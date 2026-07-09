@@ -1,4 +1,4 @@
-// \u2b21B:template-mind.mind.entry:MODULE:the_mind_template_line_one:20260709\u2b21
+// ⬡B:template-mind.mind.entry:MODULE:the_mind_template_line_one:20260709⬡
 // THE MIND TEMPLATE. Line one of the new world's compute, W5-clean by law:
 // this file contains ZERO world literals -- no HAM UIDs, no keys, no grant IDs,
 // no founder identifiers. Identity arrives ONLY through env:
@@ -52,7 +52,7 @@ app.post('/bead', async function (req, res) {
       ham_uid: HAM,
       agent_global: String(b.agent || 'MIND').toUpperCase().slice(0, 24),
       stamp_type: String(b.type || 'NOTE').toUpperCase().slice(0, 24),
-      acl_stamp: '\u2b21B:' + String(b.ns || 'mind').toLowerCase() + ':' + String(b.type || 'NOTE').toUpperCase() + ':' + String(b.desc || 'stamped').toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40) + ':' + ymd + '\u2b21',
+      acl_stamp: '⬡B:' + String(b.ns || 'mind').toLowerCase() + ':' + String(b.type || 'NOTE').toUpperCase() + ':' + String(b.desc || 'stamped').toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40) + ':' + ymd + '⬡',
       source: String(b.ns || 'mind') + '.' + Date.now(),
       summary: String(b.summary).slice(0, 300),
       content: JSON.stringify(b.content || {}),
