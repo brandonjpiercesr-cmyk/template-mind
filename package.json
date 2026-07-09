@@ -1,0 +1,8 @@
+{
+  "name": "template-mind",
+  "version": "1.0.0",
+  "description": "The mind template. Identity by env only.",
+  "main": "mind.entry.js",
+  "scripts": { "start": "node mind.entry.js" },
+  "dependencies": { "express": "^4.19.2" }
+}
