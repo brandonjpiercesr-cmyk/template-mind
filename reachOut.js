@@ -1,7 +1,7 @@
-// ⬡B:reachOut:MODULE:_b_reachout_fix_template_reachout_2_2026:20260710⬡
-// ENTRANCE: built by the coding department through the validator pipeline
-// (cold header injected by the engine; the model never writes its own stamp).
-const fetch = require('node-fetch');
+⬡B:reachOut:MODULE:three_channel_delivery_killswitch_guarded:20260710⬡
+// WONDER: reachOut is the delivery organ -- text/email/voice, kill-switch first,
+// grants from the bank, delivers never composes. Agent of the reach wonder.
+// node-fetch removed: Node 22 has global fetch
 
 async function send(env, channel, payload) {
   // Kill‑switch guard
