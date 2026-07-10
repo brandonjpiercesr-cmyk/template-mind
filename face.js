@@ -1,6 +1,6 @@
-// ⬡B:face:MODULE:_b_face_fix_template_face_20260617_canew:20260710⬡
-// ENTRANCE: built by the coding department through the validator pipeline
-// (cold header injected by the engine; the model never writes its own stamp).
+⬡B:face:MODULE:anu_expression_persona_voiced:20260710⬡
+// WONDER: face is A NU, the expression organ -- takes the mind compiled turn and
+// speaks it in persona voice. Agent of the reach wonder; never composes, never leaks.
 const consultantNames = ['Nash', 'NURU', 'Aunt Pam', 'Tim', 'Eli'];
 
 function pickPersona(persona) {
