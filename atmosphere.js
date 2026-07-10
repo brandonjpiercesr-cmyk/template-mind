@@ -1,34 +1,35 @@
-// ⬡B:atmosphere:MODULE:_b_atmosphere_fix_template_atmosphere_20:20260710⬡
+// ⬡B:atmosphere:MODULE:_b_atmosphere_fix_drain_1783705590563_20:20260710⬡
 // ENTRANCE: built by the coding department through the validator pipeline
 // (cold header injected by the engine; the model never writes its own stamp).
-const fetch = global.fetch || (await import('node-fetch')).default;
+const DIRECTORY_URL = process.env.DIRECTORY_URL;
+
+let cache = null;
+let cachePromise = null;
+
+async function getDirectory() {
+  if (cache) return cache;
+  if (!cachePromise) {
+    if (!DIRECTORY_URL) throw new Error('DIRECTORY_URL not set');
+    cachePromise = fetch(DIRECTORY_URL)
+      .then(res => {
+        if (!res.ok) throw new Error(`Directory fetch failed: ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        cache = data;
+        return cache;
+      });
+  }
+  return cachePromise;
+}
 
 async function resolveWorld(identifier) {
-  console.log('Entering resolveWorld');
-  const directoryUrl = process.env.DIRECTORY_URL;
-  if (!directoryUrl) {
-    throw new Error('DIRECTORY_URL environment variable is not set');
+  const dir = await getDirectory();
+  const entry = dir[identifier];
+  if (entry && entry.hamUid && entry.worldUrl) {
+    return { ok: true, hamUid: entry.hamUid, worldUrl: entry.worldUrl };
   }
-
-  const response = await fetch(directoryUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch directory: ${response.status} ${response.statusText}`);
-  }
-
-  const directory = await response.json();
-  const entry = directory.find(
-    (item) =>
-      item.phone === identifier ||
-      item.email === identifier ||
-      item.callerId === identifier
-  );
-
-  const result = entry
-    ? { ok: true, hamUid: entry.hamUid, worldUrl: entry.worldUrl }
-    : { ok: false, reason: 'unregistered' };
-
-  console.log('Exiting resolveWorld');
-  return result;
+  return { ok: false, reason: 'unregistered' };
 }
 
 module.exports = { resolveWorld };
