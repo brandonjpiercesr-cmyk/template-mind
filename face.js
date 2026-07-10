@@ -1,4 +1,4 @@
-⬡B:face:MODULE:anu_expression_persona_voiced:20260710⬡
+// ⬡B:face:MODULE:anu_expression_persona_voiced:20260710⬡
 // WONDER: face is A NU, the expression organ -- takes the mind compiled turn and
 // speaks it in persona voice. Agent of the reach wonder; never composes, never leaks.
 const consultantNames = ['Nash', 'NURU', 'Aunt Pam', 'Tim', 'Eli'];
