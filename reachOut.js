@@ -1,4 +1,4 @@
-⬡B:reachOut:MODULE:three_channel_delivery_killswitch_guarded:20260710⬡
+// ⬡B:reachOut:MODULE:three_channel_delivery_killswitch_guarded:20260710⬡
 // WONDER: reachOut is the delivery organ -- text/email/voice, kill-switch first,
 // grants from the bank, delivers never composes. Agent of the reach wonder.
 // node-fetch removed: Node 22 has global fetch
