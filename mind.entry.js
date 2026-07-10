@@ -66,6 +66,23 @@ app.post('/bead', async function (req, res) {
   } catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
 
+// ⬡B:template-mind.mind.entry:WIRE:coding_downtime_wash_doors:20260710⬡
+// The world's own organs, each env-scoped, each submitting through law.
+app.post('/code/submit', async function (req, res) {
+  try {
+    var out = await require('./coding.js').submitForReview({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY, NIGHT_CHECK_URL: process.env.NIGHT_CHECK_URL }, (req.body || {}).draft || req.body);
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
+});
+app.post('/downtime/run', async function (req, res) {
+  try { res.json(await require('./downtime.js').downtimeCycle({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY })); }
+  catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
+});
+app.post('/wash/listen', async function (req, res) {
+  try { res.json(await require('./wash.js').washListen({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY }, (req.body || {}).signal || req.body)); }
+  catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
+});
+
 // EXIT narration: the mind listens; everything else it becomes arrives as lawful
 // modules through the coding department, each one gated before it lands.
 const PORT = process.env.PORT || 10000;
