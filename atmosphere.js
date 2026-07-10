@@ -1,6 +1,6 @@
-// ⬡B:atmosphere:MODULE:_b_atmosphere_fix_template_atmosphere_20:20260710⬡
-// ENTRANCE: built by the coding department through the validator pipeline
-// (cold header injected by the engine; the model never writes its own stamp).
+⬡B:atmosphere:MODULE:directory_not_data_plane:20260710⬡
+// WONDER: atmosphere is the DIRECTORY organ of the new world -- pure cold resolver,
+// identifier to world door, zero personal data. Agent of the routing wonder.
 const fetch = global.fetch || (await import('node-fetch')).default;
 
 async function resolveWorld(identifier) {
