@@ -1,7 +1,7 @@
 // ⬡B:atmosphere:MODULE:directory_not_data_plane:20260710⬡
 // WONDER: atmosphere is the DIRECTORY organ of the new world -- pure cold resolver,
 // identifier to world door, zero personal data. Agent of the routing wonder.
-const fetch = global.fetch || (await import('node-fetch')).default;
+// node-fetch hybrid removed (SELF_HEAL diagnosed node_fetch_require; Node 22 global fetch is native)
 
 async function resolveWorld(identifier) {
   console.log('Entering resolveWorld');
