@@ -89,8 +89,9 @@ app.post('/downtime/run', async function (req, res) {
 // personal data read, pure cold resolution.
 app.post('/atmosphere/resolve', async (req, res) => {
   try {
-    const atmosphere = require('./atmosphere.js');
-    const fn = atmosphere.resolve || atmosphere.route || Object.values(atmosphere)[0];
+    // ESM graph: dynamic import, not require (this template is type:module)
+    const atmosphere = await import('./atmosphere.js');
+    const fn = atmosphere.resolveWorld || atmosphere.default?.resolveWorld || atmosphere.resolve;
     const out = await fn((req.body || {}).identifier || '');
     res.json({ ok: true, resolved: out });
   } catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
