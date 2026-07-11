@@ -82,6 +82,20 @@ app.post('/downtime/run', async function (req, res) {
   try { res.json(await require('./downtime.js').downtimeCycle({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY })); }
   catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
+// \u2b21B:mind.entry:WIRE:atmosphere_door_mounted:20260710\u2b21
+// AUDIT FIX: atmosphere.js existed as an organ but its door was never mounted --
+// an orphan door, the exact pattern the founder's audit law exists to catch. The
+// directory organ now answers at its door: identifier in, world route out, zero
+// personal data read, pure cold resolution.
+app.post('/atmosphere/resolve', async (req, res) => {
+  try {
+    const atmosphere = require('./atmosphere.js');
+    const fn = atmosphere.resolve || atmosphere.route || Object.values(atmosphere)[0];
+    const out = await fn((req.body || {}).identifier || '');
+    res.json({ ok: true, resolved: out });
+  } catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
+});
+
 app.post('/wash/listen', async function (req, res) {
   try { res.json(await require('./wash.js').washListen({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY }, (req.body || {}).signal || req.body)); }
   catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
