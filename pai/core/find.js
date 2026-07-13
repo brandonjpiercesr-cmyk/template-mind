@@ -23,8 +23,8 @@ function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
 
 
 function bh() {
-  var BU = process.env.AIBE_BRAIN_URL;
-  var BK = process.env.AIBE_BRAIN_KEY;
+  var BU = _bu();
+  var BK = _bk();
   return {
     url: BU,
     hdrs: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() }
