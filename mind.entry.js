@@ -68,6 +68,36 @@ app.post('/bead', async function (req, res) {
 
 // ⬡B:template-mind.mind.entry:WIRE:coding_downtime_wash_doors:20260710⬡
 // The world's own organs, each env-scoped, each submitting through law.
+// ⬡B:template-mind.mind.entry:BUILD:pai_cycle_grafted_phase4_20260713⬡
+// PHASE 4 of the port: the real PAI engine (the one cycle) now lives in this new world,
+// under pai/. This /cycle door is the new world THINKING for itself: it runs runPAI
+// against THIS world's own memory bank (the closure reads MEMORY_BANK_* by design after
+// the world-agnostic funnel), then hands the compiled turn to face for expression.
+// Additive: the 6 original organs are untouched. The engine is byte-identical to legacy;
+// only the bank it points at differs, by env. Rollback = do not call this door.
+app.post('/cycle', async function (req, res) {
+  try {
+    if (!HAM || !BANK || !KEY) return res.status(200).json({ ok: false, reason: 'unborn: missing world env' });
+    const body = req.body || {};
+    const message = body.message || body.text || '';
+    if (!message) return res.status(400).json({ ok: false, reason: 'message required' });
+    // the closure reads MEMORY_BANK_* / BEAD_TABLE / BRAIN_SCHEMA from env -- this world's own bank
+    const { runPAI } = require('./pai/core/tool.loop.js');
+    const out = await runPAI(HAM, message, body.channel || 'new_world');
+    // hand the compiled turn to face for persona expression (unchanged organ)
+    if (out && out.ok && (out.answer || out.text)) {
+      const spoken = await require('./face.js').expressTurn(
+        { HAM_UID: HAM, PERSONA: process.env.PERSONA },
+        { text: out.answer || out.text, contributions: out.tools_used });
+      return res.json({ ok: true, compiled: out, expressed: spoken });
+    }
+    return res.json({ ok: false, reason: (out && out.reason) || 'no_answer', compiled: out });
+  } catch (e) {
+    console.log('[MIND /cycle] error: ' + e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.post('/express', async function (req, res) {
   try { res.json(await require('./face.js').expressTurn({ HAM_UID: HAM, PERSONA: process.env.PERSONA }, (req.body || {}).compiled || req.body)); }
   catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
