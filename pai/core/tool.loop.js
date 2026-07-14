@@ -99,6 +99,27 @@ var TOOLS = [
     parameters:{type:'object',required:['service_id'],properties:{service_id:{type:'string'}}}}},
   {type:'function',function:{name:'notify_ham',description:'Text a HAM via iMessage. Use to reach Brandon when something is fixed or needs attention.',
     parameters:{type:'object',required:['ham_uid','message'],properties:{ham_uid:{type:'string'},message:{type:'string'}}}}},
+  {type:'function',function:{name:'find_contact',description:'Resolve a person the HAM names (a name like BJ, or a relationship like "my brother" or "mom") to their real saved contact (name, relationship, phone, email). Use before texting, calling, or emailing someone who is not the HAM, or when the HAM asks for a contact\'s details. Returns not found if the person is not saved -- never invent a number or email.',
+    parameters:{type:'object',required:['ham_uid','who'],properties:{ham_uid:{type:'string'},who:{type:'string'}}}}},
+  {type:'function',function:{name:'contact_send',description:'Text a REAL third party (not the HAM) -- someone resolved via find_contact. This is a real outbound message to a real external human, gated by the HAM\'s own standing rule: an outbound send to a real external human needs explicit confirmation UNLESS the HAM already authorized this exact send in their current message ("text my brother and tell him X" IS the authorization -- send it). Set authorized_in_message true ONLY when the HAM\'s current message explicitly instructed this exact send to this exact person. If you are proposing this on your own initiative, or the HAM only mentioned the person without instructing a send, set it false -- this drafts the message and asks for confirmation instead of sending. Never invent a phone number; if find_contact returned nothing, do not call this.',
+    parameters:{type:'object',required:['ham_uid','contact_query','message','authorized_in_message'],
+    properties:{ham_uid:{type:'string'},contact_query:{type:'string',description:'the name or relationship as the HAM said it'},
+      message:{type:'string',description:'the exact text to send'},
+      authorized_in_message:{type:'boolean',description:'true only if the HAM\'s current message explicitly instructed this exact send'}}}}},
+  {type:'function',function:{name:'calendar_read',description:'Check the HAM\'s real calendar for open slots or upcoming events. Use before proposing a meeting time or answering any question about their schedule.',
+    parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'},days:{type:'number',description:'how many days ahead to consider, default 14'}}}}},
+  {type:'function',function:{name:'calendar_book',description:'Book a REAL event on the HAM\'s calendar. This creates an actual calendar entry, so only call it once the HAM has approved the specific time. If the HAM is replying to a session you proposed ("yes", "lock it", a specific time they picked), first call find_in_brain with stamp_type SESSION to find the exact pending proposal and its slot times, then book those exact times, do not invent a time. Never book a time the HAM has not confirmed.',
+    parameters:{type:'object',required:['ham_uid','title','start'],
+    properties:{ham_uid:{type:'string'},title:{type:'string'},start:{type:'string',description:'ISO 8601 start time'},
+      end:{type:'string',description:'ISO 8601 end time; optional, defaults to 45 minutes after start'},
+      description:{type:'string'}}}}},
+  {type:'function',function:{name:'propose_working_session',description:'Convene a real working session with the HAM when enough genuine work has piled up. Pulls the real agenda from what advisers already proposed and what is owed to the HAM, finds an open slot on their calendar, and brings it to them with a real agenda. Use when the HAM asks whether you should meet, or when accumulated decisions genuinely need a sit-down. Convenes nothing if there is not enough real material -- never a canned session.',
+    parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'},autobook:{type:'boolean',description:'if true, book the slot live now; default false = propose and ask to lock it'}}}}},
+  {type:'function',function:{name:'session_complete',description:'Capture what happened in a working session: the HAM\'s real decisions and every assignment taken on. Every assignment becomes a real tracked-to-completion item. Use after a session concludes and the HAM tells you what was decided.',
+    parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'},
+      decisions:{type:'array',items:{type:'string'}},
+      assignments:{type:'array',items:{type:'object',properties:{text:{type:'string'},owner:{type:'string'}}}},
+      notes:{type:'string'}}}}},
   {type:'function',function:{name:'get_budget_upcoming',description:'Get the HAM\'s real upcoming Buy Now Pay Later payments (Zip, Afterpay, Klarna, Sezzle) with exact due dates and amounts. '
     +'Use for any question about what money is due soon, what is coming up, or pay-later balances.',
     parameters:{type:'object',properties:{ham_uid:{type:'string'},days:{type:'number',description:'How many days ahead to look, default 45'}}}}},
@@ -619,6 +640,88 @@ async function executeTool(name, args, hamUid) {
   }
   if (name === 'trigger_deploy') {
     return JSON.stringify(await triggerDeploy(args.service_id));
+  }
+  if (name === 'find_contact') {
+    try {
+      var _ct = require('./tools/contacts.js');
+      var _ctHam = args.ham_uid || hamUid;
+      var _hit = await _ct.resolveContact(_ctHam, args.who||'');
+      if (!_hit) return JSON.stringify({ok:true,found:false,who:args.who,note:'no saved contact matches; do not invent a number or email'});
+      return JSON.stringify({ok:true,found:true,contact:_hit});
+    } catch(eFc){ return JSON.stringify({ok:false,error:eFc.message}); }
+  }
+  if (name === 'contact_send') {
+    // ported from aibebase G1: real third-party reach, gated to explicit in-message
+    // authorization from the HAM; drafts (never sends) otherwise.
+    try {
+      var _ct2 = require('./tools/contacts.js');
+      var _csHam = args.ham_uid || hamUid;
+      var _hit2 = await _ct2.resolveContact(_csHam, args.contact_query || '');
+      if (!_hit2 || typeof _hit2 !== 'object') return JSON.stringify({ok:true,sent:false,reason:'no_saved_contact',note:'do not invent a number or email'});
+      if (!_hit2.phone) return JSON.stringify({ok:true,sent:false,reason:'contact_has_no_phone',contact:_hit2});
+      var _ymd3 = new Date().toISOString().slice(0,10).replace(/-/g,'');
+      if (args.authorized_in_message === true) {
+        var BLOOIO_KEY2 = process.env.BLOOIO_API_KEY;
+        var BLOOIO_BASE2 = process.env.BLOOIO_API_BASE || 'https://backend.blooio.com/v2/api';
+        var _sendRes = { ok: false, reason: 'no_blooio_key' };
+        if (BLOOIO_KEY2) {
+          try {
+            var _sr = await fetch(BLOOIO_BASE2 + '/chats/' + encodeURIComponent(_hit2.phone) + '/messages', {
+              method:'POST', headers:{ Authorization:'Bearer '+BLOOIO_KEY2, 'Content-Type':'application/json', 'Idempotency-Key': _hit2.phone+'.'+Date.now() },
+              body: JSON.stringify({ text: String(args.message||'').slice(0,1500) })
+            });
+            _sendRes = { ok: _sr.ok };
+          } catch(eSend){ _sendRes = { ok:false, error: eSend.message }; }
+        }
+        try { await fetch(_bu()+'/rest/v1/'+_tbl(),{method:'POST',headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify({
+          ham_uid:String(_csHam).toUpperCase(),agent_global:'A\u2019NU',stamp_type:'OUTBOUND_THIRD_PARTY',
+          acl_stamp:'\u2b21B:core.tool.loop:OUTBOUND_THIRD_PARTY:sent:'+_ymd3+'\u2b21',
+          source:'contact.send.'+Date.now(),summary:'[SENT to '+(_hit2.name||'contact')+'] '+String(args.message||'').slice(0,100),
+          content:JSON.stringify({contact:_hit2.name,phone:_hit2.phone,message:args.message,result:_sendRes}),importance:6})}); } catch(eStamp){}
+        return JSON.stringify({ok:true,sent:true,to:_hit2.name,result:_sendRes});
+      }
+      try { await fetch(_bu()+'/rest/v1/'+_tbl(),{method:'POST',headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify({
+        ham_uid:String(_csHam).toUpperCase(),agent_global:'A\u2019NU',stamp_type:'PENDING_SEND',
+        acl_stamp:'\u2b21B:core.tool.loop:PENDING_SEND:drafted:'+_ymd3+'\u2b21',
+        source:'contact.draft.'+Date.now(),summary:'[DRAFT for '+(_hit2.name||'contact')+', AWAITING CONFIRM] '+String(args.message||'').slice(0,100),
+        content:JSON.stringify({contact:_hit2.name,phone:_hit2.phone,message:args.message}),importance:6})}); } catch(eStamp2){}
+      return JSON.stringify({ok:true,sent:false,drafted:true,to:_hit2.name,note:'not sent -- the HAM did not explicitly authorize this exact send; confirm before sending'});
+    } catch(eCs){ return JSON.stringify({ok:false,error:eCs.message}); }
+  }
+  if (name === 'calendar_read') {
+    try {
+      var _slR = require('./tools/schedule.js');
+      var _crHam = args.ham_uid || hamUid;
+      var events = await _slR.getRadarEvents(_crHam);
+      var prefs = await _slR.getHamPrefs(_crHam);
+      var slots = _slR.computeFreeSlots(events||[], prefs);
+      return JSON.stringify({ok:true, upcoming_events: (events||[]).length, next_open_slots: (slots||[]).slice(0,6)});
+    } catch(eCal){ return JSON.stringify({ok:false,error:eCal.message}); }
+  }
+  if (name === 'calendar_book') {
+    try {
+      var _slB = require('./tools/schedule.js');
+      var _bHam = args.ham_uid || hamUid;
+      if (!_bHam || !args.title || !args.start) return JSON.stringify({ok:false,reason:'need ham_uid, title, and start'});
+      var _bres = await _slB.bookEvent(_bHam, { title:args.title, start:args.start, end:args.end, description:args.description });
+      return JSON.stringify(_bres);
+    } catch(eBk){ return JSON.stringify({ok:false,error:eBk.message}); }
+  }
+  if (name === 'propose_working_session') {
+    try {
+      var _sw = require('./wonders/session.wonder.js');
+      var _swHam = args.ham_uid || hamUid;
+      var _swRes = await _sw.proposeSession(_swHam, { autobook: args.autobook === true });
+      return JSON.stringify(_swRes);
+    } catch(eSw){ return JSON.stringify({ok:false,error:eSw.message}); }
+  }
+  if (name === 'session_complete') {
+    try {
+      var _sc = require('./wonders/session.wonder.js');
+      var _scHam = args.ham_uid || hamUid;
+      var _scRes = await _sc.completeSession(_scHam, { decisions: args.decisions, assignments: args.assignments, notes: args.notes });
+      return JSON.stringify(_scRes);
+    } catch(eScE){ return JSON.stringify({ok:false,error:eScE.message}); }
   }
   if (name === 'notify_ham') {
     return JSON.stringify(await notifyHam(args.ham_uid, args.message));
