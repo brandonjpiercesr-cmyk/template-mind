@@ -1280,6 +1280,23 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     break;
   }
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
+  // ⬡B:core.tool.loop:FIX:raw_json_never_a_final_answer:20260714⬡
+  // Ported alongside the aibebase fix: a raw tool result must never go out AS the answer.
+  // If the final answer parses as JSON, compose it into an actual sentence instead.
+  if (finalAns && /^[\[{]/.test(finalAns.trim())) {
+    var _rawParsed = null;
+    try { _rawParsed = JSON.parse(finalAns.trim()); } catch (eRawJ) {}
+    if (_rawParsed && typeof _rawParsed === 'object') {
+      if (_rawParsed.next_open_slots || _rawParsed.upcoming_events !== undefined) {
+        var _n = Array.isArray(_rawParsed.next_open_slots) ? _rawParsed.next_open_slots.length : 0;
+        finalAns = _n > 0
+          ? 'Your calendar is open right now, ' + _n + ' free half-hour blocks coming up. Want me to grab one?'
+          : 'Nothing open on your calendar in the window I checked, or it is genuinely clear -- tell me what you are trying to book and I will look closer.';
+      } else {
+        finalAns = 'I pulled that up, but I need to say it in words instead of handing you raw data. Ask me again and I will answer it properly.';
+      }
+    }
+  }
   // ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡
   // Founder screenshot: she replied 'I've set a reminder for you to check in on Tameka,
   // it'll pop up tomorrow 9am' -- but create_reminder NEVER fired, so no reminder
