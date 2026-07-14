@@ -14,7 +14,11 @@ const https = require('https');
 
 const ABA_SERVER_URL = process.env.ABA_SERVER_URL || 'https://dnzwyufdzafcwnjaqbxs.supabase.co';
 const ABA_SERVER_SRK = process.env.ABA_SERVER_SERVICE_ROLE_KEY;
-const NYLAS_KEY       = process.env.NYLAS_API_KEY;
+const NYLAS_KEY       = process.env.NYLAS_PRODUCTION_KEY || process.env.NYLAS_API_KEY;
+// ⬡B:core.tools.schedule:FIX:calendar_grant_lives_on_production_not_sandbox:20260714⬡
+// Same fix as the aibebase source: the real calendar grant (anu@anu-anew.com, verified
+// valid) only resolves against the PRODUCTION Nylas key. Preferred here without touching
+// NYLAS_API_KEY, which other paths in this world may depend on staying as-is.
 const NYLAS_HOST      = 'api.us.nylas.com';
 
 const PREFS_DEFAULT = {
