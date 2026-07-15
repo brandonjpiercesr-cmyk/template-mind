@@ -40,21 +40,35 @@ function bh() {
 
 function bq(path) {
   var b = bh();
-  if (!b.url || !b.hdrs.apikey) return Promise.resolve([]);
-  // Hard timeout -- a slow brain can never hang the Memory Bank build.
-  // If the new brain is paused/slow, FIND returns [] fast instead of blocking the turn.
+  if (!b.url || !b.hdrs.apikey) {
+    return Promise.resolve({ rows: [], ok: false, status: null, error: 'brain_target_unconfigured' });
+  }
+  // ⬡B:core.find:FIX:checked_read_receipts:20260715⬡
+  // A timeout or failed REST read stays empty for callers, but it is no longer
+  // indistinguishable from a successful query that honestly found no rows.
   return new Promise(function(resolve) {
     var settled = false;
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    }
     var timer = setTimeout(function() {
-      if (!settled) { settled = true; resolve([]); }
+      finish({ rows: [], ok: false, status: null, error: 'brain_read_timeout' });
     }, 2500);
     fetch(b.url + '/rest/v1/' + b.table + '?' + path, { headers: b.hdrs })
-      .then(function(r) { return r.ok ? r.json() : []; })
-      .then(function(rows) {
-        if (!settled) { settled = true; clearTimeout(timer); resolve(rows || []); }
+      .then(async function(response) {
+        if (!response.ok) {
+          var errorText = typeof response.text === 'function' ? await response.text() : '';
+          return { rows: [], ok: false, status: response.status, error: String(errorText || 'brain_read_failed').slice(0, 300) };
+        }
+        var rows = await response.json();
+        return { rows: Array.isArray(rows) ? rows : [], ok: true, status: response.status, error: null };
       })
-      .catch(function() {
-        if (!settled) { settled = true; clearTimeout(timer); resolve([]); }
+      .then(finish)
+      .catch(function(error) {
+        finish({ rows: [], ok: false, status: null, error: String(error && error.message || error).slice(0, 300) });
       });
   });
 }
@@ -101,16 +115,26 @@ async function find(queries) {
   // Merge + dedupe by id
   var seen = {};
   var merged = [];
-  results.forEach(function(rows) {
-    (rows || []).forEach(function(row) {
+  results.forEach(function(result) {
+    (result && result.rows || []).forEach(function(row) {
       if (!seen[row.id]) {
         seen[row.id] = true;
         merged.push(row);
       }
     });
   });
+  var readFailures = results.filter(function(result) { return !result || !result.ok; }).map(function(result) {
+    return { status: result ? result.status : null, error: result ? result.error : 'missing_read_result' };
+  });
 
-  return { beads: merged, ms: Date.now() - t0, count: merged.length, reads: targetReady ? promises.length : 0 };
+  return {
+    beads: merged,
+    ms: Date.now() - t0,
+    count: merged.length,
+    reads: targetReady ? promises.length : 0,
+    read_ok: targetReady && readFailures.length === 0,
+    read_failures: readFailures
+  };
 }
 
 // Named FIND patterns used by the Memory Bank builder
