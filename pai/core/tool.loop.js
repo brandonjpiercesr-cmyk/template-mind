@@ -22,11 +22,23 @@ function tokenCapFor(channel) {
 // assumed. Added a real cooldown guard at the one place a commit actually
 // happens, so no future burst can land regardless of what triggers the retry.
 'use strict';
-// ⬡B:core.tool.loop:WIRE:funneled_20260713⬡
-function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
-function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
-function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
+// ⬡B:core.tool.loop:FIX:atomic_cycle_bank_target:20260715⬡
+// The ABAHAM-resolved world selects one complete target for each PAI cycle.
+// Every step in that cycle writes to the same URL, table, and schema.
+function _brainTarget() {
+  var memoryUrl = process.env.MEMORY_BANK_URL;
+  var usesMemoryBank = !!memoryUrl;
+  return {
+    url: memoryUrl || process.env.AIBE_BRAIN_URL,
+    key: process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY,
+    table: process.env.BEAD_TABLE || (usesMemoryBank ? 'beads' : 'aibe_brain'),
+    schema: process.env.BRAIN_SCHEMA || (usesMemoryBank ? 'memory_bank' : 'abacia_core')
+  };
+}
+function _bu(){return _brainTarget().url;}
+function _bk(){return _brainTarget().key;}
+function _tbl(){return _brainTarget().table;}
+function _schema(){return _brainTarget().schema;}
 
 function ymd(){return new Date().toISOString().slice(0,10).replace(/-/g,'');}
 const { buildMemoryBank } = require('./fcw.builder.js'); // Memory Bank (BIND doctrine)
@@ -427,6 +439,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     if (args.order) q.order=args.order;
     q.ham_uid=args.ham_uid||hamUid;
     var res=await find([q]);
+    var _findReads = Number(res && res.reads) || 0;
     // ⬡B:core.tool_loop:FIX:model_reliability_not_the_query_mechanics:20260708⬡
     // Real, live incident, confirmed by direct testing: the underlying query
     // is correct -- stamp_type=ALERT with the real ham_uid genuinely returns
@@ -439,6 +452,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // once before giving up. Deterministic, not another prompt bet.
     if (res.beads.length===0 && q.stamp_type!=='ALERT') {
       var fallback=await find([{stamp_type:'ALERT',ham_uid:q.ham_uid,limit:q.limit,order:q.order}]);
+      _findReads += Number(fallback && fallback.reads) || 0;
       if (fallback.beads.length>0) { res=fallback; }
     }
     // ⬡B:core.tool_loop:FIX:wondergames_mechanical_fallback_20260714⬡
@@ -459,6 +473,7 @@ async function executeTool(name, args, hamUid, origMessage) {
           {stamp_type:'WONDER_GAMES',ham_uid:q.ham_uid,limit:q.limit||5},
           {stamp_type:'DOCTRINE',ham_uid:q.ham_uid,importance_gte:8,limit:3}
         ]);
+        _findReads += Number(wgFallback && wgFallback.reads) || 0;
         if (wgFallback.beads.length>0) { res=wgFallback; }
       }
     }
@@ -532,6 +547,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     });
     _result.recency_instruction = 'Every result above carries "stamped: X ago", real elapsed time, not a guess. Before stating anything as a CURRENT problem, loop, or status, check its age. Anything more than a few hours old may already be resolved -- state it as history ("as of N ago, X was happening") not as present-tense fact ("X is happening right now"), unless you have separately confirmed it is still true today.';
     _result.ms = res.ms;
+    _result.reads = _findReads;
     return JSON.stringify(_result);
   }
   if (name === 'write_to_brain') {
@@ -926,26 +942,76 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       return (gd.choices && gd.choices[0] && gd.choices[0].message && gd.choices[0].message.content) || null;
     } catch (eGlm) { return null; }
   }
-  // \u2b21B:core.tool.loop:BUILD:live_cycle_observability:20260707\u2b21
-  // span.task.live_pai_cycle_observability -- founder's Life Command Center
-  // idea. Real-time step stamps as the cycle actually runs, not just the
-  // finished result, read by GET /command-center/live/:hamUid below.
+  // \u2b21B:core.tool.loop:FIX:durable_edged_cycle_observability:20260715\u2b21
+  // This PAI Wonder's steps are awaited and checked before the cycle advances.
+  // New World beads carry explicit spawn lineage and a typed feed edge; legacy
+  // archives keep the same edge inside content because that table has no columns.
   var _cycleId = hamUid + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
-  var _BU=_bu(), _BK=_bk();
-  function _stampStep(step, detail) {
-    if (!_BU || !_BK) return;
-    fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-      headers:{apikey:_BK,Authorization:'Bearer '+_BK,'Accept-Profile':_schema(),
-        'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-      body:JSON.stringify({ham_uid:hamUid,agent_global:'PAI',stamp_type:'CYCLE_STEP',
-        source:'pai.cycle.'+_cycleId,
-        acl_stamp:'\u2b21B:core.tool.loop:CYCLE_STEP:'+step+':'+Date.now()+'\u2b21',
-        summary:'[CYCLE '+_cycleId.slice(-8)+'] '+step+(detail?': '+String(detail).slice(0,100):''),
-        content:JSON.stringify({cycleId:_cycleId,step:step,channel:channel,detail:detail||null,atMs:Date.now()-t0}),
-        importance:3})
-    }).catch(function(){});
+  var _cycleTarget = _brainTarget();
+  var _stampOutcomes = [];
+  async function _stampStep(step, detail) {
+    var outcome = { step: step, ok: false, status: null, error: null, id: null, source: 'pai.cycle.' + _cycleId };
+    if (!_cycleTarget.url || !_cycleTarget.key) {
+      outcome.error = 'brain_target_unconfigured';
+      _stampOutcomes.push(outcome);
+      return outcome;
+    }
+    var stampAt = Date.now();
+    var cycleEdges = [{ type: 'feeds', target: 'ham_' + String(hamUid).toLowerCase() + '.pai.cycle_log' }];
+    var cycleContent = {
+      cycleId: _cycleId,
+      step: step,
+      channel: channel,
+      detail: detail || null,
+      atMs: stampAt - t0,
+      edges: cycleEdges
+    };
+    var cycleBead = {
+      ham_uid: hamUid,
+      agent_global: 'PAI',
+      stamp_type: 'CYCLE_STEP',
+      source: 'pai.cycle.' + _cycleId,
+      acl_stamp: '\u2b21B:core.tool.loop:CYCLE_STEP:' + step + ':' + stampAt + '\u2b21',
+      summary: '[CYCLE ' + _cycleId.slice(-8) + '] ' + step + (detail ? ': ' + String(detail).slice(0, 100) : ''),
+      content: JSON.stringify(cycleContent),
+      importance: 3
+    };
+    if (_cycleTarget.table !== 'aibe_brain') {
+      cycleBead.spawned_by = 'PAI';
+      cycleBead.edges = cycleEdges;
+    }
+    try {
+      var response = await fetch(_cycleTarget.url + '/rest/v1/' + _cycleTarget.table, {
+        method: 'POST',
+        headers: {
+          apikey: _cycleTarget.key,
+          Authorization: 'Bearer ' + _cycleTarget.key,
+          'Accept-Profile': _cycleTarget.schema,
+          'Content-Profile': _cycleTarget.schema,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation'
+        },
+        body: JSON.stringify(cycleBead)
+      });
+      outcome.status = response.status;
+      var responseText = String(await response.text());
+      if (response.ok) {
+        var rows = [];
+        try { rows = responseText ? JSON.parse(responseText) : []; } catch (_eStampJson) {}
+        var row = Array.isArray(rows) ? rows[0] : rows;
+        outcome.id = row && row.id != null ? row.id : null;
+        outcome.ok = outcome.id != null;
+        if (!outcome.ok) outcome.error = 'receipt_id_missing';
+      } else {
+        outcome.error = responseText.slice(0, 300);
+      }
+    } catch (error) {
+      outcome.error = String(error && error.message || error).slice(0, 300);
+    }
+    _stampOutcomes.push(outcome);
+    return outcome;
   }
-  _stampStep('cycle_start', String(message||'').slice(0,80));
+  await _stampStep('cycle_start', String(message || '').slice(0, 80));
   // \u2b21B:core.tool.loop:FIX:real_two_pass_verifier_per_research:20260710\u2b21
   // Real, researched fix (Towards AI hallucination mitigation survey): "two-pass
   // systems where a verifier inspects the draft, highlights unsupported statements,
@@ -957,7 +1023,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // pass: real numbers verified during the turn are captured; the final answer is
   // mechanically checked against them before it is ever returned.
   var _verifiedRealNumbers = [];
-  if (!GROQ) return {ok:false,reason:'no_groq_key',_dbg:'GROQ_API_KEY not in process.env'};
+  if (!GROQ) {
+    await _stampStep('cycle_abort', 'no_groq_key');
+    return {ok:false,reason:'no_groq_key',cycleId:_cycleId,
+      cycle_stamps_persisted:_stampOutcomes.filter(function (s) { return s.ok; }).length,
+      cycle_stamps_total:_stampOutcomes.length,_dbg:'GROQ_API_KEY not in process.env'};
+  }
   var _fcwT0=Date.now();
   var fcw=await buildMemoryBank(hamUid,channel,message,identity).catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
@@ -1113,7 +1184,30 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     } catch (eWgSynth) {}
   }
-  var iter=0,tools=[],ans=null;
+  // ⬡B:core.tool.loop:WIRE:bounded_tool_outcomes:20260715⬡
+  // Keep the public tools_used array backward compatible while the receipt records
+  // whether each real tool result succeeded. No result body or secret is retained.
+  var iter=0,tools=[],_toolOutcomes=[],ans=null;
+  function _boundedToolOutcome(name, raw, elapsedMs, thrown) {
+    var outcome = { name: String(name || 'unknown'), ok: !thrown, ms: Math.max(0, Number(elapsedMs) || 0), reads: 0, reason: null };
+    var parsed = null;
+    if (!thrown) {
+      if (raw && typeof raw === 'object') parsed = raw;
+      else if (typeof raw === 'string' && /^\s*[\[{]/.test(raw)) {
+        try { parsed = JSON.parse(raw); } catch (_eOutcomeParse) {}
+      }
+      if (parsed && typeof parsed === 'object') {
+        outcome.reads = Math.max(0, Number(parsed.reads) || 0);
+        if (parsed.ok === false || parsed.success === false || parsed.failed === true || parsed.error) {
+          outcome.ok = false;
+          outcome.reason = String(parsed.error || parsed.reason || parsed.note || 'tool_reported_failure').slice(0, 160);
+        }
+      }
+    } else {
+      outcome.reason = String(thrown && thrown.message || thrown).slice(0, 160);
+    }
+    return outcome;
+  }
   while (iter<MAX) {
     iter++;
     // ⬡B:core.tool.loop:FIX:strong_model_makes_the_tool_decision:20260704⬡
@@ -1371,7 +1465,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             try {
               var salvArgs = JSON.parse(msg.content.slice(braceStart, endBr + 1));
               msg = { role: 'assistant', content: null, tool_calls: [{ id: 'salvage_' + Date.now(), type: 'function', function: { name: mSalv[1], arguments: JSON.stringify(salvArgs) } }] };
-              _stampStep('tool_text_salvaged', mSalv[1]);
+              await _stampStep('tool_text_salvaged', mSalv[1]);
             } catch (eSalv) { /* unparseable text stays under the original reject rule */ }
           }
         }
@@ -1498,9 +1592,21 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       for (var i=0;i<msg.tool_calls.length;i++){
         var tc=msg.tool_calls[i],targs={};
         try{targs=JSON.parse(tc.function.arguments||'{}');}catch(e){}
-        _stampStep('tool_call', tc.function.name);
-        var tr=await executeTool(tc.function.name,targs,hamUid,message);
+        await _stampStep('tool_call', tc.function.name);
+        var toolStartedAt = Date.now();
+        var tr, toolOutcome;
+        try {
+          tr = await executeTool(tc.function.name,targs,hamUid,message);
+          toolOutcome = _boundedToolOutcome(tc.function.name, tr, Date.now() - toolStartedAt, null);
+        } catch (toolError) {
+          toolOutcome = _boundedToolOutcome(tc.function.name, null, Date.now() - toolStartedAt, toolError);
+          _toolOutcomes.push(toolOutcome);
+          await _stampStep('tool_result', JSON.stringify(toolOutcome));
+          throw toolError;
+        }
         tools.push(tc.function.name);
+        _toolOutcomes.push(toolOutcome);
+        await _stampStep('tool_result', JSON.stringify(toolOutcome));
         if (tc.function.name === 'read_own_code') {
           try {
             var _trParsed = JSON.parse(tr);
@@ -1563,7 +1669,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _rawParsed = null;
     try { _rawParsed = JSON.parse(finalAns.trim()); } catch (eRawJ) {}
     if (_rawParsed && typeof _rawParsed === 'object') {
-      _stampStep('raw_json_answer_caught', 'a tool result nearly went out as raw JSON instead of a sentence');
+      await _stampStep('raw_json_answer_caught', 'a tool result nearly went out as raw JSON instead of a sentence');
       if (_rawParsed.next_open_slots || _rawParsed.upcoming_events !== undefined) {
         var _n = Array.isArray(_rawParsed.next_open_slots) ? _rawParsed.next_open_slots.length : 0;
         finalAns = _n > 0
@@ -1581,11 +1687,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // reply claims a reminder/calendar action but the matching tool did not run this
   // turn, strip the false claim and tell the truth. Cold detection, no LLM.
   if (finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
-    _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
+    await _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
     finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
   }
   if(!finalAns){
-    _stampStep('cycle_end_silent', 'no_answer, iterations='+iter);
+    await _stampStep('cycle_end_silent', 'no_answer, iterations='+iter);
     // ⬡B:core.tool.loop:BUILD:universal_tracker_no_silent_evaporation:20260713⬡
     // Architect-flagged live: a two-part text (recurring timeshare reminder + scan
     // calendars / consult advisors / book a haircut) hit THIS path and VANISHED -- no
@@ -1616,7 +1722,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _answerNumbers = (finalAns.match(/\b\d+\b/g) || []);
     var _unverified = _answerNumbers.filter(function(n){ return _verifiedRealNumbers.indexOf(n) === -1; });
     if (_unverified.length) {
-      _stampStep('verifier_caught_fabrication', 'unverified numbers: '+_unverified.join(','));
+      await _stampStep('verifier_caught_fabrication', 'unverified numbers: '+_unverified.join(','));
       try {
         var _retryMsgs = msgs.concat([
           {role:'assistant',content:finalAns},
@@ -1654,8 +1760,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // malformed block drops in silence; the words always still flow.
   var _screenPushed = 0;
   try { var _scr = await require('./stream/screen.awareness.js').applyScreenBlock(hamUid, finalAns); finalAns = _scr.answer || finalAns; _screenPushed = _scr.pushed || 0; } catch (eScrA) {}
-  if (!finalAns) { _stampStep('cycle_end_silent','answer_was_only_screen_block'); return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null}; }
-  _stampStep('cycle_end', finalAns.slice(0,80) + (_screenPushed ? (' [screen:'+_screenPushed+']') : ''));
+  if (!finalAns) { await _stampStep('cycle_end_silent','answer_was_only_screen_block'); return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null}; }
+  await _stampStep('cycle_end', finalAns.slice(0,80) + (_screenPushed ? (' [screen:'+_screenPushed+']') : ''));
   // ⬡B:tool.loop:GUARD:leaked_tool_syntax_scrub:20260711⬡ on an empty NASH
   // board the model retried and leaked "<function=...>" into its last line.
   // Cold scrub; if nothing real remains, hollow-reply law: ok:false.
@@ -1673,19 +1779,6 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
   } catch (eFmt) {}
   if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
-  // ⬡B:core.tool.loop:WIRE:cycle_receipt_stamped:20260712⬡
-  // Two Command Centers step 5: tools_used/iterations/ms already existed in this return
-  // object but were only ever handed to the caller, never stamped as a bead, so the
-  // CLAIR view (self-heal, self-learn) had nothing to show which tools ran or fell.
-  // One stamp, same lineage shape as everywhere else, builder-only (technical).
-  try {
-    var _fellTools = tools.filter(function (tu) { return tu && (tu.error || tu.failed); }).map(function (tu) { return tu.name || tu.tool || 'unknown'; });
-    var _lineage = require('./lineage.attach.js');
-    _stampStep('cycle_receipt', JSON.stringify(_lineage.attachLineage(
-      { cycleId: _cycleId, tools_used: tools, iterations: iter, ms: Date.now() - t0, fell: _fellTools, channel: channel },
-      { chain: ['PAI', 'MemoryBank'], deliveredBy: 'PAI cycle', why: (_fellTools.length ? _fellTools.length + ' tool(s) fell: ' + _fellTools.join(', ') : 'clean cycle, ' + tools.length + ' tool(s) ran'), audience: 'builder' }
-    )));
-  } catch (eRcpt) { /* receipt is diagnostic, never block the real answer on it */ }
   // ⬡B:core.tool.loop:BUILD:universal_tracker_done_on_completion:20260713⬡
   // The other half of the Architect's tracker: when a real action request completes, it
   // gets a TRACK DONE with what ran, so "everything has a record" is true on the win side
@@ -1702,11 +1795,75 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     }
   } catch (eTrkDone) {}
+  // ⬡B:core.tool.loop:FIX:verified_durable_cycle_receipt:20260715⬡
+  // The stamped receipt and the returned receipt share the exact same measured
+  // fields. Persistence is explicit; a caller can never confuse an attempted
+  // diagnostic write with a durable PAI cycle.
+  var _cycleWorkMs = Date.now() - t0;
+  var _fellTools = _toolOutcomes.filter(function (outcome) { return !outcome.ok; })
+    .map(function (outcome) { return outcome.name; });
+  var _memoryReads = ((fcw && Number(fcw.memoryReads)) || 0) + _toolOutcomes.reduce(function (total, outcome) {
+    return total + (Number(outcome.reads) || 0);
+  }, 0);
+  var _fcwPersisted = !!(fcw && fcw.wallPersistence && fcw.wallPersistence.persisted);
+  var _fcwReceiptId = fcw && fcw.wallPersistence && fcw.wallPersistence.id != null ? fcw.wallPersistence.id : null;
+  var _receiptFields = {
+    cycleId: _cycleId,
+    tools_used: tools,
+    tool_executions: _toolOutcomes,
+    iterations: iter,
+    ms: _cycleWorkMs,
+    fell: _fellTools,
+    channel: channel,
+    fcw_ok: !!(fcw && fcw.ok),
+    fcw_ms: (fcw && fcw.ms) || 0,
+    fcw_build_ms: _fcwBuildMs,
+    fcw_persisted: _fcwPersisted,
+    fcw_receipt_id: _fcwReceiptId,
+    memory_reads: _memoryReads,
+    fcw_contributors: (fcw && fcw.contributors) || null,
+    fcw_contributors_resolved: (fcw && fcw.contributorsResolved) || 0,
+    fcw_contributors_total: (fcw && fcw.contributorsTotal) || 0
+  };
+  var _receiptFieldsValid = typeof _receiptFields.cycleId === 'string' && _receiptFields.cycleId.indexOf(String(hamUid) + '.') === 0
+    && Number.isInteger(_receiptFields.iterations) && _receiptFields.iterations > 0
+    && Number.isFinite(_receiptFields.ms) && _receiptFields.ms > 0
+    && Number.isFinite(_receiptFields.memory_reads) && _receiptFields.memory_reads > 0
+    && Array.isArray(_receiptFields.tools_used) && Array.isArray(_receiptFields.tool_executions);
+  var _receiptDetail = _receiptFields;
+  try {
+    var _lineage = require('./lineage.attach.js');
+    _receiptDetail = _lineage.attachLineage(_receiptFields, {
+      chain: ['PAI', 'MemoryBank'],
+      deliveredBy: 'PAI cycle',
+      why: (_fellTools.length ? _fellTools.length + ' tool(s) fell: ' + _fellTools.join(', ') : 'clean cycle, ' + tools.length + ' tool(s) ran'),
+      audience: 'builder'
+    });
+  } catch (eLineage) {}
+  var _receiptStartedAt = Date.now();
+  var _receiptWrite = await _stampStep('cycle_receipt', JSON.stringify(_receiptDetail));
+  var _receiptMs = Date.now() - _receiptStartedAt;
+  var _stampFailures = _stampOutcomes.filter(function (stamp) { return !stamp.ok; }).map(function (stamp) {
+    return { step: stamp.step, status: stamp.status, error: stamp.error };
+  });
   return {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
-    tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,
+    tools_used:tools,tool_executions:_toolOutcomes,iterations:iter,ms:_cycleWorkMs,cycle_total_ms:Date.now()-t0,
+    fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,fcw_ok:!!(fcw&&fcw.ok),
+    fcw_persisted:_fcwPersisted,fcw_receipt_id:_fcwReceiptId,memory_reads:_memoryReads,
     fcw_contributors:(fcw&&fcw.contributors)||null,
+    fcw_contributor_details:(fcw&&fcw.contributorDetails)||null,
     fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
     fcw_contributors_total:(fcw&&fcw.contributorsTotal)||0,
+    fcw_wall_persistence:(fcw&&fcw.wallPersistence)||null,
+    cycle_receipt_fields_verified:_receiptFieldsValid,
+    cycle_receipt_persisted:!!(_receiptWrite&&_receiptWrite.ok),
+    cycle_receipt_id:(_receiptWrite&&_receiptWrite.id!=null)?_receiptWrite.id:null,
+    cycle_receipt_verified:!!(_receiptFieldsValid&&_receiptWrite&&_receiptWrite.ok&&_stampFailures.length===0),
+    cycle_receipt_status:(_receiptWrite&&_receiptWrite.status)||null,
+    cycle_receipt_ms:_receiptMs,
+    cycle_stamps_persisted:_stampOutcomes.filter(function (stamp) { return stamp.ok; }).length,
+    cycle_stamps_total:_stampOutcomes.length,
+    cycle_stamp_failures:_stampFailures,
     _dbg:global._paiLastError||null};
 }
 module.exports={runPAI};
