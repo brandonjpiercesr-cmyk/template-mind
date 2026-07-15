@@ -1,5 +1,6 @@
 // ⬡B:template-mind.mind.entry:MODULE:the_mind_template_line_one:20260709⬡
 // THE MIND TEMPLATE. Line one of the new world's compute, W5-clean by law:
+// entered from the shared face through the ABAHAM door; HAM_UID fixes this per-HAM mind at birth.
 // this file contains ZERO world literals -- no HAM UIDs, no keys, no grant IDs,
 // no founder identifiers. Identity arrives ONLY through env:
 //   HAM_UID          -- whose world this mind serves
