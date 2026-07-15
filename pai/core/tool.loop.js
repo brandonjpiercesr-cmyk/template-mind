@@ -211,12 +211,15 @@ var TOOLS = [
       query:{type:'string',description:'Plain-language description of the real feature or behavior to look up, e.g. "command center timestamp display" or "how reminders get marked done".'}
     }}}}
 ];
+var BUILDER_ONLY_TOOL_NAMES = [
+  'read_own_code', 'read_render_logs', 'fix_file_in_github', 'trigger_deploy'
+];
+
 async function executeTool(name, args, hamUid, origMessage, cycleId, builderAuthorized) {
   args = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
   // Coding mutations are authorized only by trusted face policy carried in the
   // cycle identity. Message prose, tool arguments, and body.mode cannot grant it.
-  if ((name === 'fix_file_in_github' || name === 'trigger_deploy')
-      && builderAuthorized !== true) {
+  if (BUILDER_ONLY_TOOL_NAMES.indexOf(name) !== -1 && builderAuthorized !== true) {
     return JSON.stringify({ok:false,reason:'builder_authorization_required'});
   }
   if (name === 'read_own_code') {
@@ -1047,6 +1050,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // face replies with ms:0 and no cycle lineage. A new-world mind may be integrated as
   // a tool or contributor inside this cycle, but it must never replace this choke point.
   var t0=Date.now(),GROQ=process.env.GROQ_API_KEY;
+  var _builderAuthorized = !!(identity && identity.builderAuthorized === true);
+  var _availableTools = _builderAuthorized ? TOOLS : TOOLS.filter(function (tool) {
+    var toolName = tool && tool.function && tool.function.name;
+    return BUILDER_ONLY_TOOL_NAMES.indexOf(toolName) === -1;
+  });
   // \u2b21B:core.tool.loop:FIX:glm_primary_on_plain_completions:20260711\u2b21
   // Founder, direct: why is this file, the one that serves every real text
   // and call, still on Groq when GLM-5.2 was made primary everywhere else
@@ -1521,7 +1529,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // This is a real improvement, not a guarantee -- instruction-following on
     // a growing system prompt stays worth watching, not a closed case.
     var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),temperature:0.3};
-    if (iter<=3) body.tools=TOOLS;
+    if (iter<=3) body.tools=_availableTools;
     // ⬡B:core.tool_loop:FIX:tool_choice_never_set_defaults_to_skippable:20260705⬡
     // Real, live incident: the founder asked who a real HAM UID was and requested
     // the original message over text -- the single clearest possible
@@ -1882,7 +1890,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var tr, toolOutcome;
         try {
           tr = await executeTool(tc.function.name,targs,hamUid,message,_cycleId,
-            !!(identity && identity.builderAuthorized === true));
+            _builderAuthorized);
           toolOutcome = _boundedToolOutcome(tc.function.name, tr, Date.now() - toolStartedAt, null);
         } catch (toolError) {
           toolOutcome = _boundedToolOutcome(tc.function.name, null, Date.now() - toolStartedAt, toolError);
