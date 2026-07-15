@@ -11,6 +11,7 @@
 // and memory as one braid.
 'use strict';
 
+const crypto = require('crypto');
 const express = require('express');
 const app = express();
 app.use(express.json());
@@ -18,6 +19,17 @@ app.use(express.json());
 const HAM = (process.env.HAM_UID || '').toUpperCase();
 const BANK = process.env.MEMORY_BANK_URL || '';
 const KEY = process.env.MEMORY_BANK_KEY || '';
+const CYCLE_INTERNAL_KEY = String(process.env.MIND_CYCLE_INTERNAL_KEY || '');
+const CYCLE_AUTH_CONFIGURED = CYCLE_INTERNAL_KEY.trim().length > 0;
+
+// The shared face may enter the PAI cycle only through this authenticated internal door.
+// Hashing both values fixes the comparison length before timingSafeEqual; the key is never logged.
+function cycleKeyMatches(provided) {
+  if (!CYCLE_AUTH_CONFIGURED || typeof provided !== 'string' || provided.length === 0) return false;
+  const expected = crypto.createHash('sha256').update(CYCLE_INTERNAL_KEY, 'utf8').digest();
+  const actual = crypto.createHash('sha256').update(provided, 'utf8').digest();
+  return crypto.timingSafeEqual(expected, actual);
+}
 
 // ENTRANCE narration: a mind without identity or memory refuses to pretend.
 if (!HAM || !BANK || !KEY) {
@@ -77,6 +89,8 @@ app.post('/bead', async function (req, res) {
 // only the bank it points at differs, by env. Rollback = do not call this door.
 app.post('/cycle', async function (req, res) {
   try {
+    if (!CYCLE_AUTH_CONFIGURED) return res.status(503).json({ ok: false, reason: 'cycle_auth_unconfigured' });
+    if (!cycleKeyMatches(req.get('x-mind-cycle-key'))) return res.status(401).json({ ok: false, reason: 'unauthorized' });
     if (!HAM || !BANK || !KEY) return res.status(200).json({ ok: false, reason: 'unborn: missing world env' });
     const body = req.body || {};
     const message = body.message || body.text || '';
