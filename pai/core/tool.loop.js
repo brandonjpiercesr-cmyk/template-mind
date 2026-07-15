@@ -1048,6 +1048,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         previousReceiptId: _activeAwarenessRead && _activeAwarenessRead.id != null ? _activeAwarenessRead.id : null,
         summary: String(summary || status || 'cycle complete').slice(0, 240),
         status: status || 'DONE',
+        channel: channel || null,
         done: status === 'DONE' ? ['answered through ' + String(channel || 'unknown')] : [],
         found: knownOutcomes.filter(function (outcome) { return outcome.ok; })
           .map(function (outcome) { return 'tool:' + outcome.name; }),
