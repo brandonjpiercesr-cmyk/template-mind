@@ -15,49 +15,10 @@
 // explicitly for a HAM_IDENTIFIER-type bead instead of trusting array position.
 
 'use strict';
-// ⬡B:core.fcw.builder:FIX:atomic_memory_bank_target:20260715⬡
-// The ABAHAM door keeps URL, key, table, and schema in one resolved target. This prevents
-// a New World write from silently falling through to legacy table/schema names.
-function _brainTarget() {
-  var memoryUrl = String(process.env.MEMORY_BANK_URL || '').trim();
-  var memoryKey = String(process.env.MEMORY_BANK_KEY || '').trim();
-  if (memoryUrl || memoryKey) {
-    if (!memoryUrl || !memoryKey) {
-      return {
-        url: null,
-        key: null,
-        table: process.env.BEAD_TABLE || 'beads',
-        schema: process.env.BRAIN_SCHEMA || 'memory_bank',
-        error: 'memory_bank_target_incomplete'
-      };
-    }
-    return {
-      url: memoryUrl,
-      key: memoryKey,
-      table: process.env.BEAD_TABLE || 'beads',
-      schema: process.env.BRAIN_SCHEMA || 'memory_bank',
-      error: null
-    };
-  }
-  var legacyUrl = String(process.env.AIBE_BRAIN_URL || '').trim();
-  var legacyKey = String(process.env.AIBE_BRAIN_KEY || '').trim();
-  if (!legacyUrl || !legacyKey) {
-    return {
-      url: null,
-      key: null,
-      table: process.env.BEAD_TABLE || 'aibe_brain',
-      schema: process.env.BRAIN_SCHEMA || 'abacia_core',
-      error: legacyUrl || legacyKey ? 'legacy_target_incomplete' : 'brain_target_unconfigured'
-    };
-  }
-  return {
-    url: legacyUrl,
-    key: legacyKey,
-    table: process.env.BEAD_TABLE || 'aibe_brain',
-    schema: process.env.BRAIN_SCHEMA || 'abacia_core',
-    error: null
-  };
-}
+// ⬡B:core.fcw.builder:WIRE:canonical_new_world_brain_client:20260715⬡
+// Memory Bank builds judgment context; the canonical client owns persistence and
+// rejects an unborn or partially configured per-HAM world.
+const { writeBead } = require('./brain.client.js');
 
 var findOrgan;
 try {
@@ -110,9 +71,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var _isWonderGamesQ = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/.test(_q);
   var _batch = [
     findIdentity(hamUid),
-    findAgentJDs(),
+    findAgentJDs(hamUid),
     findContext(hamUid, 5),
-    findRecentResults(5),
+    findRecentResults(hamUid, 5),
     findDoctrine(hamUid, 3),
     findPersonProfile(hamUid)
   ];
@@ -316,14 +277,12 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'their own life story or "you do not know me" -> source_prefix journal.biography.v2 ;',
     'a prophecy or revelation -> source_prefix journal.prophecies.v2 ; a thought or idea',
     'they wrote -> source_prefix journal.thoughts.v2 ; a specific book -> source_prefix',
-    'journal.books. plus the book slug if you can tell which one (balanced_party,',
-    'journey_to_balance, gaslight_draft, gaslight_outline, man_like_coffee_outline,',
-    'man_like_coffee_ch1, man_like_coffee_prelude, marriage_meter_outline,',
-    'marriage_meter_content, trinity_outline, raisin_brandon_outline, remove_the_doors,',
-    'moving_maria) ; unsure which -> the bare journal. prefix as a last resort. If they ask',
-    'for the OPENING, BEGINNING, or FIRST line/part of something, pass order:"asc" -- without',
-    'it you get the newest-created part, not the actual start, and will answer wrong. Call the',
-    'tool BEFORE answering -- do not guess. If nothing comes back, say so honestly.',
+    'journal.books. plus a slug only when the current request or this HAM\'s retrieved context',
+    'actually supplies that book name. Otherwise use the bare journal.books. prefix; never',
+    'carry another person\'s title list into this HAM\'s wall. If they ask for the OPENING,',
+    'BEGINNING, or FIRST line/part of something, pass order:"asc" -- without it you get the',
+    'newest-created part, not the actual start, and will answer wrong. Call the tool BEFORE',
+    'answering -- do not guess. If nothing comes back, say so honestly.',
     'Do not repeat stock phrases (like air or ventilation status) unless directly asked about',
     'system health. Answer what was actually asked, in fresh words each time.',
     'Never include internal labels in your reply -- no "SIGIL:", no "SHADOW:", no stamps,',
@@ -366,75 +325,49 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var wallPersistence = { attempted: false, persisted: false, status: null, error: null, id: null, source: null };
 
   try {
-    var target = _brainTarget();
-    if (target.url && target.key) {
-      wallPersistence.attempted = true;
-      var wallAt = Date.now();
-      var wallSource = 'ham_' + String(hamUid).toLowerCase() + '.fcw.build.' + wallAt;
-      var wallEdges = [{ type: 'grounds', target: 'ham_' + String(hamUid).toLowerCase() + '.pai.context' }];
-      var wallContent = {
-        entrance: {
-          hamUid: String(hamUid).toUpperCase(),
-          channel: channel || null,
-          question: String(question || '').slice(0, 120),
-          gateIdentity: !!identity
-        },
-        exit: {
-          ok: finderReceiptsVerified,
-          readFailures: finderFailures,
-          contributors: contributors,
-          contributorDetails: contributorDetails,
-          contributorsResolved: contributorsResolved,
-          contributorsTotal: contributorsTotal,
-          memoryReads: memoryReads,
-          msBeforePersistence: Date.now() - t0
-        },
-        note: emptyContributors.length
-          ? ('Memory Bank wall assembled with EMPTY contributors: ' + emptyContributors.join(', ') + ' -- if she answered wrong on this turn, start here')
-          : 'Memory Bank wall assembled with every measured contributor present',
-        edges: wallEdges
-      };
-      var wallBead = {
-        ham_uid: String(hamUid).toUpperCase(),
-        agent_global: 'Memory Bank',
-        stamp_type: 'MINUTES',
-        acl_stamp: '\u2b21B:core.fcw.builder:MINUTES:wall_built:' + wallAt + '\u2b21',
-        source: wallSource,
-        content: JSON.stringify(wallContent),
-        summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase() + ' (' + (channel || 'na') + '), ' + contributorsResolved + '/' + contributorsTotal + ' contributors',
-        importance: 2
-      };
-      if (target.table !== 'aibe_brain') {
-        wallBead.spawned_by = 'Memory Bank';
-        wallBead.edges = wallEdges;
-      }
-      wallPersistence.source = wallSource;
-      var wallResponse = await fetch(target.url + '/rest/v1/' + target.table, {
-        method: 'POST',
-        headers: {
-          apikey: target.key,
-          Authorization: 'Bearer ' + target.key,
-          'Accept-Profile': target.schema,
-          'Content-Profile': target.schema,
-          'Content-Type': 'application/json',
-          Prefer: 'return=representation'
-        },
-        body: JSON.stringify(wallBead)
-      });
-      wallPersistence.status = wallResponse.status;
-      var wallResponseText = String(await wallResponse.text());
-      if (wallResponse.ok) {
-        var wallRows = [];
-        try { wallRows = wallResponseText ? JSON.parse(wallResponseText) : []; } catch (_eWallJson) {}
-        var wallRow = Array.isArray(wallRows) ? wallRows[0] : wallRows;
-        wallPersistence.id = wallRow && wallRow.id != null ? wallRow.id : null;
-        wallPersistence.persisted = wallPersistence.id != null;
-        if (!wallPersistence.persisted) wallPersistence.error = 'receipt_id_missing';
-      } else {
-        wallPersistence.error = wallResponseText.slice(0, 300);
-      }
-    } else {
-      wallPersistence.error = target.error || 'brain_target_unconfigured';
+    wallPersistence.attempted = true;
+    var wallAt = Date.now();
+    var wallSource = 'memory_bank.' + String(hamUid).toLowerCase() + '.fcw.build.' + wallAt;
+    var wallEdges = [{ type: 'grounds', target: 'ham_' + String(hamUid).toLowerCase() + '.pai.context' }];
+    var wallContent = {
+      entrance: {
+        hamUid: String(hamUid).toUpperCase(),
+        channel: channel || null,
+        question: String(question || '').slice(0, 120),
+        gateIdentity: !!identity
+      },
+      exit: {
+        ok: finderReceiptsVerified,
+        readFailures: finderFailures,
+        contributors: contributors,
+        contributorDetails: contributorDetails,
+        contributorsResolved: contributorsResolved,
+        contributorsTotal: contributorsTotal,
+        memoryReads: memoryReads,
+        msBeforePersistence: Date.now() - t0
+      },
+      note: emptyContributors.length
+        ? ('Memory Bank wall assembled with EMPTY contributors: ' + emptyContributors.join(', ') + ' -- inspect these measured gaps before trusting an answer')
+        : 'Memory Bank wall assembled with every measured contributor present'
+    };
+    wallPersistence.source = wallSource;
+    var wallWrite = await writeBead({
+      hamUid: String(hamUid).toUpperCase(),
+      agentGlobal: 'Memory Bank',
+      type: 'MINUTES',
+      source: wallSource,
+      content: wallContent,
+      summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase()
+        + ' (' + (channel || 'na') + '), ' + contributorsResolved
+        + '/' + contributorsTotal + ' contributors',
+      importance: 2,
+      edges: wallEdges
+    });
+    wallPersistence.status = wallWrite && wallWrite.status != null ? wallWrite.status : null;
+    wallPersistence.id = wallWrite && wallWrite.id != null ? wallWrite.id : null;
+    wallPersistence.persisted = !!(wallWrite && wallWrite.ok && wallPersistence.id != null);
+    if (!wallPersistence.persisted) {
+      wallPersistence.error = String(wallWrite && wallWrite.error || 'fcw_receipt_missing').slice(0, 300);
     }
   } catch (_e) {
     wallPersistence.error = String(_e && _e.message || _e).slice(0, 300);
@@ -442,10 +375,17 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   ms = Date.now() - t0;
   var wallReceiptVerified = wallPersistence.persisted === true
     && wallPersistence.id != null;
-  var groundingOk = finderReceiptsVerified && wallReceiptVerified;
+  var requiredContributors = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile'];
+  var allRequiredContributorsResolved = requiredContributors.every(function (name) {
+    return contributors[name] === true;
+  }) && contributorsResolved === 6 && contributorsTotal === 6;
+  var groundingOk = finderReceiptsVerified && wallReceiptVerified
+    && allRequiredContributorsResolved;
   var groundingReason = finderFailures.length
     ? 'memory_read_unverified'
-    : (groundingOk ? null : 'fcw_receipt_unpersisted');
+    : (!wallReceiptVerified
+        ? 'fcw_receipt_unpersisted'
+        : (allRequiredContributorsResolved ? null : 'fcw_contributors_incomplete'));
 
   return {
     ok: groundingOk,
@@ -460,6 +400,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     readFailures: finderFailures,
     readReceiptsVerified: finderReceiptsVerified,
     wallReceiptVerified: wallReceiptVerified,
+    allRequiredContributorsResolved: allRequiredContributorsResolved,
     contributorsResolved: contributorsResolved,
     contributorsTotal: contributorsTotal,
     wallPersistence: wallPersistence,
