@@ -75,19 +75,16 @@ var TOOLS = [
     +'the contest system are stamped there, not just individual match results). '
     +'agent_global can combine with stamp_type (e.g. agent_global MEDIATORS_ADVISOR + stamp_type RESULT) to narrow further, '
     +'or be used alone with a higher limit to see everything recent from that org. '
-    +'Real, confirmed bug this closes: ham_uid defaults to the asking HAM unless you pass it explicitly, but '
-    +'UNRESOLVED_INBOUND rows are always stamped ham_uid "unknown" (an unresolved sender has no HAM yet), so a '
-    +'default search for inbox questions silently returns nothing every time even with the right stamp_type. '
-    +'For UNRESOLVED_INBOUND specifically, pass ham_uid as the literal string "unknown", not the asking HAM. '
+    +'The authenticated cycle HAM is always applied mechanically; tool/model input cannot select another world. '
+    +'UNRESOLVED_INBOUND is the one system-owned exception and automatically reads literal HAM "unknown". '
     +'If you are not sure which stamp_type or agent_global fits, run it with a higher limit and no filter first, read '
     +'the summaries, then narrow. Say plainly you do not have the information rather than guessing if nothing real comes back.',
     parameters:{type:'object',properties:{stamp_type:{type:'string'},source_prefix:{type:'string'},
-      agent_global:{type:'string',description:'Exact org/advisor name for topic questions -- see description for the real list. Equality match, not a keyword search.'},
-      ham_uid:{type:'string'},limit:{type:'number'},
+      agent_global:{type:'string',description:'Exact org/advisor name for topic questions -- see description for the real list. Equality match, not a keyword search.'},limit:{type:'number'},
       order:{type:'string',description:'"asc" to get the EARLIEST match (e.g. the beginning/opening of a multi-part document); omit for newest-first, the default.'}}}}},
   {type:'function',function:{name:'write_to_brain',description:'Write a BEAD to brain.',
-    parameters:{type:'object',required:['ham_uid','stamp_type','summary','content'],
-    properties:{ham_uid:{type:'string'},stamp_type:{type:'string'},
+    parameters:{type:'object',required:['stamp_type','summary','content'],
+    properties:{stamp_type:{type:'string'},
       summary:{type:'string'},content:{type:'string'},importance:{type:'number'}}}}},
   {type:'function',function:{name:'read_render_logs',description:'Read crash logs for a Render service. Use when diagnosing deploy failures.',
     parameters:{type:'object',required:['service_id'],
@@ -97,56 +94,56 @@ var TOOLS = [
     properties:{repo:{type:'string'},path:{type:'string'},content:{type:'string'},reason:{type:'string'}}}}},
   {type:'function',function:{name:'trigger_deploy',description:'Trigger a Render deploy after fixing a file.',
     parameters:{type:'object',required:['service_id'],properties:{service_id:{type:'string'}}}}},
-  {type:'function',function:{name:'notify_ham',description:'Text a HAM via iMessage. Use to reach Brandon when something is fixed or needs attention.',
-    parameters:{type:'object',required:['ham_uid','message'],properties:{ham_uid:{type:'string'},message:{type:'string'}}}}},
+  {type:'function',function:{name:'notify_ham',description:'Text the resolved HAM through the configured personal channel when something is fixed or needs attention.',
+    parameters:{type:'object',required:['message'],properties:{message:{type:'string'}}}}},
   {type:'function',function:{name:'get_budget_upcoming',description:'Get the HAM\'s real upcoming Buy Now Pay Later payments (Zip, Afterpay, Klarna, Sezzle) with exact due dates and amounts. '
     +'Use for any question about what money is due soon, what is coming up, or pay-later balances.',
-    parameters:{type:'object',properties:{ham_uid:{type:'string'},days:{type:'number',description:'How many days ahead to look, default 45'}}}}},
+    parameters:{type:'object',properties:{days:{type:'number',description:'How many days ahead to look, default 45'}}}}},
   {type:'function',function:{name:'get_budget_summary',description:'Get the HAM\'s real income vs expenses for the current or a specific budget cycle, spending by category, and active BNPL plan count. '
     +'Use for any question about being on track, how much has come in or gone out, or spending by category.',
-    parameters:{type:'object',properties:{ham_uid:{type:'string'},cycle_start:{type:'string'},cycle_end:{type:'string'}}}}},
+    parameters:{type:'object',properties:{cycle_start:{type:'string'},cycle_end:{type:'string'}}}}},
   {type:'function',function:{name:'create_reminder',description:'Create a real reminder that fires as a real text at the due time, and shows in Command Center before then. '
     +'Use when the HAM asks to be reminded of something, or names a specific future thing to remember. '
     +'If the HAM did not state a real date or timeframe, do not invent one -- omit due_at entirely and a sensible near-future default is used automatically.',
-    parameters:{type:'object',required:['ham_uid','text'],
-    properties:{ham_uid:{type:'string'},text:{type:'string',description:'the reminder text, in plain words'},
+    parameters:{type:'object',required:['text'],
+    properties:{text:{type:'string',description:'the reminder text, in plain words'},
       due_at:{type:'string',description:'ISO 8601 timestamp, ONLY if the HAM actually stated a real date or timeframe. Leave this out entirely otherwise -- never invent a specific date that was not given.'}}}}},
   {type:'function',function:{name:'consult_advisor',description:'Consult one of the HAM\'s real advisors (their named worlds/stations such as bdif, gmg, business, mediators, mh_action) about a question or task, and get their brief back. '
     +'Use whenever the HAM asks to talk to, ask, run something by, or get input from an advisor. The advisor roster is per-HAM and real -- never invent an advisor name; if unsure, the tool returns the real available list.',
-    parameters:{type:'object',required:['ham_uid','advisor','question'],
-    properties:{ham_uid:{type:'string'},advisor:{type:'string',description:'the advisor/station slug, e.g. bdif, gmg, business, mediators, mh_action'},
+    parameters:{type:'object',required:['advisor','question'],
+    properties:{advisor:{type:'string',description:'the advisor/station slug, e.g. bdif, gmg, business, mediators, mh_action'},
       question:{type:'string',description:'what to ask the advisor, in plain words'}}}}},
   {type:'function',function:{name:'calendar_read',description:'Read the HAM\'s real calendar: upcoming events and open time slots. Use whenever the HAM asks what is on their calendar, whether they are free, or to find a time or slot for something (a haircut, a meeting). Returns real events and computed free slots -- never invent availability.',
-    parameters:{type:'object',required:['ham_uid'],
-    properties:{ham_uid:{type:'string'},want:{type:'string',enum:['events','slots','both'],description:'events = what is scheduled, slots = open times, both = default'},
+    parameters:{type:'object',
+    properties:{want:{type:'string',enum:['events','slots','both'],description:'events = what is scheduled, slots = open times, both = default'},
       days:{type:'number',description:'how many days ahead to consider, default 14'}}}}},
   {type:'function',function:{name:'calendar_book',description:'Book a REAL event on the HAM\'s calendar. This creates an actual calendar entry, so only call it once the HAM has approved the specific time -- after calendar_read surfaced an open slot they said yes to, or when they explicitly ask to put something on their calendar at a stated time. IMPORTANT: if the HAM is replying to a session you (or a prior turn) proposed -- "yes", "lock it", "sounds good", a specific time they picked -- first call find_in_brain with stamp_type SESSION to find the exact pending proposal and its slot times, then book those exact times, do not invent a time. Never book a time the HAM has not confirmed.',
-    parameters:{type:'object',required:['ham_uid','title','start'],
-    properties:{ham_uid:{type:'string'},title:{type:'string',description:'what the event is, e.g. "Haircut"'},
+    parameters:{type:'object',required:['title','start'],
+    properties:{title:{type:'string',description:'what the event is, e.g. "Haircut"'},
       start:{type:'string',description:'ISO 8601 start time'},end:{type:'string',description:'ISO 8601 end time; optional, defaults to 45 minutes after start'},
       description:{type:'string',description:'optional note on the event'}}}}},
   {type:'function',function:{name:'propose_working_session',description:'Convene a real working session with the HAM when enough genuine work has piled up. Pulls the real agenda from what the advisers already proposed and what is owed to the HAM, finds an open slot on their calendar, and brings it to them with a real agenda. Use when the HAM asks whether you should meet, or when accumulated decisions genuinely need a sit-down. Convenes nothing if there is not enough real material -- never a canned session.',
-    parameters:{type:'object',required:['ham_uid'],
-    properties:{ham_uid:{type:'string'},autobook:{type:'boolean',description:'if true, book the slot live now; default false = propose the real slot and agenda and ask to lock it'}}}}},
+    parameters:{type:'object',
+    properties:{autobook:{type:'boolean',description:'if true, book the slot live now; default false = propose the real slot and agenda and ask to lock it'}}}}},
   {type:'function',function:{name:'contact_send',description:'Text a REAL third party (not the HAM) -- someone resolved via find_contact. This is a real outbound message to a real external human, gated by the HAM\'s own standing rule: an outbound send to a real external human needs explicit confirmation UNLESS the HAM already authorized this exact send in their current message ("text my brother and tell him X" IS the authorization -- send it). Set authorized_in_message true ONLY when the HAM\'s current message explicitly instructed this exact send to this exact person. If you are proposing this on your own initiative, or the HAM only mentioned the person without instructing a send, set it false -- this drafts the message and asks for confirmation instead of sending. Never invent a phone number; if find_contact returned nothing, do not call this.',
-    parameters:{type:'object',required:['ham_uid','contact_query','message','authorized_in_message'],
-    properties:{ham_uid:{type:'string'},contact_query:{type:'string',description:'the name or relationship as the HAM said it, e.g. "BJ" or "my brother"'},
+    parameters:{type:'object',required:['contact_query','message','authorized_in_message'],
+    properties:{contact_query:{type:'string',description:'the name or relationship as the HAM said it, e.g. "BJ" or "my brother"'},
       message:{type:'string',description:'the exact text to send'},
       authorized_in_message:{type:'boolean',description:'true only if the HAM\'s current message explicitly instructed this exact send'}}}}},
   {type:'function',function:{name:'find_contact',description:'Resolve a person the HAM names (a name like BJ, or a relationship like "my brother" or "mom") to their real saved contact (name, relationship, phone, email). Use before texting, calling, or emailing someone who is not the HAM, or when the HAM asks for a contact\'s details. Returns not found if the person is not saved -- never invent a number or email.',
-    parameters:{type:'object',required:['ham_uid','who'],
-    properties:{ham_uid:{type:'string'},who:{type:'string',description:'the name or relationship phrase, e.g. "my brother", "BJ", "mom"'}}}}},
+    parameters:{type:'object',required:['who'],
+    properties:{who:{type:'string',description:'the name or relationship phrase, e.g. "my brother", "BJ", "mom"'}}}}},
   {type:'function',function:{name:'stop_mentioning',description:'Stop bringing up a topic, task, or reminder the HAM has told you to drop (for example "stop mentioning the Park LOI", "that is expired, quit reminding me"). Records a suppression so it never surfaces again as a passive aside. Use whenever the HAM says a recurring mention is unwanted, done, or expired.',
-    parameters:{type:'object',required:['ham_uid','keyword'],
-    properties:{ham_uid:{type:'string'},keyword:{type:'string',description:'the distinctive word or phrase to stop mentioning, e.g. "park" or "Park LOI"'}}}}},
+    parameters:{type:'object',required:['keyword'],
+    properties:{keyword:{type:'string',description:'the distinctive word or phrase to stop mentioning, e.g. "park" or "Park LOI"'}}}}},
   {type:'function',function:{name:'get_pending_drafts',description:'Get the real, current pending draft replies for a specific org, waiting on approval. '
     +'Use this whenever asked for drafts, pending replies, or "the X ones" for BDIF, Mediators, GMG, or MH Action -- do not use find_in_brain for this, the general search misses these under real traffic volume.',
-    parameters:{type:'object',required:['org'],properties:{ham_uid:{type:'string'},
+    parameters:{type:'object',required:['org'],properties:{
       org:{type:'string',enum:['bdif','mediators','gmg','mh_action'],description:'which org\'s drafts to pull'}}}}},
   {type:'function',function:{name:'request_new_capability',description:'Use when the HAM asks you to help with something you cannot currently do -- a new kind of coaching, tracking, or agent. '
     +'Checks whether enough real data already exists about this to actually build it. If yes, files a real build task. If not, tells you exactly what specific information to provide first.',
-    parameters:{type:'object',required:['ham_uid','capability_description'],
-    properties:{ham_uid:{type:'string'},capability_description:{type:'string',description:'what the HAM wants help with, in their own words'}}}}},
+    parameters:{type:'object',required:['capability_description'],
+    properties:{capability_description:{type:'string',description:'what the HAM wants help with, in their own words'}}}}},
   // \u2b21B:core.tool_loop:FIX:screen_control_as_real_tool_not_prose_json:20260709\u2b21
   // Founder-caught live, twice, two different failure modes: asking a text-completion
   // model to embed a trailing JSON block inside free conversational prose is unreliable
@@ -214,15 +211,25 @@ var TOOLS = [
       query:{type:'string',description:'Plain-language description of the real feature or behavior to look up, e.g. "command center timestamp display" or "how reminders get marked done".'}
     }}}}
 ];
-async function executeTool(name, args, hamUid, origMessage, cycleId) {
+async function executeTool(name, args, hamUid, origMessage, cycleId, builderAuthorized) {
+  args = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  // Coding mutations are authorized only by trusted face policy carried in the
+  // cycle identity. Message prose, tool arguments, and body.mode cannot grant it.
+  if ((name === 'fix_file_in_github' || name === 'trigger_deploy')
+      && builderAuthorized !== true) {
+    return JSON.stringify({ok:false,reason:'builder_authorization_required'});
+  }
   if (name === 'read_own_code') {
     try {
       var ghToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
       if (!ghToken) return JSON.stringify({ok:false,note:'No real code-read access configured right now.'});
       var query = String(args.query || '').trim();
       if (!query) return JSON.stringify({ok:false,note:'no query given'});
-      // Real, read-only. Scoped to the two repos that are actually her own real code.
-      var repos = ['brandonjpiercesr-cmyk/anew','brandonjpiercesr-cmyk/eanew'];
+      // Real, read-only, and explicitly deployed: no repository identity is baked into PAI.
+      var repos = String(process.env.PAI_CODE_REPOS || '').split(',')
+        .map(function (repo) { return repo.trim(); })
+        .filter(function (repo) { return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo); });
+      if (!repos.length) return JSON.stringify({ok:false,note:'No code repository allowlist is configured.'});
       var found = [];
       // \u2b21B:core.tool.loop:FIX:real_naming_collision_confused_synthesis:20260710\u2b21
       // Real, live incident, founder-caught, doctrine violation (STAY GROUNDED): asked
@@ -238,7 +245,7 @@ async function executeTool(name, args, hamUid, origMessage, cycleId) {
       var qLower = query.toLowerCase();
       var anchorResolved = false;
       if (qLower.indexOf('CLAIR command center') !== -1 || qLower.indexOf('clear-command-center') !== -1) {
-        found.push({repo:'brandonjpiercesr-cmyk/anew',path:'routes/three-ray.routes.js'});
+        found.push({repo:repos[0],path:'routes/three-ray.routes.js'});
         anchorResolved = true;
       }
       // \u2b21B:core.tool.loop:FIX:unrelated_cross_repo_number_bled_into_answer:20260710\u2b21
@@ -780,8 +787,14 @@ async function executeTool(name, args, hamUid, origMessage, cycleId) {
     try {
       var _calHam = String(hamUid).toUpperCase();
       if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
-      var _selfBase = process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
-      var _cr = await fetch(_selfBase + '/os/calendar/' + _calHam).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+      var _calendarBase = String(process.env.CALENDAR_SERVICE_URL || '').replace(/\/$/, '');
+      var _calendarKey = String(process.env.CALENDAR_INTERNAL_KEY || '');
+      if (!_calendarBase || !_calendarKey) {
+        return JSON.stringify({ok:false,reason:'calendar_service_not_configured'});
+      }
+      var _cr = await fetch(_calendarBase + '/os/calendar/' + encodeURIComponent(_calHam), {
+        headers: { 'x-calendar-internal-key': _calendarKey }
+      }).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
       var _realEvents = (_cr && _cr.events) || [];
       var _out = {ok:true, ham_uid:_calHam, events: _realEvents.slice(0,20)};
       if (!_realEvents.length) _out.note = 'no calendar events found for this HAM right now';
@@ -973,7 +986,16 @@ async function executeTool(name, args, hamUid, origMessage, cycleId) {
     return JSON.stringify(await readRenderLogs(args.service_id, args.limit||50));
   }
   if (name === 'fix_file_in_github') {
-    var path = args.path || '';
+    var allowedCodeRepos = String(process.env.PAI_CODE_REPOS || '').split(',')
+      .map(function (repo) { return repo.trim(); })
+      .filter(function (repo) { return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo); });
+    if (!allowedCodeRepos.length || allowedCodeRepos.indexOf(String(args.repo || '')) === -1) {
+      return JSON.stringify({ok:false,reason:'repository_not_allowlisted'});
+    }
+    var path = String(args.path || '');
+    if (!path || path.startsWith('/') || path.split('/').indexOf('..') !== -1) {
+      return JSON.stringify({ok:false,reason:'repository_path_invalid'});
+    }
     var now = Date.now();
     var last = _lastFixAttempt[path] || 0;
     if (now - last < FIX_COOLDOWN_MS) {
@@ -1000,6 +1022,12 @@ async function executeTool(name, args, hamUid, origMessage, cycleId) {
     return JSON.stringify(await fixFileInGithub(args.repo, args.path, args.content, args.reason));
   }
   if (name === 'trigger_deploy') {
+    var allowedDeployServices = String(process.env.PAI_DEPLOY_SERVICES || '').split(',')
+      .map(function (service) { return service.trim(); }).filter(Boolean);
+    if (!allowedDeployServices.length
+        || allowedDeployServices.indexOf(String(args.service_id || '')) === -1) {
+      return JSON.stringify({ok:false,reason:'service_not_allowlisted'});
+    }
     return JSON.stringify(await triggerDeploy(args.service_id));
   }
   if (name === 'notify_ham') {
@@ -1254,8 +1282,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var fcw=await buildMemoryBank(hamUid,channel,message,identity).catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
   var _fcwWall = fcw && fcw.wallPersistence;
+  var _requiredFcwContributors = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile'];
+  var _fcwContributorsComplete = !!(fcw && fcw.contributors
+    && _requiredFcwContributors.every(function (name) { return fcw.contributors[name] === true; })
+    && Number(fcw.contributorsResolved) === 6
+    && Number(fcw.contributorsTotal) === 6);
   var _fcwGrounded = !!(fcw && fcw.ok === true
     && typeof fcw.system_prompt === 'string' && fcw.system_prompt.length > 0
+    && _fcwContributorsComplete
     && _fcwWall && _fcwWall.persisted === true && _fcwWall.id != null);
   if (!_fcwGrounded) {
     var _fcwReason = String(fcw && (fcw.reason || (fcw.wallPersistence && fcw.wallPersistence.error)) || 'fcw_unverified').slice(0, 300);
@@ -1413,7 +1447,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // whether each real tool result succeeded. No result body or secret is retained.
   var iter=0,tools=[],_toolOutcomes=[],ans=null;
   function _boundedToolOutcome(name, raw, elapsedMs, thrown) {
-    var outcome = { name: String(name || 'unknown'), ok: !thrown, ms: Math.max(0, Number(elapsedMs) || 0), reads: 0, reason: null };
+    var outcome = { name: String(name || 'unknown'), ok: !thrown,
+      ms: Math.max(0, Number(elapsedMs) || 0), reads: 0, pending: false, reason: null };
     var parsed = null;
     if (!thrown) {
       if (raw && typeof raw === 'object') parsed = raw;
@@ -1422,9 +1457,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
       if (parsed && typeof parsed === 'object') {
         outcome.reads = Math.max(0, Number(parsed.reads) || 0);
-        if (parsed.ok === false || parsed.success === false || parsed.failed === true || parsed.error) {
+        var actionPending = parsed.pending === true || parsed.authorization_pending === true
+          || parsed.authorization_required === true
+          || (parsed.drafted === true && parsed.sent === false);
+        var actionNotCompleted = parsed.sent === false || parsed.booked === false
+          || parsed.created === false || parsed.built === false
+          || parsed.scheduled === false || parsed.deployed === false
+          || parsed.fixed === false || actionPending;
+        outcome.pending = actionPending;
+        if (parsed.ok === false || parsed.success === false || parsed.failed === true
+            || parsed.error || actionNotCompleted) {
           outcome.ok = false;
-          outcome.reason = String(parsed.error || parsed.reason || parsed.note || 'tool_reported_failure').slice(0, 160);
+          outcome.reason = String(parsed.error || parsed.reason || parsed.note
+            || (actionNotCompleted ? 'action_not_completed' : 'tool_reported_failure')).slice(0, 160);
         }
       }
     } else {
@@ -1836,7 +1881,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var toolStartedAt = Date.now();
         var tr, toolOutcome;
         try {
-          tr = await executeTool(tc.function.name,targs,hamUid,message,_cycleId);
+          tr = await executeTool(tc.function.name,targs,hamUid,message,_cycleId,
+            !!(identity && identity.builderAuthorized === true));
           toolOutcome = _boundedToolOutcome(tc.function.name, tr, Date.now() - toolStartedAt, null);
         } catch (toolError) {
           toolOutcome = _boundedToolOutcome(tc.function.name, null, Date.now() - toolStartedAt, toolError);
@@ -2039,6 +2085,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       active_awareness_write_persisted:!!(_activeAwarenessWrite&&_activeAwarenessWrite.persisted),
       active_awareness_receipt_id:(_activeAwarenessWrite&&_activeAwarenessWrite.id!=null)?_activeAwarenessWrite.id:null};
   }
+  // A completed PAI conversation is not proof that an external action completed.
+  // If any tool fell or returned an explicit not-completed flag, replace every possible
+  // success claim with a deterministic, receipted statement of what did not happen.
+  var _failedToolOutcomes = _toolOutcomes.filter(function (outcome) { return !outcome.ok; });
+  if (_failedToolOutcomes.length) {
+    var _failureSummary = _failedToolOutcomes.map(function (outcome) {
+      return outcome.name + ' (' + String(outcome.reason || 'failed').slice(0, 100) + ')';
+    }).join(', ');
+    finalAns = 'I did not complete that action. ' + _failureSummary + '.';
+    await _stampStep('tool_failure_answer_grounded', _failureSummary);
+  }
   // ⬡B:core.tool.loop:BUILD:universal_tracker_done_on_completion:20260713⬡
   // The other half of the Architect's tracker: when a real action request completes, it
   // gets a TRACK DONE with what ran, so "everything has a record" is true on the win side
@@ -2049,20 +2106,31 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if (!(typeof _blockedFallback !== 'undefined' && _blockedFallback)) {
       var _trkD = require('./tracker.js');
       if (_trkD.looksLikeActionRequest(message)) {
-        await _trkD.stampTrack({ hamUid: hamUid, status: 'DONE', kind: 'request',
-          request: String(message||''), channel: channel, cycleId: _cycleId, tools_used: tools,
-          outcome: finalAns });
+        await _trkD.stampTrack({
+          hamUid: String(hamUid).toUpperCase(),
+          status: _failedToolOutcomes.length ? 'BLOCKED' : 'DONE',
+          kind: 'request',
+          request: String(message||''),
+          channel: channel,
+          cycleId: _cycleId,
+          tools_used: tools,
+          outcome: finalAns,
+          reason: _failedToolOutcomes.length
+            ? _failedToolOutcomes.map(function (outcome) {
+                return outcome.name + ':' + String(outcome.reason || 'failed').slice(0, 100);
+              }).join(', ')
+            : null
+        });
       }
     }
   } catch (eTrkDone) {}
-  await _closeActiveAwareness(finalAns, 'DONE');
+  await _closeActiveAwareness(finalAns, _failedToolOutcomes.length ? 'BLOCKED' : 'DONE');
   // ⬡B:core.tool.loop:FIX:verified_durable_cycle_receipt:20260715⬡
   // The stamped receipt and the returned receipt share the exact same measured
   // fields. Persistence is explicit; a caller can never confuse an attempted
   // diagnostic write with a durable PAI cycle.
-  var _cycleWorkMs = Date.now() - t0;
-  var _fellTools = _toolOutcomes.filter(function (outcome) { return !outcome.ok; })
-    .map(function (outcome) { return outcome.name; });
+  var _cycleWorkMs = Math.max(1, Date.now() - t0);
+  var _fellTools = _failedToolOutcomes.map(function (outcome) { return outcome.name; });
   var _memoryReads = ((fcw && Number(fcw.memoryReads)) || 0)
     + ((_activeAwarenessRead && Number(_activeAwarenessRead.reads)) || 0)
     + _toolOutcomes.reduce(function (total, outcome) {
@@ -2102,8 +2170,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     && _receiptFields.active_awareness_read === true
     && _receiptFields.active_awareness_persisted === true
     && _receiptFields.active_awareness_receipt_id != null
-    && Number.isFinite(_receiptFields.memory_reads) && _receiptFields.memory_reads > 0
-    && Array.isArray(_receiptFields.tools_used) && Array.isArray(_receiptFields.tool_executions);
+    && Number.isFinite(_receiptFields.memory_reads) && _receiptFields.memory_reads >= 7
+    && _fcwContributorsComplete
+    && Array.isArray(_receiptFields.tools_used) && Array.isArray(_receiptFields.tool_executions)
+    && _receiptFields.tools_used.length === _receiptFields.tool_executions.length
+    && _receiptFields.tool_executions.every(function (execution, index) {
+      return execution && execution.name === _receiptFields.tools_used[index]
+        && typeof execution.ok === 'boolean'
+        && Number.isFinite(execution.ms) && execution.ms >= 0;
+    });
   var _receiptDetail = _receiptFields;
   try {
     var _lineage = require('./lineage.attach.js');
