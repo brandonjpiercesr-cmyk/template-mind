@@ -94,7 +94,7 @@ app.post('/cycle', async function (req, res) {
     return res.json({ ok: false, reason: (out && out.reason) || 'no_answer', compiled: out });
   } catch (e) {
     console.log('[MIND /cycle] error: ' + e.message);
-    return res.status(500).json({ ok: false, error: e.message, stack: (e.stack||'').split('\n').slice(0,6) });
+    return res.status(500).json({ ok: false, error: e.message });
   }
 });
 
