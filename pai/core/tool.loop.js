@@ -23,7 +23,7 @@ function tokenCapFor(channel) {
 // happens, so no future burst can land regardless of what triggers the retry.
 'use strict';
 // ⬡B:core.tool.loop:FIX:atomic_cycle_bank_target:20260715⬡
-// The ABAHAM-resolved world selects one complete target for each PAI cycle.
+// The ABAHAM door resolves one complete target for each PAI cycle.
 // Every step in that cycle writes to the same URL, table, and schema.
 function _brainTarget() {
   var memoryUrl = process.env.MEMORY_BANK_URL;
@@ -190,9 +190,9 @@ var TOOLS = [
     parameters:{type:'object',properties:{
       background:{type:'string',description:'One of the real canonical background ids. Never invent a new name.'},
       preset:{type:'string',description:'One of the real layout preset names.'},
-      skywrite:{type:'string',description:'One short real line that writes itself across the sky. Never a placeholder.'},
+      skywrite:{type:'string',description:'One short real line that writes itself across the sky. Never a stand-in.'},
       voice:{type:'boolean',description:'true to summon the live voice surface'},
-      cards:{type:'array',description:'Real glass cards to show. Each needs a real title and region (left, center, or right), plus either real items (a text list) or a real https image url with a caption. NEVER invented, generic, or placeholder-feeling content -- "Build 1", "Build 2", or a canned Hello World print statement are exactly what NOT to do; if you do not have a real, specific, verifiable fact for a card, call get_recent_builds or find_in_brain first, or omit that card entirely. A person who calls out fake-looking content is right every time -- omit rather than decorate.',
+      cards:{type:'array',description:'Real glass cards to show. Each needs a real title and region (left, center, or right), plus either real items (a text list) or a real https image url with a caption. NEVER invented, generic, or stand-in content -- "Build 1", "Build 2", or a canned Hello World print statement are exactly what NOT to do; if you do not have a real, specific, verifiable fact for a card, call get_recent_builds or find_in_brain first, or omit that card entirely. A person who calls out fake-looking content is right every time -- omit rather than decorate.',
         items:{type:'object',properties:{title:{type:'string'},region:{type:'string',enum:['left','center','right']},
           items:{type:'array',items:{type:'string'}},image:{type:'string'},caption:{type:'string'},
           email:{type:'object',description:'A real email DRAFT you have fully written, to visibly type itself onto the glass. Rendering only; this can never send. Include to, subject, and the complete real body you drafted.',
@@ -1254,8 +1254,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),temperature:0.3};
     if (iter<=3) body.tools=TOOLS;
     // ⬡B:core.tool_loop:FIX:tool_choice_never_set_defaults_to_skippable:20260705⬡
-    // Real, live incident: Brandon asked directly "who is DC499D0C, show me
-    // the original message" over text -- the single clearest possible
+    // Real, live incident: the founder asked who a real HAM UID was and requested
+    // the original message over text -- the single clearest possible
     // trigger for find_in_brain -- and the turn answered in 4.7s with
     // toolsUsed:[], fabricating "HAM UID stands for Human-Assisted Messaging"
     // out of nothing. The doctrine already says SEARCH FIRST, ALWAYS as a
