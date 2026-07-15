@@ -1,6 +1,7 @@
 // ⬡B:core.fcw.builder:MODULE:context_window_assembler:20260630⬡
 // ⬡B:core.fcw.builder:FIX:identity_type_confusion_resolved:20260630⬡
 // Memory Bank BUILDER -- assembles the agent's context window from brain before any LLM call.
+// Entered through the ABAHAM door for one authenticated HAM; grounds the MESSAGES channel.
 // Uses FIND at microseconds. All queries parallel. No LLM. No hardcode.
 // ANYHAM test: hamUid drives all reads. Any HAM gets their own Memory Bank.
 // Cost: C0 -- pure brain reads via FIND.
