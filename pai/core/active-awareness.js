@@ -7,13 +7,43 @@
 const { find } = require('./find.js');
 
 function _brainTarget() {
-  var memoryUrl = process.env.MEMORY_BANK_URL;
-  var usesMemoryBank = !!memoryUrl;
+  var memoryUrl = String(process.env.MEMORY_BANK_URL || '').trim();
+  var memoryKey = String(process.env.MEMORY_BANK_KEY || '').trim();
+  if (memoryUrl || memoryKey) {
+    if (!memoryUrl || !memoryKey) {
+      return {
+        url: null,
+        key: null,
+        table: process.env.BEAD_TABLE || 'beads',
+        schema: process.env.BRAIN_SCHEMA || 'memory_bank',
+        error: 'memory_bank_target_incomplete'
+      };
+    }
+    return {
+      url: memoryUrl,
+      key: memoryKey,
+      table: process.env.BEAD_TABLE || 'beads',
+      schema: process.env.BRAIN_SCHEMA || 'memory_bank',
+      error: null
+    };
+  }
+  var legacyUrl = String(process.env.AIBE_BRAIN_URL || '').trim();
+  var legacyKey = String(process.env.AIBE_BRAIN_KEY || '').trim();
+  if (!legacyUrl || !legacyKey) {
+    return {
+      url: null,
+      key: null,
+      table: process.env.BEAD_TABLE || 'aibe_brain',
+      schema: process.env.BRAIN_SCHEMA || 'abacia_core',
+      error: legacyUrl || legacyKey ? 'legacy_target_incomplete' : 'brain_target_unconfigured'
+    };
+  }
   return {
-    url: memoryUrl || process.env.AIBE_BRAIN_URL,
-    key: process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY,
-    table: process.env.BEAD_TABLE || (usesMemoryBank ? 'beads' : 'aibe_brain'),
-    schema: process.env.BRAIN_SCHEMA || (usesMemoryBank ? 'memory_bank' : 'abacia_core')
+    url: legacyUrl,
+    key: legacyKey,
+    table: process.env.BEAD_TABLE || 'aibe_brain',
+    schema: process.env.BRAIN_SCHEMA || 'abacia_core',
+    error: null
   };
 }
 
@@ -62,7 +92,7 @@ async function readLastRunWithReceipt(agentName, hamUid) {
     return receipt;
   }
   if (!target.url || !target.key) {
-    receipt.error = 'brain_target_unconfigured';
+    receipt.error = target.error || 'brain_target_unconfigured';
     return receipt;
   }
 
@@ -123,7 +153,7 @@ async function writeLastRunWithReceipt(agentName, hamUid, cycleData) {
     return receipt;
   }
   if (!target.url || !target.key) {
-    receipt.error = 'brain_target_unconfigured';
+    receipt.error = target.error || 'brain_target_unconfigured';
     return receipt;
   }
 
