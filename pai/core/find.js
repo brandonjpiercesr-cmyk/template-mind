@@ -15,19 +15,26 @@
 // order:asc capability and the findContext/findPersonProfile work). Restoration of
 // lost code, zero new behavior.
 'use strict';
-// ⬡B:core.find:WIRE:funneled_20260713⬡
-function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
-function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
-
+// ⬡B:core.find:FIX:atomic_memory_bank_target:20260715⬡
+// The ABAHAM-resolved world selects one complete brain target per FIND request.
+// A MEMORY_BANK_URL can never be paired with the legacy table/schema defaults.
+function _brainTarget() {
+  var memoryUrl = process.env.MEMORY_BANK_URL;
+  var usesMemoryBank = !!memoryUrl;
+  return {
+    url: memoryUrl || process.env.AIBE_BRAIN_URL,
+    key: process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY,
+    table: process.env.BEAD_TABLE || (usesMemoryBank ? 'beads' : 'aibe_brain'),
+    schema: process.env.BRAIN_SCHEMA || (usesMemoryBank ? 'memory_bank' : 'abacia_core')
+  };
+}
 
 function bh() {
-  var BU = _bu();
-  var BK = _bk();
+  var target = _brainTarget();
   return {
-    url: BU,
-    hdrs: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() }
+    url: target.url,
+    table: target.table,
+    hdrs: { apikey: target.key, Authorization: 'Bearer ' + target.key, 'Accept-Profile': target.schema }
   };
 }
 
@@ -41,7 +48,7 @@ function bq(path) {
     var timer = setTimeout(function() {
       if (!settled) { settled = true; resolve([]); }
     }, 2500);
-    fetch(b.url + '/rest/v1/' + _tbl() + '?' + path, { headers: b.hdrs })
+    fetch(b.url + '/rest/v1/' + b.table + '?' + path, { headers: b.hdrs })
       .then(function(r) { return r.ok ? r.json() : []; })
       .then(function(rows) {
         if (!settled) { settled = true; clearTimeout(timer); resolve(rows || []); }
@@ -57,6 +64,8 @@ function bq(path) {
 async function find(queries) {
   if (!Array.isArray(queries)) queries = [queries];
   var t0 = Date.now();
+  var target = bh();
+  var targetReady = !!(target.url && target.hdrs.apikey);
 
   var promises = queries.map(function(q) {
     var parts = [];
@@ -101,7 +110,7 @@ async function find(queries) {
     });
   });
 
-  return { beads: merged, ms: Date.now() - t0, count: merged.length };
+  return { beads: merged, ms: Date.now() - t0, count: merged.length, reads: targetReady ? promises.length : 0 };
 }
 
 // Named FIND patterns used by the Memory Bank builder
