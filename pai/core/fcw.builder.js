@@ -63,6 +63,7 @@ var findOrgan;
 try {
   findOrgan = require('./find.js');
 } catch (findLoadError) {
+  process.exitCode = 1;
   throw new Error('FIND is a required Memory Bank organ and failed to load: ' + String(findLoadError && findLoadError.message || findLoadError));
 }
 const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = findOrgan;
