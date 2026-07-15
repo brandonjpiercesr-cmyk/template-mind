@@ -103,7 +103,7 @@ app.post('/cycle', async function (req, res) {
       const spoken = await require('./face.js').expressTurn(
         { HAM_UID: HAM, PERSONA: process.env.PERSONA },
         { text: out.answer || out.text, contributions: out.tools_used });
-      out._servedBy = "new_world_mind_dc499d0c"; return res.json({ ok: true, compiled: out, expressed: spoken });
+      out._servedBy = "new_world_mind_" + HAM.toLowerCase(); return res.json({ ok: true, compiled: out, expressed: spoken });
     }
     return res.json({ ok: false, reason: (out && out.reason) || 'no_answer', compiled: out });
   } catch (e) {
