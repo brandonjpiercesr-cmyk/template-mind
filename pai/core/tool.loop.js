@@ -217,7 +217,7 @@ var TOOLS = [
       query:{type:'string',description:'Plain-language description of the real feature or behavior to look up, e.g. "command center timestamp display" or "how reminders get marked done".'}
     }}}}
 ];
-async function executeTool(name, args, hamUid) {
+async function executeTool(name, args, hamUid, origMessage) {
   if (name === 'read_own_code') {
     try {
       var ghToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
@@ -453,7 +453,7 @@ async function executeTool(name, args, hamUid) {
     // smells like Wonder Games/cook-off, force a real WONDER_GAMES query before
     // giving up.
     if (res.beads.length===0) {
-      var _wgAsk = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(String(message||''));
+      var _wgAsk = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(String(origMessage||''));
       if (_wgAsk && q.stamp_type!=='WONDER_GAMES') {
         var wgFallback=await find([
           {stamp_type:'WONDER_GAMES',ham_uid:q.ham_uid,limit:q.limit||5},
@@ -1460,7 +1460,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var tc=msg.tool_calls[i],targs={};
         try{targs=JSON.parse(tc.function.arguments||'{}');}catch(e){}
         _stampStep('tool_call', tc.function.name);
-        var tr=await executeTool(tc.function.name,targs,hamUid);
+        var tr=await executeTool(tc.function.name,targs,hamUid,message);
         tools.push(tc.function.name);
         if (tc.function.name === 'read_own_code') {
           try {
