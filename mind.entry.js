@@ -5,6 +5,7 @@
 //   HAM_UID          -- whose world this mind serves
 //   MEMORY_BANK_URL  -- that world's own Supabase (born by worldBirth)
 //   MEMORY_BANK_KEY  -- that world's own service key (minted per HAM, RLS-locked)
+//   MIND_CYCLE_INTERNAL_KEY -- shared only with trusted internal callers of protected POST doors
 // Every world -- the founder's, Eric's, HAM #489's -- deploys THIS SAME FILE and
 // becomes itself purely by configuration. The ACL binding law: this stamp matches
 // the GENESIS stamp family in the bank it serves; the three-way GREP reads code
@@ -22,13 +23,21 @@ const KEY = process.env.MEMORY_BANK_KEY || '';
 const CYCLE_INTERNAL_KEY = String(process.env.MIND_CYCLE_INTERNAL_KEY || '');
 const CYCLE_AUTH_CONFIGURED = CYCLE_INTERNAL_KEY.trim().length > 0;
 
-// The shared face may enter the PAI cycle only through this authenticated internal door.
+// Only trusted internal callers may enter a state-changing or model-running POST.
 // Hashing both values fixes the comparison length before timingSafeEqual; the key is never logged.
 function cycleKeyMatches(provided) {
   if (!CYCLE_AUTH_CONFIGURED || typeof provided !== 'string' || provided.length === 0) return false;
   const expected = crypto.createHash('sha256').update(CYCLE_INTERNAL_KEY, 'utf8').digest();
   const actual = crypto.createHash('sha256').update(provided, 'utf8').digest();
   return crypto.timingSafeEqual(expected, actual);
+}
+
+function requireMindInternalKey(req, res, next) {
+  if (!CYCLE_AUTH_CONFIGURED) return res.status(503).json({ ok: false, reason: 'cycle_auth_unconfigured' });
+  if (!cycleKeyMatches(req.get('x-mind-cycle-key'))) {
+    return res.status(401).json({ ok: false, reason: 'unauthorized' });
+  }
+  return next();
 }
 
 // ENTRANCE narration: a mind without identity or memory refuses to pretend.
@@ -55,7 +64,7 @@ app.get('/health', async function (req, res) {
 
 // /bead -- stamp a bead into THIS world's own memory. Supersede-only lives in the
 // schema (superseded_by); this door only ever adds.
-app.post('/bead', async function (req, res) {
+app.post('/bead', requireMindInternalKey, async function (req, res) {
   try {
     const b = req.body || {};
     if (!b.summary) return res.status(400).json({ ok: false, reason: 'summary required' });
@@ -87,10 +96,8 @@ app.post('/bead', async function (req, res) {
 // the world-agnostic funnel), then hands the compiled turn to face for expression.
 // Additive: the 6 original organs are untouched. The engine is byte-identical to legacy;
 // only the bank it points at differs, by env. Rollback = do not call this door.
-app.post('/cycle', async function (req, res) {
+app.post('/cycle', requireMindInternalKey, async function (req, res) {
   try {
-    if (!CYCLE_AUTH_CONFIGURED) return res.status(503).json({ ok: false, reason: 'cycle_auth_unconfigured' });
-    if (!cycleKeyMatches(req.get('x-mind-cycle-key'))) return res.status(401).json({ ok: false, reason: 'unauthorized' });
     if (!HAM || !BANK || !KEY) return res.status(200).json({ ok: false, reason: 'unborn: missing world env' });
     const body = req.body || {};
     const message = body.message || body.text || '';
@@ -112,17 +119,17 @@ app.post('/cycle', async function (req, res) {
   }
 });
 
-app.post('/express', async function (req, res) {
+app.post('/express', requireMindInternalKey, async function (req, res) {
   try { res.json(await require('./face.js').expressTurn({ HAM_UID: HAM, PERSONA: process.env.PERSONA }, (req.body || {}).compiled || req.body)); }
   catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
-app.post('/code/submit', async function (req, res) {
+app.post('/code/submit', requireMindInternalKey, async function (req, res) {
   try {
     var out = await require('./coding.js').submitForReview({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY, NIGHT_CHECK_URL: process.env.NIGHT_CHECK_URL }, (req.body || {}).draft || req.body);
     res.json(out);
   } catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
-app.post('/downtime/run', async function (req, res) {
+app.post('/downtime/run', requireMindInternalKey, async function (req, res) {
   try { res.json(await require('./downtime.js').downtimeCycle({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY })); }
   catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
@@ -141,7 +148,7 @@ app.post('/atmosphere/resolve', async (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
 
-app.post('/wash/listen', async function (req, res) {
+app.post('/wash/listen', requireMindInternalKey, async function (req, res) {
   try { res.json(await require('./wash.js').washListen({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY }, (req.body || {}).signal || req.body)); }
   catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
