@@ -59,7 +59,13 @@ function _brainTarget() {
   };
 }
 
-const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = require('./find.js');
+var findOrgan;
+try {
+  findOrgan = require('./find.js');
+} catch (findLoadError) {
+  throw new Error('FIND is a required Memory Bank organ and failed to load: ' + String(findLoadError && findLoadError.message || findLoadError));
+}
+const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = findOrgan;
 
 // Build complete Memory Bank for a HAM turn
 // Returns: { system_prompt, ham, agents, context, tools_summary, ms }
