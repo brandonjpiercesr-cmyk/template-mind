@@ -19,13 +19,43 @@
 // The ABAHAM door resolves one complete brain target per FIND request.
 // A MEMORY_BANK_URL can never be paired with the legacy table/schema defaults.
 function _brainTarget() {
-  var memoryUrl = process.env.MEMORY_BANK_URL;
-  var usesMemoryBank = !!memoryUrl;
+  var memoryUrl = String(process.env.MEMORY_BANK_URL || '').trim();
+  var memoryKey = String(process.env.MEMORY_BANK_KEY || '').trim();
+  if (memoryUrl || memoryKey) {
+    if (!memoryUrl || !memoryKey) {
+      return {
+        url: null,
+        key: null,
+        table: process.env.BEAD_TABLE || 'beads',
+        schema: process.env.BRAIN_SCHEMA || 'memory_bank',
+        error: 'memory_bank_target_incomplete'
+      };
+    }
+    return {
+      url: memoryUrl,
+      key: memoryKey,
+      table: process.env.BEAD_TABLE || 'beads',
+      schema: process.env.BRAIN_SCHEMA || 'memory_bank',
+      error: null
+    };
+  }
+  var legacyUrl = String(process.env.AIBE_BRAIN_URL || '').trim();
+  var legacyKey = String(process.env.AIBE_BRAIN_KEY || '').trim();
+  if (!legacyUrl || !legacyKey) {
+    return {
+      url: null,
+      key: null,
+      table: process.env.BEAD_TABLE || 'aibe_brain',
+      schema: process.env.BRAIN_SCHEMA || 'abacia_core',
+      error: legacyUrl || legacyKey ? 'legacy_target_incomplete' : 'brain_target_unconfigured'
+    };
+  }
   return {
-    url: memoryUrl || process.env.AIBE_BRAIN_URL,
-    key: process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY,
-    table: process.env.BEAD_TABLE || (usesMemoryBank ? 'beads' : 'aibe_brain'),
-    schema: process.env.BRAIN_SCHEMA || (usesMemoryBank ? 'memory_bank' : 'abacia_core')
+    url: legacyUrl,
+    key: legacyKey,
+    table: process.env.BEAD_TABLE || 'aibe_brain',
+    schema: process.env.BRAIN_SCHEMA || 'abacia_core',
+    error: null
   };
 }
 
@@ -34,6 +64,7 @@ function bh() {
   return {
     url: target.url,
     table: target.table,
+    error: target.error,
     hdrs: { apikey: target.key, Authorization: 'Bearer ' + target.key, 'Accept-Profile': target.schema }
   };
 }
@@ -41,7 +72,7 @@ function bh() {
 function bq(path) {
   var b = bh();
   if (!b.url || !b.hdrs.apikey) {
-    return Promise.resolve({ rows: [], ok: false, status: null, error: 'brain_target_unconfigured' });
+    return Promise.resolve({ rows: [], ok: false, status: null, error: b.error || 'brain_target_unconfigured' });
   }
   // ⬡B:core.find:FIX:checked_read_receipts:20260715⬡
   // A timeout or failed REST read stays empty for callers, but it is no longer
