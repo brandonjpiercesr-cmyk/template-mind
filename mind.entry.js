@@ -7,7 +7,7 @@
 //   MEMORY_BANK_URL  -- that world's own Supabase (born by worldBirth)
 //   MEMORY_BANK_KEY  -- that world's own service key (minted per HAM, RLS-locked)
 //   MIND_CYCLE_INTERNAL_KEY -- shared only with trusted internal callers of protected POST doors
-// Every world -- the founder's, Eric's, HAM #489's -- deploys THIS SAME FILE and
+// Every configured HAM/world deploys THIS SAME FILE and
 // becomes itself purely by configuration. The ACL binding law: this stamp matches
 // the GENESIS stamp family in the bank it serves; the three-way GREP reads code
 // and memory as one braid.
@@ -158,13 +158,11 @@ app.post('/bead', requireMindInternalKey, async function (req, res) {
 
 // ⬡B:template-mind.mind.entry:WIRE:coding_downtime_wash_doors:20260710⬡
 // The world's own organs, each env-scoped, each submitting through law.
-// ⬡B:template-mind.mind.entry:BUILD:pai_cycle_grafted_phase4_20260713⬡
-// PHASE 4 of the port: the real PAI engine (the one cycle) now lives in this new world,
-// under pai/. This /cycle door is the new world THINKING for itself: it runs runPAI
-// against THIS world's own memory bank (the closure reads MEMORY_BANK_* by design after
-// the world-agnostic funnel), then hands the compiled turn to face for expression.
-// Additive: the 6 original organs are untouched. The engine is byte-identical to legacy;
-// only the bank it points at differs, by env. Rollback = do not call this door.
+// ⬡B:template-mind.mind.entry:BUILD:one_receipted_pai_cycle:20260715⬡
+// The authenticated /cycle door is this New World's single thinking choke point. It
+// runs the repaired per-HAM PAI against this world's own Memory Bank, validates the
+// complete receipt, and returns only the compiled turn. The shared face owns expression;
+// there is no second local model call, discarded expression, legacy fallback, or retry.
 app.post('/cycle', requireMindInternalKey, async function (req, res) {
   try {
     if (!HAM || !BANK || !KEY) {
