@@ -414,7 +414,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     try {
       const { nashWonder } = require('./wonders/nash.wonder.js');
       const lg = String((args && args.league) || 'nba').toLowerCase();
-      const w = await nashWonder(hamUid, message, lg);
+      const w = await nashWonder(hamUid, origMessage, lg);
       if (w && w.ok && w.answer) return w.answer;
       return 'NASH: nothing surfaced right now.';
     } catch (e) { return 'NASH: failed -- ' + e.message; }
@@ -508,7 +508,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // day/schedule/meeting-shaped question, any ALERT/BRIEF bead older than 48 hours,
     // OR one that names a specific weekday that is not today, is stripped from the
     // result before the model ever sees it -- it cannot present what it cannot read.
-    var _dayQMsg = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|going on today|day today|tomorrow)\b/i.test(String(message||''));
+    var _dayQMsg = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|going on today|day today|tomorrow)\b/i.test(String(origMessage||''));
     if (_dayQMsg) {
       var _todayName = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][new Date().getDay()];
       res.beads = res.beads.filter(function (b) {
