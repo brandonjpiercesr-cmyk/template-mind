@@ -5,47 +5,7 @@
 'use strict';
 
 const { find } = require('./find.js');
-
-function _brainTarget() {
-  var memoryUrl = String(process.env.MEMORY_BANK_URL || '').trim();
-  var memoryKey = String(process.env.MEMORY_BANK_KEY || '').trim();
-  if (memoryUrl || memoryKey) {
-    if (!memoryUrl || !memoryKey) {
-      return {
-        url: null,
-        key: null,
-        table: process.env.BEAD_TABLE || 'beads',
-        schema: process.env.BRAIN_SCHEMA || 'memory_bank',
-        error: 'memory_bank_target_incomplete'
-      };
-    }
-    return {
-      url: memoryUrl,
-      key: memoryKey,
-      table: process.env.BEAD_TABLE || 'beads',
-      schema: process.env.BRAIN_SCHEMA || 'memory_bank',
-      error: null
-    };
-  }
-  var legacyUrl = String(process.env.AIBE_BRAIN_URL || '').trim();
-  var legacyKey = String(process.env.AIBE_BRAIN_KEY || '').trim();
-  if (!legacyUrl || !legacyKey) {
-    return {
-      url: null,
-      key: null,
-      table: process.env.BEAD_TABLE || 'aibe_brain',
-      schema: process.env.BRAIN_SCHEMA || 'abacia_core',
-      error: legacyUrl || legacyKey ? 'legacy_target_incomplete' : 'brain_target_unconfigured'
-    };
-  }
-  return {
-    url: legacyUrl,
-    key: legacyKey,
-    table: process.env.BEAD_TABLE || 'aibe_brain',
-    schema: process.env.BRAIN_SCHEMA || 'abacia_core',
-    error: null
-  };
-}
+const { getBrainTarget, writeBead } = require('./brain.client.js');
 
 function _address(agentName, hamUid) {
   var agent = String(agentName || '').trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '_');
@@ -71,7 +31,7 @@ function _parseContent(content) {
 
 // ⬡B:core.active_awareness:FUNCTION:read_last_run_receipt:20260715⬡
 async function readLastRunWithReceipt(agentName, hamUid) {
-  var target = _brainTarget();
+  var target = getBrainTarget();
   var source = _address(agentName, hamUid);
   var receipt = {
     ok: false,
@@ -91,8 +51,8 @@ async function readLastRunWithReceipt(agentName, hamUid) {
     receipt.error = 'invalid_active_awareness_address';
     return receipt;
   }
-  if (!target.url || !target.key) {
-    receipt.error = target.error || 'brain_target_unconfigured';
+  if (!target || !target.ok) {
+    receipt.error = target && target.reason || 'memory_bank_target_unconfigured';
     return receipt;
   }
 
@@ -136,7 +96,7 @@ async function readLastRunWithReceipt(agentName, hamUid) {
 
 // ⬡B:core.active_awareness:FUNCTION:write_last_run_receipt:20260715⬡
 async function writeLastRunWithReceipt(agentName, hamUid, cycleData) {
-  var target = _brainTarget();
+  var target = getBrainTarget();
   var source = _address(agentName, hamUid);
   var receipt = {
     ok: false,
@@ -152,8 +112,8 @@ async function writeLastRunWithReceipt(agentName, hamUid, cycleData) {
     receipt.error = 'invalid_active_awareness_address';
     return receipt;
   }
-  if (!target.url || !target.key) {
-    receipt.error = target.error || 'brain_target_unconfigured';
+  if (!target || !target.ok) {
+    receipt.error = target && target.reason || 'memory_bank_target_unconfigured';
     return receipt;
   }
 
@@ -180,49 +140,28 @@ async function writeLastRunWithReceipt(agentName, hamUid, cycleData) {
     toolExecutions: Array.isArray(data.toolExecutions) ? data.toolExecutions.slice(0, 20) : [],
     edges: graphEdges
   };
-  var bead = {
-    ham_uid: String(hamUid).toUpperCase(),
-    agent_global: String(agentName),
-    stamp_type: 'LAST_RUN',
-    acl_stamp: '\u2b21B:core.active_awareness:LAST_RUN:pai_cycle:' + at + '\u2b21',
-    source: source,
-    summary: '[LAST_RUN] ' + String(agentName) + ': ' + summary,
-    content: JSON.stringify(content),
-    importance: 4
-  };
-  if (target.table !== 'aibe_brain') {
-    bead.spawned_by = String(agentName);
-    bead.edges = graphEdges;
-  }
+
 
   receipt.attempted = true;
   try {
-    var response = await fetch(target.url + '/rest/v1/' + target.table, {
-      method: 'POST',
-      headers: {
-        apikey: target.key,
-        Authorization: 'Bearer ' + target.key,
-        'Accept-Profile': target.schema,
-        'Content-Profile': target.schema,
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation'
-      },
-      body: JSON.stringify(bead)
+    var writeResult = await writeBead({
+      hamUid: String(hamUid).toUpperCase(),
+      agentGlobal: String(agentName),
+      type: 'LAST_RUN',
+      source: source,
+      summary: '[LAST_RUN] ' + String(agentName) + ': ' + summary,
+      content: content,
+      importance: 4,
+      edges: graphEdges
     });
-    receipt.status = response.status;
-    var responseText = String(await response.text());
-    if (!response.ok) {
-      receipt.error = responseText.slice(0, 300);
-      return receipt;
-    }
-    var rows = [];
-    try { rows = responseText ? JSON.parse(responseText) : []; } catch (_error) {}
-    var row = Array.isArray(rows) ? rows[0] : rows;
-    receipt.id = row && row.id != null ? row.id : null;
+    receipt.status = writeResult && writeResult.status != null ? writeResult.status : null;
+    receipt.id = writeResult && writeResult.id != null ? writeResult.id : null;
     receipt.receiptId = receipt.id;
-    receipt.persisted = receipt.id != null;
+    receipt.persisted = !!(writeResult && writeResult.ok && receipt.id != null);
     receipt.ok = receipt.persisted;
-    if (!receipt.persisted) receipt.error = 'receipt_id_missing';
+    if (!receipt.persisted) {
+      receipt.error = String(writeResult && writeResult.error || 'receipt_id_missing').slice(0, 300);
+    }
   } catch (error) {
     receipt.error = String(error && error.message || error).slice(0, 300);
   }
