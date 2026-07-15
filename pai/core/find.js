@@ -1,5 +1,6 @@
 // ⬡B:core.find:MODULE:microsecond_brain_search:20260630⬡
 // FIND -- Mount Rushmore. Always on. Stamp-based precision queries.
+// Entered only through the ABAHAM door's authenticated per-HAM PAI cycle; serves MESSAGES.
 // No ilike wildcards. No full-table scans. Filter by stamp_type, source prefix, ham_uid.
 // Runs in parallel via Promise.all. Target: <100ms for any query set.
 // ANYHAM test: ham_uid parameter drives all reads. No HAM hardcoded here.
