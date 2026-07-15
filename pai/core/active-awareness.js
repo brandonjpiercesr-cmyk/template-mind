@@ -4,6 +4,8 @@
 // ENTRANCE reads the prior LAST_RUN. EXIT writes the current LAST_RUN with lineage.
 'use strict';
 
+const { find } = require('./find.js');
+
 function _brainTarget() {
   var memoryUrl = process.env.MEMORY_BANK_URL;
   var usesMemoryBank = !!memoryUrl;
@@ -33,8 +35,8 @@ function _boundedList(value) {
 
 function _parseContent(content) {
   if (content && typeof content === 'object') return content;
-  if (typeof content !== 'string' || !content) return {};
-  try { return JSON.parse(content); } catch (_error) { return {}; }
+  if (typeof content !== 'string' || !content) return Object.create(null);
+  try { return JSON.parse(content); } catch (_error) { return Object.create(null); }
 }
 
 // ⬡B:core.active_awareness:FUNCTION:read_last_run_receipt:20260715⬡
@@ -65,31 +67,24 @@ async function readLastRunWithReceipt(agentName, hamUid) {
   }
 
   receipt.attempted = true;
-  receipt.reads = 1;
-  var select = target.table === 'aibe_brain'
-    ? 'id,source,content,created_at'
-    : 'id,source,content,created_at,spawned_by,edges';
-  var url = target.url + '/rest/v1/' + target.table
-    + '?source=eq.' + encodeURIComponent(source)
-    + '&stamp_type=eq.LAST_RUN&select=' + encodeURIComponent(select)
-    + '&order=created_at.desc&limit=1';
-
   try {
-    var response = await fetch(url, {
-      headers: {
-        apikey: target.key,
-        Authorization: 'Bearer ' + target.key,
-        'Accept-Profile': target.schema
-      }
-    });
-    receipt.status = response.status;
-    if (!response.ok) {
-      receipt.error = String(await response.text()).slice(0, 300);
+    var result = await find([{
+      stamp_type: 'LAST_RUN',
+      source_prefix: source,
+      ham_uid: String(hamUid).toUpperCase(),
+      limit: 1
+    }]);
+    receipt.reads = Number(result && result.reads) || 0;
+    if (!result || result.read_ok !== true) {
+      var failure = result && Array.isArray(result.read_failures) ? result.read_failures[0] : null;
+      receipt.status = failure ? failure.status : null;
+      receipt.error = String(failure && failure.error || 'last_run_read_unverified').slice(0, 300);
       return receipt;
     }
-    var rows = await response.json();
-    var row = Array.isArray(rows) ? rows[0] : rows;
+    receipt.status = 200;
     receipt.ok = true;
+    var rows = Array.isArray(result.beads) ? result.beads : [];
+    var row = rows.find(function (candidate) { return candidate && candidate.source === source; });
     if (!row) return receipt;
     receipt.found = true;
     receipt.id = row.id != null ? row.id : null;
