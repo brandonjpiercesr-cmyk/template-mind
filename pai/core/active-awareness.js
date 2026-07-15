@@ -144,6 +144,7 @@ async function writeLastRunWithReceipt(agentName, hamUid, cycleData) {
     previousReceiptId: data.previousReceiptId != null ? data.previousReceiptId : null,
     summary: summary,
     status: String(data.status || 'DONE').slice(0, 40),
+    channel: data.channel ? String(data.channel).slice(0, 40) : null,
     done: _boundedList(data.done),
     found: _boundedList(data.found),
     flagged: _boundedList(data.flagged),
