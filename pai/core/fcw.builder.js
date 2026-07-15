@@ -10,13 +10,13 @@
 // DIRECTIVE beads ahead of HAM_IDENTIFIER beads and merges in that order, so
 // beads[0] was virtually always the most recent DIRECTIVE -- often an internal
 // engineering flag about an unrelated feature, filed under this ham_uid only
-// because this person did that work too. One such bead (a GMG SEER login TODO)
+// because this person did that work too. One such bead (a GMG SEER login task)
 // got read out to the person as their own identity over text. Fixed by filtering
 // explicitly for a HAM_IDENTIFIER-type bead instead of trusting array position.
 
 'use strict';
 // ⬡B:core.fcw.builder:FIX:atomic_memory_bank_target:20260715⬡
-// Keep URL, key, table, and schema in one ABAHAM-resolved target. This prevents
+// The ABAHAM door keeps URL, key, table, and schema in one resolved target. This prevents
 // a New World write from silently falling through to legacy table/schema names.
 function _brainTarget() {
   var memoryUrl = process.env.MEMORY_BANK_URL;
