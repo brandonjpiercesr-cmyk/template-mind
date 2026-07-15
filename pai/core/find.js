@@ -1,9 +1,9 @@
 // ⬡B:core.find:MODULE:microsecond_brain_search:20260630⬡
-// FIND — Mount Rushmore. Always on. Stamp-based precision queries.
+// FIND -- Mount Rushmore. Always on. Stamp-based precision queries.
 // No ilike wildcards. No full-table scans. Filter by stamp_type, source prefix, ham_uid.
 // Runs in parallel via Promise.all. Target: <100ms for any query set.
 // ANYHAM test: ham_uid parameter drives all reads. No HAM hardcoded here.
-// Cost: C0 — pure Supabase REST, zero LLM calls.
+// Cost: C0 -- pure Supabase REST, zero LLM calls.
 
 // ⬡B:core.find:FIX:restore_organ_after_8b_lobotomy:20260703⬡
 // Commit a66c148 (an 8B fallback build, pre model-chain fix fa58b0a) REPLACED this
@@ -41,7 +41,7 @@ function bh() {
 function bq(path) {
   var b = bh();
   if (!b.url || !b.hdrs.apikey) return Promise.resolve([]);
-  // Hard timeout — a slow brain can never hang the Memory Bank build.
+  // Hard timeout -- a slow brain can never hang the Memory Bank build.
   // If the new brain is paused/slow, FIND returns [] fast instead of blocking the turn.
   return new Promise(function(resolve) {
     var settled = false;
@@ -59,7 +59,7 @@ function bq(path) {
   });
 }
 
-// FIND entry point — run multiple queries in parallel, merge, dedupe by id
+// FIND entry point -- run multiple queries in parallel, merge, dedupe by id
 // queries: array of { stamp_type?, source_prefix?, ham_uid?, importance_gte?, limit? }
 async function find(queries) {
   if (!Array.isArray(queries)) queries = [queries];
@@ -133,11 +133,11 @@ async function findAgentJDs() {
 // Recent context: last N minutes + results for a HAM
 async function findContext(hamUid, limit) {
   // ⬡B:core.find:FIX:conversation_context_not_machinery:20260702⬡
-  // Was: all MINUTES for the ham — which is dominated by Overseer's every-3-minute
+  // Was: all MINUTES for the ham -- which is dominated by Overseer's every-3-minute
   // "air flowed through the ventilation system" machinery stamps. Her FCW context was
   // wall-to-wall ventilation, so she parroted it in every reply (screenshot evidence:
   // same phrase repeated across texts and emails). Now: conversation minutes
-  // (pai.minutes.*) and high-importance results — what was actually said and done.
+  // (pai.minutes.*) and high-importance results -- what was actually said and done.
   return find([
     { source_prefix: 'pai.minutes.', ham_uid: hamUid, limit: limit || 5 },
     { stamp_type: 'RESULT', ham_uid: hamUid, importance_gte: 7, limit: limit || 5 }
@@ -157,7 +157,7 @@ async function findRecentResults(limit) {
 // ⬡B:core.find:WIRE:findDoctrine_20260701⬡
 // ROADMAP + DOCTRINE beads for a HAM's world. Added after a real live gap: asked
 // "what is the most important thing on our roadmap" over text, she answered
-// "I don't have any information on our roadmap" — the Memory Bank loaded identity, agent
+// "I don't have any information on our roadmap" -- the Memory Bank loaded identity, agent
 // JDs, and recent minutes but never doctrine or roadmap. ANYHAM test: hamUid drives
 // the read, any HAM gets their own doctrine.
 async function findDoctrine(hamUid, limit) {
@@ -170,7 +170,7 @@ async function findDoctrine(hamUid, limit) {
 // ⬡B:core.find:WIRE:findPersonProfile:20260702⬡
 // Rich identity: who this person actually IS, from their scw.person_profile bead.
 // Founder said, verbatim: "she should know me bro". Name + tier is not knowing
-// someone. UNIVERSALITY: keyed by ham_uid — any HAM gets their own profile.
+// someone. UNIVERSALITY: keyed by ham_uid -- any HAM gets their own profile.
 async function findPersonProfile(hamUid) {
   return find([{ source_prefix: 'scw.person_profile.' + hamUid, limit: 1 }]);
 }
