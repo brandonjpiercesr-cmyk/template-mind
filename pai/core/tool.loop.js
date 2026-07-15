@@ -42,6 +42,7 @@ function _schema(){return _brainTarget().schema;}
 
 function ymd(){return new Date().toISOString().slice(0,10).replace(/-/g,'');}
 const { buildMemoryBank } = require('./fcw.builder.js'); // Memory Bank (BIND doctrine)
+const { readLastRunWithReceipt, writeLastRunWithReceipt } = require('./active-awareness.js');
 const { find } = require('./find.js');
 const { readRenderLogs } = require('./tools/render.logs.js');
 const { fixFileInGithub } = require('./tools/github.fix.js');
@@ -1012,6 +1013,65 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     return outcome;
   }
   await _stampStep('cycle_start', String(message || '').slice(0, 80));
+
+  // ⬡B:core.tool.loop:WIRE:active_awareness_entrance_exit:20260715⬡
+  // The entrance reads PAI's own previous LAST_RUN before Memory Bank and model
+  // work. The exit writes this run once, then the cycle receipt verifies its ID.
+  var _activeAwarenessRead;
+  try {
+    _activeAwarenessRead = await readLastRunWithReceipt('PAI', hamUid);
+  } catch (awarenessReadError) {
+    _activeAwarenessRead = {
+      ok: false, attempted: true, found: false, reads: 1, status: null, id: null,
+      receiptId: null, data: null, error: String(awarenessReadError && awarenessReadError.message || awarenessReadError).slice(0, 300)
+    };
+  }
+  await _stampStep('active_awareness_read', JSON.stringify({
+    ok: !!_activeAwarenessRead.ok,
+    found: !!_activeAwarenessRead.found,
+    reads: Number(_activeAwarenessRead.reads) || 0,
+    status: _activeAwarenessRead.status,
+    id: _activeAwarenessRead.id,
+    error: _activeAwarenessRead.error
+  }));
+
+  var _activeAwarenessWrite = null;
+  async function _closeActiveAwareness(summary, status) {
+    if (_activeAwarenessWrite) return _activeAwarenessWrite;
+    var knownTools = Array.isArray(tools) ? tools : [];
+    var knownOutcomes = Array.isArray(_toolOutcomes) ? _toolOutcomes : [];
+    var failedTools = knownOutcomes.filter(function (outcome) { return !outcome.ok; })
+      .map(function (outcome) { return outcome.name; });
+    try {
+      _activeAwarenessWrite = await writeLastRunWithReceipt('PAI', hamUid, {
+        cycleId: _cycleId,
+        previousReceiptId: _activeAwarenessRead && _activeAwarenessRead.id != null ? _activeAwarenessRead.id : null,
+        summary: String(summary || status || 'cycle complete').slice(0, 240),
+        status: status || 'DONE',
+        done: status === 'DONE' ? ['answered through ' + String(channel || 'unknown')] : [],
+        found: knownOutcomes.filter(function (outcome) { return outcome.ok; })
+          .map(function (outcome) { return 'tool:' + outcome.name; }),
+        flagged: failedTools,
+        incomplete: status === 'DONE' ? [] : [String(status || 'BLOCKED')],
+        nextCycle: failedTools.map(function (name) { return 'recheck failed tool:' + name; }),
+        toolsUsed: knownTools,
+        toolExecutions: knownOutcomes
+      });
+    } catch (awarenessWriteError) {
+      _activeAwarenessWrite = {
+        ok: false, attempted: true, persisted: false, status: null, id: null,
+        receiptId: null, error: String(awarenessWriteError && awarenessWriteError.message || awarenessWriteError).slice(0, 300)
+      };
+    }
+    await _stampStep('active_awareness_write', JSON.stringify({
+      ok: !!_activeAwarenessWrite.ok,
+      persisted: !!_activeAwarenessWrite.persisted,
+      status: _activeAwarenessWrite.status,
+      id: _activeAwarenessWrite.id,
+      error: _activeAwarenessWrite.error
+    }));
+    return _activeAwarenessWrite;
+  }
   // \u2b21B:core.tool.loop:FIX:real_two_pass_verifier_per_research:20260710\u2b21
   // Real, researched fix (Towards AI hallucination mitigation survey): "two-pass
   // systems where a verifier inspects the draft, highlights unsupported statements,
@@ -1025,7 +1085,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _verifiedRealNumbers = [];
   if (!GROQ) {
     await _stampStep('cycle_abort', 'no_groq_key');
+    await _closeActiveAwareness('PAI cycle could not start because the model key is unavailable', 'BLOCKED');
     return {ok:false,reason:'no_groq_key',cycleId:_cycleId,
+      active_awareness_read_ok:!!(_activeAwarenessRead&&_activeAwarenessRead.ok),
+      active_awareness_write_persisted:!!(_activeAwarenessWrite&&_activeAwarenessWrite.persisted),
+      active_awareness_receipt_id:(_activeAwarenessWrite&&_activeAwarenessWrite.id!=null)?_activeAwarenessWrite.id:null,
       cycle_stamps_persisted:_stampOutcomes.filter(function (s) { return s.ok; }).length,
       cycle_stamps_total:_stampOutcomes.length,_dbg:'GROQ_API_KEY not in process.env'};
   }
@@ -1078,6 +1142,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           content:JSON.stringify({reason:(fcw&&fcw.reason)||'unknown',channel:channel}),importance:6})
       }).catch(function(){});
     }
+  }
+  if (_activeAwarenessRead && _activeAwarenessRead.ok && _activeAwarenessRead.found && _activeAwarenessRead.data) {
+    var _continuity = [];
+    if (_activeAwarenessRead.data.summary) {
+      _continuity.push('Your previous PAI cycle ended with: ' + String(_activeAwarenessRead.data.summary).slice(0, 300));
+    }
+    if (Array.isArray(_activeAwarenessRead.data.nextCycle) && _activeAwarenessRead.data.nextCycle.length) {
+      _continuity.push('It left these continuity notes: ' + _activeAwarenessRead.data.nextCycle.slice(0, 5)
+        .map(function (note) { return String(note).slice(0, 120); }).join('; '));
+    }
+    if (_continuity.length) systemPrompt += '\nACTIVE AWARENESS CONTINUITY:\n' + _continuity.join('\n');
   }
   // ⬡B:core.tool.loop:FIX:thread_real_prior_turns:20260704⬡
   // Founder-reported live incident: on voice specifically, the assistant reads
@@ -1714,8 +1789,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         _blockedFallback = true;
       }
     } catch(_eTrk){}
-    if(!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,
-      tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null};
+    if(!finalAns) {
+      await _closeActiveAwareness('PAI cycle ended without an answer', 'BLOCKED');
+      return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,
+        active_awareness_read_ok:!!(_activeAwarenessRead&&_activeAwarenessRead.ok),
+        active_awareness_write_persisted:!!(_activeAwarenessWrite&&_activeAwarenessWrite.persisted),
+        active_awareness_receipt_id:(_activeAwarenessWrite&&_activeAwarenessWrite.id!=null)?_activeAwarenessWrite.id:null,
+        _dbg:global._paiLastError||null};
+    }
   }
   // THE REAL SECOND PASS. Deterministic, not another LLM guess trusting itself.
   if (_verifiedRealNumbers.length && /\d/.test(finalAns)) {
@@ -1760,7 +1842,16 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // malformed block drops in silence; the words always still flow.
   var _screenPushed = 0;
   try { var _scr = await require('./stream/screen.awareness.js').applyScreenBlock(hamUid, finalAns); finalAns = _scr.answer || finalAns; _screenPushed = _scr.pushed || 0; } catch (eScrA) {}
-  if (!finalAns) { await _stampStep('cycle_end_silent','answer_was_only_screen_block'); return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null}; }
+  if (!finalAns) {
+    await _stampStep('cycle_end_silent','answer_was_only_screen_block');
+    await _closeActiveAwareness('PAI answer contained only a screen instruction', 'BLOCKED');
+    return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,
+      ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,
+      active_awareness_read_ok:!!(_activeAwarenessRead&&_activeAwarenessRead.ok),
+      active_awareness_write_persisted:!!(_activeAwarenessWrite&&_activeAwarenessWrite.persisted),
+      active_awareness_receipt_id:(_activeAwarenessWrite&&_activeAwarenessWrite.id!=null)?_activeAwarenessWrite.id:null,
+      _dbg:global._paiLastError||null};
+  }
   await _stampStep('cycle_end', finalAns.slice(0,80) + (_screenPushed ? (' [screen:'+_screenPushed+']') : ''));
   // ⬡B:tool.loop:GUARD:leaked_tool_syntax_scrub:20260711⬡ on an empty NASH
   // board the model retried and leaked "<function=...>" into its last line.
@@ -1778,7 +1869,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _fmtDest = (channel === 'text' || channel === 'sms') ? 'sms' : 'command_center';
     finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
   } catch (eFmt) {}
-  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  if (!finalAns) {
+    await _stampStep('cycle_end_silent','answer_removed_by_final_format');
+    await _closeActiveAwareness('PAI answer was removed by final formatting', 'BLOCKED');
+    return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
+      active_awareness_read_ok:!!(_activeAwarenessRead&&_activeAwarenessRead.ok),
+      active_awareness_write_persisted:!!(_activeAwarenessWrite&&_activeAwarenessWrite.persisted),
+      active_awareness_receipt_id:(_activeAwarenessWrite&&_activeAwarenessWrite.id!=null)?_activeAwarenessWrite.id:null};
+  }
   // ⬡B:core.tool.loop:BUILD:universal_tracker_done_on_completion:20260713⬡
   // The other half of the Architect's tracker: when a real action request completes, it
   // gets a TRACK DONE with what ran, so "everything has a record" is true on the win side
@@ -1795,6 +1893,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     }
   } catch (eTrkDone) {}
+  await _closeActiveAwareness(finalAns, 'DONE');
   // ⬡B:core.tool.loop:FIX:verified_durable_cycle_receipt:20260715⬡
   // The stamped receipt and the returned receipt share the exact same measured
   // fields. Persistence is explicit; a caller can never confuse an attempted
@@ -1802,9 +1901,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _cycleWorkMs = Date.now() - t0;
   var _fellTools = _toolOutcomes.filter(function (outcome) { return !outcome.ok; })
     .map(function (outcome) { return outcome.name; });
-  var _memoryReads = ((fcw && Number(fcw.memoryReads)) || 0) + _toolOutcomes.reduce(function (total, outcome) {
-    return total + (Number(outcome.reads) || 0);
-  }, 0);
+  var _memoryReads = ((fcw && Number(fcw.memoryReads)) || 0)
+    + ((_activeAwarenessRead && Number(_activeAwarenessRead.reads)) || 0)
+    + _toolOutcomes.reduce(function (total, outcome) {
+      return total + (Number(outcome.reads) || 0);
+    }, 0);
   var _fcwPersisted = !!(fcw && fcw.wallPersistence && fcw.wallPersistence.persisted);
   var _fcwReceiptId = fcw && fcw.wallPersistence && fcw.wallPersistence.id != null ? fcw.wallPersistence.id : null;
   var _receiptFields = {
@@ -1820,6 +1921,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     fcw_build_ms: _fcwBuildMs,
     fcw_persisted: _fcwPersisted,
     fcw_receipt_id: _fcwReceiptId,
+    active_awareness_read: !!(_activeAwarenessRead && _activeAwarenessRead.ok),
+    active_awareness_persisted: !!(_activeAwarenessWrite && _activeAwarenessWrite.persisted),
+    active_awareness_receipt_id: (_activeAwarenessWrite && _activeAwarenessWrite.id != null) ? _activeAwarenessWrite.id : null,
+    active_awareness_read_ok: !!(_activeAwarenessRead && _activeAwarenessRead.ok),
+    active_awareness_previous_found: !!(_activeAwarenessRead && _activeAwarenessRead.found),
+    active_awareness_previous_id: (_activeAwarenessRead && _activeAwarenessRead.id != null) ? _activeAwarenessRead.id : null,
+    active_awareness_write_persisted: !!(_activeAwarenessWrite && _activeAwarenessWrite.persisted),
     memory_reads: _memoryReads,
     fcw_contributors: (fcw && fcw.contributors) || null,
     fcw_contributors_resolved: (fcw && fcw.contributorsResolved) || 0,
@@ -1828,13 +1936,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _receiptFieldsValid = typeof _receiptFields.cycleId === 'string' && _receiptFields.cycleId.indexOf(String(hamUid) + '.') === 0
     && Number.isInteger(_receiptFields.iterations) && _receiptFields.iterations > 0
     && Number.isFinite(_receiptFields.ms) && _receiptFields.ms > 0
+    && _receiptFields.fcw_persisted === true && _receiptFields.fcw_receipt_id != null
+    && _receiptFields.active_awareness_read === true
+    && _receiptFields.active_awareness_persisted === true
+    && _receiptFields.active_awareness_receipt_id != null
     && Number.isFinite(_receiptFields.memory_reads) && _receiptFields.memory_reads > 0
     && Array.isArray(_receiptFields.tools_used) && Array.isArray(_receiptFields.tool_executions);
   var _receiptDetail = _receiptFields;
   try {
     var _lineage = require('./lineage.attach.js');
     _receiptDetail = _lineage.attachLineage(_receiptFields, {
-      chain: ['PAI', 'MemoryBank'],
+      chain: ['PAI', 'MemoryBank', 'ActiveAwareness#' + String(_receiptFields.active_awareness_receipt_id)],
       deliveredBy: 'PAI cycle',
       why: (_fellTools.length ? _fellTools.length + ' tool(s) fell: ' + _fellTools.join(', ') : 'clean cycle, ' + tools.length + ' tool(s) ran'),
       audience: 'builder'
@@ -1846,10 +1958,20 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _stampFailures = _stampOutcomes.filter(function (stamp) { return !stamp.ok; }).map(function (stamp) {
     return { step: stamp.step, status: stamp.status, error: stamp.error };
   });
-  return {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
+  var _cycleVerified = !!(_receiptFieldsValid && _receiptWrite && _receiptWrite.ok && _stampFailures.length === 0);
+  return {ok:_cycleVerified,answer:_cycleVerified?finalAns:null,
+    reason:_cycleVerified?null:'cycle_receipt_unverified',
+    screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
     tools_used:tools,tool_executions:_toolOutcomes,iterations:iter,ms:_cycleWorkMs,cycle_total_ms:Date.now()-t0,
     fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,fcw_ok:!!(fcw&&fcw.ok),
     fcw_persisted:_fcwPersisted,fcw_receipt_id:_fcwReceiptId,memory_reads:_memoryReads,
+    active_awareness_read:!!(_activeAwarenessRead&&_activeAwarenessRead.ok),
+    active_awareness_persisted:!!(_activeAwarenessWrite&&_activeAwarenessWrite.persisted),
+    active_awareness_receipt_id:(_activeAwarenessWrite&&_activeAwarenessWrite.id!=null)?_activeAwarenessWrite.id:null,
+    active_awareness_read_ok:!!(_activeAwarenessRead&&_activeAwarenessRead.ok),
+    active_awareness_previous_found:!!(_activeAwarenessRead&&_activeAwarenessRead.found),
+    active_awareness_previous_id:(_activeAwarenessRead&&_activeAwarenessRead.id!=null)?_activeAwarenessRead.id:null,
+    active_awareness_write_persisted:!!(_activeAwarenessWrite&&_activeAwarenessWrite.persisted),
     fcw_contributors:(fcw&&fcw.contributors)||null,
     fcw_contributor_details:(fcw&&fcw.contributorDetails)||null,
     fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
@@ -1858,7 +1980,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     cycle_receipt_fields_verified:_receiptFieldsValid,
     cycle_receipt_persisted:!!(_receiptWrite&&_receiptWrite.ok),
     cycle_receipt_id:(_receiptWrite&&_receiptWrite.id!=null)?_receiptWrite.id:null,
-    cycle_receipt_verified:!!(_receiptFieldsValid&&_receiptWrite&&_receiptWrite.ok&&_stampFailures.length===0),
+    cycle_receipt_verified:_cycleVerified,
     cycle_receipt_status:(_receiptWrite&&_receiptWrite.status)||null,
     cycle_receipt_ms:_receiptMs,
     cycle_stamps_persisted:_stampOutcomes.filter(function (stamp) { return stamp.ok; }).length,
