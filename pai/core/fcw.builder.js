@@ -19,13 +19,43 @@
 // The ABAHAM door keeps URL, key, table, and schema in one resolved target. This prevents
 // a New World write from silently falling through to legacy table/schema names.
 function _brainTarget() {
-  var memoryUrl = process.env.MEMORY_BANK_URL;
-  var usesMemoryBank = !!memoryUrl;
+  var memoryUrl = String(process.env.MEMORY_BANK_URL || '').trim();
+  var memoryKey = String(process.env.MEMORY_BANK_KEY || '').trim();
+  if (memoryUrl || memoryKey) {
+    if (!memoryUrl || !memoryKey) {
+      return {
+        url: null,
+        key: null,
+        table: process.env.BEAD_TABLE || 'beads',
+        schema: process.env.BRAIN_SCHEMA || 'memory_bank',
+        error: 'memory_bank_target_incomplete'
+      };
+    }
+    return {
+      url: memoryUrl,
+      key: memoryKey,
+      table: process.env.BEAD_TABLE || 'beads',
+      schema: process.env.BRAIN_SCHEMA || 'memory_bank',
+      error: null
+    };
+  }
+  var legacyUrl = String(process.env.AIBE_BRAIN_URL || '').trim();
+  var legacyKey = String(process.env.AIBE_BRAIN_KEY || '').trim();
+  if (!legacyUrl || !legacyKey) {
+    return {
+      url: null,
+      key: null,
+      table: process.env.BEAD_TABLE || 'aibe_brain',
+      schema: process.env.BRAIN_SCHEMA || 'abacia_core',
+      error: legacyUrl || legacyKey ? 'legacy_target_incomplete' : 'brain_target_unconfigured'
+    };
+  }
   return {
-    url: memoryUrl || process.env.AIBE_BRAIN_URL,
-    key: process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY,
-    table: process.env.BEAD_TABLE || (usesMemoryBank ? 'beads' : 'aibe_brain'),
-    schema: process.env.BRAIN_SCHEMA || (usesMemoryBank ? 'memory_bank' : 'abacia_core')
+    url: legacyUrl,
+    key: legacyKey,
+    table: process.env.BEAD_TABLE || 'aibe_brain',
+    schema: process.env.BRAIN_SCHEMA || 'abacia_core',
+    error: null
   };
 }
 
@@ -84,8 +114,23 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); _labels.push('preferences'); }
   if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); _labels.push('wonderGames'); }
   var _results = await Promise.allSettled(_batch);
-  _results.forEach(function (r, i) {
-    if (r.status === 'rejected') console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + (r.reason && r.reason.message || r.reason));
+  var finderFailures = [];
+  _results.forEach(function (result, i) {
+    if (result.status === 'rejected') {
+      var rejectedError = String(result.reason && result.reason.message || result.reason || 'finder_rejected').slice(0, 300);
+      console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + rejectedError);
+      finderFailures.push({ name: _labels[i], status: null, error: rejectedError });
+      return;
+    }
+    var value = result.value;
+    if (!value || value.read_ok !== true) {
+      var failures = value && Array.isArray(value.read_failures) ? value.read_failures : [];
+      finderFailures.push({
+        name: _labels[i],
+        status: failures[0] ? failures[0].status : null,
+        error: String(failures[0] && failures[0].error || 'finder_read_unverified').slice(0, 300)
+      });
+    }
   });
   var identityBeads = _results[0].status === 'fulfilled' ? _results[0].value : null;
   var agentJDs = _results[1].status === 'fulfilled' ? _results[1].value : null;
@@ -296,6 +341,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
       status: result ? result.status : 'missing',
       count: beads.length,
       reads: result && result.status === 'fulfilled' && result.value ? (Number(result.value.reads) || 0) : 0,
+      readOk: !!(result && result.status === 'fulfilled' && result.value && result.value.read_ok === true),
       resolved: beads.length > 0
     };
     contributors[name] = beads.length > 0;
@@ -323,7 +369,8 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
           gateIdentity: !!identity
         },
         exit: {
-          ok: true,
+          ok: finderFailures.length === 0,
+          readFailures: finderFailures,
           contributors: contributors,
           contributorDetails: contributorDetails,
           contributorsResolved: contributorsResolved,
@@ -376,15 +423,22 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
         wallPersistence.error = wallResponseText.slice(0, 300);
       }
     } else {
-      wallPersistence.error = 'brain_target_unconfigured';
+      wallPersistence.error = target.error || 'brain_target_unconfigured';
     }
   } catch (_e) {
     wallPersistence.error = String(_e && _e.message || _e).slice(0, 300);
   }
   ms = Date.now() - t0;
+  var groundingOk = finderFailures.length === 0
+    && wallPersistence.persisted === true
+    && wallPersistence.id != null;
+  var groundingReason = finderFailures.length
+    ? 'memory_read_unverified'
+    : (groundingOk ? null : 'fcw_receipt_unpersisted');
 
   return {
-    ok: true,
+    ok: groundingOk,
+    reason: groundingReason,
     system_prompt: systemPrompt,
     ham: { uid: hamUid, name: hamName, tier: hamTier, world: hamWorld },
     agents: agentJDs ? agentJDs.beads : [],
@@ -392,6 +446,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     ms: ms,
     contributors: contributors,
     contributorDetails: contributorDetails,
+    readFailures: finderFailures,
     contributorsResolved: contributorsResolved,
     contributorsTotal: contributorsTotal,
     wallPersistence: wallPersistence,
