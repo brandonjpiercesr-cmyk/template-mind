@@ -150,3 +150,4 @@ app.post('/wash/listen', async function (req, res) {
 // modules through the coding department, each one gated before it lands.
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, function () { console.log('[MIND] world ' + (HAM || 'unborn') + ' listening on ' + PORT); });
+module.exports = app;
