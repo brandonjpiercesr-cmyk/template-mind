@@ -15,11 +15,19 @@
 // explicitly for a HAM_IDENTIFIER-type bead instead of trusting array position.
 
 'use strict';
-// ⬡B:core.fcw.builder:WIRE:funneled_20260713⬡
-function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
-function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+// ⬡B:core.fcw.builder:FIX:atomic_memory_bank_target:20260715⬡
+// Keep URL, key, table, and schema in one ABAHAM-resolved target. This prevents
+// a New World write from silently falling through to legacy table/schema names.
+function _brainTarget() {
+  var memoryUrl = process.env.MEMORY_BANK_URL;
+  var usesMemoryBank = !!memoryUrl;
+  return {
+    url: memoryUrl || process.env.AIBE_BRAIN_URL,
+    key: process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY,
+    table: process.env.BEAD_TABLE || (usesMemoryBank ? 'beads' : 'aibe_brain'),
+    schema: process.env.BRAIN_SCHEMA || (usesMemoryBank ? 'memory_bank' : 'abacia_core')
+  };
+}
 
 const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = require('./find.js');
 
@@ -71,11 +79,11 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     findDoctrine(hamUid, 3),
     findPersonProfile(hamUid)
   ];
+  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile'];
   var _prefIdx = -1, _wgIdx = -1;
-  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); }
-  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); }
+  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); _labels.push('preferences'); }
+  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); _labels.push('wonderGames'); }
   var _results = await Promise.allSettled(_batch);
-  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'preferences'];
   _results.forEach(function (r, i) {
     if (r.status === 'rejected') console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + (r.reason && r.reason.message || r.reason));
   });
@@ -266,50 +274,114 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'no audit markers, no source codes. Those are added separately after you answer. Just talk.',
   ].join('\n');
 
-  // ⬡B:core.fcw.builder:FIX:nasty_c_to_wonder_entrance_exit_notes:20260708⬡
-  // Founder correction 20260708: this builder was a NASTY C -- pure cold code that
-  // ran silent and stamped nothing. Being C0 (no LLM) is fine for cost, but it is not
-  // what makes a wonder. A wonder has an ENTRANCE, an EXIT, and NOTES, documented, so
-  // when she screws up you can trace exactly what the Memory Bank wall held at that moment and
-  // which contributors filled it. This stamp is that trace. It is lightweight (one
-  // MINUTES bead per build), importance 2 so it never competes with real signal, and
-  // fail-silent so a logging hiccup never breaks the wall it is describing. Which
-  // contributors resolved vs came back empty is the note -- that is the self-heal.
+  // ⬡B:core.fcw.builder:FIX:durable_wall_receipt_with_lineage:20260715⬡
+  // This is the Memory Bank Wonder's EXIT and NOTES. Contributor truth comes
+  // directly from the six settled FIND results; an empty or rejected finder is
+  // reported as unresolved and is never promoted to a fake success.
+  var _baseFinders = {
+    identity: _results[0],
+    agentJDs: _results[1],
+    context: _results[2],
+    recent: _results[3],
+    doctrine: _results[4],
+    profile: _results[5]
+  };
+  var contributorDetails = {};
+  var contributors = {};
+  Object.keys(_baseFinders).forEach(function (name) {
+    var result = _baseFinders[name];
+    var beads = result && result.status === 'fulfilled' && result.value && Array.isArray(result.value.beads)
+      ? result.value.beads : [];
+    contributorDetails[name] = {
+      status: result ? result.status : 'missing',
+      count: beads.length,
+      reads: result && result.status === 'fulfilled' && result.value ? (Number(result.value.reads) || 0) : 0,
+      resolved: beads.length > 0
+    };
+    contributors[name] = beads.length > 0;
+  });
+  var contributorsTotal = Object.keys(contributors).length;
+  var contributorsResolved = Object.keys(contributors).filter(function (name) { return contributors[name]; }).length;
+  var emptyContributors = Object.keys(contributors).filter(function (name) { return !contributors[name]; });
+  var memoryReads = _results.reduce(function (total, result) {
+    return total + (result && result.status === 'fulfilled' && result.value ? (Number(result.value.reads) || 0) : 0);
+  }, 0);
+  var wallPersistence = { attempted: false, persisted: false, status: null, error: null, id: null, source: null };
+
   try {
-    var _BU = process.env.AIBE_BRAIN_URL, _BK = process.env.AIBE_BRAIN_KEY;
-    if (_BU && _BK) {
-      var contributors = {
-        identity: !!(identityBeads && identityBeads.beads && identityBeads.beads.length),
-        agentJDs: !!(agentJDs && agentJDs.beads && agentJDs.beads.length),
-        context: !!(context && context.beads && context.beads.length),
-        recent: !!(recent && recent.beads && recent.beads.length),
-        doctrine: !!(doctrine && doctrine.beads && doctrine.beads.length),
-        profile: !!(profile && profile.beads && profile.beads.length)
+    var target = _brainTarget();
+    if (target.url && target.key) {
+      wallPersistence.attempted = true;
+      var wallAt = Date.now();
+      var wallSource = 'ham_' + String(hamUid).toLowerCase() + '.fcw.build.' + wallAt;
+      var wallEdges = [{ type: 'grounds', target: 'ham_' + String(hamUid).toLowerCase() + '.pai.context' }];
+      var wallContent = {
+        entrance: {
+          hamUid: String(hamUid).toUpperCase(),
+          channel: channel || null,
+          question: String(question || '').slice(0, 120),
+          gateIdentity: !!identity
+        },
+        exit: {
+          ok: true,
+          contributors: contributors,
+          contributorDetails: contributorDetails,
+          contributorsResolved: contributorsResolved,
+          contributorsTotal: contributorsTotal,
+          memoryReads: memoryReads,
+          msBeforePersistence: Date.now() - t0
+        },
+        note: emptyContributors.length
+          ? ('Memory Bank wall assembled with EMPTY contributors: ' + emptyContributors.join(', ') + ' -- if she answered wrong on this turn, start here')
+          : 'Memory Bank wall assembled with every measured contributor present',
+        edges: wallEdges
       };
-      var empties = Object.keys(contributors).filter(function (k) { return !contributors[k]; });
-      var _wm = Date.now();
-      fetch(_bu() + '/rest/v1/' + _tbl() + '', {
+      var wallBead = {
+        ham_uid: String(hamUid).toUpperCase(),
+        agent_global: 'Memory Bank',
+        stamp_type: 'MINUTES',
+        acl_stamp: '\u2b21B:core.fcw.builder:MINUTES:wall_built:' + wallAt + '\u2b21',
+        source: wallSource,
+        content: JSON.stringify(wallContent),
+        summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase() + ' (' + (channel || 'na') + '), ' + contributorsResolved + '/' + contributorsTotal + ' contributors',
+        importance: 2
+      };
+      if (target.table !== 'aibe_brain') {
+        wallBead.spawned_by = 'Memory Bank';
+        wallBead.edges = wallEdges;
+      }
+      wallPersistence.source = wallSource;
+      var wallResponse = await fetch(target.url + '/rest/v1/' + target.table, {
         method: 'POST',
-        headers: { apikey: _BK, Authorization: 'Bearer ' + _BK, 'Accept-Profile': _schema(),
-          'Content-Profile': _schema(), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-        body: JSON.stringify({
-          ham_uid: String(hamUid).toUpperCase(),
-          agent_global: 'Memory Bank',
-          stamp_type: 'MINUTES',
-          acl_stamp: '\u2b21B:core.fcw.builder:MINUTES:wall_built:' + _wm + '\u2b21',
-          source: 'ham_' + String(hamUid).toLowerCase() + '.fcw.build.' + _wm,
-          content: JSON.stringify({
-            entrance: { hamUid: String(hamUid).toUpperCase(), channel: channel || null, question: String(question || '').slice(0, 120), gateIdentity: !!identity },
-            exit: { ok: true, contributors: contributors, contributorsResolved: Object.keys(contributors).length - empties.length, ms: (Date.now() - t0) },
-            note: empties.length ? ('Memory Bank wall assembled with EMPTY contributors: ' + empties.join(', ') + ' -- if she answered wrong on this turn, start here')
-                                  : 'Memory Bank wall assembled with all contributors present'
-          }),
-          summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase() + ' (' + (channel || 'na') + '), ' + (Object.keys(contributors).length - empties.length) + '/6 contributors',
-          importance: 2
-        })
-      }).catch(function () {});
+        headers: {
+          apikey: target.key,
+          Authorization: 'Bearer ' + target.key,
+          'Accept-Profile': target.schema,
+          'Content-Profile': target.schema,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation'
+        },
+        body: JSON.stringify(wallBead)
+      });
+      wallPersistence.status = wallResponse.status;
+      var wallResponseText = String(await wallResponse.text());
+      if (wallResponse.ok) {
+        var wallRows = [];
+        try { wallRows = wallResponseText ? JSON.parse(wallResponseText) : []; } catch (_eWallJson) {}
+        var wallRow = Array.isArray(wallRows) ? wallRows[0] : wallRows;
+        wallPersistence.id = wallRow && wallRow.id != null ? wallRow.id : null;
+        wallPersistence.persisted = wallPersistence.id != null;
+        if (!wallPersistence.persisted) wallPersistence.error = 'receipt_id_missing';
+      } else {
+        wallPersistence.error = wallResponseText.slice(0, 300);
+      }
+    } else {
+      wallPersistence.error = 'brain_target_unconfigured';
     }
-  } catch (_e) { /* wonder-stamp never breaks the wall */ }
+  } catch (_e) {
+    wallPersistence.error = String(_e && _e.message || _e).slice(0, 300);
+  }
+  ms = Date.now() - t0;
 
   return {
     ok: true,
@@ -318,6 +390,12 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     agents: agentJDs ? agentJDs.beads : [],
     context: allContext,
     ms: ms,
+    contributors: contributors,
+    contributorDetails: contributorDetails,
+    contributorsResolved: contributorsResolved,
+    contributorsTotal: contributorsTotal,
+    wallPersistence: wallPersistence,
+    memoryReads: memoryReads,
     find_ms: {
       identity: beadIdentity ? beadIdentity.ms : 0,
       agents: agentJDs ? agentJDs.ms : 0,
