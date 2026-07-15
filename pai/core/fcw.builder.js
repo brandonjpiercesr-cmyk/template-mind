@@ -36,7 +36,7 @@ const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine
 async function buildMemoryBank(hamUid, channel, question, identity) {
   // ⬡B:core.fcw.builder:WIRE:gate_identity_authority:20260701⬡
   // When the ATMOSPHERE gate has already resolved this person, its envelope is the
-  // authority for name/tier/world — findIdentity remains as enrichment/fallback.
+  // authority for name/tier/world -- findIdentity remains as enrichment/fallback.
   var t0 = Date.now();
   if (!hamUid) return { ok: false, reason: 'no_ham_uid' };
 
@@ -175,7 +175,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // Assemble system prompt -- butler voice, no internal names leaked
   var systemPrompt = [
     'You are A\u2019NU, a warm and direct life assistant. You speak as a trusted friend who knows things.',
-    'You never use em dashes. You never use hollow AI phrases ("Certainly!", "Of course!", "Great question!").',
+    'You never use em dashes. You never open with canned praise or hollow AI phrases.',
     'You speak in plain sentences. Coffee Shop Test: say it how you would say it out loud to a friend.',
     '',
     'HAM CONTEXT:',
@@ -183,7 +183,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     (_hamTitle ? ('Address them as "' + _hamTitle + '" when it lands naturally (a greeting, a sign-off, a direct address). This is their title in this context. Use it like a person would, not on every line.') : ''),
     (function(){
       // ⬡B:core.fcw.builder:WIRE:person_profile_knowledge:20260702⬡
-      // "She should know me" — the profile bead is WHO they are, loaded as knowledge.
+      // "She should know me" -- the profile bead is WHO they are, loaded as knowledge.
       try {
         var pb = profile && profile.beads && profile.beads[0];
         if (!pb) return '';
@@ -248,8 +248,8 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'NEVER invent shared memories, past events, trips, objects, or history. If asked to prove',
     'who you are or recall something not in context, say plainly you do not have that memory',
     'stored yet. A made-up memory is a lie and one lie destroys all trust. Uncertain = say so.',
-    'MEMORY IS BORN WHEN THEY GIVE IT: when the person TELLS you something new — a decision,',
-    'a rename, a moment, a fact to keep — that is not a recall test, it is the memory being',
+    'MEMORY IS BORN WHEN THEY GIVE IT: when the person TELLS you something new -- a decision,',
+    'a rename, a moment, a fact to keep -- that is not a recall test, it is the memory being',
     'made. Use write_to_brain immediately (stamp_type MEMORY, importance 9, their words in',
     'content) and confirm back in your own words what you will remember. NEVER answer new',
     'information with I-do-not-have-that-memory. Deflecting a gift kills it.',
