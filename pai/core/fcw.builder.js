@@ -1,6 +1,7 @@
 // ⬡B:core.fcw.builder:MODULE:context_window_assembler:20260630⬡
 // ⬡B:core.fcw.builder:FIX:identity_type_confusion_resolved:20260630⬡
 // Memory Bank BUILDER -- assembles the agent's context window from brain before any LLM call.
+// Entered through the ABAHAM door for one authenticated HAM; grounds the MESSAGES channel.
 // Uses FIND at microseconds. All queries parallel. No LLM. No hardcode.
 // ANYHAM test: hamUid drives all reads. Any HAM gets their own Memory Bank.
 // Cost: C0 -- pure brain reads via FIND.
@@ -10,25 +11,31 @@
 // DIRECTIVE beads ahead of HAM_IDENTIFIER beads and merges in that order, so
 // beads[0] was virtually always the most recent DIRECTIVE -- often an internal
 // engineering flag about an unrelated feature, filed under this ham_uid only
-// because this person did that work too. One such bead (a GMG SEER login TODO)
+// because this person did that work too. One such bead (a GMG SEER login task)
 // got read out to the person as their own identity over text. Fixed by filtering
 // explicitly for a HAM_IDENTIFIER-type bead instead of trusting array position.
 
 'use strict';
-// ⬡B:core.fcw.builder:WIRE:funneled_20260713⬡
-function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
-function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+// ⬡B:core.fcw.builder:WIRE:canonical_new_world_brain_client:20260715⬡
+// Memory Bank builds judgment context; the canonical client owns persistence and
+// rejects an unborn or partially configured per-HAM world.
+const { writeBead } = require('./brain.client.js');
 
-const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = require('./find.js');
+var findOrgan;
+try {
+  findOrgan = require('./find.js');
+} catch (findLoadError) {
+  process.exitCode = 1;
+  throw new Error('FIND is a required Memory Bank organ and failed to load: ' + String(findLoadError && findLoadError.message || findLoadError));
+}
+const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = findOrgan;
 
 // Build complete Memory Bank for a HAM turn
 // Returns: { system_prompt, ham, agents, context, tools_summary, ms }
 async function buildMemoryBank(hamUid, channel, question, identity) {
   // ⬡B:core.fcw.builder:WIRE:gate_identity_authority:20260701⬡
   // When the ATMOSPHERE gate has already resolved this person, its envelope is the
-  // authority for name/tier/world — findIdentity remains as enrichment/fallback.
+  // authority for name/tier/world -- findIdentity remains as enrichment/fallback.
   var t0 = Date.now();
   if (!hamUid) return { ok: false, reason: 'no_ham_uid' };
 
@@ -65,20 +72,36 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var _isWonderGamesQ = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/.test(_q);
   var _batch = [
     findIdentity(hamUid),
-    findAgentJDs(),
+    findAgentJDs(hamUid),
     findContext(hamUid, 5),
-    findRecentResults(5),
+    findRecentResults(hamUid, 5),
     findDoctrine(hamUid, 3),
     findPersonProfile(hamUid)
   ];
+  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile'];
   var _prefIdx = -1, _wgIdx = -1;
-  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); }
-  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); }
+  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); _labels.push('preferences'); }
+  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); _labels.push('wonderGames'); }
   var _results = await Promise.allSettled(_batch);
-  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'preferences'];
-  _results.forEach(function (r, i) {
-    if (r.status === 'rejected') console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + (r.reason && r.reason.message || r.reason));
+  var finderFailures = [];
+  _results.forEach(function (result, i) {
+    if (result.status === 'rejected') {
+      var rejectedError = String(result.reason && result.reason.message || result.reason || 'finder_rejected').slice(0, 300);
+      console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + rejectedError);
+      finderFailures.push({ name: _labels[i], status: null, error: rejectedError });
+      return;
+    }
+    var value = result.value;
+    if (!value || value.read_ok !== true) {
+      var failures = value && Array.isArray(value.read_failures) ? value.read_failures : [];
+      finderFailures.push({
+        name: _labels[i],
+        status: failures[0] ? failures[0].status : null,
+        error: String(failures[0] && failures[0].error || 'finder_read_unverified').slice(0, 300)
+      });
+    }
   });
+  var finderReceiptsVerified = finderFailures.length === 0;
   var identityBeads = _results[0].status === 'fulfilled' ? _results[0].value : null;
   var agentJDs = _results[1].status === 'fulfilled' ? _results[1].value : null;
   var context = _results[2].status === 'fulfilled' ? _results[2].value : null;
@@ -95,6 +118,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     if (identity.trust_level != null) hamTier = identity.trust_level;
     if (identity.world) hamWorld = identity.world;
   }
+  // Identity rows keep their own ACL family. Their authenticity comes from the
+  // checked, HAM-scoped FIND receipt above; inventing an FCW-specific row prefix
+  // would reject legitimate identity records.
   var beadIdentity = identityBeads;
   if (beadIdentity && beadIdentity.beads) {
     // Only a real HAM_IDENTIFIER bead describes who this person is.
@@ -167,7 +193,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // Assemble system prompt -- butler voice, no internal names leaked
   var systemPrompt = [
     'You are A\u2019NU, a warm and direct life assistant. You speak as a trusted friend who knows things.',
-    'You never use em dashes. You never use hollow AI phrases ("Certainly!", "Of course!", "Great question!").',
+    'You never use em dashes. You never open with canned praise or hollow AI phrases.',
     'You speak in plain sentences. Coffee Shop Test: say it how you would say it out loud to a friend.',
     '',
     'HAM CONTEXT:',
@@ -175,7 +201,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     (_hamTitle ? ('Address them as "' + _hamTitle + '" when it lands naturally (a greeting, a sign-off, a direct address). This is their title in this context. Use it like a person would, not on every line.') : ''),
     (function(){
       // ⬡B:core.fcw.builder:WIRE:person_profile_knowledge:20260702⬡
-      // "She should know me" — the profile bead is WHO they are, loaded as knowledge.
+      // "She should know me" -- the profile bead is WHO they are, loaded as knowledge.
       try {
         var pb = profile && profile.beads && profile.beads[0];
         if (!pb) return '';
@@ -240,8 +266,8 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'NEVER invent shared memories, past events, trips, objects, or history. If asked to prove',
     'who you are or recall something not in context, say plainly you do not have that memory',
     'stored yet. A made-up memory is a lie and one lie destroys all trust. Uncertain = say so.',
-    'MEMORY IS BORN WHEN THEY GIVE IT: when the person TELLS you something new — a decision,',
-    'a rename, a moment, a fact to keep — that is not a recall test, it is the memory being',
+    'MEMORY IS BORN WHEN THEY GIVE IT: when the person TELLS you something new -- a decision,',
+    'a rename, a moment, a fact to keep -- that is not a recall test, it is the memory being',
     'made. Use write_to_brain immediately (stamp_type MEMORY, importance 9, their words in',
     'content) and confirm back in your own words what you will remember. NEVER answer new',
     'information with I-do-not-have-that-memory. Deflecting a gift kills it.',
@@ -252,72 +278,134 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'their own life story or "you do not know me" -> source_prefix journal.biography.v2 ;',
     'a prophecy or revelation -> source_prefix journal.prophecies.v2 ; a thought or idea',
     'they wrote -> source_prefix journal.thoughts.v2 ; a specific book -> source_prefix',
-    'journal.books. plus the book slug if you can tell which one (balanced_party,',
-    'journey_to_balance, gaslight_draft, gaslight_outline, man_like_coffee_outline,',
-    'man_like_coffee_ch1, man_like_coffee_prelude, marriage_meter_outline,',
-    'marriage_meter_content, trinity_outline, raisin_brandon_outline, remove_the_doors,',
-    'moving_maria) ; unsure which -> the bare journal. prefix as a last resort. If they ask',
-    'for the OPENING, BEGINNING, or FIRST line/part of something, pass order:"asc" -- without',
-    'it you get the newest-created part, not the actual start, and will answer wrong. Call the',
-    'tool BEFORE answering -- do not guess. If nothing comes back, say so honestly.',
+    'journal.books. plus a slug only when the current request or this HAM\'s retrieved context',
+    'actually supplies that book name. Otherwise use the bare journal.books. prefix; never',
+    'carry another person\'s title list into this HAM\'s wall. If they ask for the OPENING,',
+    'BEGINNING, or FIRST line/part of something, pass order:"asc" -- without it you get the',
+    'newest-created part, not the actual start, and will answer wrong. Call the tool BEFORE',
+    'answering -- do not guess. If nothing comes back, say so honestly.',
     'Do not repeat stock phrases (like air or ventilation status) unless directly asked about',
     'system health. Answer what was actually asked, in fresh words each time.',
     'Never include internal labels in your reply -- no "SIGIL:", no "SHADOW:", no stamps,',
     'no audit markers, no source codes. Those are added separately after you answer. Just talk.',
   ].join('\n');
 
-  // ⬡B:core.fcw.builder:FIX:nasty_c_to_wonder_entrance_exit_notes:20260708⬡
-  // Founder correction 20260708: this builder was a NASTY C -- pure cold code that
-  // ran silent and stamped nothing. Being C0 (no LLM) is fine for cost, but it is not
-  // what makes a wonder. A wonder has an ENTRANCE, an EXIT, and NOTES, documented, so
-  // when she screws up you can trace exactly what the Memory Bank wall held at that moment and
-  // which contributors filled it. This stamp is that trace. It is lightweight (one
-  // MINUTES bead per build), importance 2 so it never competes with real signal, and
-  // fail-silent so a logging hiccup never breaks the wall it is describing. Which
-  // contributors resolved vs came back empty is the note -- that is the self-heal.
+  // ⬡B:core.fcw.builder:FIX:durable_wall_receipt_with_lineage:20260715⬡
+  // This is the Memory Bank Wonder's EXIT and NOTES. Contributor truth comes
+  // directly from the six settled FIND results; an empty or rejected finder is
+  // reported as unresolved and is never promoted to a fake success.
+  var _baseFinders = {
+    identity: _results[0],
+    agentJDs: _results[1],
+    context: _results[2],
+    recent: _results[3],
+    doctrine: _results[4],
+    profile: _results[5]
+  };
+  var contributorDetails = {};
+  var contributors = {};
+  Object.keys(_baseFinders).forEach(function (name) {
+    var result = _baseFinders[name];
+    var beads = result && result.status === 'fulfilled' && result.value && Array.isArray(result.value.beads)
+      ? result.value.beads : [];
+    contributorDetails[name] = {
+      status: result ? result.status : 'missing',
+      count: beads.length,
+      reads: result && result.status === 'fulfilled' && result.value ? (Number(result.value.reads) || 0) : 0,
+      readOk: !!(result && result.status === 'fulfilled' && result.value && result.value.read_ok === true),
+      resolved: beads.length > 0
+    };
+    contributors[name] = beads.length > 0;
+  });
+  var contributorsTotal = Object.keys(contributors).length;
+  var contributorsResolved = Object.keys(contributors).filter(function (name) { return contributors[name]; }).length;
+  var emptyContributors = Object.keys(contributors).filter(function (name) { return !contributors[name]; });
+  var memoryReads = _results.reduce(function (total, result) {
+    return total + (result && result.status === 'fulfilled' && result.value ? (Number(result.value.reads) || 0) : 0);
+  }, 0);
+  var wallPersistence = { attempted: false, persisted: false, status: null, error: null, id: null, source: null };
+
   try {
-    var _BU = process.env.AIBE_BRAIN_URL, _BK = process.env.AIBE_BRAIN_KEY;
-    if (_BU && _BK) {
-      var contributors = {
-        identity: !!(identityBeads && identityBeads.beads && identityBeads.beads.length),
-        agentJDs: !!(agentJDs && agentJDs.beads && agentJDs.beads.length),
-        context: !!(context && context.beads && context.beads.length),
-        recent: !!(recent && recent.beads && recent.beads.length),
-        doctrine: !!(doctrine && doctrine.beads && doctrine.beads.length),
-        profile: !!(profile && profile.beads && profile.beads.length)
-      };
-      var empties = Object.keys(contributors).filter(function (k) { return !contributors[k]; });
-      var _wm = Date.now();
-      fetch(_bu() + '/rest/v1/' + _tbl() + '', {
-        method: 'POST',
-        headers: { apikey: _BK, Authorization: 'Bearer ' + _BK, 'Accept-Profile': _schema(),
-          'Content-Profile': _schema(), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-        body: JSON.stringify({
-          ham_uid: String(hamUid).toUpperCase(),
-          agent_global: 'Memory Bank',
-          stamp_type: 'MINUTES',
-          acl_stamp: '\u2b21B:core.fcw.builder:MINUTES:wall_built:' + _wm + '\u2b21',
-          source: 'ham_' + String(hamUid).toLowerCase() + '.fcw.build.' + _wm,
-          content: JSON.stringify({
-            entrance: { hamUid: String(hamUid).toUpperCase(), channel: channel || null, question: String(question || '').slice(0, 120), gateIdentity: !!identity },
-            exit: { ok: true, contributors: contributors, contributorsResolved: Object.keys(contributors).length - empties.length, ms: (Date.now() - t0) },
-            note: empties.length ? ('Memory Bank wall assembled with EMPTY contributors: ' + empties.join(', ') + ' -- if she answered wrong on this turn, start here')
-                                  : 'Memory Bank wall assembled with all contributors present'
-          }),
-          summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase() + ' (' + (channel || 'na') + '), ' + (Object.keys(contributors).length - empties.length) + '/6 contributors',
-          importance: 2
-        })
-      }).catch(function () {});
+    wallPersistence.attempted = true;
+    var wallAt = Date.now();
+    var wallSource = 'memory_bank.' + String(hamUid).toLowerCase() + '.fcw.build.' + wallAt;
+    var wallEdges = [{ type: 'grounds', target: 'ham_' + String(hamUid).toLowerCase() + '.pai.context' }];
+    var wallContent = {
+      entrance: {
+        hamUid: String(hamUid).toUpperCase(),
+        channel: channel || null,
+        question: String(question || '').slice(0, 120),
+        gateIdentity: !!identity
+      },
+      exit: {
+        ok: finderReceiptsVerified,
+        readFailures: finderFailures,
+        contributors: contributors,
+        contributorDetails: contributorDetails,
+        contributorsResolved: contributorsResolved,
+        contributorsTotal: contributorsTotal,
+        memoryReads: memoryReads,
+        msBeforePersistence: Date.now() - t0
+      },
+      note: emptyContributors.length
+        ? ('Memory Bank wall assembled with EMPTY contributors: ' + emptyContributors.join(', ') + ' -- inspect these measured gaps before trusting an answer')
+        : 'Memory Bank wall assembled with every measured contributor present'
+    };
+    wallPersistence.source = wallSource;
+    var wallWrite = await writeBead({
+      hamUid: String(hamUid).toUpperCase(),
+      agentGlobal: 'Memory Bank',
+      type: 'MINUTES',
+      source: wallSource,
+      content: wallContent,
+      summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase()
+        + ' (' + (channel || 'na') + '), ' + contributorsResolved
+        + '/' + contributorsTotal + ' contributors',
+      importance: 2,
+      edges: wallEdges
+    });
+    wallPersistence.status = wallWrite && wallWrite.status != null ? wallWrite.status : null;
+    wallPersistence.id = wallWrite && wallWrite.id != null ? wallWrite.id : null;
+    wallPersistence.persisted = !!(wallWrite && wallWrite.ok && wallPersistence.id != null);
+    if (!wallPersistence.persisted) {
+      wallPersistence.error = String(wallWrite && wallWrite.error || 'fcw_receipt_missing').slice(0, 300);
     }
-  } catch (_e) { /* wonder-stamp never breaks the wall */ }
+  } catch (_e) {
+    wallPersistence.error = String(_e && _e.message || _e).slice(0, 300);
+  }
+  ms = Date.now() - t0;
+  var wallReceiptVerified = wallPersistence.persisted === true
+    && wallPersistence.id != null;
+  var requiredContributors = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile'];
+  var allRequiredContributorsResolved = requiredContributors.every(function (name) {
+    return contributors[name] === true;
+  }) && contributorsResolved === 6 && contributorsTotal === 6;
+  var groundingOk = finderReceiptsVerified && wallReceiptVerified
+    && allRequiredContributorsResolved;
+  var groundingReason = finderFailures.length
+    ? 'memory_read_unverified'
+    : (!wallReceiptVerified
+        ? 'fcw_receipt_unpersisted'
+        : (allRequiredContributorsResolved ? null : 'fcw_contributors_incomplete'));
 
   return {
-    ok: true,
-    system_prompt: systemPrompt,
-    ham: { uid: hamUid, name: hamName, tier: hamTier, world: hamWorld },
-    agents: agentJDs ? agentJDs.beads : [],
-    context: allContext,
+    ok: groundingOk,
+    reason: groundingReason,
+    system_prompt: groundingOk ? systemPrompt : null,
+    ham: groundingOk ? { uid: hamUid, name: hamName, tier: hamTier, world: hamWorld } : null,
+    agents: groundingOk && agentJDs ? agentJDs.beads : [],
+    context: groundingOk ? allContext : [],
     ms: ms,
+    contributors: contributors,
+    contributorDetails: contributorDetails,
+    readFailures: finderFailures,
+    readReceiptsVerified: finderReceiptsVerified,
+    wallReceiptVerified: wallReceiptVerified,
+    allRequiredContributorsResolved: allRequiredContributorsResolved,
+    contributorsResolved: contributorsResolved,
+    contributorsTotal: contributorsTotal,
+    wallPersistence: wallPersistence,
+    memoryReads: memoryReads,
     find_ms: {
       identity: beadIdentity ? beadIdentity.ms : 0,
       agents: agentJDs ? agentJDs.ms : 0,
