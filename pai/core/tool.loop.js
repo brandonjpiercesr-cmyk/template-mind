@@ -22,54 +22,8 @@ function tokenCapFor(channel) {
 // assumed. Added a real cooldown guard at the one place a commit actually
 // happens, so no future burst can land regardless of what triggers the retry.
 'use strict';
-// ⬡B:core.tool.loop:FIX:atomic_cycle_bank_target:20260715⬡
-// The ABAHAM door resolves one complete target for each PAI cycle.
-// Every step in that cycle writes to the same URL, table, and schema.
-function _brainTarget() {
-  var memoryUrl = String(process.env.MEMORY_BANK_URL || '').trim();
-  var memoryKey = String(process.env.MEMORY_BANK_KEY || '').trim();
-  if (memoryUrl || memoryKey) {
-    if (!memoryUrl || !memoryKey) {
-      return {
-        url: null,
-        key: null,
-        table: process.env.BEAD_TABLE || 'beads',
-        schema: process.env.BRAIN_SCHEMA || 'memory_bank',
-        error: 'memory_bank_target_incomplete'
-      };
-    }
-    return {
-      url: memoryUrl,
-      key: memoryKey,
-      table: process.env.BEAD_TABLE || 'beads',
-      schema: process.env.BRAIN_SCHEMA || 'memory_bank',
-      error: null
-    };
-  }
-  var legacyUrl = String(process.env.AIBE_BRAIN_URL || '').trim();
-  var legacyKey = String(process.env.AIBE_BRAIN_KEY || '').trim();
-  if (!legacyUrl || !legacyKey) {
-    return {
-      url: null,
-      key: null,
-      table: process.env.BEAD_TABLE || 'aibe_brain',
-      schema: process.env.BRAIN_SCHEMA || 'abacia_core',
-      error: legacyUrl || legacyKey ? 'legacy_target_incomplete' : 'brain_target_unconfigured'
-    };
-  }
-  return {
-    url: legacyUrl,
-    key: legacyKey,
-    table: process.env.BEAD_TABLE || 'aibe_brain',
-    schema: process.env.BRAIN_SCHEMA || 'abacia_core',
-    error: null
-  };
-}
-function _bu(){return _brainTarget().url;}
-function _bk(){return _brainTarget().key;}
-function _tbl(){return _brainTarget().table;}
-function _schema(){return _brainTarget().schema;}
-
+// ⬡B:core.tool.loop:WIRE:canonical_brain_boundary:20260715⬡
+const { readBead, writeBead } = require('./brain.client.js');
 function ymd(){return new Date().toISOString().slice(0,10).replace(/-/g,'');}
 const { buildMemoryBank } = require('./fcw.builder.js'); // Memory Bank (BIND doctrine)
 const { readLastRunWithReceipt, writeLastRunWithReceipt } = require('./active-awareness.js');
@@ -260,7 +214,7 @@ var TOOLS = [
       query:{type:'string',description:'Plain-language description of the real feature or behavior to look up, e.g. "command center timestamp display" or "how reminders get marked done".'}
     }}}}
 ];
-async function executeTool(name, args, hamUid, origMessage) {
+async function executeTool(name, args, hamUid, origMessage, cycleId) {
   if (name === 'read_own_code') {
     try {
       var ghToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
@@ -468,8 +422,15 @@ async function executeTool(name, args, hamUid, origMessage) {
     if (args.source_prefix) q.source_prefix=args.source_prefix;
     if (args.agent_global) q.agent_global=args.agent_global;
     if (args.order) q.order=args.order;
-    q.ham_uid=args.ham_uid||hamUid;
+    var unresolvedInbox = q.stamp_type === 'UNRESOLVED_INBOUND'
+      && String(args.ham_uid || '').toLowerCase() === 'unknown';
+    q.ham_uid = unresolvedInbox ? 'unknown' : String(hamUid).toUpperCase();
     var res=await find([q]);
+    if (!res || res.read_ok !== true) {
+      return JSON.stringify({ok:false,reason:'brain_read_unverified',
+        reads:Number(res && res.reads) || 0,
+        read_failures:res && res.read_failures || []});
+    }
     var _findReads = Number(res && res.reads) || 0;
     // ⬡B:core.tool_loop:FIX:model_reliability_not_the_query_mechanics:20260708⬡
     // Real, live incident, confirmed by direct testing: the underlying query
@@ -484,6 +445,10 @@ async function executeTool(name, args, hamUid, origMessage) {
     if (res.beads.length===0 && q.stamp_type!=='ALERT') {
       var fallback=await find([{stamp_type:'ALERT',ham_uid:q.ham_uid,limit:q.limit,order:q.order}]);
       _findReads += Number(fallback && fallback.reads) || 0;
+      if (!fallback || fallback.read_ok !== true) {
+        return JSON.stringify({ok:false,reason:'alert_fallback_read_unverified',
+          reads:_findReads,read_failures:fallback && fallback.read_failures || []});
+      }
       if (fallback.beads.length>0) { res=fallback; }
     }
     // ⬡B:core.tool_loop:FIX:wondergames_mechanical_fallback_20260714⬡
@@ -505,6 +470,10 @@ async function executeTool(name, args, hamUid, origMessage) {
           {stamp_type:'DOCTRINE',ham_uid:q.ham_uid,importance_gte:8,limit:3}
         ]);
         _findReads += Number(wgFallback && wgFallback.reads) || 0;
+        if (!wgFallback || wgFallback.read_ok !== true) {
+          return JSON.stringify({ok:false,reason:'wonder_games_read_unverified',
+            reads:_findReads,read_failures:wgFallback && wgFallback.read_failures || []});
+        }
         if (wgFallback.beads.length>0) { res=wgFallback; }
       }
     }
@@ -582,27 +551,33 @@ async function executeTool(name, args, hamUid, origMessage) {
     return JSON.stringify(_result);
   }
   if (name === 'write_to_brain') {
-    var BU=process.env.AIBE_BRAIN_URL,BK=process.env.AIBE_BRAIN_KEY;
-    if (!_bu() || !_bk()) return JSON.stringify({ok:false});
-    var bead={ham_uid:args.ham_uid||hamUid,agent_global:'PAI',stamp_type:args.stamp_type||'RESULT',
-      source:'pai.tool.write.'+(args.ham_uid||hamUid)+'.'+Date.now(),
-      acl_stamp:'\u2b21B:pai.tool:RESULT:tool_write:20260630\u2b21',
-      summary:args.summary,content:args.content,importance:args.importance||7};
+    var writeType = String(args.stamp_type || 'RESULT').toUpperCase();
+    var writeSource = 'pai.tool.write.' + String(hamUid).toLowerCase() + '.' + Date.now();
     try {
-      await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-        headers:{apikey: _bk(),Authorization:'Bearer ' + _bk(),'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-        body:JSON.stringify(bead)});
-      return JSON.stringify({ok:true});
-    }catch(e){return JSON.stringify({ok:false,error:e.message});}
+      var writeReceipt = await writeBead({
+        hamUid: String(hamUid).toUpperCase(),
+        agentGlobal: 'PAI',
+        type: writeType,
+        source: writeSource,
+        summary: args.summary,
+        content: args.content,
+        importance: args.importance || 7,
+        edges: [{ type: 'remembers', target: 'ham_' + String(hamUid).toLowerCase()
+          + '.memory_' + writeType.toLowerCase() }]
+      });
+      if (!writeReceipt || !writeReceipt.ok || writeReceipt.id == null) {
+        return JSON.stringify({ok:false,reason:'brain_write_receipt_missing'});
+      }
+      return JSON.stringify({ok:true,receipt_id:writeReceipt.id});
+    } catch (e) { return JSON.stringify({ok:false,error:e.message}); }
   }
   if (name === 'get_budget_upcoming') {
-    var buHam = args.ham_uid || hamUid;
+    var buHam = String(hamUid).toUpperCase();
     var up = await ledger.getUpcoming(buHam, args.days || 45);
     return JSON.stringify(up);
   }
   if (name === 'get_budget_summary') {
-    var bsHam = args.ham_uid || hamUid;
+    var bsHam = String(hamUid).toUpperCase();
     var sum = await ledger.getCycleSummary(bsHam, args.cycle_start, args.cycle_end);
     return JSON.stringify(sum);
   }
@@ -617,14 +592,19 @@ async function executeTool(name, args, hamUid, origMessage) {
     // (advisor cycles, reconciliation, CYCLE_STEP) that recency window
     // rarely still contains them. This is a deterministic, org-scoped
     // query instead of hoping recency happens to line up.
-    var BUd=process.env.AIBE_BRAIN_URL, BKd=process.env.AIBE_BRAIN_KEY;
-    if (!BUd||!BKd) return JSON.stringify({ok:false,reason:'no_brain'});
     var orgMap={bdif:'BDIF_ADVISOR',mediators:'MEDIATORS_ADVISOR',gmg:'GMG_ADVISOR',mh_action:'MH_ACTION_ADVISOR'};
     var agentGlobal=orgMap[String(args.org||'').toLowerCase()];
     if (!agentGlobal) return JSON.stringify({ok:false,reason:'unknown_org',knownOrgs:Object.keys(orgMap)});
     try {
-      var dHam = args.ham_uid || hamUid;
-      var draftRows=await fetch(_bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.'+dHam+'&agent_global=eq.'+agentGlobal+'&stamp_type=eq.DRAFT_PENDING&order=created_at.desc&limit=1&select=summary,content,created_at',{headers:{apikey:BKd,Authorization:'Bearer '+BKd,'Accept-Profile':_schema()}}).then(function(x){return x.json();}).catch(function(){return [];});
+      var dHam = String(hamUid).toUpperCase();
+      var draftRows = await readBead({
+        ham_uid: 'eq.' + dHam,
+        agent_global: 'eq.' + agentGlobal,
+        stamp_type: 'eq.DRAFT_PENDING',
+        order: 'created_at.desc',
+        limit: '1',
+        select: 'summary,content,created_at'
+      });
       if (!draftRows||!draftRows.length) return JSON.stringify({ok:true,found:false,org:args.org,message:'No pending drafts on file for '+args.org+' right now.'});
       var latest=draftRows[0];
       var c=latest.content; try{c=JSON.parse(c);}catch(e){c={};}
@@ -639,18 +619,24 @@ async function executeTool(name, args, hamUid, origMessage) {
     // checkable signal, not a guess: real related beads already in the
     // brain about this HAM. Below threshold, she names what's missing
     // instead of guessing or refusing outright.
-    var BUc=process.env.AIBE_BRAIN_URL, BKc=process.env.AIBE_BRAIN_KEY;
-    var cHam = args.ham_uid || hamUid;
+    var cHam = String(hamUid).toUpperCase();
     var desc = String(args.capability_description||'').slice(0,200);
-    if (!BUc||!BKc) return JSON.stringify({ok:false,built:false,reason:'no_brain'});
     var keywords = desc.split(/\s+/).filter(function(w){return w.length>3;}).slice(0,4);
     var relatedCount = 0;
     try {
       for (var kwi=0;kwi<keywords.length;kwi++){
-        var kwRes = await fetch(_bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.'+cHam+'&summary=ilike.*'+encodeURIComponent(keywords[kwi])+'*&select=id&limit=5',{headers:{apikey:BKc,Authorization:'Bearer '+BKc,'Accept-Profile':_schema()}}).then(function(x){return x.json();}).catch(function(){return [];});
-        relatedCount += (Array.isArray(kwRes)?kwRes.length:0);
+        var kwRes = await readBead({
+          ham_uid: 'eq.' + cHam,
+          summary: 'ilike.*' + keywords[kwi] + '*',
+          select: 'id',
+          limit: '5'
+        });
+        relatedCount += Array.isArray(kwRes) ? kwRes.length : 0;
       }
-    } catch(eReq){}
+    } catch(eReq) {
+      return JSON.stringify({ok:false,built:false,reason:'capability_history_read_failed',
+        error:String(eReq && eReq.message || eReq)});
+    }
     if (relatedCount >= 5) {
       // \u2b21B:core.tool.loop:WIRE:spawnGuard_on_agent_birth:20260708\u2b21
       // core/spawnGuard.js was built 20260702, real, correct logic, never
@@ -660,19 +646,25 @@ async function executeTool(name, args, hamUid, origMessage) {
       // command. Real lineage and a real budget on every one from now on.
       var spawnGuard = require('../core/spawnGuard.js');
       var taskName = 'span.task.agent_birth_'+cHam.toLowerCase()+'_'+Date.now();
-      var lineage = { spawner: 'request_new_capability', parent: _cycleId || 'unknown' };
+      var lineage = { spawner: 'request_new_capability', parent: cycleId || 'unknown' };
       var budget = { maxIterations: 20, maxLlmCalls: 10 };
       try { spawnGuard.validateTask({ lineage: lineage, budget: budget }); } catch (eGuard) { return JSON.stringify({ok:false,built:false,reason:'spawn_guard_rejected',error:eGuard.message}); }
-      await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-        headers:{apikey:BKc,Authorization:'Bearer '+BKc,'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-        body:JSON.stringify({ham_uid:cHam,agent_global:'PAI',stamp_type:'TASK',
-          source:taskName,
-          acl_stamp:'\u2b21B:pai.agentbirth:TASK:proposed:'+ymd()+'\u2b21',
-          summary:'[FOR PAI -- agent birth, '+relatedCount+' related real beads found] '+desc,
-          content:JSON.stringify({requestedBy:cHam,description:desc,relatedBeadCount:relatedCount,lineage:lineage,budget:budget}),
-          importance:6})});
-      return JSON.stringify({ok:true,built:true,relatedBeadCount:relatedCount,message:'Enough real history exists ('+relatedCount+' related things already known). Filed to build this for real.'});
+      var taskReceipt = await writeBead({
+        hamUid: cHam,
+        agentGlobal: 'PAI',
+        type: 'TASK',
+        source: taskName,
+        summary: '[FOR PAI, agent birth, ' + relatedCount + ' related real beads found] ' + desc,
+        content: { requestedBy: cHam, description: desc,
+          relatedBeadCount: relatedCount, lineage: lineage, budget: budget },
+        importance: 6,
+        edges: [{ type: 'spawns', target: taskName }]
+      });
+      if (!taskReceipt || !taskReceipt.ok || taskReceipt.id == null) {
+        return JSON.stringify({ok:false,built:false,reason:'task_receipt_missing'});
+      }
+      return JSON.stringify({ok:true,built:true,receipt_id:taskReceipt.id,
+        relatedBeadCount:relatedCount,message:'Enough real history exists ('+relatedCount+' related things already known). Filed to build this for real.'});
     } else {
       return JSON.stringify({ok:true,built:false,relatedBeadCount:relatedCount,
         message:'Not enough real history yet ('+relatedCount+' related things found, need at least 5) to build this well. Talk through it more, or feed a transcript about it, and ask again.'});
@@ -684,10 +676,8 @@ async function executeTool(name, args, hamUid, origMessage) {
     // pretending to be one. EANEW's own 3-min cycle (already real, already
     // running) checks REMINDER beads for due ones and fires them for real
     // through POST /reach/out, the same real compose-and-send path already
-    // wired for her to reach Brandon on her own.
-    var BUr=process.env.AIBE_BRAIN_URL, BKr=process.env.AIBE_BRAIN_KEY;
-    if (!BUr||!BKr) return JSON.stringify({ok:false,reason:'no_brain'});
-    var rHam = args.ham_uid || hamUid;
+    // wired for her to reach the resolved HAM on her own.
+    var rHam = String(hamUid).toUpperCase();
     // \u2b21B:core.tool.loop:FIX:reminder_hallucinated_past_date:20260711\u2b21
     // Real, live incident: asked to be reminded of something with no date
     // given at all, the model invented one anyway -- 2024, a past year it
@@ -714,10 +704,13 @@ async function executeTool(name, args, hamUid, origMessage) {
     try {
       var _rt = String(args.text || '').trim().toLowerCase().slice(0, 100);
       if (_rt) {
-        var _dq = await fetch(_bu() + '/rest/v1/' + _tbl() + '?stamp_type=eq.REMINDER&ham_uid=eq.' + encodeURIComponent(rHam)
-          + '&summary=ilike.' + encodeURIComponent('%' + _rt.slice(0, 40) + '%') + '&order=created_at.desc&limit=15',
-          { headers: { apikey: BKr, Authorization: 'Bearer ' + BKr, 'Accept-Profile': _schema() } });
-        var _ex = _dq.ok ? await _dq.json() : [];
+        var _ex = await readBead({
+          stamp_type: 'eq.REMINDER',
+          ham_uid: 'eq.' + rHam,
+          summary: 'ilike.*' + _rt.slice(0, 40) + '*',
+          order: 'created_at.desc',
+          limit: '15'
+        });
         var _dup = (Array.isArray(_ex) ? _ex : []).find(function (b) {
           try { var c = JSON.parse(b.content || '{}'); return !c.fired && String(c.text || '').trim().toLowerCase().slice(0, 100) === _rt; } catch (e) { return false; }
         });
@@ -725,18 +718,28 @@ async function executeTool(name, args, hamUid, origMessage) {
           return JSON.stringify({ ok: true, duplicate: true, text: args.text, note: 'a reminder with this text is already pending; not creating a duplicate' });
         }
       }
-    } catch (eDup) { /* dedup is best-effort and must never block a legitimate new reminder */ }
+    } catch (eDup) {
+      return JSON.stringify({ok:false,reason:'reminder_dedup_read_failed',
+        error:String(eDup && eDup.message || eDup)});
+    }
     try {
-      await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-        headers:{apikey:BKr,Authorization:'Bearer '+BKr,'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-        body:JSON.stringify({ham_uid:rHam,agent_global:'PAI',stamp_type:'REMINDER',
-          source:'pai.reminder.'+rHam+'.'+Date.now(),
-          acl_stamp:'\u2b21B:pai.reminder:REMINDER:created:'+ymd()+'\u2b21',
-          summary:'[REMINDER] '+String(args.text||'').slice(0,100),
-          content:JSON.stringify({text:args.text,due_at:dueAt,fired:false,defaultedDate:!isValidFuture,createdAt:new Date().toISOString()}),
-          importance:6})});
-      return JSON.stringify({ok:true,text:args.text,due_at:dueAt,note:isValidFuture?undefined:'no real date was given, defaulted to tomorrow 9am'});
+      var reminderSource = 'pai.reminder.' + rHam.toLowerCase() + '.' + Date.now();
+      var reminderReceipt = await writeBead({
+        hamUid: rHam,
+        agentGlobal: 'PAI',
+        type: 'REMINDER',
+        source: reminderSource,
+        summary: '[REMINDER] ' + String(args.text || '').slice(0, 100),
+        content: { text: args.text, due_at: dueAt, fired: false,
+          defaultedDate: !isValidFuture, createdAt: new Date().toISOString() },
+        importance: 6,
+        edges: [{ type: 'schedules', target: 'ham_' + rHam.toLowerCase() + '.reminder_queue' }]
+      });
+      if (!reminderReceipt || !reminderReceipt.ok || reminderReceipt.id == null) {
+        return JSON.stringify({ok:false,reason:'reminder_receipt_missing'});
+      }
+      return JSON.stringify({ok:true,receipt_id:reminderReceipt.id,text:args.text,due_at:dueAt,
+        note:isValidFuture?undefined:'no real date was given, defaulted to tomorrow 9am'});
     } catch(e){return JSON.stringify({ok:false,error:e.message});}
   }
   if (name === 'consult_advisor') {
@@ -750,7 +753,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     try {
       var _ar = require('../advisors/advisor-router.js');
       var _station = String(args.advisor||'').toLowerCase().replace(/[^a-z_]/g,'');
-      var _cHam = args.ham_uid || hamUid;
+      var _cHam = String(hamUid).toUpperCase();
       if (!_station || !_cHam) return JSON.stringify({ok:false,reason:'need advisor and ham_uid'});
       var _worlds = await _ar.discoverStations(_cHam);
       if (_worlds.indexOf(_station) === -1) return JSON.stringify({ok:false,reason:'no_such_advisor',advisor:_station,available:_worlds});
@@ -773,7 +776,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // founder-gated, Nylas-backed, verified live with his 20 real events). No parallel
     // implementation, no new exposure -- reuses the existing gate.
     try {
-      var _calHam = args.ham_uid || hamUid;
+      var _calHam = String(hamUid).toUpperCase();
       if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
       var _selfBase = process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
       var _cr = await fetch(_selfBase + '/os/calendar/' + _calHam).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
@@ -791,7 +794,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // the haircut ask that went silent. Booking (write) is a separate queued wire.
     try {
       var _sl = require('./schedule/schedule.logic.js');
-      var _calHam = args.ham_uid || hamUid;
+      var _calHam = String(hamUid).toUpperCase();
       if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
       var _want = args.want || 'both';
       var _events = await _sl.getRadarEvents(_calHam);
@@ -816,51 +819,114 @@ async function executeTool(name, args, hamUid, origMessage) {
     // not-found honestly when no contact is saved, so a number or email is never invented.
     try {
       var _ct = require('./contacts.js');
-      var _ctHam = args.ham_uid || hamUid;
+      var _ctHam = String(hamUid).toUpperCase();
       var _hit = await _ct.resolveContact(_ctHam, args.who||'');
       if (!_hit) return JSON.stringify({ok:true,found:false,who:args.who,note:'no saved contact matches; do not invent a number or email'});
       return JSON.stringify({ok:true,found:true,contact:_hit});
     } catch(eFc){ return JSON.stringify({ok:false,error:eFc.message}); }
   }
   if (name === 'contact_send') {
-    // ⬡B:core.tool.loop:WIRE:contact_send_G1_third_party_reach:20260713⬡
-    // G1: the last big reach gap -- she can resolve a contact (find_contact) but never
-    // touch them. This closes it, honoring the HAM's own standing rule word for word: an
-    // outbound send to a real external human needs confirmation UNLESS the HAM already
-    // authorized this exact send in his own message. authorized_in_message is the model's
-    // own judgment call on that, driven by the tool description; the channel enforces
-    // nothing, it only executes what the one cycle decided. A DRAFT is never a SEND: when
-    // not authorized, this stamps a PENDING_SEND for review and does not touch Blooio.
+    // A third-party send is a gated Wonder: the current HAM's saved contact,
+    // deterministic authorization in the actual inbound words, the real sender,
+    // and durable authorization/result receipts all have to agree.
     try {
-      var _ct2 = require('./contacts.js');
-      var _csHam = args.ham_uid || hamUid;
-      var _hit2 = await _ct2.resolveContact(_csHam, args.contact_query || '');
-      if (!_hit2 || typeof _hit2 !== 'object') return JSON.stringify({ ok: true, sent: false, reason: 'no_saved_contact', note: 'do not invent a number or email' });
-      if (!_hit2.phone) return JSON.stringify({ ok: true, sent: false, reason: 'contact_has_no_phone', contact: _hit2 });
-      var _bu3 = process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL;
-      var _bk3 = process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY;
-      var _wh3 = { apikey: _bk3, Authorization: 'Bearer ' + _bk3, 'Content-Profile': 'abacia_core', 'Content-Type': 'application/json', Prefer: 'return=minimal' };
-      var _ymd3 = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      if (args.authorized_in_message === true) {
-        var _tap = require('./wren/reply.js').tapSend;
-        var _sendRes = await _tap(_hit2.phone, String(args.message || '').slice(0, 1500));
-        try { await fetch(_bu3 + '/rest/v1/aibe_brain', { method: 'POST', headers: _wh3, body: JSON.stringify({
-          ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'OUTBOUND_THIRD_PARTY',
-          acl_stamp: '\u2b21B:core.tool.loop:OUTBOUND_THIRD_PARTY:sent:' + _ymd3 + '\u2b21',
-          source: 'contact.send.' + Date.now(), summary: '[SENT to ' + (_hit2.name || 'contact') + '] ' + String(args.message || '').slice(0, 100),
-          content: JSON.stringify({ contact: _hit2.name, phone: _hit2.phone, message: args.message, result: _sendRes }), importance: 6
-        }) }); } catch (eStamp) {}
-        return JSON.stringify({ ok: true, sent: true, to: _hit2.name, result: _sendRes });
+      var contacts = require('./contacts.js');
+      var contactHam = String(hamUid).toUpperCase();
+      var contact = await contacts.resolveContact(contactHam, args.contact_query || '');
+      if (!contact || typeof contact !== 'object') {
+        return JSON.stringify({ ok: true, sent: false, reason: 'no_saved_contact',
+          note: 'do not invent a number or email' });
       }
-      // NOT authorized in-message: draft only, never send. Hard pause per doctrine.
-      try { await fetch(_bu3 + '/rest/v1/aibe_brain', { method: 'POST', headers: _wh3, body: JSON.stringify({
-        ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'PENDING_SEND',
-        acl_stamp: '\u2b21B:core.tool.loop:PENDING_SEND:drafted:' + _ymd3 + '\u2b21',
-        source: 'contact.draft.' + Date.now(), summary: '[DRAFT for ' + (_hit2.name || 'contact') + ', AWAITING CONFIRM] ' + String(args.message || '').slice(0, 100),
-        content: JSON.stringify({ contact: _hit2.name, phone: _hit2.phone, message: args.message }), importance: 6
-      }) }); } catch (eStamp2) {}
-      return JSON.stringify({ ok: true, sent: false, drafted: true, to: _hit2.name, note: 'not sent -- the HAM did not explicitly authorize this exact send; confirm before sending' });
-    } catch (eCs) { return JSON.stringify({ ok: false, error: eCs.message }); }
+      if (!contact.phone) {
+        return JSON.stringify({ ok: true, sent: false,
+          reason: 'contact_has_no_phone', contact: contact });
+      }
+
+      var inboundWords = String(origMessage || '').toLowerCase();
+      var requestedContact = String(args.contact_query || '').trim().toLowerCase();
+      var savedName = String(contact.name || '').trim().toLowerCase();
+      var hasSendVerb = /\b(send|text|message|tell|write)\b/.test(inboundWords);
+      var namesContact = !!((requestedContact && inboundWords.indexOf(requestedContact) !== -1)
+        || (savedName && inboundWords.indexOf(savedName) !== -1));
+      var directlyAuthorized = args.authorized_in_message === true
+        && hasSendVerb && namesContact;
+      var outboundMessage = String(args.message || '').slice(0, 1500);
+      var contactTarget = 'ham_' + contactHam.toLowerCase() + '.contact_'
+        + String(contact.name || args.contact_query || 'unknown')
+          .toLowerCase().replace(/[^a-z0-9_.-]/g, '_');
+
+      if (directlyAuthorized) {
+        var authorizationReceipt = await writeBead({
+          hamUid: contactHam,
+          agentGlobal: 'ANU',
+          type: 'OUTBOUND_AUTHORIZED',
+          source: 'contact.authorization.' + Date.now(),
+          summary: '[AUTHORIZED SEND to ' + (contact.name || 'contact') + '] '
+            + outboundMessage.slice(0, 100),
+          content: { contact: contact.name, phone: contact.phone,
+            message: outboundMessage, authorization: 'explicit_in_current_message' },
+          importance: 7,
+          edges: [{ type: 'authorizes', target: contactTarget }]
+        });
+        if (!authorizationReceipt || !authorizationReceipt.ok
+            || authorizationReceipt.id == null) {
+          return JSON.stringify({ ok: false, sent: false,
+            reason: 'outbound_authorization_receipt_missing' });
+        }
+
+        var tapSend = require('./wren/reply.js').tapSend;
+        var sendResult = await tapSend(contact.phone, outboundMessage);
+        var sendAccepted = !!sendResult && sendResult.ok !== false;
+        if (!sendAccepted) {
+          return JSON.stringify({ ok: false, sent: false,
+            reason: 'sender_rejected', authorization_receipt_id: authorizationReceipt.id,
+            result: sendResult });
+        }
+        var sendReceipt = await writeBead({
+          hamUid: contactHam,
+          agentGlobal: 'ANU',
+          type: 'OUTBOUND_THIRD_PARTY',
+          source: 'contact.send.' + Date.now(),
+          summary: '[SENT to ' + (contact.name || 'contact') + '] '
+            + outboundMessage.slice(0, 100),
+          content: { contact: contact.name, phone: contact.phone,
+            message: outboundMessage, result: sendResult,
+            authorizationReceiptId: authorizationReceipt.id },
+          importance: 7,
+          edges: [{ type: 'reaches', target: contactTarget }]
+        });
+        if (!sendReceipt || !sendReceipt.ok || sendReceipt.id == null) {
+          return JSON.stringify({ ok: false, sent: true,
+            reason: 'send_succeeded_receipt_missing',
+            authorization_receipt_id: authorizationReceipt.id, result: sendResult });
+        }
+        return JSON.stringify({ ok: true, sent: true, to: contact.name,
+          authorization_receipt_id: authorizationReceipt.id,
+          send_receipt_id: sendReceipt.id, result: sendResult });
+      }
+
+      var draftReceipt = await writeBead({
+        hamUid: contactHam,
+        agentGlobal: 'ANU',
+        type: 'PENDING_SEND',
+        source: 'contact.draft.' + Date.now(),
+        summary: '[DRAFT for ' + (contact.name || 'contact')
+          + ', AWAITING CONFIRM] ' + outboundMessage.slice(0, 100),
+        content: { contact: contact.name, phone: contact.phone,
+          message: outboundMessage },
+        importance: 6,
+        edges: [{ type: 'awaits_authorization', target: contactTarget }]
+      });
+      if (!draftReceipt || !draftReceipt.ok || draftReceipt.id == null) {
+        return JSON.stringify({ ok: false, sent: false,
+          reason: 'pending_send_receipt_missing' });
+      }
+      return JSON.stringify({ ok: true, sent: false, drafted: true,
+        draft_receipt_id: draftReceipt.id, to: contact.name,
+        note: 'not sent; the HAM did not explicitly authorize this exact send in the current message' });
+    } catch (contactSendError) {
+      return JSON.stringify({ ok: false, sent: false, error: contactSendError.message });
+    }
   }
   if (name === 'stop_mentioning') {
     // ⬡B:core.tool.loop:WIRE:stop_mentioning_cycle_tool:20260713⬡
@@ -870,7 +936,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // you kept doing it" loop.
     try {
       var _rw = require('./reminderWeave.js');
-      var _sHam = args.ham_uid || hamUid;
+      var _sHam = String(hamUid).toUpperCase();
       var _r = await _rw.suppressWeave(_sHam, args.keyword||'');
       return JSON.stringify(_r && _r.ok ? {ok:true, stopped:_r.keyword} : {ok:false, reason:'could_not_suppress'});
     } catch(eStop){ return JSON.stringify({ok:false,error:eStop.message}); }
@@ -884,7 +950,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // explicit yes from the HAM.
     try {
       var _slB = require('./schedule/schedule.logic.js');
-      var _bHam = args.ham_uid || hamUid;
+      var _bHam = String(hamUid).toUpperCase();
       if (!_bHam || !args.title || !args.start) return JSON.stringify({ok:false,reason:'need ham_uid, title, and start'});
       var _bres = await _slB.bookEvent(_bHam, { title:args.title, start:args.start, end:args.end, description:args.description });
       return JSON.stringify(_bres);
@@ -897,7 +963,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // non-gimmick -- it convenes nothing when there is not enough genuine material.
     try {
       var _sw = require('./session.wonder.js');
-      var _swHam = args.ham_uid || hamUid;
+      var _swHam = String(hamUid).toUpperCase();
       var _swRes = await _sw.proposeSession(_swHam, { autobook: args.autobook === true });
       return JSON.stringify(_swRes);
     } catch(eSw){ return JSON.stringify({ok:false,error:eSw.message}); }
@@ -910,19 +976,24 @@ async function executeTool(name, args, hamUid, origMessage) {
     var now = Date.now();
     var last = _lastFixAttempt[path] || 0;
     if (now - last < FIX_COOLDOWN_MS) {
-      var BU2=process.env.AIBE_BRAIN_URL,BK2=process.env.AIBE_BRAIN_KEY;
-      if (BU2&&BK2) {
-        fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-          headers:{apikey:BK2,Authorization:'Bearer '+BK2,'Accept-Profile':_schema(),
-            'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-          body:JSON.stringify({ham_uid:hamUid||'SYSTEM',agent_global:'PAI',stamp_type:'LOGFUL',
-            source:'pai.fix_cooldown_blocked.'+Date.now(),
-            acl_stamp:'\u2b21B:pai.tool:LOGFUL:cooldown_blocked:20260701\u2b21',
-            summary:'fix_file_in_github blocked by cooldown -- same path attempted again within '+FIX_COOLDOWN_MS+'ms: '+path,
-            content:JSON.stringify({path:path,reason:args.reason||''}),importance:7})
-        }).catch(function(){});
-      }
-      return JSON.stringify({ok:false,reason:'cooldown_active',path:path,retry_after_ms:FIX_COOLDOWN_MS-(now-last)});
+      var cooldownReceiptId = null;
+      try {
+        var cooldownWrite = await writeBead({
+          hamUid: String(hamUid).toUpperCase(),
+          agentGlobal: 'PAI',
+          type: 'LOGFUL',
+          source: 'pai.fix_cooldown_blocked.' + Date.now(),
+          summary: 'fix_file_in_github blocked by cooldown, same path attempted again within '
+            + FIX_COOLDOWN_MS + 'ms: ' + path,
+          content: { path: path, reason: args.reason || '' },
+          importance: 7,
+          edges: [{ type: 'guards', target: 'ham_' + String(hamUid).toLowerCase()
+            + '.github_fix_' + String(path).replace(/[^A-Za-z0-9_.-]/g, '_') }]
+        });
+        cooldownReceiptId = cooldownWrite && cooldownWrite.id != null ? cooldownWrite.id : null;
+      } catch (cooldownWriteError) {}
+      return JSON.stringify({ok:false,reason:'cooldown_active',path:path,
+        log_receipt_id:cooldownReceiptId,retry_after_ms:FIX_COOLDOWN_MS-(now-last)});
     }
     _lastFixAttempt[path] = now;
     return JSON.stringify(await fixFileInGithub(args.repo, args.path, args.content, args.reason));
@@ -931,7 +1002,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     return JSON.stringify(await triggerDeploy(args.service_id));
   }
   if (name === 'notify_ham') {
-    return JSON.stringify(await notifyHam(args.ham_uid, args.message));
+    return JSON.stringify(await notifyHam(String(hamUid).toUpperCase(), args.message));
   }
   return JSON.stringify({ok:false,error:'unknown:'+name});
 }
@@ -978,64 +1049,33 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // New World beads carry explicit spawn lineage and a typed feed edge; legacy
   // archives keep the same edge inside content because that table has no columns.
   var _cycleId = hamUid + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
-  var _cycleTarget = _brainTarget();
   var _stampOutcomes = [];
   async function _stampStep(step, detail) {
-    var outcome = { step: step, ok: false, status: null, error: null, id: null, source: 'pai.cycle.' + _cycleId };
-    if (!_cycleTarget.url || !_cycleTarget.key) {
-      outcome.error = _cycleTarget.error || 'brain_target_unconfigured';
-      _stampOutcomes.push(outcome);
-      return outcome;
-    }
     var stampAt = Date.now();
-    var cycleEdges = [{ type: 'feeds', target: 'ham_' + String(hamUid).toLowerCase() + '.pai.cycle_log' }];
-    var cycleContent = {
-      cycleId: _cycleId,
-      step: step,
-      channel: channel,
-      detail: detail || null,
-      atMs: stampAt - t0,
-      edges: cycleEdges
-    };
-    var cycleBead = {
-      ham_uid: hamUid,
-      agent_global: 'PAI',
-      stamp_type: 'CYCLE_STEP',
-      source: 'pai.cycle.' + _cycleId,
-      acl_stamp: '\u2b21B:core.tool.loop:CYCLE_STEP:' + step + ':' + stampAt + '\u2b21',
-      summary: '[CYCLE ' + _cycleId.slice(-8) + '] ' + step + (detail ? ': ' + String(detail).slice(0, 100) : ''),
-      content: JSON.stringify(cycleContent),
-      importance: 3
-    };
-    if (_cycleTarget.table !== 'aibe_brain') {
-      cycleBead.spawned_by = 'PAI';
-      cycleBead.edges = cycleEdges;
-    }
+    var source = 'pai.cycle.' + _cycleId + '.' + step + '.' + stampAt;
+    var outcome = { step: step, ok: false, status: null, error: null, id: null, source: source };
     try {
-      var response = await fetch(_cycleTarget.url + '/rest/v1/' + _cycleTarget.table, {
-        method: 'POST',
-        headers: {
-          apikey: _cycleTarget.key,
-          Authorization: 'Bearer ' + _cycleTarget.key,
-          'Accept-Profile': _cycleTarget.schema,
-          'Content-Profile': _cycleTarget.schema,
-          'Content-Type': 'application/json',
-          Prefer: 'return=representation'
+      var writeResult = await writeBead({
+        hamUid: String(hamUid).toUpperCase(),
+        agentGlobal: 'PAI',
+        type: 'CYCLE_STEP',
+        source: source,
+        content: {
+          cycleId: _cycleId,
+          step: step,
+          channel: channel,
+          detail: detail || null,
+          atMs: stampAt - t0
         },
-        body: JSON.stringify(cycleBead)
+        summary: '[CYCLE ' + _cycleId.slice(-8) + '] ' + step
+          + (detail ? ': ' + String(detail).slice(0, 100) : ''),
+        importance: 3,
+        edges: [{ type: 'feeds', target: 'ham_' + String(hamUid).toLowerCase() + '.pai.cycle_log' }]
       });
-      outcome.status = response.status;
-      var responseText = String(await response.text());
-      if (response.ok) {
-        var rows = [];
-        try { rows = responseText ? JSON.parse(responseText) : []; } catch (_eStampJson) {}
-        var row = Array.isArray(rows) ? rows[0] : rows;
-        outcome.id = row && row.id != null ? row.id : null;
-        outcome.ok = outcome.id != null;
-        if (!outcome.ok) outcome.error = 'receipt_id_missing';
-      } else {
-        outcome.error = responseText.slice(0, 300);
-      }
+      outcome.status = writeResult && writeResult.status != null ? writeResult.status : null;
+      outcome.id = writeResult && writeResult.id != null ? writeResult.id : null;
+      outcome.ok = !!(writeResult && writeResult.ok && outcome.id != null);
+      if (!outcome.ok) outcome.error = writeResult && writeResult.error || 'cycle_step_receipt_missing';
     } catch (error) {
       outcome.error = String(error && error.message || error).slice(0, 300);
     }
@@ -1779,7 +1819,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var toolStartedAt = Date.now();
         var tr, toolOutcome;
         try {
-          tr = await executeTool(tc.function.name,targs,hamUid,message);
+          tr = await executeTool(tc.function.name,targs,hamUid,message,_cycleId);
           toolOutcome = _boundedToolOutcome(tc.function.name, tr, Date.now() - toolStartedAt, null);
         } catch (toolError) {
           toolOutcome = _boundedToolOutcome(tc.function.name, null, Date.now() - toolStartedAt, toolError);
@@ -1823,20 +1863,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // whatever it turns out to be) has real data behind it instead of
     // another guess. Never decides the fix, only shows the pattern.
     if (!tools.length && ans) {
-      try {
-        var BUd = process.env.AIBE_BRAIN_URL, BKd = process.env.AIBE_BRAIN_KEY;
-        if (BUd && BKd) {
-          fetch(_bu() + '/rest/v1/' + _tbl() + '', { method: 'POST',
-            headers: { apikey: BKd, Authorization: 'Bearer ' + BKd, 'Content-Profile': _schema(), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-            body: JSON.stringify({ ham_uid: hamUid, agent_global: 'CLAIR', stamp_type: 'RESULT',
-              acl_stamp: '\u2b21B:clair.diagnostic:RESULT:no_tool_turn:20260704\u2b21',
-              source: 'clair.diagnostic.no_tool_turn.' + Date.now(),
-              summary: '[CLAIR DIAGNOSTIC] no-tool turn on channel ' + channel,
-              content: JSON.stringify({ channel: channel, question: String(message || '').slice(0, 150), answer_preview: ans.slice(0, 200) }),
-              importance: 5 })
-          }).catch(function () {});
-        }
-      } catch (eDiagLoop) {}
+      await _stampStep('no_tool_answer', JSON.stringify({
+        channel: channel,
+        question: String(message || '').slice(0, 150),
+        answer_preview: ans.slice(0, 200)
+      }));
     }
     break;
   }
