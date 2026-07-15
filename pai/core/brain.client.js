@@ -15,10 +15,39 @@
 // identity is never frozen to whatever was set the instant this file was required.
 // Not a wonder: a REST boundary makes no judgment call, so it is correctly cold code
 // (env-driven, deterministic) -- forcing an LLM in here would be theater.
-function brainUrl() { return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
-function brainKey() { return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
-function beadTable() { return process.env.BEAD_TABLE || 'aibe_brain'; }
-function brainSchema() { return process.env.BRAIN_SCHEMA || 'abacia_core'; }
+// Resolve URL, key, table, and schema as one target. A partial MEMORY_BANK pair
+// must never borrow the other half from the legacy archive: that is how readers and
+// writers silently split across worlds. Explicit BEAD_TABLE/BRAIN_SCHEMA values remain
+// supported for a deliberate cutover using the AIBE credential pair.
+function getBrainTarget() {
+    const memoryUrl = process.env.MEMORY_BANK_URL || '';
+    const memoryKey = process.env.MEMORY_BANK_KEY || '';
+    const wantsMemoryPair = !!(memoryUrl || memoryKey);
+    if (wantsMemoryPair && (!memoryUrl || !memoryKey)) {
+        return { ok: false, reason: 'incomplete_memory_bank_credentials' };
+    }
+
+    const url = wantsMemoryPair ? memoryUrl : (process.env.AIBE_BRAIN_URL || '');
+    const key = wantsMemoryPair ? memoryKey : (process.env.AIBE_BRAIN_KEY || '');
+    const table = process.env.BEAD_TABLE || (wantsMemoryPair ? 'beads' : 'aibe_brain');
+    const schema = process.env.BRAIN_SCHEMA
+        || (table === 'beads' || wantsMemoryPair ? 'memory_bank' : 'abacia_core');
+    if (!url || !key) return { ok: false, reason: 'brain_target_unconfigured' };
+    return {
+        ok: true,
+        url,
+        key,
+        table,
+        schema,
+        world: (table === 'beads' || schema === 'memory_bank') ? 'new_world' : 'legacy'
+    };
+}
+
+function requireBrainTarget() {
+    const target = getBrainTarget();
+    if (!target.ok) throw new Error(target.reason);
+    return target;
+}
 
 /**
  * Build a four‑colon ACL stamp wrapped in hex B markers.
@@ -74,18 +103,20 @@ async function writeBead({ hamUid, agentGlobal, source, type, content, summary, 
         importance: importance || 0
     };
 
-    // new bank ('beads' table) requires a spawned_by column legacy never had; set it
-    // only when writing to a schema that expects it, so legacy writes stay unchanged.
-    if (beadTable() !== 'aibe_brain' && bead.spawned_by === undefined) {
+    const target = requireBrainTarget();
+    // New-world beads carry graph lineage in the real top-level columns as well as
+    // content.edges. Legacy aibe_brain has no such columns, so its shape stays intact.
+    if (target.world === 'new_world') {
         bead.spawned_by = (source && String(source).split('.')[0]) || 'brain.client';
+        bead.edges = edges;
     }
-    const url = `${brainUrl()}/rest/v1/${beadTable()}`;
+    const url = `${target.url}/rest/v1/${target.table}`;
     const headers = {
-        'apikey': brainKey(),
-        'Authorization': `Bearer ${brainKey()}`,
-        'Content-Profile': brainSchema(),
+        'apikey': target.key,
+        'Authorization': `Bearer ${target.key}`,
+        'Content-Profile': target.schema,
         'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
+        'Prefer': 'return=representation'
     };
 
     const response = await fetch(url, {
@@ -95,11 +126,23 @@ async function writeBead({ hamUid, agentGlobal, source, type, content, summary, 
     });
 
     const ok = response.status === 201 || response.status === 200 || response.status === 204;
+    const responseText = response.status === 204 ? '' : await response.text();
     if (!ok) {
-        const errText = await response.text();
-        throw new Error(`writeBead failed: ${response.status} ${errText}`);
+        throw new Error(`writeBead failed: ${response.status} ${responseText}`);
     }
-    return { source, ok };
+    let rows = [];
+    if (responseText) {
+        try {
+            const parsed = JSON.parse(responseText);
+            rows = Array.isArray(parsed) ? parsed : [parsed];
+        } catch (e) { rows = []; }
+    }
+    const receiptId = rows[0] && rows[0].id != null ? rows[0].id : null;
+    if (receiptId == null) {
+        return { source, ok: false, id: null, status: response.status,
+            target: target.world, error: 'receipt_id_missing' };
+    }
+    return { source, ok: true, id: receiptId, status: response.status, target: target.world };
 }
 
 /**
@@ -108,12 +151,13 @@ async function writeBead({ hamUid, agentGlobal, source, type, content, summary, 
  * @returns {Promise<Array>} array of bead objects
  */
 async function readBead(filter = {}) {
+    const target = requireBrainTarget();
     const params = new URLSearchParams(filter);
-    const url = `${brainUrl()}/rest/v1/${beadTable()}?${params}`;
+    const url = `${target.url}/rest/v1/${target.table}?${params}`;
     const headers = {
-        'apikey': brainKey(),
-        'Authorization': `Bearer ${brainKey()}`,
-        'Accept-Profile': brainSchema()
+        'apikey': target.key,
+        'Authorization': `Bearer ${target.key}`,
+        'Accept-Profile': target.schema
     };
 
     const response = await fetch(url, { headers });
@@ -132,7 +176,7 @@ async function readBead(filter = {}) {
  */
 async function findBySource(source) {
     // ⬡B:core.brain_client:FIX:findBySource_missing_eq_operator:20260709⬡
-    // This passed the raw value as the filter, producing ?source=<value> — PostgREST
+    // This passed the raw value as the filter, producing ?source=<value> , PostgREST
     // requires an operator (?source=eq.<value>) and 400s without one. Found live when
     // the idempotency layer's first real claim failed. Every caller gets the fix here.
     const results = await readBead({ source: 'eq.' + source, limit: '1' });
@@ -156,5 +200,6 @@ module.exports = {
     writeBead,
     readBead,
     findBySource,
-    parseEdges
+    parseEdges,
+    getBrainTarget
 };
