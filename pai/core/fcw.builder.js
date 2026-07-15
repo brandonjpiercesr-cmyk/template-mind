@@ -139,6 +139,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
       });
     }
   });
+  var finderReceiptsVerified = finderFailures.length === 0;
   var identityBeads = _results[0].status === 'fulfilled' ? _results[0].value : null;
   var agentJDs = _results[1].status === 'fulfilled' ? _results[1].value : null;
   var context = _results[2].status === 'fulfilled' ? _results[2].value : null;
@@ -155,6 +156,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     if (identity.trust_level != null) hamTier = identity.trust_level;
     if (identity.world) hamWorld = identity.world;
   }
+  // Identity rows keep their own ACL family. Their authenticity comes from the
+  // checked, HAM-scoped FIND receipt above; inventing an FCW-specific row prefix
+  // would reject legitimate identity records.
   var beadIdentity = identityBeads;
   if (beadIdentity && beadIdentity.beads) {
     // Only a real HAM_IDENTIFIER bead describes who this person is.
@@ -376,7 +380,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
           gateIdentity: !!identity
         },
         exit: {
-          ok: finderFailures.length === 0,
+          ok: finderReceiptsVerified,
           readFailures: finderFailures,
           contributors: contributors,
           contributorDetails: contributorDetails,
@@ -436,9 +440,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     wallPersistence.error = String(_e && _e.message || _e).slice(0, 300);
   }
   ms = Date.now() - t0;
-  var groundingOk = finderFailures.length === 0
-    && wallPersistence.persisted === true
+  var wallReceiptVerified = wallPersistence.persisted === true
     && wallPersistence.id != null;
+  var groundingOk = finderReceiptsVerified && wallReceiptVerified;
   var groundingReason = finderFailures.length
     ? 'memory_read_unverified'
     : (groundingOk ? null : 'fcw_receipt_unpersisted');
@@ -454,6 +458,8 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     contributors: contributors,
     contributorDetails: contributorDetails,
     readFailures: finderFailures,
+    readReceiptsVerified: finderReceiptsVerified,
+    wallReceiptVerified: wallReceiptVerified,
     contributorsResolved: contributorsResolved,
     contributorsTotal: contributorsTotal,
     wallPersistence: wallPersistence,
