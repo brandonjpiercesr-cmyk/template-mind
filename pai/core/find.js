@@ -16,7 +16,7 @@
 // lost code, zero new behavior.
 'use strict';
 // ⬡B:core.find:FIX:atomic_memory_bank_target:20260715⬡
-// The ABAHAM-resolved world selects one complete brain target per FIND request.
+// The ABAHAM door resolves one complete brain target per FIND request.
 // A MEMORY_BANK_URL can never be paired with the legacy table/schema defaults.
 function _brainTarget() {
   var memoryUrl = process.env.MEMORY_BANK_URL;
