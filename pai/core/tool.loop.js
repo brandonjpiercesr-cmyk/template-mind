@@ -1073,6 +1073,34 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (_nashNeeded) {
     msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
   }
+  // ⬡B:tool.loop:FIX:wondergames_synthetic_toolresult_20260714⬡
+  // Founder-confirmed live: even with the real Wonder Games record cold-loaded into
+  // the system prompt (verified via /debug/fcw), the model still sometimes answered
+  // 'I do not have information' -- because this codebase's own prior, proven finding
+  // (context.fusion, 20260710) is that passive system-prompt text is not reliably
+  // attended to; only TOOL RESULTS are. Mechanism, not phrasing, applied again: for a
+  // Wonder Games/cook-off question, inject a SYNTHETIC completed find_in_brain
+  // tool-call-and-result pair into the message history before the model's first turn,
+  // so the real record arrives via the one channel demonstrated to be reliable, and
+  // the model never has to decide whether to call the tool or trust the wall.
+  var _wgNeeded = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(message);
+  if (_wgNeeded) {
+    try {
+      var _wgSynthRes = await find([
+        { stamp_type: 'WONDER_GAMES', ham_uid: hamUid, limit: 5 },
+        { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: 3 }
+      ]);
+      if (_wgSynthRes && _wgSynthRes.beads && _wgSynthRes.beads.length) {
+        var _wgCallId = 'wg_preload_' + Date.now();
+        msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: _wgCallId, type: 'function',
+          function: { name: 'find_in_brain', arguments: JSON.stringify({ stamp_type: 'WONDER_GAMES' }) } }] });
+        msgs.push({ role: 'tool', tool_call_id: _wgCallId, content: JSON.stringify(_wgSynthRes) });
+        // (tools_used tracking for this synthetic call happens naturally once the
+        // real loop's `tools` array is declared below; not referenced here to avoid
+        // a use-before-declaration error since `tools` is declared after this point.)
+      }
+    } catch (eWgSynth) {}
+  }
   msgs.push({role:'user',content:message});
   var iter=0,tools=[],ans=null;
   while (iter<MAX) {
