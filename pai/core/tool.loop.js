@@ -26,13 +26,43 @@ function tokenCapFor(channel) {
 // The ABAHAM door resolves one complete target for each PAI cycle.
 // Every step in that cycle writes to the same URL, table, and schema.
 function _brainTarget() {
-  var memoryUrl = process.env.MEMORY_BANK_URL;
-  var usesMemoryBank = !!memoryUrl;
+  var memoryUrl = String(process.env.MEMORY_BANK_URL || '').trim();
+  var memoryKey = String(process.env.MEMORY_BANK_KEY || '').trim();
+  if (memoryUrl || memoryKey) {
+    if (!memoryUrl || !memoryKey) {
+      return {
+        url: null,
+        key: null,
+        table: process.env.BEAD_TABLE || 'beads',
+        schema: process.env.BRAIN_SCHEMA || 'memory_bank',
+        error: 'memory_bank_target_incomplete'
+      };
+    }
+    return {
+      url: memoryUrl,
+      key: memoryKey,
+      table: process.env.BEAD_TABLE || 'beads',
+      schema: process.env.BRAIN_SCHEMA || 'memory_bank',
+      error: null
+    };
+  }
+  var legacyUrl = String(process.env.AIBE_BRAIN_URL || '').trim();
+  var legacyKey = String(process.env.AIBE_BRAIN_KEY || '').trim();
+  if (!legacyUrl || !legacyKey) {
+    return {
+      url: null,
+      key: null,
+      table: process.env.BEAD_TABLE || 'aibe_brain',
+      schema: process.env.BRAIN_SCHEMA || 'abacia_core',
+      error: legacyUrl || legacyKey ? 'legacy_target_incomplete' : 'brain_target_unconfigured'
+    };
+  }
   return {
-    url: memoryUrl || process.env.AIBE_BRAIN_URL,
-    key: process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY,
-    table: process.env.BEAD_TABLE || (usesMemoryBank ? 'beads' : 'aibe_brain'),
-    schema: process.env.BRAIN_SCHEMA || (usesMemoryBank ? 'memory_bank' : 'abacia_core')
+    url: legacyUrl,
+    key: legacyKey,
+    table: process.env.BEAD_TABLE || 'aibe_brain',
+    schema: process.env.BRAIN_SCHEMA || 'abacia_core',
+    error: null
   };
 }
 function _bu(){return _brainTarget().url;}
@@ -953,7 +983,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   async function _stampStep(step, detail) {
     var outcome = { step: step, ok: false, status: null, error: null, id: null, source: 'pai.cycle.' + _cycleId };
     if (!_cycleTarget.url || !_cycleTarget.key) {
-      outcome.error = 'brain_target_unconfigured';
+      outcome.error = _cycleTarget.error || 'brain_target_unconfigured';
       _stampOutcomes.push(outcome);
       return outcome;
     }
@@ -1012,7 +1042,35 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     _stampOutcomes.push(outcome);
     return outcome;
   }
-  await _stampStep('cycle_start', String(message || '').slice(0, 80));
+  var _cycleStartStamp = await _stampStep('cycle_start', String(message || '').slice(0, 80));
+  if (!_cycleStartStamp.ok) {
+    await _stampStep('cycle_abort', 'cycle_start_unpersisted');
+    return {
+      ok: false,
+      answer: null,
+      reason: 'cycle_start_unpersisted',
+      cycleId: _cycleId,
+      ms: Date.now() - t0,
+      iterations: 0,
+      cycle_start_persisted: false,
+      cycle_receipt_persisted: false,
+      cycle_receipt_id: null,
+      fcw_persisted: false,
+      fcw_receipt_id: null,
+      memory_reads: 0,
+      fcw_contributors: {},
+      fcw_contributors_resolved: 0,
+      fcw_contributors_total: 0,
+      active_awareness_read: false,
+      active_awareness_persisted: false,
+      active_awareness_receipt_id: null,
+      tool_executions: [],
+      tools_used: [],
+      cycle_stamps_persisted: _stampOutcomes.filter(function (stamp) { return stamp.ok; }).length,
+      cycle_stamps_total: _stampOutcomes.length,
+      cycle_stamp_failures: _stampOutcomes.filter(function (stamp) { return !stamp.ok; })
+    };
+  }
 
   // ⬡B:core.tool.loop:WIRE:active_awareness_entrance_exit:20260715⬡
   // The entrance reads PAI's own previous LAST_RUN before Memory Bank and model
@@ -1026,7 +1084,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       receiptId: null, data: null, error: String(awarenessReadError && awarenessReadError.message || awarenessReadError).slice(0, 300)
     };
   }
-  await _stampStep('active_awareness_read', JSON.stringify({
+  var _activeAwarenessReadStamp = await _stampStep('active_awareness_read', JSON.stringify({
     ok: !!_activeAwarenessRead.ok,
     found: !!_activeAwarenessRead.found,
     reads: Number(_activeAwarenessRead.reads) || 0,
@@ -1073,6 +1131,43 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     }));
     return _activeAwarenessWrite;
   }
+
+  // Entrance proof is a hard gate. No model or tool work may run on an
+  // unverified LAST_RUN read or an unpersisted read-step receipt.
+  if (!_activeAwarenessRead || _activeAwarenessRead.ok !== true || !_activeAwarenessReadStamp.ok) {
+    var _awarenessGateReason = (!_activeAwarenessRead || _activeAwarenessRead.ok !== true)
+      ? 'active_awareness_read_unverified'
+      : 'active_awareness_read_step_unpersisted';
+    await _closeActiveAwareness('PAI cycle stopped at the Active Awareness entrance: ' + _awarenessGateReason, 'BLOCKED');
+    await _stampStep('cycle_abort', _awarenessGateReason);
+    return {
+      ok: false,
+      answer: null,
+      reason: _awarenessGateReason,
+      cycleId: _cycleId,
+      ms: Date.now() - t0,
+      iterations: 0,
+      cycle_start_persisted: true,
+      cycle_receipt_persisted: false,
+      cycle_receipt_id: null,
+      fcw_persisted: false,
+      fcw_receipt_id: null,
+      memory_reads: Number(_activeAwarenessRead && _activeAwarenessRead.reads) || 0,
+      fcw_contributors: {},
+      fcw_contributors_resolved: 0,
+      fcw_contributors_total: 0,
+      active_awareness_read: !!(_activeAwarenessRead && _activeAwarenessRead.ok),
+      active_awareness_persisted: !!(_activeAwarenessWrite && _activeAwarenessWrite.persisted),
+      active_awareness_receipt_id: (_activeAwarenessWrite && _activeAwarenessWrite.id != null) ? _activeAwarenessWrite.id : null,
+      active_awareness_read_error: _activeAwarenessRead ? _activeAwarenessRead.error : 'missing_read_receipt',
+      active_awareness_read_step_persisted: !!_activeAwarenessReadStamp.ok,
+      tool_executions: [],
+      tools_used: [],
+      cycle_stamps_persisted: _stampOutcomes.filter(function (stamp) { return stamp.ok; }).length,
+      cycle_stamps_total: _stampOutcomes.length,
+      cycle_stamp_failures: _stampOutcomes.filter(function (stamp) { return !stamp.ok; })
+    };
+  }
   // \u2b21B:core.tool.loop:FIX:real_two_pass_verifier_per_research:20260710\u2b21
   // Real, researched fix (Towards AI hallucination mitigation survey): "two-pass
   // systems where a verifier inspects the draft, highlights unsupported statements,
@@ -1085,65 +1180,77 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // mechanically checked against them before it is ever returned.
   var _verifiedRealNumbers = [];
   if (!GROQ) {
-    await _stampStep('cycle_abort', 'no_groq_key');
     await _closeActiveAwareness('PAI cycle could not start because the model key is unavailable', 'BLOCKED');
-    return {ok:false,reason:'no_groq_key',cycleId:_cycleId,
-      active_awareness_read_ok:!!(_activeAwarenessRead&&_activeAwarenessRead.ok),
-      active_awareness_write_persisted:!!(_activeAwarenessWrite&&_activeAwarenessWrite.persisted),
-      active_awareness_receipt_id:(_activeAwarenessWrite&&_activeAwarenessWrite.id!=null)?_activeAwarenessWrite.id:null,
-      cycle_stamps_persisted:_stampOutcomes.filter(function (s) { return s.ok; }).length,
-      cycle_stamps_total:_stampOutcomes.length,_dbg:'GROQ_API_KEY not in process.env'};
+    await _stampStep('cycle_abort', 'no_groq_key');
+    return {
+      ok: false,
+      answer: null,
+      reason: 'no_groq_key',
+      cycleId: _cycleId,
+      ms: Date.now() - t0,
+      iterations: 0,
+      cycle_start_persisted: true,
+      cycle_receipt_persisted: false,
+      cycle_receipt_id: null,
+      fcw_persisted: false,
+      fcw_receipt_id: null,
+      memory_reads: Number(_activeAwarenessRead && _activeAwarenessRead.reads) || 0,
+      fcw_contributors: {},
+      fcw_contributors_resolved: 0,
+      fcw_contributors_total: 0,
+      active_awareness_read: true,
+      active_awareness_persisted: !!(_activeAwarenessWrite && _activeAwarenessWrite.persisted),
+      active_awareness_receipt_id: (_activeAwarenessWrite && _activeAwarenessWrite.id != null) ? _activeAwarenessWrite.id : null,
+      tool_executions: [],
+      tools_used: [],
+      cycle_stamps_persisted: _stampOutcomes.filter(function (stamp) { return stamp.ok; }).length,
+      cycle_stamps_total: _stampOutcomes.length,
+      cycle_stamp_failures: _stampOutcomes.filter(function (stamp) { return !stamp.ok; }),
+      _dbg: 'GROQ_API_KEY not in process.env'
+    };
   }
   var _fcwT0=Date.now();
   var fcw=await buildMemoryBank(hamUid,channel,message,identity).catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
-  var systemPrompt, hamObj;
-  if (fcw && fcw.ok) {
-    systemPrompt = fcw.system_prompt;
-    hamObj = fcw.ham;
-  } else {
-    systemPrompt = 'You are A\u2019NU, a warm and direct life assistant. You speak as a trusted friend. '
-      + 'You never use em dashes. You never use hollow AI phrases. Say it how you would say it out loud. '
-      + 'Answer the user directly and helpfully.';
-    hamObj = { uid: hamUid, name: (identity && identity.name) || 'friend', tier: (identity && identity.trust_level) || 0 }; // gate envelope survives Memory Bank build failure
-    global._paiLastError = 'fcw_fallback:' + ((fcw&&fcw.reason)||'unknown');
-    // \u2b21B:core.tool.loop:WIRE:needs_clair_before_founder:20260710\u2b21
-    // Life Assistant pt6 law: when she lacks context, her FIRST move is to reach the
-    // command center (CLAIR), not the founder. This stamps a NEEDS_CLAIR gap the
-    // command center surfaces, so a knowledge hole becomes a question to CLAIR before
-    // it ever becomes a pin on the founder. Founder-world only; agent of the reach wonder.
-    try {
-      // ⬡B:core.tool.loop:FIX:w5_no_hardcoded_founder_fallback:20260710⬡
-      // CANON caught a hardcoded HAM UID landed as an env-fallback literal. The new
-      // world's template law (template-mind line one) is explicit: identity arrives
-      // ONLY through env. If FOUNDER_HAM_UID is unset, this founder-only lane simply
-      // does not fire; it never guesses who the founder is from a literal in code.
-      var FOUNDER = String(process.env.FOUNDER_HAM_UID || '').toUpperCase();
-      if (FOUNDER && String(hamUid).toUpperCase() === FOUNDER) {
-        var BUk=process.env.AIBE_BRAIN_URL,BKk=process.env.AIBE_BRAIN_KEY;
-        if (BUk&&BKk) fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-          headers:{apikey:BKk,Authorization:'Bearer '+BKk,'Accept-Profile':_schema(),'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-          body:JSON.stringify({ham_uid:hamUid,agent_global:'ANEW',stamp_type:'GAP_FLAGS',
-            source:'gap.needs_clair.'+Date.now(),
-            acl_stamp:'\u2b21B:core.tool.loop:GAP_FLAGS:needs_clair:'+ymd()+'\u2b21',
-            summary:'[SHE NEEDS CLAIR] ran on thin context ('+((fcw&&fcw.reason)||'unknown')+') for: '+String(message||'').slice(0,80),
-            content:JSON.stringify({question:String(message||'').slice(0,300),reason:(fcw&&fcw.reason)||'unknown',askClairFirst:true}),importance:7})
-        }).catch(function(){});
-      }
-    } catch (eNC) {}
-    var BU=process.env.AIBE_BRAIN_URL,BK=process.env.AIBE_BRAIN_KEY;
-    if (_bu() && _bk()) {
-      fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-        headers:{apikey: _bk(),Authorization:'Bearer ' + _bk(),'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-        body:JSON.stringify({ham_uid:hamUid,agent_global:'PAI',stamp_type:'LOGFUL',
-          source:'pai.fcw_fallback.'+hamUid+'.'+Date.now(),
-          acl_stamp:'\u2b21B:pai.fcw:LOGFUL:fallback_fired:20260630\u2b21',
-          summary:'Memory Bank fallback fired -- brain unreachable or slow, ran on minimal generic prompt instead of real personalized context',
-          content:JSON.stringify({reason:(fcw&&fcw.reason)||'unknown',channel:channel}),importance:6})
-      }).catch(function(){});
-    }
+  var _fcwWall = fcw && fcw.wallPersistence;
+  var _fcwGrounded = !!(fcw && fcw.ok === true
+    && typeof fcw.system_prompt === 'string' && fcw.system_prompt.length > 0
+    && _fcwWall && _fcwWall.persisted === true && _fcwWall.id != null);
+  if (!_fcwGrounded) {
+    var _fcwReason = String(fcw && (fcw.reason || (fcw.wallPersistence && fcw.wallPersistence.error)) || 'fcw_unverified').slice(0, 300);
+    global._paiLastError = 'fcw_blocked:' + _fcwReason;
+    await _closeActiveAwareness('PAI cycle stopped before deliberation because Memory Bank grounding was unverified: ' + _fcwReason, 'BLOCKED');
+    await _stampStep('cycle_abort', 'fcw_unverified:' + _fcwReason);
+    return {
+      ok: false,
+      answer: null,
+      reason: 'fcw_unverified',
+      fcw_reason: _fcwReason,
+      cycleId: _cycleId,
+      ms: Date.now() - t0,
+      iterations: 0,
+      cycle_start_persisted: true,
+      cycle_receipt_persisted: false,
+      cycle_receipt_id: null,
+      fcw_persisted: !!(_fcwWall && _fcwWall.persisted),
+      fcw_receipt_id: (_fcwWall && _fcwWall.id != null) ? _fcwWall.id : null,
+      memory_reads: (Number(fcw && fcw.memoryReads) || 0) + (Number(_activeAwarenessRead && _activeAwarenessRead.reads) || 0),
+      fcw_contributors: fcw && fcw.contributors ? fcw.contributors : {},
+      fcw_contributors_resolved: Number(fcw && fcw.contributorsResolved) || 0,
+      fcw_contributors_total: Number(fcw && fcw.contributorsTotal) || 0,
+      fcw_read_failures: fcw && Array.isArray(fcw.readFailures) ? fcw.readFailures : [],
+      active_awareness_read: true,
+      active_awareness_persisted: !!(_activeAwarenessWrite && _activeAwarenessWrite.persisted),
+      active_awareness_receipt_id: (_activeAwarenessWrite && _activeAwarenessWrite.id != null) ? _activeAwarenessWrite.id : null,
+      tool_executions: [],
+      tools_used: [],
+      cycle_stamps_persisted: _stampOutcomes.filter(function (stamp) { return stamp.ok; }).length,
+      cycle_stamps_total: _stampOutcomes.length,
+      cycle_stamp_failures: _stampOutcomes.filter(function (stamp) { return !stamp.ok; })
+    };
   }
+  var systemPrompt = fcw.system_prompt;
+  var hamObj = fcw.ham;
   if (_activeAwarenessRead && _activeAwarenessRead.ok && _activeAwarenessRead.found && _activeAwarenessRead.data) {
     var _continuity = [];
     if (_activeAwarenessRead.data.summary) {
