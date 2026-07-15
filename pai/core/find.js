@@ -177,4 +177,20 @@ async function findPreferences(hamUid, limit) {
   return find([{ stamp_type: 'PREFERENCE', ham_uid: hamUid, limit: limit || 5 }]);
 }
 
-module.exports = { find, findIdentity, findAgentJDs, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences };
+// ⬡B:core.find:WIRE:findWonderGames_20260714⬡
+// The same class of bug as findPreferences, caught by the founder live: 'what is
+// Wonder Games / the coding cook-off' returned no-info even though 11+ real
+// WONDER_GAMES/DOCTRINE/DIRECTIVE beads exist, because the model doesn't reliably
+// call find_in_brain with the right stamp_type for a feature-explanation question.
+// Cold fix, same pattern as preferences: FCW pre-loads these into the wall so the
+// answer is already present and the model never has to guess a filter.
+// UNIVERSALITY: keyed by ham_uid, works for any HAM, no hardcoded content.
+async function findWonderGames(hamUid, limit) {
+  return find([
+    { stamp_type: 'WONDER_GAMES', ham_uid: hamUid, limit: limit || 3 },
+    { source_prefix: 'wonder_games.', ham_uid: hamUid, limit: limit || 3 },
+    { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: limit || 3 }
+  ]);
+}
+
+module.exports = { find, findIdentity, findAgentJDs, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames };

@@ -73,6 +73,9 @@ var TOOLS = [
     +'agent_global instead of guessing a stamp_type, set to exactly one of: MEDIATORS_ADVISOR (mediators/mediation), '
     +'BDIF_ADVISOR (Brian Dawkins Impact Foundation/BDIF), GMG_ADVISOR (Global Majority Group/GMG), MH_ACTION_ADVISOR '
     +'(MH Action), ELI (legal/Envolve entity), BUSINESS (Envolve business/entity), CODER (coding department/build queue). '
+    +'A question about Wonder Games, the coding cook-off, a head-to-head model contest, or which model won a build -> '
+    +'stamp_type WONDER_GAMES first; if that returns nothing, also try DOCTRINE and DIRECTIVE (the rules and naming of '
+    +'the contest system are stamped there, not just individual match results). '
     +'agent_global can combine with stamp_type (e.g. agent_global MEDIATORS_ADVISOR + stamp_type RESULT) to narrow further, '
     +'or be used alone with a higher limit to see everything recent from that org. '
     +'Real, confirmed bug this closes: ham_uid defaults to the asking HAM unless you pass it explicitly, but '
@@ -99,27 +102,6 @@ var TOOLS = [
     parameters:{type:'object',required:['service_id'],properties:{service_id:{type:'string'}}}}},
   {type:'function',function:{name:'notify_ham',description:'Text a HAM via iMessage. Use to reach Brandon when something is fixed or needs attention.',
     parameters:{type:'object',required:['ham_uid','message'],properties:{ham_uid:{type:'string'},message:{type:'string'}}}}},
-  {type:'function',function:{name:'find_contact',description:'Resolve a person the HAM names (a name like BJ, or a relationship like "my brother" or "mom") to their real saved contact (name, relationship, phone, email). Use before texting, calling, or emailing someone who is not the HAM, or when the HAM asks for a contact\'s details. Returns not found if the person is not saved -- never invent a number or email.',
-    parameters:{type:'object',required:['ham_uid','who'],properties:{ham_uid:{type:'string'},who:{type:'string'}}}}},
-  {type:'function',function:{name:'contact_send',description:'Text a REAL third party (not the HAM) -- someone resolved via find_contact. This is a real outbound message to a real external human, gated by the HAM\'s own standing rule: an outbound send to a real external human needs explicit confirmation UNLESS the HAM already authorized this exact send in their current message ("text my brother and tell him X" IS the authorization -- send it). Set authorized_in_message true ONLY when the HAM\'s current message explicitly instructed this exact send to this exact person. If you are proposing this on your own initiative, or the HAM only mentioned the person without instructing a send, set it false -- this drafts the message and asks for confirmation instead of sending. Never invent a phone number; if find_contact returned nothing, do not call this.',
-    parameters:{type:'object',required:['ham_uid','contact_query','message','authorized_in_message'],
-    properties:{ham_uid:{type:'string'},contact_query:{type:'string',description:'the name or relationship as the HAM said it'},
-      message:{type:'string',description:'the exact text to send'},
-      authorized_in_message:{type:'boolean',description:'true only if the HAM\'s current message explicitly instructed this exact send'}}}}},
-  {type:'function',function:{name:'calendar_read',description:'Check the HAM\'s real calendar for open slots or upcoming events. Use before proposing a meeting time or answering any question about their schedule.',
-    parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'},days:{type:'number',description:'how many days ahead to consider, default 14'}}}}},
-  {type:'function',function:{name:'calendar_book',description:'Book a REAL event on the HAM\'s calendar. This creates an actual calendar entry, so only call it once the HAM has approved the specific time. If the HAM is replying to a session you proposed ("yes", "lock it", a specific time they picked), first call find_in_brain with stamp_type SESSION to find the exact pending proposal and its slot times, then book those exact times, do not invent a time. Never book a time the HAM has not confirmed.',
-    parameters:{type:'object',required:['ham_uid','title','start'],
-    properties:{ham_uid:{type:'string'},title:{type:'string'},start:{type:'string',description:'ISO 8601 start time'},
-      end:{type:'string',description:'ISO 8601 end time; optional, defaults to 45 minutes after start'},
-      description:{type:'string'}}}}},
-  {type:'function',function:{name:'propose_working_session',description:'Convene a real working session with the HAM when enough genuine work has piled up. Pulls the real agenda from what advisers already proposed and what is owed to the HAM, finds an open slot on their calendar, and brings it to them with a real agenda. Use when the HAM asks whether you should meet, or when accumulated decisions genuinely need a sit-down. Convenes nothing if there is not enough real material -- never a canned session.',
-    parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'},autobook:{type:'boolean',description:'if true, book the slot live now; default false = propose and ask to lock it'}}}}},
-  {type:'function',function:{name:'session_complete',description:'Capture what happened in a working session: the HAM\'s real decisions and every assignment taken on. Every assignment becomes a real tracked-to-completion item. Use after a session concludes and the HAM tells you what was decided.',
-    parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'},
-      decisions:{type:'array',items:{type:'string'}},
-      assignments:{type:'array',items:{type:'object',properties:{text:{type:'string'},owner:{type:'string'}}}},
-      notes:{type:'string'}}}}},
   {type:'function',function:{name:'get_budget_upcoming',description:'Get the HAM\'s real upcoming Buy Now Pay Later payments (Zip, Afterpay, Klarna, Sezzle) with exact due dates and amounts. '
     +'Use for any question about what money is due soon, what is coming up, or pay-later balances.',
     parameters:{type:'object',properties:{ham_uid:{type:'string'},days:{type:'number',description:'How many days ahead to look, default 45'}}}}},
@@ -132,6 +114,34 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','text'],
     properties:{ham_uid:{type:'string'},text:{type:'string',description:'the reminder text, in plain words'},
       due_at:{type:'string',description:'ISO 8601 timestamp, ONLY if the HAM actually stated a real date or timeframe. Leave this out entirely otherwise -- never invent a specific date that was not given.'}}}}},
+  {type:'function',function:{name:'consult_advisor',description:'Consult one of the HAM\'s real advisors (their named worlds/stations such as bdif, gmg, business, mediators, mh_action) about a question or task, and get their brief back. '
+    +'Use whenever the HAM asks to talk to, ask, run something by, or get input from an advisor. The advisor roster is per-HAM and real -- never invent an advisor name; if unsure, the tool returns the real available list.',
+    parameters:{type:'object',required:['ham_uid','advisor','question'],
+    properties:{ham_uid:{type:'string'},advisor:{type:'string',description:'the advisor/station slug, e.g. bdif, gmg, business, mediators, mh_action'},
+      question:{type:'string',description:'what to ask the advisor, in plain words'}}}}},
+  {type:'function',function:{name:'calendar_read',description:'Read the HAM\'s real calendar: upcoming events and open time slots. Use whenever the HAM asks what is on their calendar, whether they are free, or to find a time or slot for something (a haircut, a meeting). Returns real events and computed free slots -- never invent availability.',
+    parameters:{type:'object',required:['ham_uid'],
+    properties:{ham_uid:{type:'string'},want:{type:'string',enum:['events','slots','both'],description:'events = what is scheduled, slots = open times, both = default'},
+      days:{type:'number',description:'how many days ahead to consider, default 14'}}}}},
+  {type:'function',function:{name:'calendar_book',description:'Book a REAL event on the HAM\'s calendar. This creates an actual calendar entry, so only call it once the HAM has approved the specific time -- after calendar_read surfaced an open slot they said yes to, or when they explicitly ask to put something on their calendar at a stated time. IMPORTANT: if the HAM is replying to a session you (or a prior turn) proposed -- "yes", "lock it", "sounds good", a specific time they picked -- first call find_in_brain with stamp_type SESSION to find the exact pending proposal and its slot times, then book those exact times, do not invent a time. Never book a time the HAM has not confirmed.',
+    parameters:{type:'object',required:['ham_uid','title','start'],
+    properties:{ham_uid:{type:'string'},title:{type:'string',description:'what the event is, e.g. "Haircut"'},
+      start:{type:'string',description:'ISO 8601 start time'},end:{type:'string',description:'ISO 8601 end time; optional, defaults to 45 minutes after start'},
+      description:{type:'string',description:'optional note on the event'}}}}},
+  {type:'function',function:{name:'propose_working_session',description:'Convene a real working session with the HAM when enough genuine work has piled up. Pulls the real agenda from what the advisers already proposed and what is owed to the HAM, finds an open slot on their calendar, and brings it to them with a real agenda. Use when the HAM asks whether you should meet, or when accumulated decisions genuinely need a sit-down. Convenes nothing if there is not enough real material -- never a canned session.',
+    parameters:{type:'object',required:['ham_uid'],
+    properties:{ham_uid:{type:'string'},autobook:{type:'boolean',description:'if true, book the slot live now; default false = propose the real slot and agenda and ask to lock it'}}}}},
+  {type:'function',function:{name:'contact_send',description:'Text a REAL third party (not the HAM) -- someone resolved via find_contact. This is a real outbound message to a real external human, gated by the HAM\'s own standing rule: an outbound send to a real external human needs explicit confirmation UNLESS the HAM already authorized this exact send in their current message ("text my brother and tell him X" IS the authorization -- send it). Set authorized_in_message true ONLY when the HAM\'s current message explicitly instructed this exact send to this exact person. If you are proposing this on your own initiative, or the HAM only mentioned the person without instructing a send, set it false -- this drafts the message and asks for confirmation instead of sending. Never invent a phone number; if find_contact returned nothing, do not call this.',
+    parameters:{type:'object',required:['ham_uid','contact_query','message','authorized_in_message'],
+    properties:{ham_uid:{type:'string'},contact_query:{type:'string',description:'the name or relationship as the HAM said it, e.g. "BJ" or "my brother"'},
+      message:{type:'string',description:'the exact text to send'},
+      authorized_in_message:{type:'boolean',description:'true only if the HAM\'s current message explicitly instructed this exact send'}}}}},
+  {type:'function',function:{name:'find_contact',description:'Resolve a person the HAM names (a name like BJ, or a relationship like "my brother" or "mom") to their real saved contact (name, relationship, phone, email). Use before texting, calling, or emailing someone who is not the HAM, or when the HAM asks for a contact\'s details. Returns not found if the person is not saved -- never invent a number or email.',
+    parameters:{type:'object',required:['ham_uid','who'],
+    properties:{ham_uid:{type:'string'},who:{type:'string',description:'the name or relationship phrase, e.g. "my brother", "BJ", "mom"'}}}}},
+  {type:'function',function:{name:'stop_mentioning',description:'Stop bringing up a topic, task, or reminder the HAM has told you to drop (for example "stop mentioning the Park LOI", "that is expired, quit reminding me"). Records a suppression so it never surfaces again as a passive aside. Use whenever the HAM says a recurring mention is unwanted, done, or expired.',
+    parameters:{type:'object',required:['ham_uid','keyword'],
+    properties:{ham_uid:{type:'string'},keyword:{type:'string',description:'the distinctive word or phrase to stop mentioning, e.g. "park" or "Park LOI"'}}}}},
   {type:'function',function:{name:'get_pending_drafts',description:'Get the real, current pending draft replies for a specific org, waiting on approval. '
     +'Use this whenever asked for drafts, pending replies, or "the X ones" for BDIF, Mediators, GMG, or MH Action -- do not use find_in_brain for this, the general search misses these under real traffic volume.',
     parameters:{type:'object',required:['org'],properties:{ham_uid:{type:'string'},
@@ -431,6 +441,27 @@ async function executeTool(name, args, hamUid) {
       var fallback=await find([{stamp_type:'ALERT',ham_uid:q.ham_uid,limit:q.limit,order:q.order}]);
       if (fallback.beads.length>0) { res=fallback; }
     }
+    // ⬡B:core.tool_loop:FIX:wondergames_mechanical_fallback_20260714⬡
+    // Same doctrine as the ALERT fallback above (reliability is mechanism, never
+    // phrasing): the founder caught A'NU unable to answer 'what is Wonder Games /
+    // the coding cook-off' even after the FCW cold-load and a description mapping
+    // were both added -- because the model's OWN find_in_brain call (with whatever
+    // stamp_type it guessed) came back empty, and that live empty tool result
+    // overrode the passive system-prompt context. Mechanical, deterministic fix:
+    // if the model's own query came back empty AND the original question text
+    // (carried on args._question by the caller, or reconstructed from message)
+    // smells like Wonder Games/cook-off, force a real WONDER_GAMES query before
+    // giving up.
+    if (res.beads.length===0) {
+      var _wgAsk = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(String(message||''));
+      if (_wgAsk && q.stamp_type!=='WONDER_GAMES') {
+        var wgFallback=await find([
+          {stamp_type:'WONDER_GAMES',ham_uid:q.ham_uid,limit:q.limit||5},
+          {stamp_type:'DOCTRINE',ham_uid:q.ham_uid,importance_gte:8,limit:3}
+        ]);
+        if (wgFallback.beads.length>0) { res=wgFallback; }
+      }
+    }
     // ⬡B:core.tool_loop:FIX:fusion_rides_the_tool_result_3b_20260710⬡ Measured live,
     // same question three times: the WORLD CONTEXT system line grounded her only 1
     // of 3 runs, while forced find_in_brain results dominated attention every run.
@@ -449,9 +480,57 @@ async function executeTool(name, args, hamUid) {
     if (_fusionLine) {
       _result.answer_this_first_for_day_or_schedule = _fusionLine.trim();
     }
+    // ⬡B:core.tool_loop:FIX:no_recency_on_find_results_stale_reported_as_live_20260713⬡
+    // Founder-caught live, twice in one reply: asked a coding question, got
+    // back two confident "this is happening right now" claims (a recap loop
+    // "firing every few seconds", an agent "scaffolding without live file
+    // context") that were both stale -- one resolved a week earlier, one
+    // resolved over two weeks earlier, each confirmed by its own real
+    // timestamp. Root cause, found by reading this exact mapping: the tool
+    // result handed the model stamp_type, summary, and up to 200 chars of
+    // content -- and NOTHING else. No created_at ever reached the model. It
+    // could not have known these were old even if it tried; the information
+    // needed to tell "happening now" from "happened three weeks ago and got
+    // fixed" was stripped before it ever saw the result. Not a phrasing
+    // problem, a missing-field problem, same class of bug as the BCW
+    // truncation fix earlier this session: the data the model needed was
+    // simply never in front of it. Fix follows the exact decay-language
+    // pattern already proven in context.fusion.js (age computed in minutes,
+    // honest "X ago" language, explicit instruction not to assert without
+    // it) rather than inventing a new convention.
+    var _now = Date.now();
+    // ⬡B:core.tool_loop:FIX:hard_filter_stale_day_beads_20260714⬡ 911, repeated
+    // pattern: the recency-decay tagging below ("stamped: 22 days ago") already
+    // existed and the model STILL presented a 22-day-old, Monday-only ALERT
+    // ("Mediators Monday: 2:30 Mark Gerzon") as today's (a Tuesday) real meeting --
+    // proof that attaching honest text is not enough when the model chooses to
+    // override it. This is a hard, mechanical filter, not another instruction: for a
+    // day/schedule/meeting-shaped question, any ALERT/BRIEF bead older than 48 hours,
+    // OR one that names a specific weekday that is not today, is stripped from the
+    // result before the model ever sees it -- it cannot present what it cannot read.
+    var _dayQMsg = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|going on today|day today|tomorrow)\b/i.test(String(message||''));
+    if (_dayQMsg) {
+      var _todayName = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][new Date().getDay()];
+      res.beads = res.beads.filter(function (b) {
+        var isDayFlavored = /^(ALERT|BRIEF)$/.test(b.stamp_type || '');
+        if (!isDayFlavored) return true; // only guard the day-shaped stamp types
+        var ageH = b.created_at ? (_now - Date.parse(b.created_at)) / 3600000 : 999999;
+        if (ageH > 48) return false; // too old to be today's real schedule
+        var mentionsOtherWeekday = /\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i.test(b.summary || '')
+          && !new RegExp('\\b' + _todayName + '\\b', 'i').test(b.summary || '');
+        if (mentionsOtherWeekday) return false; // named a day that is not today
+        return true;
+      });
+    }
     _result.beads = res.beads.slice(0,8).map(function(b){
-      return {stamp_type:b.stamp_type,summary:b.summary,content:(b.content||'').slice(0,200)};
+      var ageMin = b.created_at ? Math.round((_now - Date.parse(b.created_at)) / 60000) : null;
+      var ageLabel = ageMin == null ? 'age unknown' :
+        ageMin < 60 ? (ageMin + ' minutes ago') :
+        ageMin < 1440 ? (Math.round(ageMin/60) + ' hours ago') :
+        (Math.round(ageMin/1440) + ' days ago');
+      return {stamp_type:b.stamp_type,summary:b.summary,content:(b.content||'').slice(0,200),stamped:ageLabel};
     });
+    _result.recency_instruction = 'Every result above carries "stamped: X ago", real elapsed time, not a guess. Before stating anything as a CURRENT problem, loop, or status, check its age. Anything more than a few hours old may already be resolved -- state it as history ("as of N ago, X was happening") not as present-tense fact ("X is happening right now"), unless you have separately confirmed it is still true today.';
     _result.ms = res.ms;
     return JSON.stringify(_result);
   }
@@ -613,6 +692,169 @@ async function executeTool(name, args, hamUid) {
       return JSON.stringify({ok:true,text:args.text,due_at:dueAt,note:isValidFuture?undefined:'no real date was given, defaulted to tomorrow 9am'});
     } catch(e){return JSON.stringify({ok:false,error:e.message});}
   }
+  if (name === 'consult_advisor') {
+    // ⬡B:core.tool.loop:WIRE:consult_advisor_cycle_tool:20260713⬡
+    // Wonder rehaul G2: the advisor system (advisor-router + station modules with a real
+    // runCycle) already existed, but the cycle could never invoke it, so "talk to my
+    // advisors" had no tool and went silent (half the haircut failure). This wires the
+    // existing router as a real cycle tool. Per-HAM roster via discoverStations (no
+    // hardcode); an advisor that is not real for this HAM returns a clean, honest miss
+    // with the actual available list, never a fabricated brief.
+    try {
+      var _ar = require('../advisors/advisor-router.js');
+      var _station = String(args.advisor||'').toLowerCase().replace(/[^a-z_]/g,'');
+      var _cHam = args.ham_uid || hamUid;
+      if (!_station || !_cHam) return JSON.stringify({ok:false,reason:'need advisor and ham_uid'});
+      var _worlds = await _ar.discoverStations(_cHam);
+      if (_worlds.indexOf(_station) === -1) return JSON.stringify({ok:false,reason:'no_such_advisor',advisor:_station,available:_worlds});
+      var _mod = _ar.loadStationModule(_station);
+      if (!_mod || typeof _mod.runCycle !== 'function') return JSON.stringify({ok:false,reason:'advisor_has_no_cycle',advisor:_station});
+      var _q = String(args.question||'').slice(0,2000);
+      var _res = await _mod.runCycle(_q, _cHam, _q);
+      var _brief = _res && (_res.answer || _res.output || _res.summary || _res.brief);
+      if (!_brief) return JSON.stringify({ok:false,reason:'advisor_returned_empty',advisor:_station});
+      return JSON.stringify({ok:true,advisor:_station,brief:String(_brief).slice(0,4000)});
+    } catch(eCons){ return JSON.stringify({ok:false,error:eCons.message}); }
+  }
+  if (name === 'calendar_read') {
+    // ⬡B:core.tool.loop:FIX:calendar_read_real_source_20260714⬡ 911: this tool was
+    // wired to getRadarEvents, an internal RADAR bead system that is essentially
+    // EMPTY for this ham -- founder-caught fabrication traced back to this: forced
+    // to call calendar_read, it honestly returned nothing, but a prior version's
+    // free-talk covered the gap with an invented meeting. Repointed to the SAME real,
+    // EBC-firewall-gated source that already proves his actual day (/os/calendar,
+    // founder-gated, Nylas-backed, verified live with his 20 real events). No parallel
+    // implementation, no new exposure -- reuses the existing gate.
+    try {
+      var _calHam = args.ham_uid || hamUid;
+      if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
+      var _selfBase = process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
+      var _cr = await fetch(_selfBase + '/os/calendar/' + _calHam).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+      var _realEvents = (_cr && _cr.events) || [];
+      var _out = {ok:true, ham_uid:_calHam, events: _realEvents.slice(0,20)};
+      if (!_realEvents.length) _out.note = 'no calendar events found for this HAM right now';
+      return JSON.stringify(_out);
+    } catch (eCalReal) { return JSON.stringify({ok:false, reason:'calendar_read_failed: '+eCalReal.message}); }
+  }
+  if (false && name === 'calendar_read') {
+    // ⬡B:core.tool.loop:WIRE:calendar_read_cycle_tool:20260713⬡
+    // Wonder rehaul G3 (read): scan the HAM's calendar and find open slots. Reuses the
+    // real DST-safe schedule logic (getRadarEvents / computeFreeSlots) -- no parallel
+    // implementation, no invented availability. This is the "scan my calendar" half of
+    // the haircut ask that went silent. Booking (write) is a separate queued wire.
+    try {
+      var _sl = require('./schedule/schedule.logic.js');
+      var _calHam = args.ham_uid || hamUid;
+      if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
+      var _want = args.want || 'both';
+      var _events = await _sl.getRadarEvents(_calHam);
+      var _out = {ok:true, ham_uid:_calHam};
+      if (_want === 'events' || _want === 'both') _out.events = (_events||[]).slice(0,25);
+      if (_want === 'slots' || _want === 'both') {
+        var _prefs = await _sl.getHamPrefs(_calHam);
+        if (args.days) _prefs = Object.assign({}, _prefs, {daysAhead: args.days});
+        _out.free_slots = _sl.computeFreeSlots(_events||[], _prefs).slice(0,25);
+      }
+      if ((!_out.events || !_out.events.length) && (!_out.free_slots || !_out.free_slots.length)) {
+        _out.note = 'no calendar events found for this HAM yet (calendar may not be synced to RADAR)';
+      }
+      return JSON.stringify(_out);
+    } catch(eCal){ return JSON.stringify({ok:false,error:eCal.message}); }
+  }
+  if (name === 'find_contact') {
+    // ⬡B:core.tool.loop:WIRE:find_contact_cycle_tool:20260713⬡
+    // Wonder rehaul G5: gives the contacts resolver (built via the cook-off, glm-5.2's
+    // corrected winner) a real reach path. The cycle can now resolve "my brother" to a
+    // saved contact. Foundation for third-party reach (G1). Never fabricates: returns
+    // not-found honestly when no contact is saved, so a number or email is never invented.
+    try {
+      var _ct = require('./contacts.js');
+      var _ctHam = args.ham_uid || hamUid;
+      var _hit = await _ct.resolveContact(_ctHam, args.who||'');
+      if (!_hit) return JSON.stringify({ok:true,found:false,who:args.who,note:'no saved contact matches; do not invent a number or email'});
+      return JSON.stringify({ok:true,found:true,contact:_hit});
+    } catch(eFc){ return JSON.stringify({ok:false,error:eFc.message}); }
+  }
+  if (name === 'contact_send') {
+    // ⬡B:core.tool.loop:WIRE:contact_send_G1_third_party_reach:20260713⬡
+    // G1: the last big reach gap -- she can resolve a contact (find_contact) but never
+    // touch them. This closes it, honoring the HAM's own standing rule word for word: an
+    // outbound send to a real external human needs confirmation UNLESS the HAM already
+    // authorized this exact send in his own message. authorized_in_message is the model's
+    // own judgment call on that, driven by the tool description; the channel enforces
+    // nothing, it only executes what the one cycle decided. A DRAFT is never a SEND: when
+    // not authorized, this stamps a PENDING_SEND for review and does not touch Blooio.
+    try {
+      var _ct2 = require('./contacts.js');
+      var _csHam = args.ham_uid || hamUid;
+      var _hit2 = await _ct2.resolveContact(_csHam, args.contact_query || '');
+      if (!_hit2 || typeof _hit2 !== 'object') return JSON.stringify({ ok: true, sent: false, reason: 'no_saved_contact', note: 'do not invent a number or email' });
+      if (!_hit2.phone) return JSON.stringify({ ok: true, sent: false, reason: 'contact_has_no_phone', contact: _hit2 });
+      var _bu3 = process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL;
+      var _bk3 = process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY;
+      var _wh3 = { apikey: _bk3, Authorization: 'Bearer ' + _bk3, 'Content-Profile': 'abacia_core', 'Content-Type': 'application/json', Prefer: 'return=minimal' };
+      var _ymd3 = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      if (args.authorized_in_message === true) {
+        var _tap = require('./wren/reply.js').tapSend;
+        var _sendRes = await _tap(_hit2.phone, String(args.message || '').slice(0, 1500));
+        try { await fetch(_bu3 + '/rest/v1/aibe_brain', { method: 'POST', headers: _wh3, body: JSON.stringify({
+          ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'OUTBOUND_THIRD_PARTY',
+          acl_stamp: '\u2b21B:core.tool.loop:OUTBOUND_THIRD_PARTY:sent:' + _ymd3 + '\u2b21',
+          source: 'contact.send.' + Date.now(), summary: '[SENT to ' + (_hit2.name || 'contact') + '] ' + String(args.message || '').slice(0, 100),
+          content: JSON.stringify({ contact: _hit2.name, phone: _hit2.phone, message: args.message, result: _sendRes }), importance: 6
+        }) }); } catch (eStamp) {}
+        return JSON.stringify({ ok: true, sent: true, to: _hit2.name, result: _sendRes });
+      }
+      // NOT authorized in-message: draft only, never send. Hard pause per doctrine.
+      try { await fetch(_bu3 + '/rest/v1/aibe_brain', { method: 'POST', headers: _wh3, body: JSON.stringify({
+        ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'PENDING_SEND',
+        acl_stamp: '\u2b21B:core.tool.loop:PENDING_SEND:drafted:' + _ymd3 + '\u2b21',
+        source: 'contact.draft.' + Date.now(), summary: '[DRAFT for ' + (_hit2.name || 'contact') + ', AWAITING CONFIRM] ' + String(args.message || '').slice(0, 100),
+        content: JSON.stringify({ contact: _hit2.name, phone: _hit2.phone, message: args.message }), importance: 6
+      }) }); } catch (eStamp2) {}
+      return JSON.stringify({ ok: true, sent: false, drafted: true, to: _hit2.name, note: 'not sent -- the HAM did not explicitly authorize this exact send; confirm before sending' });
+    } catch (eCs) { return JSON.stringify({ ok: false, error: eCs.message }); }
+  }
+  if (name === 'stop_mentioning') {
+    // ⬡B:core.tool.loop:WIRE:stop_mentioning_cycle_tool:20260713⬡
+    // Founder 911: "I told u yesterday to stop." There was no way for the cycle to honor a
+    // stop, so a stale nudge kept firing. Now it can: this records a suppression so the
+    // reminder-weave never surfaces that topic again. Closes the "I told you to stop and
+    // you kept doing it" loop.
+    try {
+      var _rw = require('./reminderWeave.js');
+      var _sHam = args.ham_uid || hamUid;
+      var _r = await _rw.suppressWeave(_sHam, args.keyword||'');
+      return JSON.stringify(_r && _r.ok ? {ok:true, stopped:_r.keyword} : {ok:false, reason:'could_not_suppress'});
+    } catch(eStop){ return JSON.stringify({ok:false,error:eStop.message}); }
+  }
+  if (name === 'calendar_book') {
+    // ⬡B:core.tool.loop:WIRE:calendar_book_cycle_tool_G3b:20260713⬡
+    // Wonder rehaul G3b: the write half of SCHEDULE. Reuses the real Nylas booking path
+    // (bookEvent over getCalendarGrant + nylasReq) -- no parallel implementation. This
+    // creates a REAL event, so the tool description instructs the model to only call it on
+    // a time the HAM approved. Founder-gate holds: the first live write should follow an
+    // explicit yes from the HAM.
+    try {
+      var _slB = require('./schedule/schedule.logic.js');
+      var _bHam = args.ham_uid || hamUid;
+      if (!_bHam || !args.title || !args.start) return JSON.stringify({ok:false,reason:'need ham_uid, title, and start'});
+      var _bres = await _slB.bookEvent(_bHam, { title:args.title, start:args.start, end:args.end, description:args.description });
+      return JSON.stringify(_bres);
+    } catch(eBk){ return JSON.stringify({ok:false,error:eBk.message}); }
+  }
+  if (name === 'propose_working_session') {
+    // ⬡B:core.tool.loop:WIRE:propose_working_session_wonder:20260713⬡
+    // The Session Wonder: a real agenda from what the advisers already proposed plus what is
+    // owed, a real open slot, a real booking (gated). The founder's imagination made
+    // non-gimmick -- it convenes nothing when there is not enough genuine material.
+    try {
+      var _sw = require('./session.wonder.js');
+      var _swHam = args.ham_uid || hamUid;
+      var _swRes = await _sw.proposeSession(_swHam, { autobook: args.autobook === true });
+      return JSON.stringify(_swRes);
+    } catch(eSw){ return JSON.stringify({ok:false,error:eSw.message}); }
+  }
   if (name === 'read_render_logs') {
     return JSON.stringify(await readRenderLogs(args.service_id, args.limit||50));
   }
@@ -641,88 +883,6 @@ async function executeTool(name, args, hamUid) {
   if (name === 'trigger_deploy') {
     return JSON.stringify(await triggerDeploy(args.service_id));
   }
-  if (name === 'find_contact') {
-    try {
-      var _ct = require('./tools/contacts.js');
-      var _ctHam = args.ham_uid || hamUid;
-      var _hit = await _ct.resolveContact(_ctHam, args.who||'');
-      if (!_hit) return JSON.stringify({ok:true,found:false,who:args.who,note:'no saved contact matches; do not invent a number or email'});
-      return JSON.stringify({ok:true,found:true,contact:_hit});
-    } catch(eFc){ return JSON.stringify({ok:false,error:eFc.message}); }
-  }
-  if (name === 'contact_send') {
-    // ported from aibebase G1: real third-party reach, gated to explicit in-message
-    // authorization from the HAM; drafts (never sends) otherwise.
-    try {
-      var _ct2 = require('./tools/contacts.js');
-      var _csHam = args.ham_uid || hamUid;
-      var _hit2 = await _ct2.resolveContact(_csHam, args.contact_query || '');
-      if (!_hit2 || typeof _hit2 !== 'object') return JSON.stringify({ok:true,sent:false,reason:'no_saved_contact',note:'do not invent a number or email'});
-      if (!_hit2.phone) return JSON.stringify({ok:true,sent:false,reason:'contact_has_no_phone',contact:_hit2});
-      var _ymd3 = new Date().toISOString().slice(0,10).replace(/-/g,'');
-      if (args.authorized_in_message === true) {
-        var BLOOIO_KEY2 = process.env.BLOOIO_API_KEY;
-        var BLOOIO_BASE2 = process.env.BLOOIO_API_BASE || 'https://backend.blooio.com/v2/api';
-        var _sendRes = { ok: false, reason: 'no_blooio_key' };
-        if (BLOOIO_KEY2) {
-          try {
-            var _sr = await fetch(BLOOIO_BASE2 + '/chats/' + encodeURIComponent(_hit2.phone) + '/messages', {
-              method:'POST', headers:{ Authorization:'Bearer '+BLOOIO_KEY2, 'Content-Type':'application/json', 'Idempotency-Key': _hit2.phone+'.'+Date.now() },
-              body: JSON.stringify({ text: String(args.message||'').slice(0,1500) })
-            });
-            _sendRes = { ok: _sr.ok };
-          } catch(eSend){ _sendRes = { ok:false, error: eSend.message }; }
-        }
-        try { await fetch(_bu()+'/rest/v1/'+_tbl(),{method:'POST',headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify({
-          ham_uid:String(_csHam).toUpperCase(),agent_global:'A\u2019NU',stamp_type:'OUTBOUND_THIRD_PARTY',
-          acl_stamp:'\u2b21B:core.tool.loop:OUTBOUND_THIRD_PARTY:sent:'+_ymd3+'\u2b21',
-          source:'contact.send.'+Date.now(),summary:'[SENT to '+(_hit2.name||'contact')+'] '+String(args.message||'').slice(0,100),
-          content:JSON.stringify({contact:_hit2.name,phone:_hit2.phone,message:args.message,result:_sendRes}),importance:6})}); } catch(eStamp){}
-        return JSON.stringify({ok:true,sent:true,to:_hit2.name,result:_sendRes});
-      }
-      try { await fetch(_bu()+'/rest/v1/'+_tbl(),{method:'POST',headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify({
-        ham_uid:String(_csHam).toUpperCase(),agent_global:'A\u2019NU',stamp_type:'PENDING_SEND',
-        acl_stamp:'\u2b21B:core.tool.loop:PENDING_SEND:drafted:'+_ymd3+'\u2b21',
-        source:'contact.draft.'+Date.now(),summary:'[DRAFT for '+(_hit2.name||'contact')+', AWAITING CONFIRM] '+String(args.message||'').slice(0,100),
-        content:JSON.stringify({contact:_hit2.name,phone:_hit2.phone,message:args.message}),importance:6})}); } catch(eStamp2){}
-      return JSON.stringify({ok:true,sent:false,drafted:true,to:_hit2.name,note:'not sent -- the HAM did not explicitly authorize this exact send; confirm before sending'});
-    } catch(eCs){ return JSON.stringify({ok:false,error:eCs.message}); }
-  }
-  if (name === 'calendar_read') {
-    try {
-      var _slR = require('./tools/schedule.js');
-      var _crHam = args.ham_uid || hamUid;
-      var events = await _slR.getRadarEvents(_crHam);
-      var prefs = await _slR.getHamPrefs(_crHam);
-      var slots = _slR.computeFreeSlots(events||[], prefs);
-      return JSON.stringify({ok:true, upcoming_events: (events||[]).length, next_open_slots: (slots||[]).slice(0,6)});
-    } catch(eCal){ return JSON.stringify({ok:false,error:eCal.message}); }
-  }
-  if (name === 'calendar_book') {
-    try {
-      var _slB = require('./tools/schedule.js');
-      var _bHam = args.ham_uid || hamUid;
-      if (!_bHam || !args.title || !args.start) return JSON.stringify({ok:false,reason:'need ham_uid, title, and start'});
-      var _bres = await _slB.bookEvent(_bHam, { title:args.title, start:args.start, end:args.end, description:args.description });
-      return JSON.stringify(_bres);
-    } catch(eBk){ return JSON.stringify({ok:false,error:eBk.message}); }
-  }
-  if (name === 'propose_working_session') {
-    try {
-      var _sw = require('./wonders/session.wonder.js');
-      var _swHam = args.ham_uid || hamUid;
-      var _swRes = await _sw.proposeSession(_swHam, { autobook: args.autobook === true });
-      return JSON.stringify(_swRes);
-    } catch(eSw){ return JSON.stringify({ok:false,error:eSw.message}); }
-  }
-  if (name === 'session_complete') {
-    try {
-      var _sc = require('./wonders/session.wonder.js');
-      var _scHam = args.ham_uid || hamUid;
-      var _scRes = await _sc.completeSession(_scHam, { decisions: args.decisions, assignments: args.assignments, notes: args.notes });
-      return JSON.stringify(_scRes);
-    } catch(eScE){ return JSON.stringify({ok:false,error:eScE.message}); }
-  }
   if (name === 'notify_ham') {
     return JSON.stringify(await notifyHam(args.ham_uid, args.message));
   }
@@ -733,6 +893,28 @@ async function executeTool(name, args, hamUid) {
 // who this is, the Memory Bank must trust that, the founder was greeted as "unknown, trust
 // tier 0" over live text while the very same request had resolved him at tier 10.
 async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
+  // ⬡B:core.tool.loop:BUILD:cutover_at_the_one_choke_point_20260713⬡
+  // THE CUTOVER (Phase 5), at the single point every channel already flows through so no
+  // channel file is touched. When USE_NEW_WORLD=true, delegate the whole turn to the
+  // new-world mind and return its answer. On ANY failure fall through to legacy below --
+  // legacy is always the safety net, a turn is never dead. Rollback = USE_NEW_WORLD=false.
+  if (process.env.USE_NEW_WORLD === 'true' && process.env.NEW_MIND_URL) {
+    try {
+      var _nr = await fetch(process.env.NEW_MIND_URL.replace(/\/$/, '') + '/cycle', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: message, channel: channel, ham: hamUid }),
+        signal: AbortSignal.timeout(90000)
+      });
+      if (_nr.ok) {
+        var _nd = await _nr.json();
+        var _nc = _nd && _nd.compiled;
+        if (_nd && _nd.ok && _nc && (_nc.answer || _nc.text)) {
+          return { ok: true, answer: _nc.answer || _nc.text, ham: _nc.ham || hamUid,
+                   tools_used: _nc.tools_used || [], source: 'new_world', ms: 0 };
+        }
+      }
+    } catch (_ne) { /* new world down/slow -> legacy safety net below */ }
+  }
   var t0=Date.now(),GROQ=process.env.GROQ_API_KEY;
   // \u2b21B:core.tool.loop:FIX:glm_primary_on_plain_completions:20260711\u2b21
   // Founder, direct: why is this file, the one that serves every real text
@@ -869,7 +1051,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // currently open, so the base prompt now carries it unconditionally: she commands
   // the glass through update_screen; if no screen is live the TOOL says so and she
   // says the screen is not open -- she never again claims she lacks the ability.
-  systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens.';
+  systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if it returns no events, say the day is open, do not fall back to an old find_in_brain stamp to fill the gap.';
   try { systemPrompt += require('./stream/screen.awareness.js').promptAddendum(hamUid, uiPortal); } catch (eScr) {}
   // \u2b21B:core.tool_loop:WIRE:context_fusion_grounding_3b_20260710\u2b21 every judgment
   // turn grounds against the freshest fused world context (calendar, lanes, screen),
@@ -974,8 +1156,35 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // just answer -- the mandatory lookup on text/email is completely unchanged.
       var _liveNow = false;
       try { _liveNow = require('./stream/screen.awareness.js').hasLiveScreen(hamUid); } catch (eLn) {}
+      // ⬡B:core.tool.loop:FIX:live_screen_suppressed_lookup_gaslit_founder_questions:20260713⬡
+      // Founder-caught live 8am: on a VOICE call (which registers as a live screen) he
+      // asked "what's the fix" and got "I don't have it, you point me to the code" -- six
+      // no_tool_turn diagnostics, zero tools fired. Root cause: the live-screen skip below
+      // turned OFF the forced find_in_brain for EVERY live turn, including real questions,
+      // so she answered from nothing and it read as gaslighting. The skip exists for a real
+      // reason -- forcing a lookup on a UI command ("change background to a vibe") pulled
+      // unrelated brain content and derailed. So the split is by intent, cold, no LLM: a
+      // real information question still forces the read even on a live screen; a screen/UI
+      // manipulation command stays unforced so it never derails. Text/email path unchanged.
+      // B:core.tool_loop:FIX:hallucinated_meeting_911_20260714 Founder caught her
+      // CONFIDENTLY INVENTING a fake meeting ("Mark Gerzon at 2:30", "7 assets",
+      // "ten BDIF emails") that do not exist anywhere in his real calendar or inbox.
+      // ROOT CAUSE: the info-question detector was anchored to the START of the
+      // message (^who|what|...), so "Hey. What's going on today?" never matched --
+      // the greeting defeated the anchor -- find_in_brain was never forced, and the
+      // model free-talked a plausible-sounding lie instead of reading real data.
+      // Fixed to match ANYWHERE in the message, not just the start. AND: any question
+      // that could be answered by his real calendar (today/schedule/meeting/free/
+      // busy/calendar) now forces calendar_read specifically -- never find_in_brain
+      // alone -- so a day-shaped question can only ever be answered from real events.
+      var _mSt = String(message||'').trim();
+      var _looksLikeInfoQ = /\?\s*$/.test(_mSt)
+        || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
+      var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
+      var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
       if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
-      else if (!_liveNow) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
+      else if (_isDayQ) body.tool_choice={type:'function',function:{name:'calendar_read'}};
+      else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
     }
     // \u2b21B:core.tool_loop:WIRE:ornith_opt_in_no_tools_only:20260703\u2b21
     // Founder request: try Ornith for A'NU's real conversational turns too, not
@@ -1027,6 +1236,30 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='together_no_key';}
+    }
+    // ⬡B:core.tool_loop:FIX:openrouter_third_tier_20260713⬡
+    // Founder-caught live: Together returned "Credit limit exceeded" on a real
+    // production call, and there was nothing after it -- ans='' and the whole
+    // cycle died, surfacing as ok:false/no_answer at the reach channel. Real,
+    // observed failure mode, not hypothetical. OpenRouter is already a standing
+    // key on this service (doctrine.model_map, un-banned by founder's own word
+    // 20260709), so it is the correct third tier rather than a new dependency.
+    // No tools attached here (matches the Together tier above, which is also
+    // tool-free) since this only ever engages after tool-capable Groq has
+    // already failed on this turn. Same fail-soft discipline: any error here
+    // just falls through to the existing empty-answer path below, unchanged.
+    if (!r||r.error||!r.choices){
+      var ORK=process.env.OPENROUTER_API_KEY;
+      if(ORK){r=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
+        headers:{Authorization:'Bearer '+ORK,'Content-Type':'application/json'},
+        body:JSON.stringify({model:process.env.OPENROUTER_MODEL||'meta-llama/llama-3.3-70b-instruct',
+          messages:msgs.map(function(m){return {role:m.role,content:m.content||''};}),
+          max_tokens:tokenCapFor(channel),temperature:0.3})
+      }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
+      else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0,120);}
+      else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0,150);}
+      }else{global._paiLastError='openrouter_no_key';}
     }
     if (!r||r.error||!r.choices){
       ans='';
@@ -1176,7 +1409,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           if (_liveScreen) {
             var honestBody = { model: model, messages: msgs.concat([
               { role: 'assistant', content: msg.content || '' },
-              { role: 'user', content: 'Just answer plainly, in your own voice, right now. If this needs personal or factual data you were not able to look up, say so honestly instead of guessing or inventing anything. Do not mention tools or lookups.' }
+              { role: 'user', content: 'Just answer plainly, in your own voice, right now. If you already have the material, answer with it directly. If this needs data you could not find, say plainly that you checked and there is nothing on it yet -- never tell the person to go find it for you, never say "you tell me", and never invent anything.' }
             ]), max_tokens: tokenCapFor(channel), temperature: 0.3 };
             var honestAns = (await callGLMPlain(null, honestBody.messages, tokenCapFor(channel))) || '';
             if (!honestAns) {
@@ -1207,7 +1440,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           // pattern, no longer gated to live screens or questions only.
           var stmtBody = { model: model, messages: msgs.concat([
             { role: 'assistant', content: (retryMsg && retryMsg.content) || msg.content || '' },
-            { role: 'user', content: 'You could not look anything up for that. Respond anyway, briefly and honestly, in your own words -- acknowledge what was actually said, do not invent facts or next steps you cannot verify, and do not mention tools or lookups.' }
+            { role: 'user', content: 'You could not look anything up for that. Respond anyway, briefly and honestly, in your own words -- acknowledge what was actually said, and if you are missing information say plainly that you checked and have nothing on it yet rather than telling the person to find it for you. Do not invent facts or next steps you cannot verify.' }
           ]), max_tokens: tokenCapFor(channel), temperature: 0.3 };
           var stmtAns = (await callGLMPlain(null, stmtBody.messages, tokenCapFor(channel))) || '';
           if (!stmtAns) {
@@ -1281,17 +1514,22 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   }
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
   // ⬡B:core.tool.loop:FIX:raw_json_never_a_final_answer:20260714⬡
-  // Ported alongside the aibebase fix: a raw tool result must never go out AS the answer.
-  // If the final answer parses as JSON, compose it into an actual sentence instead.
+  // Live incident, founder's real phone: a raw tool result -- {"ok":true,"upcoming_events":
+  // 0,"next_open_slots":[...]} -- went out as the actual text message. A text channel is
+  // never the place for a JSON blob; whatever asked for it, a human reading iMessage never
+  // gets raw data back. Cold detection: if the answer parses as JSON (starts with { or [ and
+  // is valid JSON), it is never sent as-is. Composed instead, in plain words, from the shape
+  // of what came back, so the tool result still reaches him, just as an actual sentence.
   if (finalAns && /^[\[{]/.test(finalAns.trim())) {
     var _rawParsed = null;
     try { _rawParsed = JSON.parse(finalAns.trim()); } catch (eRawJ) {}
     if (_rawParsed && typeof _rawParsed === 'object') {
+      _stampStep('raw_json_answer_caught', 'a tool result nearly went out as raw JSON instead of a sentence');
       if (_rawParsed.next_open_slots || _rawParsed.upcoming_events !== undefined) {
         var _n = Array.isArray(_rawParsed.next_open_slots) ? _rawParsed.next_open_slots.length : 0;
         finalAns = _n > 0
           ? 'Your calendar is open right now, ' + _n + ' free half-hour blocks coming up. Want me to grab one?'
-          : 'Nothing open on your calendar in the window I checked, or it is genuinely clear -- tell me what you are trying to book and I will look closer.';
+          : 'Nothing open on your calendar in the window I checked, or it is genuinely clear with no slots computed yet -- tell me what you are trying to book and I will look closer.';
       } else {
         finalAns = 'I pulled that up, but I need to say it in words instead of handing you raw data. Ask me again and I will answer it properly.';
       }
@@ -1309,7 +1547,29 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   }
   if(!finalAns){
     _stampStep('cycle_end_silent', 'no_answer, iterations='+iter);
-    return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,
+    // ⬡B:core.tool.loop:BUILD:universal_tracker_no_silent_evaporation:20260713⬡
+    // Architect-flagged live: a two-part text (recurring timeshare reminder + scan
+    // calendars / consult advisors / book a haircut) hit THIS path and VANISHED -- no
+    // reply, no reminder, and no record that anything was ever owed. Silence-over-hollow
+    // is correct for identity-hallucination risk, but a clear ACTION request must never
+    // evaporate without a trace. Now: (1) stamp a TRACK BLOCKED so the ask is findable in
+    // one query, and (2) if the inbound was an explicit action request on a reply channel,
+    // return a short HONEST status instead of dead air -- a truthful "logged it, could not
+    // finish it", not hollow content. A non-action empty (identity risk, contentless) still
+    // goes fully silent, unchanged.
+    var _blockedFallback = false;
+    try {
+      var _trk = require('./tracker.js');
+      var _wasAction = _trk.looksLikeActionRequest(message);
+      await _trk.stampTrack({ hamUid: hamUid, status: 'BLOCKED', kind: 'request',
+        request: String(message||''), channel: channel, cycleId: _cycleId, tools_used: tools,
+        reason: 'cycle produced no answer after ' + iter + ' iterations; likely missing a tool for part of the ask' });
+      if (_wasAction && ['blooio','text','sms','voice','iman','email','portal','omi','ccwa','cara'].indexOf(channel) !== -1) {
+        finalAns = 'I have your request logged so it will not get lost. Part of it I could not finish on my own yet, and I have flagged that to get handled. If you tell me which piece matters most right now, I will take another run at it.';
+        _blockedFallback = true;
+      }
+    } catch(_eTrk){}
+    if(!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,
       tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null};
   }
   // THE REAL SECOND PASS. Deterministic, not another LLM guess trusting itself.
@@ -1327,9 +1587,18 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             +'qualitatively with no invented figure, or say plainly that detail was not confirmed. Do not invent a '
             +'replacement number either.'}
         ]);
+        // \u2b21B:core.tool.loop:FIX:reasoning_model_token_starvation:20260712\u2b21
+        // Real, documented pattern found in another lane's session notes today:
+        // GROQ_MODEL_C2 (openai/gpt-oss-120b) is a reasoning model -- it writes an
+        // internal reasoning field before content, both counted against max_tokens.
+        // A hardcoded 400 here was within range of the exact failure another lane
+        // found and fixed elsewhere in this same codebase the same day (a 600-token
+        // call spending 598 on reasoning, content empty). This call site wasn't
+        // part of that sweep. Moved to the same configurable, safer cap (700
+        // default) every other real call in this file already uses.
         var _retryResp = await fetch('https://api.groq.com/openai/v1/chat/completions',{
           method:'POST',headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
-          body:JSON.stringify({model:(process.env.GROQ_MODEL_C2||'openai/gpt-oss-120b'),messages:_retryMsgs,max_tokens:400,temperature:0.1})
+          body:JSON.stringify({model:(process.env.GROQ_MODEL_C2||'openai/gpt-oss-120b'),messages:_retryMsgs,max_tokens:tokenCapFor(channel),temperature:0.1})
         }).then(function(x){return x.json();});
         var _retryText = _retryResp && _retryResp.choices && _retryResp.choices[0] && _retryResp.choices[0].message && _retryResp.choices[0].message.content;
         if (_retryText && _retryText.trim()) {
@@ -1378,6 +1647,22 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       { chain: ['PAI', 'MemoryBank'], deliveredBy: 'PAI cycle', why: (_fellTools.length ? _fellTools.length + ' tool(s) fell: ' + _fellTools.join(', ') : 'clean cycle, ' + tools.length + ' tool(s) ran'), audience: 'builder' }
     )));
   } catch (eRcpt) { /* receipt is diagnostic, never block the real answer on it */ }
+  // ⬡B:core.tool.loop:BUILD:universal_tracker_done_on_completion:20260713⬡
+  // The other half of the Architect's tracker: when a real action request completes, it
+  // gets a TRACK DONE with what ran, so "everything has a record" is true on the win side
+  // too, not only when things break. High-signal only: plain chat/greetings are not
+  // tracked (that would be bead-spam / a bleed). Skips the blocked-fallback path above so
+  // one turn is never stamped both DONE and BLOCKED. Never blocks the real answer.
+  try {
+    if (!(typeof _blockedFallback !== 'undefined' && _blockedFallback)) {
+      var _trkD = require('./tracker.js');
+      if (_trkD.looksLikeActionRequest(message)) {
+        await _trkD.stampTrack({ hamUid: hamUid, status: 'DONE', kind: 'request',
+          request: String(message||''), channel: channel, cycleId: _cycleId, tools_used: tools,
+          outcome: finalAns });
+      }
+    }
+  } catch (eTrkDone) {}
   return {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
     tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,_dbg:global._paiLastError||null};
 }

@@ -21,7 +21,7 @@ function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
 function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
 function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
 
-const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences } = require('./find.js');
+const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = require('./find.js');
 
 // Build complete Memory Bank for a HAM turn
 // Returns: { system_prompt, ham, agents, context, tools_summary, ms }
@@ -55,6 +55,14 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // the wall, so the answer is already in context and the model never has to guess.
   var _q = String(question || '').toLowerCase();
   var _isPreferenceQ = /\bfavou?rite\b|\bprefer(ence|red)?\b|what do i (like|love|enjoy)\b|\bmy taste\b/.test(_q);
+  // ⬡B:core.fcw.builder:FIX:cold_wondergames_detection_20260714⬡
+  // Same class of bug as the preference fix above, caught live by the founder: a
+  // question about Wonder Games or the coding cook-off returned no-info even though
+  // real records exist, because the model doesn't reliably call find_in_brain with
+  // the right stamp_type for a feature-explanation question. Cold, deterministic
+  // detection (no LLM) pre-loads the real records into the wall so the answer is
+  // already present -- the model never has to guess a filter.
+  var _isWonderGamesQ = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/.test(_q);
   var _batch = [
     findIdentity(hamUid),
     findAgentJDs(),
@@ -63,7 +71,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     findDoctrine(hamUid, 3),
     findPersonProfile(hamUid)
   ];
-  if (_isPreferenceQ) _batch.push(findPreferences(hamUid, 5));
+  var _prefIdx = -1, _wgIdx = -1;
+  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); }
+  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); }
   var _results = await Promise.allSettled(_batch);
   var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'preferences'];
   _results.forEach(function (r, i) {
@@ -114,8 +124,10 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var allContext = [];
   // preferences (7th finder) rides the FRONT of context when it was a favorites
   // question, so it is never truncated out of the wall by the slice below.
-  var _prefs = (_isPreferenceQ && _results[6] && _results[6].status === 'fulfilled') ? _results[6].value : null;
+  var _prefs = (_prefIdx >= 0 && _results[_prefIdx] && _results[_prefIdx].status === 'fulfilled') ? _results[_prefIdx].value : null;
+  var _wg = (_wgIdx >= 0 && _results[_wgIdx] && _results[_wgIdx].status === 'fulfilled') ? _results[_wgIdx].value : null;
   if (_prefs && _prefs.beads && _prefs.beads.length) allContext = allContext.concat(_prefs.beads);
+  if (_wg && _wg.beads && _wg.beads.length) allContext = allContext.concat(_wg.beads);
   if (context && context.beads) allContext = allContext.concat(context.beads);
   if (recent && recent.beads) allContext = allContext.concat(recent.beads);
   contextStr = allContext.slice(0, 8).map(function(b) {
@@ -139,6 +151,19 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
 
   var ms = Date.now() - t0;
 
+  // ⬡B:core.fcw.builder:BUILD:per_ham_title_injection:20260713⬡
+  // Resolve this HAM's title from the brain (Architect while coding, Founder elsewhere,
+  // for the founder; NAME-ONLY for everyone else). Never hardcoded -- a HAM with no
+  // HAM_TITLE bead gets null here and is simply addressed by name. Failure -> null.
+  var _hamTitle = null;
+  try { _hamTitle = await require('./title.js').resolveTitle(hamUid, channel); } catch (eTitle) {}
+
+  // ⬡B:core.fcw.builder:BUILD:capability_surface_injection:20260713⬡
+  // She reads her own Wonder registry so she knows what she can do and what is still a
+  // gap -- names the gap honestly and logs it instead of hallucinating or going silent.
+  var _capLine = '';
+  try { _capLine = await require('./capabilities.js').capabilityLine(); } catch (eCap) {}
+
   // Assemble system prompt -- butler voice, no internal names leaked
   var systemPrompt = [
     'You are A\u2019NU, a warm and direct life assistant. You speak as a trusted friend who knows things.',
@@ -147,6 +172,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     '',
     'HAM CONTEXT:',
     'Name: ' + hamName,
+    (_hamTitle ? ('Address them as "' + _hamTitle + '" when it lands naturally (a greeting, a sign-off, a direct address). This is their title in this context. Use it like a person would, not on every line.') : ''),
     (function(){
       // ⬡B:core.fcw.builder:WIRE:person_profile_knowledge:20260702⬡
       // "She should know me" — the profile bead is WHO they are, loaded as knowledge.
@@ -159,6 +185,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     })(),
     'Trust tier: ' + hamTier,
     'Channel: ' + (channel || 'unknown'),
+    (_capLine ? ('YOUR CAPABILITIES RIGHT NOW: ' + _capLine) : ''),
     (identity && identity.call_reason
       ? 'WHY THIS CONVERSATION IS HAPPENING RIGHT NOW: you reached out to them proactively '
         + 'moments ago, real judgment, not scripted, because of this: "' + identity.call_reason
