@@ -15,93 +15,13 @@
 // order:asc capability and the findContext/findPersonProfile work). Restoration of
 // lost code, zero new behavior.
 'use strict';
-// ⬡B:core.find:FIX:atomic_memory_bank_target:20260715⬡
-// The ABAHAM door resolves one complete brain target per FIND request.
-// A MEMORY_BANK_URL can never be paired with the legacy table/schema defaults.
-function _brainTarget() {
-  var memoryUrl = String(process.env.MEMORY_BANK_URL || '').trim();
-  var memoryKey = String(process.env.MEMORY_BANK_KEY || '').trim();
-  if (memoryUrl || memoryKey) {
-    if (!memoryUrl || !memoryKey) {
-      return {
-        url: null,
-        key: null,
-        table: process.env.BEAD_TABLE || 'beads',
-        schema: process.env.BRAIN_SCHEMA || 'memory_bank',
-        error: 'memory_bank_target_incomplete'
-      };
-    }
-    return {
-      url: memoryUrl,
-      key: memoryKey,
-      table: process.env.BEAD_TABLE || 'beads',
-      schema: process.env.BRAIN_SCHEMA || 'memory_bank',
-      error: null
-    };
-  }
-  var legacyUrl = String(process.env.AIBE_BRAIN_URL || '').trim();
-  var legacyKey = String(process.env.AIBE_BRAIN_KEY || '').trim();
-  if (!legacyUrl || !legacyKey) {
-    return {
-      url: null,
-      key: null,
-      table: process.env.BEAD_TABLE || 'aibe_brain',
-      schema: process.env.BRAIN_SCHEMA || 'abacia_core',
-      error: legacyUrl || legacyKey ? 'legacy_target_incomplete' : 'brain_target_unconfigured'
-    };
-  }
-  return {
-    url: legacyUrl,
-    key: legacyKey,
-    table: process.env.BEAD_TABLE || 'aibe_brain',
-    schema: process.env.BRAIN_SCHEMA || 'abacia_core',
-    error: null
-  };
-}
+// ⬡B:core.find:WIRE:canonical_new_world_brain_client:20260715⬡
+// FIND owns query semantics; the canonical brain client owns the one authenticated
+// New World transport boundary and fails unborn when MEMORY_BANK_* is unavailable.
+const { getBrainTarget, readBeadWithReceipt } = require('./brain.client.js');
 
-function bh() {
-  var target = _brainTarget();
-  return {
-    url: target.url,
-    table: target.table,
-    error: target.error,
-    hdrs: { apikey: target.key, Authorization: 'Bearer ' + target.key, 'Accept-Profile': target.schema }
-  };
-}
-
-function bq(path) {
-  var b = bh();
-  if (!b.url || !b.hdrs.apikey) {
-    return Promise.resolve({ rows: [], ok: false, status: null, error: b.error || 'brain_target_unconfigured' });
-  }
-  // ⬡B:core.find:FIX:checked_read_receipts:20260715⬡
-  // A timeout or failed REST read stays empty for callers, but it is no longer
-  // indistinguishable from a successful query that honestly found no rows.
-  return new Promise(function(resolve) {
-    var settled = false;
-    function finish(result) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(result);
-    }
-    var timer = setTimeout(function() {
-      finish({ rows: [], ok: false, status: null, error: 'brain_read_timeout' });
-    }, 2500);
-    fetch(b.url + '/rest/v1/' + b.table + '?' + path, { headers: b.hdrs })
-      .then(async function(response) {
-        if (!response.ok) {
-          var errorText = typeof response.text === 'function' ? await response.text() : '';
-          return { rows: [], ok: false, status: response.status, error: String(errorText || 'brain_read_failed').slice(0, 300) };
-        }
-        var rows = await response.json();
-        return { rows: Array.isArray(rows) ? rows : [], ok: true, status: response.status, error: null };
-      })
-      .then(finish)
-      .catch(function(error) {
-        finish({ rows: [], ok: false, status: null, error: String(error && error.message || error).slice(0, 300) });
-      });
-  });
+async function bq(filter) {
+  return readBeadWithReceipt(filter, { timeoutMs: 2500 });
 }
 
 // FIND entry point -- run multiple queries in parallel, merge, dedupe by id
@@ -109,36 +29,22 @@ function bq(path) {
 async function find(queries) {
   if (!Array.isArray(queries)) queries = [queries];
   var t0 = Date.now();
-  var target = bh();
-  var targetReady = !!(target.url && target.hdrs.apikey);
+  var target = getBrainTarget();
+  var targetReady = !!(target && target.ok);
 
   var promises = queries.map(function(q) {
-    var parts = [];
-    if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
-    if (q.source_prefix) parts.push('source=like.' + encodeURIComponent(q.source_prefix) + '*');
-    if (q.ham_uid) parts.push('ham_uid=eq.' + encodeURIComponent(q.ham_uid));
-    // \u2b21B:core.find:FIX:agent_global_exact_match_topic_search:20260711\u2b21
-    // FOUNDER, most important question of all time: 'whenever I talk to her I never
-    // get the amazing results you seem to get -- why?' Traced it live: find_in_brain
-    // has NO way to search by topic/org (mediators, bdif, gmg...), only six rigid
-    // stamp_type buckets, none of which fit an ordinary 'how's X going' question.
-    // Real content existed; the tool structurally could not find it. This is the
-    // fix: agent_global is an EXACT known set of values (MEDIATORS_ADVISOR,
-    // BDIF_ADVISOR, ELI...) -- an equality filter, same performance class as
-    // stamp_type=eq., NOT an ilike scan. The no-wildcards law is honored.
-    if (q.agent_global) parts.push('agent_global=eq.' + encodeURIComponent(q.agent_global));
-    if (q.importance_gte != null) parts.push('importance=gte.' + q.importance_gte);
-    // ⬡B:core.find:FIX:order_parameter:20260702⬡
-    // Live incident: asked for the OPENING line of a multi-part journal document,
-    // every retrieval returned a middle-or-later chunk because created_at.desc was
-    // the only order this function could ever produce -- there was no way to ask
-    // for the earliest match, so "the beginning of anything" was structurally
-    // unreachable. Source names are lexicographically ordered within a document
-    // (part01, part02...), so source.asc genuinely means "from the start."
-    // Generic capability, not a one-off patch: any caller, any HAM, any document.
-    parts.push('order=' + (q.order === 'asc' ? 'source.asc' : 'created_at.desc'));
-    parts.push('limit=' + (q.limit || 10));
-    return bq(parts.join('&'));
+    q = q && typeof q === 'object' ? q : {};
+    var filter = {};
+    if (q.stamp_type) filter.stamp_type = 'eq.' + String(q.stamp_type);
+    if (q.source_prefix) filter.source = 'like.' + String(q.source_prefix) + '*';
+    if (q.ham_uid) filter.ham_uid = 'eq.' + String(q.ham_uid);
+    // Exact equality only: no fuzzy topic scans.
+    if (q.agent_global) filter.agent_global = 'eq.' + String(q.agent_global);
+    if (q.importance_gte != null) filter.importance = 'gte.' + Number(q.importance_gte);
+    // Source names are lexicographically ordered within multi-part documents.
+    filter.order = q.order === 'asc' ? 'source.asc' : 'created_at.desc';
+    filter.limit = String(Math.max(1, Math.min(50, Number(q.limit) || 10)));
+    return bq(filter);
   });
 
   var results = await Promise.all(promises);
@@ -178,10 +84,10 @@ async function findIdentity(hamUid) {
 }
 
 // Agent JDs: all agent definitions available as tools
-async function findAgentJDs() {
+async function findAgentJDs(hamUid) {
   return find([
-    { stamp_type: 'AGENT_JD', limit: 30 },
-    { source_prefix: 'agent.jd', limit: 20 }
+    { stamp_type: 'AGENT_JD', ham_uid: hamUid, limit: 30 },
+    { source_prefix: 'agent.jd', ham_uid: hamUid, limit: 20 }
   ]);
 }
 
@@ -205,8 +111,8 @@ async function findBySource(sourcePrefix, limit) {
 }
 
 // Recent RESULT BEADs across all activity (for meeting minutes context)
-async function findRecentResults(limit) {
-  return find([{ stamp_type: 'RESULT', importance_gte: 7, limit: limit || 10 }]);
+async function findRecentResults(hamUid, limit) {
+  return find([{ stamp_type: 'RESULT', ham_uid: hamUid, importance_gte: 7, limit: limit || 10 }]);
 }
 
 // ⬡B:core.find:WIRE:findDoctrine_20260701⬡
@@ -227,7 +133,7 @@ async function findDoctrine(hamUid, limit) {
 // Founder said, verbatim: "she should know me bro". Name + tier is not knowing
 // someone. UNIVERSALITY: keyed by ham_uid -- any HAM gets their own profile.
 async function findPersonProfile(hamUid) {
-  return find([{ source_prefix: 'scw.person_profile.' + hamUid, limit: 1 }]);
+  return find([{ source_prefix: 'scw.person_profile.' + hamUid, ham_uid: hamUid, limit: 1 }]);
 }
 
 // ⬡B:core.find:WIRE:findPreferences_20260711⬡
