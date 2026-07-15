@@ -25,8 +25,8 @@ function tokenCapFor(channel) {
 // ⬡B:core.tool.loop:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
 function ymd(){return new Date().toISOString().slice(0,10).replace(/-/g,'');}
 const { buildMemoryBank } = require('./fcw.builder.js'); // Memory Bank (BIND doctrine)
@@ -893,28 +893,12 @@ async function executeTool(name, args, hamUid, origMessage) {
 // who this is, the Memory Bank must trust that, the founder was greeted as "unknown, trust
 // tier 0" over live text while the very same request had resolved him at tier 10.
 async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
-  // ⬡B:core.tool.loop:BUILD:cutover_at_the_one_choke_point_20260713⬡
-  // THE CUTOVER (Phase 5), at the single point every channel already flows through so no
-  // channel file is touched. When USE_NEW_WORLD=true, delegate the whole turn to the
-  // new-world mind and return its answer. On ANY failure fall through to legacy below --
-  // legacy is always the safety net, a turn is never dead. Rollback = USE_NEW_WORLD=false.
-  if (process.env.USE_NEW_WORLD === 'true' && process.env.NEW_MIND_URL) {
-    try {
-      var _nr = await fetch(process.env.NEW_MIND_URL.replace(/\/$/, '') + '/cycle', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: message, channel: channel, ham: hamUid }),
-        signal: AbortSignal.timeout(90000)
-      });
-      if (_nr.ok) {
-        var _nd = await _nr.json();
-        var _nc = _nd && _nd.compiled;
-        if (_nd && _nd.ok && _nc && (_nc.answer || _nc.text)) {
-          return { ok: true, answer: _nc.answer || _nc.text, ham: _nc.ham || hamUid,
-                   tools_used: _nc.tools_used || [], source: 'new_world', ms: 0 };
-        }
-      }
-    } catch (_ne) { /* new world down/slow -> legacy safety net below */ }
-  }
+  // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
+  // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
+  // USE_NEW_WORLD fast path returned before _cycleId existed, before the Memory Bank
+  // wall loaded, and before cycle_start/cycle_receipt stamps. That produced successful
+  // face replies with ms:0 and no cycle lineage. A new-world mind may be integrated as
+  // a tool or contributor inside this cycle, but it must never replace this choke point.
   var t0=Date.now(),GROQ=process.env.GROQ_API_KEY;
   // \u2b21B:core.tool.loop:FIX:glm_primary_on_plain_completions:20260711\u2b21
   // Founder, direct: why is this file, the one that serves every real text
@@ -947,7 +931,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // idea. Real-time step stamps as the cycle actually runs, not just the
   // finished result, read by GET /command-center/live/:hamUid below.
   var _cycleId = hamUid + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
-  var _BU=process.env.AIBE_BRAIN_URL, _BK=process.env.AIBE_BRAIN_KEY;
+  var _BU=_bu(), _BK=_bk();
   function _stampStep(step, detail) {
     if (!_BU || !_BK) return;
     fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
@@ -1102,6 +1086,33 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     } catch (eWgSynth) {}
   }
   msgs.push({role:'user',content:message});
+  // ⬡B:tool.loop:FIX:wondergames_synthetic_toolresult_20260714⬡
+  // Founder-confirmed live: even with the real Wonder Games record cold-loaded into
+  // the system prompt (verified via /debug/fcw), the model still sometimes answered
+  // 'I do not have information' -- because this codebase's own prior, proven finding
+  // (context.fusion, 20260710) is that passive system-prompt text is not reliably
+  // attended to; only TOOL RESULTS are. Mechanism, not phrasing, applied again: for a
+  // Wonder Games/cook-off question, inject a SYNTHETIC completed find_in_brain
+  // tool-call-and-result pair into the message history, AFTER the user's message (the
+  // only valid order -- a tool call must follow what prompted it, not precede it; the
+  // first draft had this backwards, caught in reliability testing), so the real record
+  // arrives via the one channel demonstrated to be reliable, and the model never has
+  // to decide whether to call the tool or trust the wall.
+  var _wgNeeded = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(message);
+  if (_wgNeeded) {
+    try {
+      var _wgSynthRes = await find([
+        { stamp_type: 'WONDER_GAMES', ham_uid: hamUid, limit: 5 },
+        { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: 3 }
+      ]);
+      if (_wgSynthRes && _wgSynthRes.beads && _wgSynthRes.beads.length) {
+        var _wgCallId = 'wg_preload_' + Date.now();
+        msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: _wgCallId, type: 'function',
+          function: { name: 'find_in_brain', arguments: JSON.stringify({ stamp_type: 'WONDER_GAMES' }) } }] });
+        msgs.push({ role: 'tool', tool_call_id: _wgCallId, content: JSON.stringify(_wgSynthRes) });
+      }
+    } catch (eWgSynth) {}
+  }
   var iter=0,tools=[],ans=null;
   while (iter<MAX) {
     iter++;
@@ -1692,6 +1703,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     }
   } catch (eTrkDone) {}
   return {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
-    tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,_dbg:global._paiLastError||null};
+    tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,
+    fcw_contributors:(fcw&&fcw.contributors)||null,
+    fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
+    fcw_contributors_total:(fcw&&fcw.contributorsTotal)||0,
+    _dbg:global._paiLastError||null};
 }
 module.exports={runPAI};
