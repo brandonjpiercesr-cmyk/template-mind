@@ -417,14 +417,16 @@ async function executeTool(name, args, hamUid, origMessage, cycleId) {
     } catch (e) { return 'NASH: failed -- ' + e.message; }
   }
   if (name === 'find_in_brain') {
-    var q={limit:args.limit||10};
-    if (args.stamp_type) q.stamp_type=args.stamp_type;
-    if (args.source_prefix) q.source_prefix=args.source_prefix;
-    if (args.agent_global) q.agent_global=args.agent_global;
-    if (args.order) q.order=args.order;
-    var unresolvedInbox = q.stamp_type === 'UNRESOLVED_INBOUND'
-      && String(args.ham_uid || '').toLowerCase() === 'unknown';
-    q.ham_uid = unresolvedInbox ? 'unknown' : String(hamUid).toUpperCase();
+    var requestedLimit = Number(args.limit) || 10;
+    var q = { limit: Math.max(1, Math.min(50, requestedLimit)) };
+    if (args.stamp_type) q.stamp_type = String(args.stamp_type).toUpperCase();
+    if (args.source_prefix) q.source_prefix = String(args.source_prefix).slice(0, 200);
+    if (args.agent_global) q.agent_global = String(args.agent_global).toUpperCase().slice(0, 80);
+    if (args.order === 'asc' || args.order === 'desc') q.order = args.order;
+    // Tool/model input may never select another person's world. The sole exception
+    // is the system-owned unresolved inbox, whose records intentionally use HAM unknown.
+    q.ham_uid = q.stamp_type === 'UNRESOLVED_INBOUND'
+      ? 'unknown' : String(hamUid).toUpperCase();
     var res=await find([q]);
     if (!res || res.read_ok !== true) {
       return JSON.stringify({ok:false,reason:'brain_read_unverified',
@@ -786,31 +788,6 @@ async function executeTool(name, args, hamUid, origMessage, cycleId) {
       return JSON.stringify(_out);
     } catch (eCalReal) { return JSON.stringify({ok:false, reason:'calendar_read_failed: '+eCalReal.message}); }
   }
-  if (false && name === 'calendar_read') {
-    // ⬡B:core.tool.loop:WIRE:calendar_read_cycle_tool:20260713⬡
-    // Wonder rehaul G3 (read): scan the HAM's calendar and find open slots. Reuses the
-    // real DST-safe schedule logic (getRadarEvents / computeFreeSlots) -- no parallel
-    // implementation, no invented availability. This is the "scan my calendar" half of
-    // the haircut ask that went silent. Booking (write) is a separate queued wire.
-    try {
-      var _sl = require('./schedule/schedule.logic.js');
-      var _calHam = String(hamUid).toUpperCase();
-      if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
-      var _want = args.want || 'both';
-      var _events = await _sl.getRadarEvents(_calHam);
-      var _out = {ok:true, ham_uid:_calHam};
-      if (_want === 'events' || _want === 'both') _out.events = (_events||[]).slice(0,25);
-      if (_want === 'slots' || _want === 'both') {
-        var _prefs = await _sl.getHamPrefs(_calHam);
-        if (args.days) _prefs = Object.assign({}, _prefs, {daysAhead: args.days});
-        _out.free_slots = _sl.computeFreeSlots(_events||[], _prefs).slice(0,25);
-      }
-      if ((!_out.events || !_out.events.length) && (!_out.free_slots || !_out.free_slots.length)) {
-        _out.note = 'no calendar events found for this HAM yet (calendar may not be synced to RADAR)';
-      }
-      return JSON.stringify(_out);
-    } catch(eCal){ return JSON.stringify({ok:false,error:eCal.message}); }
-  }
   if (name === 'find_contact') {
     // ⬡B:core.tool.loop:WIRE:find_contact_cycle_tool:20260713⬡
     // Wonder rehaul G5: gives the contacts resolver (built via the cook-off, glm-5.2's
@@ -845,12 +822,36 @@ async function executeTool(name, args, hamUid, origMessage, cycleId) {
       var inboundWords = String(origMessage || '').toLowerCase();
       var requestedContact = String(args.contact_query || '').trim().toLowerCase();
       var savedName = String(contact.name || '').trim().toLowerCase();
-      var hasSendVerb = /\b(send|text|message|tell|write)\b/.test(inboundWords);
-      var namesContact = !!((requestedContact && inboundWords.indexOf(requestedContact) !== -1)
-        || (savedName && inboundWords.indexOf(savedName) !== -1));
+      var outboundMessage = String(args.message || '').trim().slice(0, 1500);
+      var contactLabels = [requestedContact, savedName].filter(Boolean);
+      var contactPatterns = contactLabels.map(function (label) {
+        return label.split(/\s+/).map(function (word) {
+          return word.replace(/[^a-z0-9]/g, '');
+        }).filter(Boolean).join('\\s+');
+      }).filter(Boolean);
+      var namesContact = contactPatterns.some(function (pattern) {
+        return new RegExp('\\b' + pattern + '\\b', 'i').test(inboundWords);
+      });
+      var hasDirectCommand = contactPatterns.some(function (pattern) {
+        return new RegExp('(?:^|\\b)(?:(?:please|can you|could you|will you)\\s+)?'
+          + '(?:send|text|message|tell|write)\\b[\\s\\S]{0,80}\\b'
+          + pattern + '\\b', 'i').test(inboundWords);
+      });
+      var discussionOnly = /\b(?:should i|should we|what if|do you think|maybe)\b[\s\S]{0,40}\b(?:send|text|message|tell|write)\b/i.test(inboundWords);
+      var ignoredWords = { the: true, and: true, that: true, this: true, him: true,
+        her: true, them: true, please: true, message: true, text: true,
+        send: true, tell: true, write: true };
+      var outboundWords = (outboundMessage.toLowerCase().match(/[a-z0-9']{3,}/g) || [])
+        .filter(function (word) { return !ignoredWords[word] && contactLabels.indexOf(word) === -1; });
+      var messageGrounded = outboundWords.some(function (word) {
+        return new RegExp('\\b' + word.replace(/[^a-z0-9]/g, '') + '\\b', 'i').test(inboundWords);
+      });
       var directlyAuthorized = args.authorized_in_message === true
-        && hasSendVerb && namesContact;
-      var outboundMessage = String(args.message || '').slice(0, 1500);
+        && outboundMessage.length > 0
+        && namesContact
+        && hasDirectCommand
+        && messageGrounded
+        && !discussionOnly;
       var contactTarget = 'ham_' + contactHam.toLowerCase() + '.contact_'
         + String(contact.name || args.contact_query || 'unknown')
           .toLowerCase().replace(/[^a-z0-9_.-]/g, '_');
@@ -1813,9 +1814,25 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if (msg.tool_calls&&msg.tool_calls.length) {
       msgs.push({role:'assistant',content:msg.content||null,tool_calls:msg.tool_calls});
       for (var i=0;i<msg.tool_calls.length;i++){
-        var tc=msg.tool_calls[i],targs={};
-        try{targs=JSON.parse(tc.function.arguments||'{}');}catch(e){}
+        var tc=msg.tool_calls[i],targs={},toolArgsError=null;
+        try {
+          targs=JSON.parse(tc.function.arguments||'{}');
+          if (!targs || Array.isArray(targs) || typeof targs !== 'object') {
+            toolArgsError = 'tool_arguments_must_be_an_object';
+          }
+        } catch(e) {
+          toolArgsError = 'tool_arguments_invalid_json';
+        }
         await _stampStep('tool_call', tc.function.name);
+        if (toolArgsError) {
+          var invalidToolResult = JSON.stringify({ok:false,reason:toolArgsError});
+          var invalidToolOutcome = _boundedToolOutcome(tc.function.name, invalidToolResult, 0, null);
+          tools.push(tc.function.name);
+          _toolOutcomes.push(invalidToolOutcome);
+          await _stampStep('tool_result', JSON.stringify(invalidToolOutcome));
+          msgs.push({role:'tool',tool_call_id:tc.id,content:invalidToolResult});
+          continue;
+        }
         var toolStartedAt = Date.now();
         var tr, toolOutcome;
         try {
@@ -1852,7 +1869,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // it went out as the literal answer, to a real inbox. This is a hollow
     // reply wearing a costume, not a real answer -- same rule as no answer
     // at all: silence over sending garbage to a human.
-    if (/^<[a-z_]+>\s*\{.*\}\s*<\/[a-z_]+>$/is.test(ans)) { ans = ''; }
+    var _unexecutedToolText = /^<[^>]*(?:function|tool|[a-z_]{3,})[^>]*>\s*\{[\s\S]*\}/i.test(ans)
+      || /^\s*\{[\s\S]*"(?:tool_calls|function|arguments)"\s*:/i.test(ans)
+      || /^\s*\[\[?\s*(?:TOOL|FUNCTION)\b/i.test(ans);
+    if (_unexecutedToolText) {
+      await _stampStep('unexecuted_tool_text_caught', ans.slice(0, 120));
+      ans = '';
+    }
     // ⬡B:core.tool.loop:WIRE:diagnostic_no_tool_visibility:20260704⬡
     // CLAIR wiring, licensed and diagnostic only, not the fix itself. A
     // founder-voice task asked for exactly this and gave up twice with no
