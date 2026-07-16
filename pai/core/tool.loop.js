@@ -8,7 +8,13 @@ var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '700', 10); // ⬡B:core
 function tokenCapFor(channel) {
   var c = String(channel || '').toUpperCase().replace(/[^A-Z0-9]/g, '_');
   var v = parseInt(process.env['PAI_MAX_TOKENS_' + c] || '', 10);
-  return (v && v > 0) ? v : MAX_TOKENS;
+  // Coding handoffs on the live face routinely carry a CODA decision plus roadmap,
+  // lifecycle, ownership, and acceptance evidence. An older explicit Render value
+  // still capped the portal after the fallback was raised, so the minimum must hold
+  // whether the value came from code or environment.
+  if (c === 'PORTAL') return Math.max(v || 0, MAX_TOKENS, 2200);
+  if (v && v > 0) return v;
+  return MAX_TOKENS;
 }
 // entered via the ABAHAM door, serving every channel that reaches PAI: text, voice, email, chat
 // ⬡B:core.tool.loop:FIX:fix_file_cooldown_added:20260701⬡
@@ -29,12 +35,69 @@ function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'bea
 function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
 function ymd(){return new Date().toISOString().slice(0,10).replace(/-/g,'');}
+
+function failedCodaReason(raw) {
+  var parsed = raw;
+  try { if (typeof parsed === 'string') parsed = JSON.parse(parsed); }
+  catch (error) { parsed = null; }
+  if (parsed && typeof parsed === 'object' && parsed.ok === true) return null;
+  var reason = String(parsed && parsed.reason || 'coda_consult_failed');
+  return /^[a-z0-9_:-]{1,120}$/i.test(reason) ? reason : 'coda_consult_failed';
+}
+
+function parseRoadmapActivationSpec(message) {
+  var text = String(message || '');
+  var marker = 'ROADMAP_ACTIVATION_SPEC:';
+  var markerAt = text.indexOf(marker);
+  if (markerAt < 0) return null;
+  var tail = text.slice(markerAt + marker.length);
+  var start = tail.indexOf('{');
+  if (start < 0) return { error:'roadmap_activation_spec_json_required' };
+  var depth = 0, inString = false, escaped = false, end = -1;
+  for (var i = start; i < tail.length; i++) {
+    var ch = tail[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  if (end < 0) return { error:'roadmap_activation_spec_json_incomplete' };
+  var spec;
+  try { spec = JSON.parse(tail.slice(start, end + 1)); }
+  catch (error) { return { error:'roadmap_activation_spec_json_invalid' }; }
+  var requiredStrings = ['roadmap_source','repository','task'];
+  if (requiredStrings.some(function (key) {
+    return typeof spec[key] !== 'string' || !spec[key].trim();
+  })) return { error:'roadmap_activation_spec_fields_required' };
+  if (!Array.isArray(spec.allowed_paths) || !spec.allowed_paths.length ||
+      !Array.isArray(spec.acceptance) || !spec.acceptance.length) {
+    return { error:'roadmap_activation_spec_lists_required' };
+  }
+  return { spec:spec };
+}
 const { buildMemoryBank } = require('./fcw.builder.js'); // Memory Bank (BIND doctrine)
-const { find } = require('./find.js');
+var currentTurnProofGuard = require('./current.turn.proof.guard.js');
+const { find, findIdentityEvidence } = require('./find.js');
+const identityProvenance = require('./identity.provenance.js');
 const { readRenderLogs } = require('./tools/render.logs.js');
 const { fixFileInGithub } = require('./tools/github.fix.js');
 const { triggerDeploy } = require('./tools/render.deploy.js');
-const { notifyHam } = require('./tools/notify.ham.js');
+// ⬡B:core.tool_loop:WIRE:consult_coda_uses_canonical_relay_contract:20260715⬡
+const codingRelay = require('./coding.relay.contract.js');
+const { notifyHam, resolvePhone:resolveNotifyPhone } = require('./tools/notify.ham.js');
+const { runOutboundCouncil, requireVerifiedCouncilResult, requireVerifiedCouncilDelivery,
+  compactCouncilProof, canonicalizeDeliveryTarget,
+  extractNamedContextEvidence, namedContextContradictions,
+  currentAssistantPreferenceRequest, preferenceJudgmentFindings,
+  boundedCouncilFailureCodes, isHumanFacingAnswer } = require('./pai.outbound.council.js');
 // ⬡B:core.tool.loop:WIRE:ledger_tools_registered:20260707⬡
 // CLAIR fix, real gap found in audit 20260707: LEDGER (Budget OS) had a live
 // backend, 16 real BNPL plans, a working /budget/ask endpoint -- and was never
@@ -53,6 +116,239 @@ var MAX = 20;
 var FIX_COOLDOWN_MS = 60000;
 var _lastFixAttempt = {};
 
+// ⬡B:core.tool_loop:FIX:explicit_repository_paths_reach_coda:20260715⬡
+// A founder-directed code review named the exact files CODA needed to inspect, but
+// the consult step saw the words CODA/SPAN and replaced every file path with those
+// agent names. The repository reader was live; its caller discarded the strongest
+// evidence before calling it. Preserve explicit paths first and carry the named code
+// identifiers beside them so read_own_code opens the file and centers the excerpt on
+// the questioned mechanism. Agent-name searches fill only the remaining slots.
+function repositoryReadTerms(question, namedAgents, portfolioHandoff) {
+  var q = String(question || '');
+  var paths = q.match(/(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:js|json|html|css|md)\b/g) || [];
+  var focus = (q.match(/\b[A-Za-z_$][A-Za-z0-9_$]{3,}\b/g) || []).filter(function (term) {
+    // Names and title-case prose (CATHY, CODA, GitHub, Phase) are not excerpt
+    // anchors. Keep actual code-shaped identifiers: camelCase, snake_case, or
+    // a dollar-bearing symbol. Otherwise a long human handoff can consume the
+    // bounded focus slots before requiresHitl/queuedForApproval ever arrive.
+    return (/^[a-z$][A-Za-z0-9_$]*[A-Z_]/.test(term) || /[_$]/.test(term)) && paths.every(function (path) {
+      return path.toLowerCase().indexOf(term.toLowerCase()) === -1;
+    });
+  }).filter(function (term, index, all) {
+    return all.map(function (value) { return value.toLowerCase(); }).indexOf(term.toLowerCase()) === index;
+  }).slice(0, 4);
+  var candidates = paths.map(function (path) {
+    return path + (focus.length ? ' ' + focus.join(' ') : '');
+  });
+  if (!candidates.length && portfolioHandoff) candidates = [
+    'runLead CODA', 'assembleBCW', 'SPAN roadmap',
+    'CANON_PASS', 'INTERNAL_CLAIR', 'canew drain'
+  ];
+  else candidates = candidates.concat((namedAgents || []).map(function (term) {
+    return String(term || '').toUpperCase();
+  }));
+  var seen = {};
+  return candidates.filter(function (term) {
+    var key = String(term || '').toLowerCase();
+    if (!key || seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).slice(0, 6);
+}
+
+// ⬡B:core.tool_loop:REPAIR:outer_relay_cannot_erase_coda_repository_proof:20260715⬡
+// CODA can return a repository-backed decision and the conversational speaking pass
+// can still misread an unrelated empty identity receipt as an empty code read. When
+// that exact contradiction occurs, restore CODA's verified decision bytes. The
+// restored answer still crosses formatting, SHADOW, the full council, STAMP, and
+// readback below; this is evidence preservation, not a bypass.
+function repairCodaRepositoryDraft(draft, codaAnswer, repositoryProved) {
+  var candidate = String(draft || '').trim();
+  var verified = String(codaAnswer || '').trim();
+  if (repositoryProved === true && verified &&
+      codingRelay.repositoryEvidenceDenied(candidate)) {
+    return { answer:verified, repaired:true, reason:'verified_coda_repository' };
+  }
+  return { answer:candidate, repaired:false, reason:null };
+}
+
+// ⬡B:core.tool_loop:WIRE:named_agent_rows_as_tool_evidence:20260715⬡
+// Passive Memory Bank prompt text is not consistently attended. Convert only
+// the exact-HAM named rows that FCW already loaded into completed synthetic FIND
+// results. No bank call happens here; no roster, preference, or answer is
+// inferred. Every call uses the registered singular agent_global schema, and
+// the identical bounded result enters the model tool channel and SHADOW proof.
+function injectNamedAgentEvidence(msgs, verifiedEvidence, fcw, hamUid) {
+  if (!Array.isArray(msgs) || !Array.isArray(verifiedEvidence)) return 0;
+  var exactHamUid = String(hamUid || '').toUpperCase();
+  var seen = Object.create(null);
+  var rows = (fcw && Array.isArray(fcw.named_agent_records)
+    ? fcw.named_agent_records : []).filter(function (row) {
+      var globalName = String(row && row.agent_global || '');
+      var key = String(row && row.id || '') + '|' + globalName + '|' + String(row && row.source || '');
+      if (!row || String(row.ham_uid || '').toUpperCase() !== exactHamUid
+          || !/^[A-Z][A-Z0-9_]{2,31}$/.test(globalName) || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).slice(0, 8);
+  if (!rows.length) return 0;
+
+  var started = Date.now();
+  var completed = rows.map(function (row, index) {
+    var args = JSON.stringify({ agent_global:row.agent_global,
+      ham_uid:exactHamUid, limit:1 });
+    var boundedRow = {
+      id: row.id == null ? null : row.id,
+      ham_uid: exactHamUid,
+      agent_global: row.agent_global,
+      stamp_type: row.stamp_type == null ? null : String(row.stamp_type).slice(0, 120),
+      source: row.source == null ? null : String(row.source).slice(0, 300),
+      summary: row.summary == null ? '' : String(row.summary).slice(0, 500),
+      content: row.content == null ? '' : (typeof row.content === 'string'
+        ? row.content : JSON.stringify(row.content)).slice(0, 2400),
+      created_at: row.created_at == null ? null : String(row.created_at).slice(0, 80)
+    };
+    return {
+      callId: 'named_agent_preload_' + started + '_' + index,
+      args: args,
+      result: JSON.stringify({ beads:[boundedRow], count:1,
+        ham_uid:exactHamUid, agent_global:row.agent_global, preloaded:true })
+    };
+  });
+  msgs.push({ role:'assistant', content:null, tool_calls:completed.map(function (item) {
+    return { id:item.callId, type:'function',
+      function:{ name:'find_in_brain', arguments:item.args } };
+  }) });
+  completed.forEach(function (item) {
+    msgs.push({ role:'tool', tool_call_id:item.callId, content:item.result });
+    verifiedEvidence.push({ tool:'find_in_brain', provenance:'memory_bank.exact_ham',
+      args:item.args, result:item.result });
+  });
+  while (verifiedEvidence.length > 8) verifiedEvidence.shift();
+  return rows.length;
+}
+
+// ⬡B:core.tool.loop:EVIDENCE:identity_provenance_same_bytes_model_shadow:20260715⬡
+// FCW already performed this bounded exact-HAM read. Complete one real registered
+// tool exchange with those same bytes, and place the byte-identical result into
+// SHADOW evidence. No second query, answer template, roster, or inferred identity.
+function injectIdentityProvenanceEvidence(msgs, verifiedEvidence, fcw, hamUid, question, preparedProof) {
+  if (!Array.isArray(msgs) || !Array.isArray(verifiedEvidence)) return 0;
+  var envelope = fcw && fcw.identity_evidence;
+  var exactHam = String(hamUid || '').toUpperCase();
+  if (!envelope || envelope.ok !== true || envelope.available !== true ||
+      String(envelope.ham_uid || '').toUpperCase() !== exactHam ||
+      !Array.isArray(envelope.subjects) || !envelope.subjects.length ||
+      !Array.isArray(envelope.records)) return 0;
+  var proof = preparedProof || identityProvenance.createEvidenceProof(envelope, exactHam);
+  if (!proof || proof.ok !== true ||
+      !identityProvenance.verifyEvidenceReceipt(proof.result, proof.receipt, exactHam)) return 0;
+  var args = JSON.stringify({ ham_uid:exactHam, question:String(question || '') });
+  var result = proof.result;
+  var callId = 'identity_provenance_preload_' + Date.now();
+  msgs.push({ role:'assistant', content:null, tool_calls:[{
+    id:callId, type:'function',
+    function:{ name:'find_identity_evidence', arguments:args }
+  }] });
+  msgs.push({ role:'tool', tool_call_id:callId, content:result });
+  verifiedEvidence.push({ tool:'find_identity_evidence',
+    provenance:'memory_bank.exact_ham', args:args, result:result,
+    identity_evidence_receipt:proof.receipt });
+  while (verifiedEvidence.length > 8) verifiedEvidence.shift();
+  return envelope.subjects.length;
+}
+
+// Keep completed tool exchanges structurally valid when an OpenAI-compatible
+// fallback receives the history. Dropping tool_calls/tool_call_id leaves orphan
+// tool messages and can make a grounded turn fail only when the primary falls.
+function openAiCompatibleHistory(msgs) {
+  return (Array.isArray(msgs) ? msgs : []).map(function (message) {
+    var clean = { role:message.role, content:message.content == null ? null : message.content };
+    if (Array.isArray(message.tool_calls)) clean.tool_calls = message.tool_calls;
+    if (typeof message.tool_call_id === 'string') clean.tool_call_id = message.tool_call_id;
+    if (typeof message.name === 'string') clean.name = message.name;
+    return clean;
+  });
+}
+
+// ⬡B:core.tool_loop:REPAIR:grounded_prose_after_tool_protocol_sentinel:20260715⬡
+// The live face produced `<tool_call>` from the watched-surface honesty fallback.
+// That branch intentionally exits the main tool loop, so its text never reached
+// the older in-loop syntax scrub. Repair once from the already-bound system
+// context and completed tool results. No answer, roster, preference, or identity
+// is supplied here. If two independent plain-completion lanes still produce
+// plumbing instead of prose, return empty and let the canonical cycle fail closed.
+async function regenerateHollowAnswer(candidate, history, completers) {
+  var original = typeof candidate === 'string' ? candidate.trim() : '';
+  if (isHumanFacingAnswer(original)) return { answer:original, repaired:false };
+  var repairHistory = openAiCompatibleHistory(history).concat([
+    { role:'assistant', content:original },
+    { role:'user', content:'That draft was only internal tool-protocol syntax, not a human answer. '
+      + 'Answer the original request now in normal human-facing prose. Use only facts in the system '
+      + 'context and completed tool results already present in this conversation. If the evidence '
+      + 'does not establish a requested fact, say what is not established and do not guess. Do not '
+      + 'output XML tags, tool calls, function calls, JSON envelopes, or meta-commentary.' }
+  ]);
+  var lanes = Array.isArray(completers) ? completers.slice(0, 2) : [];
+  for (var i = 0; i < lanes.length; i++) {
+    if (typeof lanes[i] !== 'function') continue;
+    var proposed = '';
+    try { proposed = await lanes[i](repairHistory); } catch (eRepairLane) { proposed = ''; }
+    proposed = typeof proposed === 'string' ? proposed.trim() : '';
+    if (isHumanFacingAnswer(proposed)) {
+      return { answer:proposed, repaired:true, lane:i + 1 };
+    }
+  }
+  return { answer:'', repaired:false };
+}
+
+function scrubLeakedToolProtocol(value) {
+  var parts = String(value || '').split(/(```[\s\S]*?```|``[^`\r\n]*``|`[^`\r\n]*`)/g);
+  function structuredProtocolTail(raw) {
+    raw = String(raw || '').trim();
+    if (!raw) return false;
+    if (/^[\[{]/.test(raw)) {
+      try { JSON.parse(raw); return true; } catch (eTailJson) {}
+    }
+    return /^[a-z_][a-z0-9_]*$/i.test(raw) ||
+      /^[a-z_][a-z0-9_]*\s*\([\s\S]*\)\s*$/i.test(raw);
+  }
+  return parts.map(function (part, index) {
+    if (index % 2 === 1) return part;
+    return part
+      .replace(/<\s*(tool_call|function_call)(?=[\s/>])[^>]*>[\s\S]*?<\/\s*\1\s*>/gi, ' ')
+      .replace(/<\s*(?:tool_call|function_call)(?=[\s/>])[^>]*\/\s*>/gi, ' ')
+      .replace(/<\/\s*(?:tool_call|function_call)\s*>/gi, ' ')
+      .replace(/<\s*(tool_call|function_call)(?=[\s/>])[^>]*>\s*([\s\S]*)$/gi,
+        function (matched, tag, tail) { return structuredProtocolTail(tail) ? ' ' : matched; })
+      .replace(/<\s*(?:tool_call|function_call)(?=[\s/>])[^>]*>\s*$/gi, ' ')
+      .replace(/\[\s*(?:tool[_\s-]?call|function[_\s-]?call)\s*\]\s*$/gi, ' ')
+      .replace(/<\s*function\s*=\s*[a-z_][a-z0-9_]*\s*>\s*(?:\{[\s\S]*\}|\[[\s\S]*\])\s*(?:<\/\s*function\s*>)?\s*$/gi, ' ')
+      .replace(/<\s*function\s*\(\s*[a-z_][a-z0-9_]*\s*\)\s*>?\s*(?:\{[\s\S]*\}|\[[\s\S]*\])\s*(?:<\/\s*function\s*>)?\s*$/gi, ' ')
+      .replace(/<([a-z_][a-z0-9_]*)>\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*<\/function>/gi,
+        function (matched, opener) { return String(opener).toLowerCase() === 'function' ? matched : ' '; });
+  }).join('').trim();
+}
+
+// Named exact-HAM rows are question-bound evidence, so later tool traffic must
+// not evict them from SHADOW's eight-item window. De-duplicate without changing
+// the actual evidence objects or manufacturing any new content.
+function prioritizeVerifiedEvidence(primary, secondary) {
+  var seen = Object.create(null);
+  var out = [];
+  [primary, secondary].forEach(function (group) {
+    (Array.isArray(group) ? group : []).forEach(function (item) {
+      if (out.length >= 8 || item == null) return;
+      var key;
+      try { key = JSON.stringify(item); } catch (e) { key = String(item); }
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push(item);
+    });
+  });
+  return out;
+}
+
 var TOOLS = [
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
@@ -60,6 +356,10 @@ var TOOLS = [
     +'Use for ANY question about a game, score, or whether a team won (Lakers, NBA, NFL, MLB, NHL, WNBA). '
     +'Pass league as one of: nba, nfl, mlb, nhl, wnba. Returns the latest scoreboard lines.',
     parameters:{type:'object',properties:{league:{type:'string',description:'nba|nfl|mlb|nhl|wnba'}},required:['league']}}},
+  {type:'function',function:{name:'find_identity_evidence',
+    description:'Read bounded exact-HAM identity provenance for the literal who-is subjects in the exact question. Returns stored definitions, stored role claims, and stored activity as separate evidence kinds.',
+    parameters:{type:'object',required:['ham_uid','question'],properties:{
+      ham_uid:{type:'string'},question:{type:'string'}}}}},
   {type:'function',function:{name:'find_in_brain',description:'Search brain by exact stamp_type, source prefix, or agent_global. '
     +'No fuzzy/ilike keyword search exists, by design, to keep every query under 100ms -- you must pick an exact match. '
     +'A question about a specific email, sender, or "what\'s in my inbox" -> stamp_type UNRESOLVED_INBOUND. '
@@ -124,9 +424,9 @@ var TOOLS = [
     properties:{ham_uid:{type:'string'},want:{type:'string',enum:['events','slots','both'],description:'events = what is scheduled, slots = open times, both = default'},
       days:{type:'number',description:'how many days ahead to consider, default 14'}}}}},
   {type:'function',function:{name:'calendar_book',description:'Book a REAL event on the HAM\'s calendar. This creates an actual calendar entry, so only call it once the HAM has approved the specific time -- after calendar_read surfaced an open slot they said yes to, or when they explicitly ask to put something on their calendar at a stated time. IMPORTANT: if the HAM is replying to a session you (or a prior turn) proposed -- "yes", "lock it", "sounds good", a specific time they picked -- first call find_in_brain with stamp_type SESSION to find the exact pending proposal and its slot times, then book those exact times, do not invent a time. Never book a time the HAM has not confirmed.',
-    parameters:{type:'object',required:['ham_uid','title','start'],
+    parameters:{type:'object',required:['ham_uid','title','start','end'],
     properties:{ham_uid:{type:'string'},title:{type:'string',description:'what the event is, e.g. "Haircut"'},
-      start:{type:'string',description:'ISO 8601 start time'},end:{type:'string',description:'ISO 8601 end time; optional, defaults to 45 minutes after start'},
+      start:{type:'string',description:'ISO 8601 start time'},end:{type:'string',description:'ISO 8601 end time. Required: the provider boundary never invents an unapproved duration.'},
       description:{type:'string',description:'optional note on the event'}}}}},
   {type:'function',function:{name:'propose_working_session',description:'Convene a real working session with the HAM when enough genuine work has piled up. Pulls the real agenda from what the advisers already proposed and what is owed to the HAM, finds an open slot on their calendar, and brings it to them with a real agenda. Use when the HAM asks whether you should meet, or when accumulated decisions genuinely need a sit-down. Convenes nothing if there is not enough real material -- never a canned session.',
     parameters:{type:'object',required:['ham_uid'],
@@ -215,17 +515,122 @@ var TOOLS = [
     +'in what you read. A vague-but-true answer is always correct over a specific-but-invented one.',
     parameters:{type:'object',required:['query'],properties:{
       query:{type:'string',description:'Plain-language description of the real feature or behavior to look up, e.g. "command center timestamp display" or "how reminders get marked done".'}
+    }}}},
+  {type:'function',function:{name:'consult_coda',description:codingRelay.line() + ' This read-and-deliberate step reuses read_own_code, then gives CODA repository, BCW, SPAN, roadmap, founder, and department evidence. CODA decides the canonical handoff; A\u2019NU relays it. It does not write build code, create a parallel queue, commit, or deploy.',
+    parameters:{type:'object',required:['ham_uid','question'],properties:{
+      ham_uid:{type:'string'},question:{type:'string',description:'The founder coding request only, without repeating the server-built BCW.'}
+    }}}},
+  {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, and acceptance checks so CANEW cannot create orphan or out-of-scope code.',
+    parameters:{type:'object',required:['roadmap_source','repository','task','allowed_paths','acceptance'],properties:{
+      roadmap_source:{type:'string',description:'Exact source of an existing ROADMAP bead.'},
+      repository:{type:'string',description:'Exact owner/repository that owns the roadmap work.'},
+      task:{type:'string',description:'One bounded implementation task selected by CODA.'},
+      allowed_paths:{type:'array',items:{type:'string'},description:'Exact repository paths CANEW may author.'},
+      acceptance:{type:'array',items:{type:'string'},description:'Concrete checks Cathy and CANON will audit.'},
+      importance:{type:'number'},max_iterations:{type:'number'},max_llm_calls:{type:'number'}
     }}}}
 ];
-async function executeTool(name, args, hamUid, origMessage) {
+// ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
+// Read tools contribute during deliberation. Every mutation is queued as
+// evidence, reviewed by the outbound council, and executed only after the
+// exact answer has a durable receipt plus committed STAMP readback.
+var POST_COUNCIL_TOOLS = Object.freeze({
+  write_to_brain:true,
+  fix_file_in_github:true,
+  trigger_deploy:true,
+  notify_ham:true,
+  create_reminder:true,
+  calendar_book:true,
+  propose_working_session:true,
+  contact_send:true,
+  stop_mentioning:true,
+  request_new_capability:true,
+  save_layout:true,
+  edit_layout:true,
+  update_screen:true,
+  activate_roadmap_task:true
+});
+
+async function executeTool(name, args, hamUid, origMessage, runtime) {
+  if (name === 'activate_roadmap_task' && (!runtime || runtime.codaVerified !== true)) {
+    return JSON.stringify({ok:false,reason:'verified_current_turn_coda_required',tool:name});
+  }
+  if (name === 'activate_roadmap_task' && runtime && runtime.activationDecisionRequired === true &&
+      runtime.codaActivationApproved !== true) {
+    return JSON.stringify({ok:false,reason:'coda_activation_approval_required',tool:name});
+  }
+  var shouldQueueMutation = POST_COUNCIL_TOOLS[name]
+    && !(name === 'propose_working_session' && args && args.autobook !== true);
+  if (shouldQueueMutation && (!runtime || runtime.phase !== 'commit')) {
+    if (!runtime || !Array.isArray(runtime.pendingEffects)) {
+      return JSON.stringify({ok:false,reason:'post_council_runtime_required',tool:name});
+    }
+    var queuedArgs;
+    try { queuedArgs = JSON.parse(JSON.stringify(args || {})); }
+    catch (eArgs) { return JSON.stringify({ok:false,reason:'tool_args_not_serializable',tool:name}); }
+    runtime.effectKeys = runtime.effectKeys || {};
+    var effectKey = name + ':' + JSON.stringify(queuedArgs);
+    var wasDuplicate = !!runtime.effectKeys[effectKey];
+    if (!wasDuplicate) {
+      runtime.effectKeys[effectKey] = true;
+      runtime.pendingEffects.push({ name:name, args:queuedArgs, key:effectKey });
+    }
+    return JSON.stringify({ok:true,executed:false,queued_for_council_commit:true,
+      duplicate_suppressed:wasDuplicate,tool:name});
+  }
+  if (name === 'consult_coda') {
+    try {
+      var q = String(args.question || origMessage || '').trim();
+      if (!q) return JSON.stringify({ok:false,reason:'question_required'});
+      // ⬡B:core.tool_loop:GUARD:consult_coda_bound_to_active_ham:20260715⬡
+      // A model-authored tool argument cannot move CODA into another person's
+      // Memory Bank. The active ABAHAM binding is authoritative for this turn.
+      var boundCodaHam = String(hamUid || '').toUpperCase();
+      var requestedCodaHam = String(args.ham_uid || '').toUpperCase();
+      if (boundCodaHam && requestedCodaHam && requestedCodaHam !== boundCodaHam) {
+        return JSON.stringify({ok:false,reason:'ham_uid_mismatch',
+          bound_ham_uid:boundCodaHam});
+      }
+      var cHam = boundCodaHam || requestedCodaHam;
+      if (!cHam) return JSON.stringify({ok:false,reason:'ham_uid_required'});
+      var named = q.match(/\b(?:SPAN|CODA|CANON|CLAIR|AIR|BCW|CANEW)\b/gi) || [];
+      var portfolioHandoff = /\b(?:what do you need|what should i (?:do|work on)|how can i help|where do you need help|help code|ready to work)\b/i.test(q);
+      // A general collaborator handoff does not name implementation symbols, so
+      // searching the entire greeting produced no repository proof. Inspect the
+      // established relay components instead; CODA still decides from what those
+      // real reads return and no task or answer is hardcoded here.
+      var terms = repositoryReadTerms(q, named, portfolioHandoff);
+      if (!terms.length) terms = [q.slice(0, 180)];
+      var rawReads = await Promise.all(terms.map(function (term) {
+        return executeTool('read_own_code', { query:term }, cHam, q, runtime);
+      }));
+      var reads = rawReads.map(function (raw, index) {
+        try {
+          var parsed = JSON.parse(raw);
+          if (!parsed || !parsed.found || !Array.isArray(parsed.files)) return parsed;
+          return { ok:parsed.ok, found:true, query:terms[index], files:parsed.files.slice(0, 2).map(function (file) {
+            return { file:file.file, startLine:file.startLine, endLine:file.endLine,
+              excerpt:String(file.excerpt || '').slice(0, 900) };
+          }) };
+        } catch (eCompact) { return { ok:false, query:terms[index], note:'unparseable repository result' }; }
+      });
+      return JSON.stringify(await require('../advisors/coding.js').runLead(q, cHam,
+        { repositoryEvidence:JSON.stringify({ queries:terms, reads:reads }),
+          storedIdentityEvidence:args._identity_evidence,
+          identityEvidenceResult:args._identity_evidence_result,
+          identityEvidenceReceipt:args._identity_evidence_receipt }));
+    } catch (eCoda) { return JSON.stringify({ok:false,reason:'coda_lead_failed',error:eCoda.message}); }
+  }
   if (name === 'read_own_code') {
     try {
       var ghToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
       if (!ghToken) return JSON.stringify({ok:false,note:'No real code-read access configured right now.'});
       var query = String(args.query || '').trim();
       if (!query) return JSON.stringify({ok:false,note:'no query given'});
-      // Real, read-only. Scoped to the two repos that are actually her own real code.
-      var repos = ['brandonjpiercesr-cmyk/anew','brandonjpiercesr-cmyk/eanew'];
+      // Real, read-only. Scoped to the canonical mind, experience face, and builder.
+      var repos = String(process.env.ANEW_OWN_CODE_REPOS
+        || 'brandonjpiercesr-cmyk/anew,brandonjpiercesr-cmyk/eanew,brandonjpiercesr-cmyk/canew')
+        .split(',').map(function (repo) { return repo.trim(); }).filter(Boolean);
       var found = [];
       // \u2b21B:core.tool.loop:FIX:real_naming_collision_confused_synthesis:20260710\u2b21
       // Real, live incident, founder-caught, doctrine violation (STAY GROUNDED): asked
@@ -240,6 +645,23 @@ async function executeTool(name, args, hamUid, origMessage) {
       // one of two real, differently-named-but-similarly-worded systems.
       var qLower = query.toLowerCase();
       var anchorResolved = false;
+      var explicitPathMatch = query.match(/(?:^|\s)((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:js|json|html|css|md))\b/);
+      if (explicitPathMatch) {
+        var explicitPath = explicitPathMatch[1];
+        for (var pathRepoIndex = 0; pathRepoIndex < repos.length; pathRepoIndex++) {
+          try {
+            var pathProbe = await fetch('https://api.github.com/repos/' + repos[pathRepoIndex]
+              + '/contents/' + explicitPath + '?ref=main', {
+              headers: {'Authorization':'token '+ghToken, 'Accept':'application/vnd.github.v3.raw'}
+            });
+            if (pathProbe.ok) found.push({repo:repos[pathRepoIndex],path:explicitPath});
+          } catch (ePathProbe) {}
+        }
+        // An exact path is an authoritative lookup request. If it does not exist in
+        // the scoped repositories, report that miss instead of fuzzy-searching into a
+        // similarly named but unrelated file.
+        anchorResolved = true;
+      }
       if (qLower.indexOf('CLAIR command center') !== -1 || qLower.indexOf('clear-command-center') !== -1) {
         found.push({repo:'brandonjpiercesr-cmyk/anew',path:'routes/three-ray.routes.js'});
         anchorResolved = true;
@@ -278,6 +700,9 @@ async function executeTool(name, args, hamUid, origMessage) {
           }
         } catch (eSearch) {}
       }
+      if (qLower.trim() === 'canew') found.sort(function (a, b) {
+        return (b.repo.endsWith('/canew') ? 1 : 0) - (a.repo.endsWith('/canew') ? 1 : 0);
+      });
       if (!found.length) return JSON.stringify({ok:true,found:false,note:'Searched the real code and found nothing relevant to this. Say plainly this was not found, do not guess.'});
       var snippets = [];
       for (var k=0;k<Math.min(found.length,5);k++) {
@@ -370,23 +795,25 @@ async function executeTool(name, args, hamUid, origMessage) {
     try {
       var lm = require('./stream/layout.memory.js');
       var r = await lm.save(hamUid, args.name, args.pieces || []);
-      return r.ok ? ('Saved "' + r.name + '" with: ' + r.pieces.join(', ') + '. Say pull up ' + r.name + ' anytime.') : ('Could not save that layout: ' + (r.reason || 'unknown'));
-    } catch (eSL) { return 'Could not save that layout right now.'; }
+      return JSON.stringify(r.ok ? {ok:true,name:r.name,pieces:r.pieces}
+        : {ok:false,reason:r.reason || 'layout_save_failed'});
+    } catch (eSL) { return JSON.stringify({ok:false,reason:eSL.message}); }
   }
   if (name === 'edit_layout') {
     try {
       var lm2 = require('./stream/layout.memory.js');
       var r = await lm2.update(hamUid, args.name, args.add || [], args.remove || []);
-      return r.ok ? ('Updated "' + args.name + '". It now has: ' + r.pieces.join(', ') + '.') : ('Could not update that layout: ' + (r.reason || 'unknown'));
-    } catch (eEL) { return 'Could not update that layout right now.'; }
+      return JSON.stringify(r.ok ? {ok:true,name:args.name,pieces:r.pieces}
+        : {ok:false,reason:r.reason || 'layout_update_failed'});
+    } catch (eEL) { return JSON.stringify({ok:false,reason:eEL.message}); }
   }
   if (name === 'update_screen') {
     try {
       var sa = require('./stream/screen.awareness.js');
-      if (!sa.hasLiveScreen(hamUid)) return 'No live screen is open right now -- nothing to update.';
+      if (!sa.hasLiveScreen(hamUid)) return JSON.stringify({ok:false,reason:'no_live_screen'});
       var validIds = sa.BACKGROUND_IDS;
       if (args.background && validIds.indexOf(args.background) === -1) {
-        return 'Rejected: "' + args.background + '" is not a real background id. Valid ids are: ' + validIds.join(', ') + '. Call again with a real one, or omit background.';
+        return JSON.stringify({ok:false,reason:'invalid_background',valid_ids:validIds});
       }
       var r = await sa.push(hamUid, args);
       // \u2b21B:core.tool_loop:FIX:tool_result_names_what_rendered_20260710\u2b21 founder gate
@@ -402,10 +829,10 @@ async function executeTool(name, args, hamUid, origMessage) {
         if (!gotEmail && Array.isArray(args.cards) && args.cards.length && String(JSON.stringify(args.cards)).toLowerCase().indexOf('subject') !== -1 && !wantedEmail) {
           note = ' NOTE: an email draft only renders as a draft when placed in the card email field (to, subject, body); plain items or text will not render as a typing draft. Call again with the email field if you meant a draft.';
         }
-        return 'Screen updated. Applied: ' + kinds + '.' + note;
+        return JSON.stringify({ok:true,pushed:r.pushed,applied:r.applied || [],note:note || null});
       }
-      return 'Nothing was applied -- every field was either invalid or missing. Do NOT tell the person something is on their screen.';
-    } catch (eUpd) { return 'Screen update failed: ' + eUpd.message; }
+      return JSON.stringify({ok:false,reason:'nothing_applied'});
+    } catch (eUpd) { return JSON.stringify({ok:false,reason:eUpd.message}); }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
@@ -419,13 +846,34 @@ async function executeTool(name, args, hamUid, origMessage) {
       return 'NASH: nothing surfaced right now.';
     } catch (e) { return 'NASH: failed -- ' + e.message; }
   }
+  if (name === 'find_identity_evidence') {
+    var boundIdentityHam = String(hamUid || '').toUpperCase();
+    var requestedIdentityHam = String(args && args.ham_uid || boundIdentityHam).toUpperCase();
+    if (!boundIdentityHam) return JSON.stringify({ ok:false, available:false,
+      reason:'ham_uid_required' });
+    if (requestedIdentityHam !== boundIdentityHam) {
+      return JSON.stringify({ ok:false, available:false, reason:'ham_uid_mismatch',
+        bound_ham_uid:boundIdentityHam });
+    }
+    return JSON.stringify(await findIdentityEvidence(boundIdentityHam,
+      args.question || origMessage));
+  }
   if (name === 'find_in_brain') {
     var q={limit:args.limit||10};
     if (args.stamp_type) q.stamp_type=args.stamp_type;
     if (args.source_prefix) q.source_prefix=args.source_prefix;
     if (args.agent_global) q.agent_global=args.agent_global;
     if (args.order) q.order=args.order;
-    q.ham_uid=args.ham_uid||hamUid;
+    var _boundFindHam = String(hamUid || '').toUpperCase();
+    var _requestedFindHam = String(args.ham_uid || _boundFindHam).toUpperCase();
+    var _unknownInboxRead = String(args.stamp_type || '').toUpperCase() ===
+      'UNRESOLVED_INBOUND' && _requestedFindHam === 'UNKNOWN';
+    if (!_boundFindHam) return JSON.stringify({ok:false,reason:'ham_uid_required'});
+    if (_requestedFindHam !== _boundFindHam && !_unknownInboxRead) {
+      return JSON.stringify({ok:false,reason:'ham_uid_mismatch',
+        bound_ham_uid:_boundFindHam});
+    }
+    q.ham_uid=_unknownInboxRead ? 'unknown' : _boundFindHam;
     var res=await find([q]);
     // ⬡B:core.tool_loop:FIX:model_reliability_not_the_query_mechanics:20260708⬡
     // Real, live incident, confirmed by direct testing: the underlying query
@@ -542,11 +990,16 @@ async function executeTool(name, args, hamUid, origMessage) {
       acl_stamp:'\u2b21B:pai.tool:RESULT:tool_write:20260630\u2b21',
       summary:args.summary,content:args.content,importance:args.importance||7};
     try {
-      await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
+      var beadWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
         headers:{apikey: _bk(),Authorization:'Bearer ' + _bk(),'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
+          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=representation'},
         body:JSON.stringify(bead)});
-      return JSON.stringify({ok:true});
+      var beadRows = beadWrite.ok ? await beadWrite.json().catch(function(){return null;}) : null;
+      if (!beadWrite.ok || !Array.isArray(beadRows) || !beadRows[0] ||
+          beadRows[0].source !== bead.source) {
+        return JSON.stringify({ok:false,reason:'brain_write_unverified'});
+      }
+      return JSON.stringify({ok:true,id:beadRows[0].id,source:bead.source});
     }catch(e){return JSON.stringify({ok:false,error:e.message});}
   }
   if (name === 'get_budget_upcoming') {
@@ -592,7 +1045,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // checkable signal, not a guess: real related beads already in the
     // brain about this HAM. Below threshold, she names what's missing
     // instead of guessing or refusing outright.
-    var BUc=process.env.AIBE_BRAIN_URL, BKc=process.env.AIBE_BRAIN_KEY;
+    var BUc=_bu(), BKc=_bk();
     var cHam = args.ham_uid || hamUid;
     var desc = String(args.capability_description||'').slice(0,200);
     if (!BUc||!BKc) return JSON.stringify({ok:false,built:false,reason:'no_brain'});
@@ -613,18 +1066,24 @@ async function executeTool(name, args, hamUid, origMessage) {
       // command. Real lineage and a real budget on every one from now on.
       var spawnGuard = require('../core/spawnGuard.js');
       var taskName = 'span.task.agent_birth_'+cHam.toLowerCase()+'_'+Date.now();
-      var lineage = { spawner: 'request_new_capability', parent: _cycleId || 'unknown' };
+      var lineage = { spawner: 'request_new_capability',
+        parent: runtime && runtime.parentCycleId || 'unknown' };
       var budget = { maxIterations: 20, maxLlmCalls: 10 };
       try { spawnGuard.validateTask({ lineage: lineage, budget: budget }); } catch (eGuard) { return JSON.stringify({ok:false,built:false,reason:'spawn_guard_rejected',error:eGuard.message}); }
-      await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
+      var taskWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
         headers:{apikey:BKc,Authorization:'Bearer '+BKc,'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
+          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=representation'},
         body:JSON.stringify({ham_uid:cHam,agent_global:'PAI',stamp_type:'TASK',
           source:taskName,
           acl_stamp:'\u2b21B:pai.agentbirth:TASK:proposed:'+ymd()+'\u2b21',
           summary:'[FOR PAI -- agent birth, '+relatedCount+' related real beads found] '+desc,
           content:JSON.stringify({requestedBy:cHam,description:desc,relatedBeadCount:relatedCount,lineage:lineage,budget:budget}),
           importance:6})});
+      var taskRows = taskWrite.ok ? await taskWrite.json().catch(function(){return null;}) : null;
+      if (!taskWrite.ok || !Array.isArray(taskRows) || !taskRows[0] ||
+          taskRows[0].source !== taskName) {
+        return JSON.stringify({ok:false,built:false,reason:'capability_task_write_unverified'});
+      }
       return JSON.stringify({ok:true,built:true,relatedBeadCount:relatedCount,message:'Enough real history exists ('+relatedCount+' related things already known). Filed to build this for real.'});
     } else {
       return JSON.stringify({ok:true,built:false,relatedBeadCount:relatedCount,
@@ -638,7 +1097,7 @@ async function executeTool(name, args, hamUid, origMessage) {
     // running) checks REMINDER beads for due ones and fires them for real
     // through POST /reach/out, the same real compose-and-send path already
     // wired for her to reach Brandon on her own.
-    var BUr=process.env.AIBE_BRAIN_URL, BKr=process.env.AIBE_BRAIN_KEY;
+    var BUr=_bu(), BKr=_bk();
     if (!BUr||!BKr) return JSON.stringify({ok:false,reason:'no_brain'});
     var rHam = args.ham_uid || hamUid;
     // \u2b21B:core.tool.loop:FIX:reminder_hallucinated_past_date:20260711\u2b21
@@ -670,7 +1129,8 @@ async function executeTool(name, args, hamUid, origMessage) {
         var _dq = await fetch(_bu() + '/rest/v1/' + _tbl() + '?stamp_type=eq.REMINDER&ham_uid=eq.' + encodeURIComponent(rHam)
           + '&summary=ilike.' + encodeURIComponent('%' + _rt.slice(0, 40) + '%') + '&order=created_at.desc&limit=15',
           { headers: { apikey: BKr, Authorization: 'Bearer ' + BKr, 'Accept-Profile': _schema() } });
-        var _ex = _dq.ok ? await _dq.json() : [];
+        if (!_dq.ok) return JSON.stringify({ok:false,reason:'reminder_dedup_unverified'});
+        var _ex = await _dq.json();
         var _dup = (Array.isArray(_ex) ? _ex : []).find(function (b) {
           try { var c = JSON.parse(b.content || '{}'); return !c.fired && String(c.text || '').trim().toLowerCase().slice(0, 100) === _rt; } catch (e) { return false; }
         });
@@ -678,17 +1138,24 @@ async function executeTool(name, args, hamUid, origMessage) {
           return JSON.stringify({ ok: true, duplicate: true, text: args.text, note: 'a reminder with this text is already pending; not creating a duplicate' });
         }
       }
-    } catch (eDup) { /* dedup is best-effort and must never block a legitimate new reminder */ }
+    } catch (eDup) { return JSON.stringify({ok:false,reason:'reminder_dedup_unverified'}); }
     try {
-      await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
+      var reminderSource = 'pai.reminder.'+rHam+'.'+Date.now();
+      var reminderWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
         headers:{apikey:BKr,Authorization:'Bearer '+BKr,'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
+          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=representation'},
         body:JSON.stringify({ham_uid:rHam,agent_global:'PAI',stamp_type:'REMINDER',
-          source:'pai.reminder.'+rHam+'.'+Date.now(),
+          source:reminderSource,
           acl_stamp:'\u2b21B:pai.reminder:REMINDER:created:'+ymd()+'\u2b21',
           summary:'[REMINDER] '+String(args.text||'').slice(0,100),
           content:JSON.stringify({text:args.text,due_at:dueAt,fired:false,defaultedDate:!isValidFuture,createdAt:new Date().toISOString()}),
           importance:6})});
+      var reminderRows = reminderWrite.ok
+        ? await reminderWrite.json().catch(function(){return null;}) : null;
+      if (!reminderWrite.ok || !Array.isArray(reminderRows) || !reminderRows[0] ||
+          reminderRows[0].source !== reminderSource) {
+        return JSON.stringify({ok:false,reason:'reminder_write_unverified'});
+      }
       return JSON.stringify({ok:true,text:args.text,due_at:dueAt,note:isValidFuture?undefined:'no real date was given, defaulted to tomorrow 9am'});
     } catch(e){return JSON.stringify({ok:false,error:e.message});}
   }
@@ -790,14 +1257,36 @@ async function executeTool(name, args, hamUid, origMessage) {
       var _hit2 = await _ct2.resolveContact(_csHam, args.contact_query || '');
       if (!_hit2 || typeof _hit2 !== 'object') return JSON.stringify({ ok: true, sent: false, reason: 'no_saved_contact', note: 'do not invent a number or email' });
       if (!_hit2.phone) return JSON.stringify({ ok: true, sent: false, reason: 'contact_has_no_phone', contact: _hit2 });
-      var _bu3 = process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL;
-      var _bk3 = process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY;
-      var _wh3 = { apikey: _bk3, Authorization: 'Bearer ' + _bk3, 'Content-Profile': 'abacia_core', 'Content-Type': 'application/json', Prefer: 'return=minimal' };
+      var _bu3 = _bu();
+      var _bk3 = _bk();
+      if (!_bu3 || !_bk3) return JSON.stringify({ok:false,reason:'no_brain'});
+      var _wh3 = { apikey: _bk3, Authorization: 'Bearer ' + _bk3,
+        'Accept-Profile':_schema(), 'Content-Profile':_schema(),
+        'Content-Type': 'application/json', Prefer: 'return=representation' };
       var _ymd3 = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       if (args.authorized_in_message === true) {
+        var _sendCouncil = runtime && runtime.councilResult;
+        var _exactContactMessage = String(args.message || '').slice(0, 1500);
+        var _resolvedAtCouncil = canonicalizeDeliveryTarget({ kind:'phone',
+          value:args._resolved_contact_phone || '' });
+        var _resolvedAtCommit = canonicalizeDeliveryTarget({ kind:'phone', value:_hit2.phone });
+        if (!_resolvedAtCouncil || !_resolvedAtCommit ||
+            JSON.stringify(_resolvedAtCouncil) !== JSON.stringify(_resolvedAtCommit)) {
+          return JSON.stringify({ok:false,sent:false,reason:'contact_target_changed_after_council'});
+        }
+        var _sendVerified = requireVerifiedCouncilDelivery(_sendCouncil,
+          { kind:'phone', value:_hit2.phone }, _exactContactMessage);
+        var _sendProof = _sendVerified && _sendVerified.ok ? compactCouncilProof(_sendCouncil) : null;
+        if (!_sendVerified || !_sendVerified.ok || !_sendProof || _sendProof.committed !== true) {
+          return JSON.stringify({ok:false,sent:false,reason:'contact_send_council_result_required'});
+        }
         var _tap = require('./wren/reply.js').tapSend;
-        var _sendRes = await _tap(_hit2.phone, String(args.message || '').slice(0, 1500));
-        try { await fetch(_bu3 + '/rest/v1/aibe_brain', { method: 'POST', headers: _wh3, body: JSON.stringify({
+        var _sendRes = await _tap(_hit2.phone, _exactContactMessage, _csHam, _sendCouncil);
+        if (!_sendRes || _sendRes.ok !== true) {
+          return JSON.stringify({ok:false,sent:false,
+            reason:_sendRes&&_sendRes.reason || 'contact_provider_unverified'});
+        }
+        try { await fetch(_bu3 + '/rest/v1/' + _tbl(), { method: 'POST', headers: _wh3, body: JSON.stringify({
           ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'OUTBOUND_THIRD_PARTY',
           acl_stamp: '\u2b21B:core.tool.loop:OUTBOUND_THIRD_PARTY:sent:' + _ymd3 + '\u2b21',
           source: 'contact.send.' + Date.now(), summary: '[SENT to ' + (_hit2.name || 'contact') + '] ' + String(args.message || '').slice(0, 100),
@@ -806,12 +1295,23 @@ async function executeTool(name, args, hamUid, origMessage) {
         return JSON.stringify({ ok: true, sent: true, to: _hit2.name, result: _sendRes });
       }
       // NOT authorized in-message: draft only, never send. Hard pause per doctrine.
-      try { await fetch(_bu3 + '/rest/v1/aibe_brain', { method: 'POST', headers: _wh3, body: JSON.stringify({
+      try {
+        var _draftSource = 'contact.draft.' + Date.now();
+        var _draftWrite = await fetch(_bu3 + '/rest/v1/' + _tbl(), { method: 'POST', headers: _wh3, body: JSON.stringify({
         ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'PENDING_SEND',
         acl_stamp: '\u2b21B:core.tool.loop:PENDING_SEND:drafted:' + _ymd3 + '\u2b21',
-        source: 'contact.draft.' + Date.now(), summary: '[DRAFT for ' + (_hit2.name || 'contact') + ', AWAITING CONFIRM] ' + String(args.message || '').slice(0, 100),
+        source: _draftSource, summary: '[DRAFT for ' + (_hit2.name || 'contact') + ', AWAITING CONFIRM] ' + String(args.message || '').slice(0, 100),
         content: JSON.stringify({ contact: _hit2.name, phone: _hit2.phone, message: args.message }), importance: 6
-      }) }); } catch (eStamp2) {}
+        }) });
+        var _draftRows = _draftWrite.ok
+          ? await _draftWrite.json().catch(function(){return null;}) : null;
+        if (!_draftWrite.ok || !Array.isArray(_draftRows) || !_draftRows[0] ||
+            _draftRows[0].source !== _draftSource) {
+          return JSON.stringify({ok:false,sent:false,reason:'contact_draft_write_unverified'});
+        }
+      } catch (eStamp2) {
+        return JSON.stringify({ok:false,sent:false,reason:'contact_draft_write_unverified'});
+      }
       return JSON.stringify({ ok: true, sent: false, drafted: true, to: _hit2.name, note: 'not sent -- the HAM did not explicitly authorize this exact send; confirm before sending' });
     } catch (eCs) { return JSON.stringify({ ok: false, error: eCs.message }); }
   }
@@ -838,8 +1338,10 @@ async function executeTool(name, args, hamUid, origMessage) {
     try {
       var _slB = require('./schedule/schedule.logic.js');
       var _bHam = args.ham_uid || hamUid;
-      if (!_bHam || !args.title || !args.start) return JSON.stringify({ok:false,reason:'need ham_uid, title, and start'});
-      var _bres = await _slB.bookEvent(_bHam, { title:args.title, start:args.start, end:args.end, description:args.description });
+      if (!_bHam || !args.title || !args.start || !args.end) return JSON.stringify({ok:false,reason:'need ham_uid, title, start, and end'});
+      var _bres = await _slB.bookEvent(_bHam, { title:args.title,
+        start:args.start, end:args.end, description:args.description,
+        bookingAuthorization:args._bookingAuthorization });
       return JSON.stringify(_bres);
     } catch(eBk){ return JSON.stringify({ok:false,error:eBk.message}); }
   }
@@ -851,7 +1353,19 @@ async function executeTool(name, args, hamUid, origMessage) {
     try {
       var _sw = require('./session.wonder.js');
       var _swHam = args.ham_uid || hamUid;
-      var _swRes = await _sw.proposeSession(_swHam, { autobook: args.autobook === true });
+      var _swParentRequest = runtime && runtime.parentRequestId;
+      var _swRequestId = _swParentRequest
+        ? String(_swParentRequest).slice(0, 140) + '.session' : undefined;
+      var _swRes = await _sw.proposeSession(_swHam, {
+        autobook: args.autobook === true,
+        requestId: _swRequestId,
+        userMessage: runtime && runtime.userMessage || origMessage,
+        send: false
+      });
+      if (args.autobook === true && (!_swRes || !_swRes.booked || _swRes.booked.ok !== true)) {
+        return JSON.stringify({ok:false,reason:'session_autobook_not_confirmed',
+          detail:_swRes && _swRes.reason || null});
+      }
       return JSON.stringify(_swRes);
     } catch(eSw){ return JSON.stringify({ok:false,error:eSw.message}); }
   }
@@ -883,8 +1397,13 @@ async function executeTool(name, args, hamUid, origMessage) {
   if (name === 'trigger_deploy') {
     return JSON.stringify(await triggerDeploy(args.service_id));
   }
+  if (name === 'activate_roadmap_task') {
+    var activationSpec = Object.assign({}, args || {}, { ham_uid: hamUid });
+    return JSON.stringify(await require('./roadmap.activation.js').activate(activationSpec));
+  }
   if (name === 'notify_ham') {
-    return JSON.stringify(await notifyHam(args.ham_uid, args.message));
+    return JSON.stringify(await notifyHam(args.ham_uid, args.message,
+      runtime && runtime.councilResult, args._resolved_notify_phone));
   }
   return JSON.stringify({ok:false,error:'unknown:'+name});
 }
@@ -931,6 +1450,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // idea. Real-time step stamps as the cycle actually runs, not just the
   // finished result, read by GET /command-center/live/:hamUid below.
   var _cycleId = hamUid + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
+  var _requestIdCandidate = identity && (identity.request_id || identity.requestId);
+  var _requestId = typeof _requestIdCandidate === 'string'
+    && /^[A-Za-z0-9._:-]{8,160}$/.test(_requestIdCandidate.trim())
+    ? _requestIdCandidate.trim() : _cycleId + '.request';
   var _BU=_bu(), _BK=_bk();
   function _stampStep(step, detail) {
     if (!_BU || !_BK) return;
@@ -961,16 +1484,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _fcwT0=Date.now();
   var fcw=await buildMemoryBank(hamUid,channel,message,identity).catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
-  var systemPrompt, hamObj;
-  if (fcw && fcw.ok) {
-    systemPrompt = fcw.system_prompt;
-    hamObj = fcw.ham;
-  } else {
-    systemPrompt = 'You are A\u2019NU, a warm and direct life assistant. You speak as a trusted friend. '
-      + 'You never use em dashes. You never use hollow AI phrases. Say it how you would say it out loud. '
-      + 'Answer the user directly and helpfully.';
-    hamObj = { uid: hamUid, name: (identity && identity.name) || 'friend', tier: (identity && identity.trust_level) || 0 }; // gate envelope survives Memory Bank build failure
-    global._paiLastError = 'fcw_fallback:' + ((fcw&&fcw.reason)||'unknown');
+  // ⬡B:core.tool.loop:GUARD:memory_wall_required_before_deliberation:20260715⬡
+  // A generic assistant prompt is not a PAI cycle. If the Memory Bank wall does
+  // not build, no deliberation, council receipt, or human answer may be produced.
+  if (!fcw || fcw.ok !== true || typeof fcw.system_prompt !== 'string' || !fcw.system_prompt) {
+    global._paiLastError = 'memory_bank_build_failed:' + ((fcw&&fcw.reason)||'unknown');
     // \u2b21B:core.tool.loop:WIRE:needs_clair_before_founder:20260710\u2b21
     // Life Assistant pt6 law: when she lacks context, her FIRST move is to reach the
     // command center (CLAIR), not the founder. This stamps a NEEDS_CLAIR gap the
@@ -995,18 +1513,88 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         }).catch(function(){});
       }
     } catch (eNC) {}
-    var BU=process.env.AIBE_BRAIN_URL,BK=process.env.AIBE_BRAIN_KEY;
-    if (_bu() && _bk()) {
-      fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-        headers:{apikey: _bk(),Authorization:'Bearer ' + _bk(),'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-        body:JSON.stringify({ham_uid:hamUid,agent_global:'PAI',stamp_type:'LOGFUL',
-          source:'pai.fcw_fallback.'+hamUid+'.'+Date.now(),
-          acl_stamp:'\u2b21B:pai.fcw:LOGFUL:fallback_fired:20260630\u2b21',
-          summary:'Memory Bank fallback fired -- brain unreachable or slow, ran on minimal generic prompt instead of real personalized context',
-          content:JSON.stringify({reason:(fcw&&fcw.reason)||'unknown',channel:channel}),importance:6})
-      }).catch(function(){});
-    }
+    return {ok:false,reason:'memory_bank_build_failed',detail:(fcw&&fcw.reason)||'unknown',
+      ham:{uid:hamUid},cycleId:_cycleId,requestId:_requestId,tools_used:[],iterations:0,
+      fcw_build_ms:_fcwBuildMs,fcw_contributors:null,
+      fcw_contributors_resolved:0,fcw_contributors_total:0};
+  }
+  var systemPrompt = fcw.system_prompt;
+  var hamObj = fcw.ham;
+  // ⬡B:core.tool_loop:GUARD:one_exact_question_for_provenance_and_council:20260715⬡
+  // Identity metadata is canonical when present. Otherwise the first trusted
+  // server builder marker separates the BCW from the exact user request. Every
+  // provenance, CODA, SHADOW, and council check consumes these same bytes.
+  var _exactUserMessage = String(identity &&
+    (identity.user_message || identity.userMessage) || '');
+  if (!_exactUserMessage) {
+    var _exactBuilderMarker = String(message || '').indexOf('=== BUILDER MESSAGE ===');
+    _exactUserMessage = _exactBuilderMarker >= 0
+      ? String(message || '').slice(
+        _exactBuilderMarker + '=== BUILDER MESSAGE ==='.length).trim()
+      : String(message || '');
+  }
+  // ⬡B:core.tool_loop:GROUND:current_turn_proof_before_draft:20260715⬡
+  // Drafting necessarily precedes council commit and STAMP readback. Ground only
+  // proof-shaped current-turn asks in the transactional release invariant so the
+  // model never mistakes its pre-commit vantage point for a failed cycle.
+  var _proofQuestion = _exactUserMessage;
+  systemPrompt += currentTurnProofGuard.systemInstruction(_proofQuestion);
+  var _currentPreferenceQuestion = currentAssistantPreferenceRequest(_exactUserMessage);
+  if (_currentPreferenceQuestion) {
+    // ⬡B:core.tool_loop:WIRE:fresh_preference_inside_full_pai:20260715⬡
+    // A current preference is a live A'NU judgment, not a fabricated memory.
+    // The candidate and reasons must come from this turn's verified evidence;
+    // the answer must label whether the choice is fresh or already stored.
+    systemPrompt += '\nCURRENT SELF-PREFERENCE: The person is asking you to choose now, not merely recall a past choice. If no matching stored preference exists, form a present judgment from verified information about the named options. Explicitly say that it is your fresh/current judgment rather than a stored preference. Do not invent option traits, history, or a prior favorite.';
+  }
+  // ⬡B:core.tool_loop:EVIDENCE:named_bcw_focus_before_deliberation:20260715⬡
+  // A live coding turn proved that merely placing THE FLOOR inside a long BCW
+  // does not guarantee model attention. Select only the server-built sections
+  // named by the exact builder question and repeat that evidence at system
+  // priority. The extractor is shared with SHADOW, which independently checks
+  // the outgoing draft; no answer or doctrine wording is invented here.
+  var _namedEvidenceQuestion = _exactUserMessage;
+  var _namedContextEvidence = extractNamedContextEvidence(_namedEvidenceQuestion, message);
+  var _identityEvidenceEnvelope = fcw && fcw.identity_evidence;
+  var _identityEvidenceProof = identityProvenance.createEvidenceProof(
+    _identityEvidenceEnvelope, hamUid);
+  var _identityProvenanceLedger = identityProvenance.buildLedger({
+    question:_namedEvidenceQuestion,
+    hamUid:hamUid,
+    storedRecords:_identityEvidenceEnvelope && _identityEvidenceEnvelope.records || [],
+    evidenceAvailable:!!(_identityEvidenceEnvelope &&
+      _identityEvidenceEnvelope.ok === true && _identityEvidenceEnvelope.available === true),
+    unavailableReason:_identityEvidenceEnvelope &&
+      (_identityEvidenceEnvelope.reason || _identityEvidenceEnvelope.error),
+    evidenceReceipt:_identityEvidenceProof.ok ? _identityEvidenceProof.receipt : null,
+    receiptVerified:_identityEvidenceProof.ok === true
+  });
+  // ⬡B:core.tool.loop:GUARD:provenance_unavailable_never_stamps:20260715⬡
+  if (_identityProvenanceLedger.required &&
+      (_identityProvenanceLedger.available !== true ||
+       _identityProvenanceLedger.receipt_verified !== true)) {
+    return { ok:false, reason:_identityProvenanceLedger.available !== true
+        ? 'identity_evidence_unavailable' : 'identity_evidence_receipt_unverified',
+      ham:hamObj, cycleId:_cycleId, requestId:_requestId,
+      tools_used:[], iterations:0, ms:Date.now()-t0 };
+  }
+  var _identityProvenanceRefocus = '';
+  if (_identityProvenanceLedger.required) {
+    _identityProvenanceRefocus = '\n\nIDENTITY PROVENANCE LEDGER (bounded exact-HAM evidence):\n' +
+      JSON.stringify(_identityProvenanceLedger) +
+      '\nAnswer directly, subject by subject, under exactly STORED MEMORY: and BOUND ROLE CONTEXT:. ' +
+      'A stored activity row proves activity only. A stored self-description is a role claim, not literal identity. ' +
+      'A role bound in the current request is current context, not stored memory. Do not use the six-section coding relay recital.';
+    systemPrompt += _identityProvenanceRefocus;
+  }
+  var _namedContextRefocus = '';
+  var _namedEvidenceRefocusedAfterFind = false;
+  var _identityEvidenceRefocusedAfterFind = false;
+  if (_namedContextEvidence.length) {
+    _namedContextRefocus = '\n\nNAMED CONTEXT EVIDENCE (selected deterministically from the bound BCW; use it for this named question):\n' +
+      _namedContextEvidence.map(function (evidence) { return evidence.text; }).join('\n\n') +
+      '\nDo not claim this named evidence is absent. Answer from it, and state its limits if it does not cover some part of the question.';
+    systemPrompt += _namedContextRefocus;
   }
   // ⬡B:core.tool.loop:FIX:thread_real_prior_turns:20260704⬡
   // Founder-reported live incident: on voice specifically, the assistant reads
@@ -1057,35 +1645,27 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (_nashNeeded) {
     msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
   }
-  // ⬡B:tool.loop:FIX:wondergames_synthetic_toolresult_20260714⬡
-  // Founder-confirmed live: even with the real Wonder Games record cold-loaded into
-  // the system prompt (verified via /debug/fcw), the model still sometimes answered
-  // 'I do not have information' -- because this codebase's own prior, proven finding
-  // (context.fusion, 20260710) is that passive system-prompt text is not reliably
-  // attended to; only TOOL RESULTS are. Mechanism, not phrasing, applied again: for a
-  // Wonder Games/cook-off question, inject a SYNTHETIC completed find_in_brain
-  // tool-call-and-result pair into the message history before the model's first turn,
-  // so the real record arrives via the one channel demonstrated to be reliable, and
-  // the model never has to decide whether to call the tool or trust the wall.
-  var _wgNeeded = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(message);
-  if (_wgNeeded) {
-    try {
-      var _wgSynthRes = await find([
-        { stamp_type: 'WONDER_GAMES', ham_uid: hamUid, limit: 5 },
-        { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: 3 }
-      ]);
-      if (_wgSynthRes && _wgSynthRes.beads && _wgSynthRes.beads.length) {
-        var _wgCallId = 'wg_preload_' + Date.now();
-        msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: _wgCallId, type: 'function',
-          function: { name: 'find_in_brain', arguments: JSON.stringify({ stamp_type: 'WONDER_GAMES' }) } }] });
-        msgs.push({ role: 'tool', tool_call_id: _wgCallId, content: JSON.stringify(_wgSynthRes) });
-        // (tools_used tracking for this synthetic call happens naturally once the
-        // real loop's `tools` array is declared below; not referenced here to avoid
-        // a use-before-declaration error since `tools` is declared after this point.)
-      }
-    } catch (eWgSynth) {}
-  }
+  var _verifiedToolEvidence = [];
+  var _identityVerifiedEvidence = [];
+  var _namedAgentVerifiedEvidence = [];
   msgs.push({role:'user',content:message});
+  var _identityLookupCount = injectIdentityProvenanceEvidence(
+    msgs, _identityVerifiedEvidence, fcw, hamUid, _namedEvidenceQuestion,
+    _identityEvidenceProof);
+  if (_identityLookupCount > 0) {
+    msgs.push({role:'system',content:'The completed identity provenance result above is an exact-HAM bounded read. Preserve each evidence_kind: stored_definition may define; stored_role_claim reports a past self-description without making it literal identity; stored_activity proves only activity. Do not say retrieval did not occur.'});
+  }
+  // The user message must precede its synthetic assistant tool call. These rows
+  // were already read by FCW; this is an attention-channel bridge, not a query.
+  var _namedLookupCount = _identityLookupCount > 0 ? 0 : injectNamedAgentEvidence(
+    msgs, _namedAgentVerifiedEvidence, fcw, hamUid);
+  if (_namedLookupCount > 0) {
+    // ⬡B:core.tool_loop:EVIDENCE:named_lookup_provenance_is_explicit:20260715⬡
+    // A completed exact-HAM lookup may return an operational row that proves
+    // existence but not identity. Tell synthesis both truths: the lookup ran,
+    // and the row must not be stretched beyond what its fields establish.
+    msgs.push({role:'system',content:'An exact-HAM Memory Bank lookup was completed for the named uppercase agents and its real result is visible above. Do not claim that no memory lookup or retrieval occurred. Separately state whether each returned row actually establishes the requested identity or role; an operational row such as a backup, receipt, or activity record proves only what it says.'});
+  }
   // ⬡B:tool.loop:FIX:wondergames_synthetic_toolresult_20260714⬡
   // Founder-confirmed live: even with the real Wonder Games record cold-loaded into
   // the system prompt (verified via /debug/fcw), the model still sometimes answered
@@ -1106,14 +1686,150 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: 3 }
       ]);
       if (_wgSynthRes && _wgSynthRes.beads && _wgSynthRes.beads.length) {
+        var _wgResult = JSON.stringify(_wgSynthRes).slice(0,4000);
+        _verifiedToolEvidence.push({ tool:'find_in_brain',
+          provenance:'memory_bank.exact_ham',
+          args:JSON.stringify({ stamp_type:'WONDER_GAMES', ham_uid:hamUid }),
+          result:_wgResult });
         var _wgCallId = 'wg_preload_' + Date.now();
         msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: _wgCallId, type: 'function',
           function: { name: 'find_in_brain', arguments: JSON.stringify({ stamp_type: 'WONDER_GAMES' }) } }] });
-        msgs.push({ role: 'tool', tool_call_id: _wgCallId, content: JSON.stringify(_wgSynthRes) });
+        msgs.push({ role: 'tool', tool_call_id: _wgCallId, content: _wgResult });
       }
     } catch (eWgSynth) {}
   }
-  var iter=0,tools=[],ans=null;
+  // ⬡B:tool.loop:FIX:preferences_synthetic_toolresult_20260714⬡
+  // Same proven mechanism as Wonder Games above, applied to the earlier PREFERENCE
+  // cold-load (20260711), which suffered the identical reliability gap: a real
+  // PREFERENCE bead exists and is cold-loaded into the system prompt, but the model
+  // still sometimes says it has no record (surfaced live once the FCW schema mismatch
+  // fix made aibebase genuinely read the new bank). Same fix: inject a synthetic
+  // completed find_in_brain(PREFERENCE) result after the user's message.
+  var _prefNeeded = /\bfavou?rite\b|\bprefer(ence|red)?\b|what do i (like|love|enjoy)\b|\bmy taste\b/i.test(message);
+  if (_prefNeeded) {
+    try {
+      var _prefSynthRes = await find([{ stamp_type: 'PREFERENCE', ham_uid: hamUid, limit: 5 }]);
+      if (_prefSynthRes && _prefSynthRes.beads && _prefSynthRes.beads.length) {
+        var _prefResult = JSON.stringify(_prefSynthRes).slice(0,4000);
+        _verifiedToolEvidence.push({ tool:'find_in_brain',
+          provenance:'memory_bank.exact_ham',
+          args:JSON.stringify({ stamp_type:'PREFERENCE', ham_uid:hamUid }),
+          result:_prefResult });
+        var _prefCallId = 'pref_preload_' + Date.now();
+        msgs.push({ role: 'assistant', content: null, tool_calls: [{ id: _prefCallId, type: 'function',
+          function: { name: 'find_in_brain', arguments: JSON.stringify({ stamp_type: 'PREFERENCE' }) } }] });
+        msgs.push({ role: 'tool', tool_call_id: _prefCallId, content: _prefResult });
+      }
+    } catch (ePrefSynth) {}
+  }
+  var _codaLeadNeeded = !!(identity && identity.council_context
+    && identity.council_context.mode === 'coding');
+  var _codaEvidenceRelayAnswer = '';
+  var _codaDirectNamedEvidenceAnswer = '';
+  var _codaProvenanceAnswer = '';
+  var _codaRepositoryAnswer = '';
+  var _codaIdentityReceiptVerified = false;
+  var _codaActivationDecision = null;
+  var _codaDecisionSource = null;
+  if (_codaLeadNeeded) {
+    var _codaCallId = 'coda_preload_' + Date.now();
+    var _codaQuestion = _exactUserMessage;
+    var _codaResult = await executeTool('consult_coda', { ham_uid:hamUid, question:_codaQuestion,
+      _identity_evidence:fcw.identity_evidence,
+      _identity_evidence_result:_identityEvidenceProof.result,
+      _identity_evidence_receipt:_identityEvidenceProof.receipt }, hamUid, _codaQuestion);
+    var _codaFailureReason = failedCodaReason(_codaResult);
+    if (_codaFailureReason) {
+      return { ok:false, reason:_codaFailureReason, blocked_by:'CODA',
+        ham:hamObj, cycleId:_cycleId, requestId:_requestId,
+        tools_used:['consult_coda'], iterations:0, ms:Date.now()-t0 };
+    }
+    try {
+      var _codaParsed = JSON.parse(_codaResult);
+      _codaIdentityReceiptVerified = !!(_codaParsed &&
+        identityProvenance.sameEvidenceReceipt(
+          _codaParsed.identityEvidenceReceipt,
+          _identityEvidenceProof.receipt));
+      if (_codaParsed && _codaParsed.ok === true && _codaParsed.provenanceVerified === true &&
+          _codaIdentityReceiptVerified &&
+          typeof _codaParsed.answer === 'string' && _codaParsed.answer.trim()) {
+        _codaProvenanceAnswer = _codaParsed.answer.trim().slice(0, 5000);
+      }
+      if (_codaParsed && _codaParsed.ok === true &&
+          (_codaParsed.activationDecision === 'APPROVE' || _codaParsed.activationDecision === 'HOLD')) {
+        _codaActivationDecision = _codaParsed.activationDecision;
+        _codaDecisionSource = typeof _codaParsed.decisionSource === 'string'
+          ? _codaParsed.decisionSource : null;
+      }
+      if (_codaParsed && _codaParsed.ok === true &&
+          _codaParsed.relayContractVerified === true &&
+          codingRelay.exactContract(_codaParsed.relay) &&
+          _codaParsed.evidence && _codaParsed.evidence.repository === true &&
+          typeof _codaParsed.answer === 'string' && _codaParsed.answer.trim()) {
+        _codaRepositoryAnswer = _codaParsed.answer.trim().slice(0, 5000);
+      }
+      if (_codaParsed && _codaParsed.ok === true && _codaParsed.evidenceRelay === true &&
+          _codaParsed.relayContractVerified === true &&
+          codingRelay.exactContract(_codaParsed.relay) &&
+          typeof _codaParsed.answer === 'string' && _codaParsed.answer.trim()) {
+        _codaEvidenceRelayAnswer = _codaParsed.answer.trim().slice(0, 5000);
+        if (_codaParsed.directNamedEvidence === true &&
+            _codaParsed.evidenceMode === 'direct_named_evidence' &&
+            _codaParsed.retried === false) {
+          _codaDirectNamedEvidenceAnswer = _codaEvidenceRelayAnswer;
+        }
+      }
+    } catch (eCodaEvidenceRelay) {}
+    if (_identityProvenanceLedger.required && !_codaIdentityReceiptVerified) {
+      return { ok:false, reason:'coda_identity_evidence_receipt_unverified',
+        ham:hamObj, cycleId:_cycleId, requestId:_requestId,
+        tools_used:['consult_coda'], iterations:0, ms:Date.now()-t0 };
+    }
+    _verifiedToolEvidence.push({ tool:'consult_coda',
+      provenance:'pai.current_turn.execute_tool', request_id:_requestId, cycle_id:_cycleId,
+      args:JSON.stringify({ ham_uid:hamUid, question:_codaQuestion }), result:_codaResult });
+    msgs.push({ role:'assistant', content:null, tool_calls:[{ id:_codaCallId, type:'function',
+      function:{ name:'consult_coda', arguments:JSON.stringify({ ham_uid:hamUid, question:_codaQuestion }) } }] });
+    msgs.push({ role:'tool', tool_call_id:_codaCallId, content:_codaResult });
+    msgs.push({role:'system',content:'CODA has already been consulted through the completed tool result above. Use her decision as the lead brief and speak only as the relay. Do not call CODA again, draft a competing roadmap, or claim evidence her result does not contain. If her result is a hold or failure, report that hold plainly.'});
+  }
+  // ⬡B:core.tool_loop:GUARD:outbound_finalize_read_only_tools:20260715⬡
+  // An autonomous reach finalizer may read evidence but may not send, write,
+  // deploy, book, or move a screen before its answer clears the council.
+  var _readOnlyToolNames = ['nash_sports','find_identity_evidence','find_in_brain','read_render_logs',
+    'get_budget_upcoming','get_budget_summary','consult_advisor','calendar_read',
+    'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda'];
+  var _turnToolDefinitions = identity && identity.outbound_finalize === true
+    ? TOOLS.filter(function (tool) {
+      return tool && tool.function && _readOnlyToolNames.indexOf(tool.function.name) >= 0;
+    }) : TOOLS;
+  var iter=0,tools=_codaLeadNeeded?['consult_coda']:[],ans=null;
+  var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{} };
+  _effectRuntime.activationDecisionRequired = false;
+  _effectRuntime.codaActivationApproved = _codaActivationDecision === 'APPROVE';
+  _effectRuntime.codaActivationDecision = _codaActivationDecision;
+  _effectRuntime.codaDecisionSource = _codaDecisionSource;
+  _effectRuntime.codaVerified = _codaLeadNeeded && _verifiedToolEvidence.some(function (proof) {
+    return proof && proof.tool === 'consult_coda';
+  });
+  // ⬡B:core.tool_loop:GUARD:explicit_roadmap_activation_is_a_real_tool_call:20260715⬡
+  // Founder live acceptance caught the model saying it would activate SPAN,
+  // then returning a ROADMAP source as though it were a TASK receipt. When a
+  // verified coding turn literally orders this named mutation, the first tool
+  // decision is structural, not optional prose. CODA has already run above;
+  // activation itself still waits behind the outbound council commit.
+  var _roadmapActivationNeeded = _effectRuntime.codaVerified === true
+    && /\bcall\s+activate_roadmap_task\b/i.test(String(_exactUserMessage || ''));
+  var _roadmapActivationEnvelope = parseRoadmapActivationSpec(_exactUserMessage);
+  _effectRuntime.activationDecisionRequired = !!_roadmapActivationEnvelope;
+  if (_roadmapActivationEnvelope && _roadmapActivationEnvelope.error) {
+    return { ok:false, reason:_roadmapActivationEnvelope.error, blocked_by:'SPAN_ACTIVATION',
+      ham:hamObj, cycleId:_cycleId, requestId:_requestId,
+      tools_used:tools, iterations:0, ms:Date.now()-t0 };
+  }
+  if (_roadmapActivationEnvelope && _effectRuntime.codaVerified === true) {
+    _roadmapActivationNeeded = _effectRuntime.codaActivationApproved === true;
+  }
   while (iter<MAX) {
     iter++;
     // ⬡B:core.tool.loop:FIX:strong_model_makes_the_tool_decision:20260704⬡
@@ -1158,7 +1874,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // This is a real improvement, not a guarantee -- instruction-following on
     // a growing system prompt stays worth watching, not a closed case.
     var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),temperature:0.3};
-    if (iter<=3) body.tools=TOOLS;
+    if (iter<=3) body.tools=_turnToolDefinitions;
     // ⬡B:core.tool_loop:FIX:tool_choice_never_set_defaults_to_skippable:20260705⬡
     // Real, live incident: Brandon asked directly "who is DC499D0C, show me
     // the original message" over text -- the single clearest possible
@@ -1221,7 +1937,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
-      if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
+      if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
+      else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
       else if (_isDayQ) body.tool_choice={type:'function',function:{name:'calendar_read'}};
       else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
     }
@@ -1241,6 +1958,18 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // failure or timeout falls straight through to the existing Groq call below --
     // this can degrade to current behavior, never below it.
     var r=null;
+    if (iter === 1 && _roadmapActivationEnvelope && _roadmapActivationEnvelope.spec &&
+        _effectRuntime.codaActivationApproved === true) {
+      // The outside coding relay supplied the exact typed command after asking
+      // CODA to lead. Do not ask a provider to translate those same bytes into
+      // a tool call it may omit. The mutation still queues in executeTool and
+      // cannot release until the full outbound council commits.
+      r = { choices:[{ message:{ role:'assistant', content:null, tool_calls:[{
+        id:'roadmap_activation_' + Date.now(), type:'function',
+        function:{ name:'activate_roadmap_task',
+          arguments:JSON.stringify(_roadmapActivationEnvelope.spec) }
+      }] } }] };
+    }
     if (process.env.TRY_ORNITH_CONVERSATIONAL === 'true' && !body.tools) {
       try {
         var ORN = process.env.ORNITH_URL, ORK = process.env.RUNPOD_API_KEY;
@@ -1268,7 +1997,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       if(TK){r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
         headers:{Authorization:'Bearer '+TK,'Content-Type':'application/json'},
         body:JSON.stringify({model:process.env.TOGETHER_MODEL||'Qwen/Qwen3.5-9B',
-          messages:msgs.map(function(m){return {role:m.role,content:m.content||''};}),
+          messages:openAiCompatibleHistory(msgs),
           max_tokens:tokenCapFor(channel),temperature:0.3})
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
@@ -1292,7 +2021,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       if(ORK){r=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
         headers:{Authorization:'Bearer '+ORK,'Content-Type':'application/json'},
         body:JSON.stringify({model:process.env.OPENROUTER_MODEL||'meta-llama/llama-3.3-70b-instruct',
-          messages:msgs.map(function(m){return {role:m.role,content:m.content||''};}),
+          messages:openAiCompatibleHistory(msgs),
           max_tokens:tokenCapFor(channel),temperature:0.3})
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
@@ -1391,8 +2120,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // hollow rule already enforced a few lines below for malformed tool-call
     // text; this is the same failure class arriving a different way.
     if (iter===1 && body.tool_choice && !(msg.tool_calls&&msg.tool_calls.length)) {
+      var _requiredToolName = body.tool_choice && body.tool_choice.function
+        && body.tool_choice.function.name || 'the required tool';
       var retryMsgs=msgs.concat([{role:'assistant',content:msg.content||''},
-        {role:'user',content:'You were required to call find_in_brain and did not. Call it now before saying anything else.'}]);
+        {role:'user',content:'You were required to call ' + _requiredToolName
+          + ' and did not. Call that exact tool now before saying anything else.'}]);
       var retryBody={model:model,messages:retryMsgs,max_tokens:tokenCapFor(channel),temperature:0.1,
         tools:body.tools,tool_choice:body.tool_choice};
       var retryR=await fetch(GB,{method:'POST',
@@ -1403,6 +2135,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
       } else {
+        if (_roadmapActivationNeeded) {
+          return { ok:false, reason:'roadmap_activation_tool_call_missing', blocked_by:'SPAN_ACTIVATION',
+            ham:hamObj, cycleId:_cycleId, requestId:_requestId,
+            tools_used:tools, iterations:iter, ms:Date.now()-t0 };
+        }
         // ⬡B:core.tool_loop:FIX:silence_was_swallowing_plain_statements:20260706⬡
         // Real, confirmed live: a message like "remember this: my coffee
         // order" is a STATEMENT, not a lookup question -- it still got
@@ -1499,8 +2236,27 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var tc=msg.tool_calls[i],targs={};
         try{targs=JSON.parse(tc.function.arguments||'{}');}catch(e){}
         _stampStep('tool_call', tc.function.name);
-        var tr=await executeTool(tc.function.name,targs,hamUid,message);
+        var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime);
         tools.push(tc.function.name);
+        if (tc.function.name === 'consult_coda') {
+          var _toolCodaFailure = failedCodaReason(tr);
+          if (_toolCodaFailure) {
+            return { ok:false, reason:_toolCodaFailure, blocked_by:'CODA',
+              ham:hamObj, cycleId:_cycleId, requestId:_requestId,
+              tools_used:tools, iterations:iter, ms:Date.now()-t0 };
+          }
+        }
+        var _evidenceArgs = Object.assign({}, targs || {});
+        if ((tc.function.name === 'find_in_brain' ||
+            tc.function.name === 'find_identity_evidence') && !_evidenceArgs.ham_uid) {
+          _evidenceArgs.ham_uid = hamUid;
+        }
+        _verifiedToolEvidence.push({ tool:tc.function.name,
+          provenance:'pai.current_turn.execute_tool', request_id:_requestId,
+          cycle_id:_cycleId,
+          args:JSON.stringify(_evidenceArgs).slice(0,4000),
+          result:String(tr||'').slice(0,4000) });
+        if (_verifiedToolEvidence.length > 8) _verifiedToolEvidence.shift();
         if (tc.function.name === 'read_own_code') {
           try {
             var _trParsed = JSON.parse(tr);
@@ -1510,6 +2266,26 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           } catch (eTrParse) {}
         }
         msgs.push({role:'tool',tool_call_id:tc.id,content:tr});
+        // ⬡B:core.tool_loop:EVIDENCE:bound_bcw_refocused_after_generic_find:20260715⬡
+        // Information questions force a live FIND after CODA's preload. A generic
+        // or empty bank result is useful evidence, but it cannot become the last
+        // instruction and erase question-bound doctrine already selected from
+        // the trusted server BCW. Re-append the same bytes once, never an answer.
+        if (tc.function.name === 'find_in_brain' && _namedContextRefocus &&
+            !_namedEvidenceRefocusedAfterFind) {
+          msgs.push({ role:'system', content:
+            'Reconcile the completed Memory Bank lookup with the already bound BCW evidence below. ' +
+            'A lookup miss limits Memory Bank claims only; it does not negate server-bound doctrine.' +
+            _namedContextRefocus });
+          _namedEvidenceRefocusedAfterFind = true;
+        }
+        if (tc.function.name === 'find_in_brain' && _identityProvenanceRefocus &&
+            !_identityEvidenceRefocusedAfterFind) {
+          msgs.push({ role:'system', content:
+            'Reconcile the generic lookup without replacing the completed identity provenance evidence.' +
+            _identityProvenanceRefocus });
+          _identityEvidenceRefocusedAfterFind = true;
+        }
       }
       continue;
     }
@@ -1552,6 +2328,128 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     break;
   }
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
+  var _repositoryDraftRepair = repairCodaRepositoryDraft(
+    finalAns, _codaRepositoryAnswer, !!_codaRepositoryAnswer);
+  if (_repositoryDraftRepair.repaired) {
+    finalAns = _repositoryDraftRepair.answer;
+    _stampStep('repository_evidence_answer_repaired', _repositoryDraftRepair.reason);
+  }
+  // ⬡B:core.tool_loop:WIRE:direct_named_evidence_to_council:20260715⬡
+  // CODA may deterministically select the exact bytes of one explicitly named
+  // BCW section. Preserve those bytes so SHADOW can verify the same question-
+  // bound digest. Nothing is released here; the complete council still follows.
+  if (_codaDirectNamedEvidenceAnswer) {
+    finalAns = _codaDirectNamedEvidenceAnswer;
+    _stampStep('direct_named_evidence_selected', 'verified_coda_decision');
+  }
+  // ⬡B:core.tool_loop:REPAIR:preference_provenance_before_council:20260715⬡
+  // The first live favorite-adviser draft copied CODA's honest lack of a stored
+  // preference into a refusal, even though the human asked A'NU to choose now.
+  // Give one evidence-bound correction pass. The rejected prose is deliberately
+  // absent from the retry history; only the original question, completed tool
+  // evidence, and bounded violation codes return to the model. Corrected bytes
+  // still traverse every canonical preparation, council stage, STAMP, and readback.
+  var _preferenceEvidenceContext = { hamUid:hamUid, requestId:_requestId,
+    cycleId:_cycleId, question:_exactUserMessage,
+    context:{ verified_evidence:_identityVerifiedEvidence
+      .concat(_namedAgentVerifiedEvidence, _verifiedToolEvidence) } };
+  var _preferenceDraftFlags = preferenceJudgmentFindings(
+    _exactUserMessage, finalAns, _preferenceEvidenceContext);
+  if (_preferenceDraftFlags.length) {
+    var _preferenceViolationCodes = _preferenceDraftFlags.map(function (flag) {
+      return flag.reason;
+    }).join(',');
+    var _preferenceRetryMessages = msgs.concat([{ role:'system', content:
+      'The exact user request asks for your current preference, not only a stored-memory lookup. ' +
+      'Your proposed response failed these provenance requirements: ' + _preferenceViolationCodes + '. ' +
+      'Answer the original request again from the completed evidence already in this message history. ' +
+      'Choose one of the options named by the user and explicitly distinguish the choice as your fresh/current judgment or an actually stored preference. ' +
+      'Ground every factual reason in the completed evidence. Do not mention this correction, internal tools, or a rejected draft.' }]);
+    var _preferenceRetry = await callGLMPlain(null, _preferenceRetryMessages,
+      tokenCapFor(channel));
+    if (!_preferenceRetry) {
+      try {
+        var _preferenceRetryResponse = await fetch(GB, { method:'POST',
+          headers:{ Authorization:'Bearer ' + GROQ, 'Content-Type':'application/json' },
+          body:JSON.stringify({ model:(process.env.GROQ_MODEL_C2||'llama-3.3-70b-versatile'),
+            messages:_preferenceRetryMessages, max_tokens:tokenCapFor(channel), temperature:0.1 })
+        }).then(function (response) { return response.json(); });
+        _preferenceRetry = _preferenceRetryResponse && _preferenceRetryResponse.choices &&
+          _preferenceRetryResponse.choices[0] && _preferenceRetryResponse.choices[0].message &&
+          _preferenceRetryResponse.choices[0].message.content;
+      } catch (ePreferenceRetry) { _preferenceRetry = ''; }
+    }
+    _preferenceRetry = String(_preferenceRetry || '').trim();
+    var _preferenceRetryFlags = preferenceJudgmentFindings(
+      _exactUserMessage, _preferenceRetry, _preferenceEvidenceContext);
+    if (!_preferenceRetry || _preferenceRetryFlags.length) {
+      _stampStep('cycle_end_silent', 'current_preference_unrepaired:' +
+        _preferenceRetryFlags.map(function (flag) { return flag.reason; }).join(','));
+      return {ok:false,reason:'current_preference_unrepaired',blocked_by:'A\'NU',
+        ham:hamObj,cycleId:_cycleId,requestId:_requestId,tools_used:tools,
+        iterations:iter,ms:Date.now()-t0};
+    }
+    finalAns = _preferenceRetry;
+    _stampStep('current_preference_repaired', _preferenceViolationCodes);
+  }
+  // ⬡B:core.tool.loop:REPAIR:verified_identity_provenance_before_council:20260715⬡
+  // CODA may already have produced a deterministically valid two-bucket answer.
+  // If the conversational draft collapses those origins, repair with CODA's
+  // verified candidate; every outbound gate still runs below.
+  if (_identityProvenanceLedger.required && _codaProvenanceAnswer) {
+    var _provenanceDraftCheck = identityProvenance.validateDraft(finalAns,
+      _identityProvenanceLedger);
+    if (!_provenanceDraftCheck.ok) {
+      finalAns = _codaProvenanceAnswer;
+      _stampStep('identity_provenance_answer_repaired', 'verified_coda_provenance');
+    }
+  }
+  // ⬡B:core.tool_loop:REPAIR:verified_coda_evidence_relay_before_council:20260715⬡
+  // The PAI model still runs and attempts natural synthesis. If it returns empty
+  // or contradicts named BCW after CODA had to fall back to exact bound evidence,
+  // use CODA's verified live bytes as the candidate. Those bytes do not bypass
+  // anything: every preparation stage, the full outbound council, STAMP commit,
+  // and readback still run below.
+  if (_codaEvidenceRelayAnswer) {
+    var _finalNamedFlags = finalAns
+      ? namedContextContradictions(finalAns, _namedContextEvidence) : [{ reason:'empty_answer' }];
+    if (!finalAns || _finalNamedFlags.length) {
+      finalAns = _codaEvidenceRelayAnswer;
+      _stampStep('named_context_answer_repaired', 'verified_coda_evidence_relay');
+    }
+  }
+  // ⬡B:core.tool_loop:REPAIR:protocol_hollow_before_canonical_preparation:20260715⬡
+  // Regeneration belongs immediately after the draft exists, before numeric
+  // verification, screen extraction, protocol scrub, destination formatting,
+  // SHADOW preparation, PAM, and persona. Repaired bytes therefore traverse
+  // the same deterministic preparation once; no retry lane can skip a gate.
+  if (finalAns && !isHumanFacingAnswer(finalAns)) {
+    _stampStep('hollow_protocol_answer_caught', String(finalAns || '').slice(0, 80));
+    var _repairCap = tokenCapFor(channel);
+    var _repairedHuman = await regenerateHollowAnswer(finalAns, msgs, [
+      async function (repairMessages) {
+        return (await callGLMPlain(null, repairMessages, _repairCap)) || '';
+      },
+      async function (repairMessages) {
+        var repairResponse = await fetch(GB, { method:'POST',
+          headers:{ Authorization:'Bearer ' + GROQ, 'Content-Type':'application/json' },
+          body:JSON.stringify({ model:(process.env.GROQ_MODEL_C2||'llama-3.3-70b-versatile'),
+            messages:repairMessages, max_tokens:_repairCap, temperature:0.1 })
+        }).then(function (response) { return response.json(); })
+          .catch(function () { return null; });
+        return repairResponse && repairResponse.choices && repairResponse.choices[0]
+          && repairResponse.choices[0].message
+          && repairResponse.choices[0].message.content || '';
+      }
+    ]);
+    if (!_repairedHuman.answer) {
+      _stampStep('cycle_end_silent', 'hollow_protocol_answer_unrepaired');
+      return {ok:false,reason:'hollow_protocol_answer',ham:hamObj,cycleId:_cycleId,
+        requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    finalAns = _repairedHuman.answer;
+    _stampStep('hollow_protocol_answer_repaired', 'plain_completion_lane_' + _repairedHuman.lane);
+  }
   // ⬡B:core.tool.loop:FIX:raw_json_never_a_final_answer:20260714⬡
   // Live incident, founder's real phone: a raw tool result -- {"ok":true,"upcoming_events":
   // 0,"next_open_slots":[...]} -- went out as the actual text message. A text channel is
@@ -1648,18 +2546,36 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       } catch (eVerify) { /* verification itself must never crash a real turn */ }
     }
   }
+  // ⬡B:core.tool_loop:REPAIR:current_turn_false_negative_before_preparation:20260715⬡
+  // If a model still converts draft-time blindness into a categorical claim that
+  // this turn did not run/complete, replace it with the true release invariant.
+  // The repaired bytes still traverse screen extraction, formatting, PAM, SHADOW,
+  // the full council, STAMP, and readback below.
+  var _proofDraft = currentTurnProofGuard.repairDraft(_proofQuestion, finalAns);
+  if (_proofDraft.repaired) {
+    finalAns = _proofDraft.answer;
+    _stampStep('current_turn_proof_claim_repaired', _proofDraft.reason);
+  }
   // ⬡B:core.tool.loop:WIRE:screen_awareness_act:20260709⬡ her own answer moves the
   // glass: one [[SCREEN {json} ]] block is extracted, validated, pushed through the
   // full gate stack to her live sessions, and the spoken answer stays human. A
   // malformed block drops in silence; the words always still flow.
   var _screenPushed = 0;
-  try { var _scr = await require('./stream/screen.awareness.js').applyScreenBlock(hamUid, finalAns); finalAns = _scr.answer || finalAns; _screenPushed = _scr.pushed || 0; } catch (eScrA) {}
+  var _screenBlock = null;
+  // Extract the screen intent before review, but do not move the live glass yet.
+  // The visible side effect is committed only after the exact spoken bytes have a
+  // durable council receipt and final STAMP proof.
+  try {
+    var _screenAware = require('./stream/screen.awareness.js');
+    var _scr = _screenAware.extract(finalAns);
+    finalAns = _scr.answer || finalAns;
+    _screenBlock = identity && identity.outbound_finalize === true ? null : (_scr.block || null);
+  } catch (eScrA) {}
   if (!finalAns) { _stampStep('cycle_end_silent','answer_was_only_screen_block'); return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null}; }
-  _stampStep('cycle_end', finalAns.slice(0,80) + (_screenPushed ? (' [screen:'+_screenPushed+']') : ''));
   // ⬡B:tool.loop:GUARD:leaked_tool_syntax_scrub:20260711⬡ on an empty NASH
   // board the model retried and leaked "<function=...>" into its last line.
   // Cold scrub; if nothing real remains, hollow-reply law: ok:false.
-  finalAns = String(finalAns || '').replace(/<function=[^>]*>?/g, '').replace(/<\/function>/g, '').trim();
+  finalAns = scrubLeakedToolProtocol(finalAns);
   // \u2b21B:core.tool_loop:WIRE:format_matrix_universal_choke_point:20260711\u2b21
   // Founder, exact words: 'this should be for every CARA and chat instance and email
   // and text! All reach should do this right??????' -- correct call. This is the ONE
@@ -1673,40 +2589,376 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
   } catch (eFmt) {}
   if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
-  // ⬡B:core.tool.loop:WIRE:cycle_receipt_stamped:20260712⬡
-  // Two Command Centers step 5: tools_used/iterations/ms already existed in this return
-  // object but were only ever handed to the caller, never stamped as a bead, so the
-  // CLAIR view (self-heal, self-learn) had nothing to show which tools ran or fell.
-  // One stamp, same lineage shape as everywhere else, builder-only (technical).
+  // ⬡B:core.tool_loop:WIRE:prepare_the_exact_council_draft:20260715⬡
+  // The older synthesize path used to do these pure output preparations after
+  // runPAI returned. They now happen before the durable council so no channel can
+  // change the reviewed bytes later and still call the turn successful.
   try {
-    var _fellTools = tools.filter(function (tu) { return tu && (tu.error || tu.failed); }).map(function (tu) { return tu.name || tu.tool || 'unknown'; });
+    var _shadowPrepared = require('./synthesize.js').shadowAudit(finalAns);
+    if (!_shadowPrepared.clean) return {ok:false,reason:'shadow_scrubbed_to_empty',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    finalAns = _shadowPrepared.clean;
+  } catch (ePrepShadow) {}
+  try {
+    var _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
+    if (_tierGate && _tierGate.gated) {
+      finalAns = 'I have some information for you but need to verify your access. Reply with your passcode.';
+    }
+  } catch (ePrepPam) {}
+  try {
+    var _personaChoice = identity && identity.persona || hamObj && hamObj.persona;
+    if (_personaChoice) finalAns = require('./persona.js').applyPersona(finalAns,
+      { hamUid:hamUid,persona:_personaChoice,contributions:{} });
+  } catch (ePrepPersona) {}
+  // ⬡B:core.tool_loop:GUARD:no_false_current_turn_failure_reaches_council:20260715⬡
+  // Later preparation/persona code may reshape prose. Fail closed if it ever
+  // reintroduces the same contradiction; a false status claim is never stamped.
+  if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns)) {
+    _stampStep('cycle_end_silent', 'false_current_turn_failure_claim_after_preparation');
+    return {ok:false,reason:'false_current_turn_failure_claim',ham:hamObj,cycleId:_cycleId,
+      requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  }
+  // ⬡B:core.tool_loop:GUARD:human_answer_before_council_commit:20260715⬡
+  // The early repair has already crossed every canonical preparation above.
+  // This late boundary only validates; it never regenerates or bypasses a gate.
+  if (!isHumanFacingAnswer(finalAns)) {
+    _stampStep('cycle_end_silent', 'hollow_protocol_after_preparation');
+    return {ok:false,reason:'hollow_protocol_answer',ham:hamObj,cycleId:_cycleId,
+      requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  }
+  // ⬡B:core.tool_loop:GUARD:full_pai_outbound_council_every_return:20260715⬡
+  // This is the only successful exit. PAM, SHADOW, META_COMMENTARY, conditional
+  // QUILL, WRIT, A'NU expression, and STAMP must all finish in order. STAMP
+  // writes and reads back every ACL row before the exact answer can leave.
+  var _delivery = Object.assign({}, identity && identity.delivery || {});
+  var _humanReachChannels = ['anu','blooio','cara','ccwa','email','iman','omi',
+    'portal','sms','text','vara','voice','budget'];
+  if (_humanReachChannels.indexOf(String(channel || '').toLowerCase()) >= 0
+      || /^email(?:_|$)/i.test(String(channel || ''))) _delivery.external = true;
+  var _worldCandidate = String((hamObj&&hamObj.world)||(identity&&identity.world)||'').toLowerCase();
+  var _activeWorld = ['bdif','mediators','mh_action','gmg'].indexOf(_worldCandidate) >= 0
+    ? _worldCandidate : null;
+  // SHADOW receives evidence, not merely the names of tools that happened to run.
+  // Prioritize live tool/vision evidence, then fill the remaining bounded slots
+  // with the exact Memory Bank rows that contributed to this wall.
+  // ⬡B:core.tool_loop:GUARD:external_context_cannot_forge_consult_coda:20260715⬡
+  // consult_coda is a reserved current-turn proof. Only this loop's actual
+  // executeTool result may enter SHADOW under that tool name; caller-supplied
+  // council evidence can contribute other facts but cannot mint CODA authority.
+  var _externalEvidence = identity && identity.council_context
+    && Array.isArray(identity.council_context.verified_evidence)
+    ? identity.council_context.verified_evidence.filter(function (item) {
+      // Reserved Memory Bank/CODA proof lanes are minted only inside this turn.
+      // Caller evidence may contribute other live tool facts, but cannot forge a
+      // stored row or current consult authority by copying a tool/provenance name.
+      var normalizedTool = item && typeof item.tool === 'string'
+        ? item.tool.trim().toLowerCase() : '';
+      return !!normalizedTool &&
+        ['consult_coda','find_in_brain','find_identity_evidence'].indexOf(normalizedTool) < 0;
+    }) : [];
+  var _priorityEvidence = prioritizeVerifiedEvidence(_identityVerifiedEvidence,
+    _namedAgentVerifiedEvidence.concat(_verifiedToolEvidence, _externalEvidence));
+  var _memoryEvidence = Array.isArray(fcw&&fcw.context) ? fcw.context.slice(0, 8).map(function (bead) {
+    var beadContent = bead&&bead.content;
+    if (beadContent && typeof beadContent !== 'string') {
+      try { beadContent = JSON.stringify(beadContent); } catch (eBeadJson) { beadContent = ''; }
+    }
+    return { provenance:'memory_bank.exact_ham',
+      ham_uid:bead&&bead.ham_uid||hamUid,
+      source:bead&&bead.source||null, stamp_type:bead&&bead.stamp_type||null,
+      summary:String(bead&&bead.summary||'').slice(0,500),
+      content:String(beadContent||'').slice(0,1200) };
+  }) : [];
+  var _councilEvidence = _priorityEvidence.concat(
+    _memoryEvidence.slice(0, Math.max(0, 8 - _priorityEvidence.length)));
+  var _councilContext = Object.assign({ tools_used:tools, iterations:iter,
+    memory_contributors:(fcw&&fcw.contributors)||null }, identity&&identity.council_context||{});
+  var _councilDeliveryTarget = _councilContext.delivery_target;
+  delete _councilContext.delivery_target;
+  _councilContext.identity_provenance = _identityProvenanceLedger;
+  _councilContext.identity_evidence_receipt = _identityEvidenceProof.ok
+    ? _identityEvidenceProof.receipt : null;
+  _councilContext.pending_effects = _effectRuntime.pendingEffects.map(function (effect) {
+    return { name:effect.name, args:effect.args };
+  });
+  _councilContext.verified_evidence = _councilEvidence;
+  var _council = await runOutboundCouncil({
+    hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
+    deliberationInput:String(message||''),
+    answer:finalAns,channel:channel,activeWorld:_activeWorld,
+    delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext
+  });
+  var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
+  var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
+    question:_exactUserMessage,deliberationInput:String(message||''),
+    answer:_council&&_council.answer};
+  if (_identityProvenanceLedger.required) {
+    _mainCouncilExpected.identityEvidenceReceipt = _identityEvidenceProof.receipt;
+  }
+  if (_councilDeliveryTarget !== undefined && _councilDeliveryTarget !== null) {
+    _mainCouncilExpected.deliveryTarget = _councilDeliveryTarget;
+  }
+  var _committedCouncil = requireVerifiedCouncilResult(_council, _mainCouncilExpected);
+  if (!_committedCouncil || !_committedCouncil.ok) {
+    // ⬡B:core.tool_loop:DIAGNOSTIC:persist_bounded_shadow_reason_codes:20260715⬡
+    // Preserve machine reason codes only. The failed answer, claims, evidence,
+    // sources, and model judgment remain out of the durable cycle breadcrumb.
+    var _blockedCouncilCodes = boundedCouncilFailureCodes(_council);
+    _stampStep('outbound_council_blocked', _blockedCouncilCodes || 'receipt_unverified');
+    return {ok:false,reason:(_council&&_council.reason)
+        || (_committedCouncil&&_committedCouncil.reason) || 'pai_council_receipt_unverified',
+      blocked_by:(_council&&_council.blocked_by)||'STAMP',ham:hamObj,cycleId:_cycleId,
+      requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
+      council_stages:(_council&&_council.stages)||[]};
+  }
+  finalAns = _council.answer;
+  if (!isHumanFacingAnswer(finalAns)) {
+    _stampStep('outbound_council_blocked', 'council_answer_hollow_protocol');
+    return {ok:false,reason:'council_answer_hollow_protocol',blocked_by:'STAMP',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  }
+  var _stampProof = _committedCouncil.stamp_proof;
+  // ⬡B:core.tool.loop:COMMIT:queued_mutations_after_stamp:20260715⬡
+  // Mutating tool calls participated in deliberation as a durable pending
+  // effect plan. Release them only now. External human messages receive their
+  // own nested read-only PAI finalizer, so the provider boundary can verify a
+  // full receipt/STAMP pair whose exact answer is the exact bytes it sends.
+  var _effectResults = [];
+  for (var _effectIndex = 0; _effectIndex < _effectRuntime.pendingEffects.length; _effectIndex++) {
+    var _effect = _effectRuntime.pendingEffects[_effectIndex];
+    var _effectArgs = Object.assign({}, _effect.args || {});
+    var _effectCouncilResult = _council;
+    try {
+      var _needsMessageCouncil = _effect.name === 'notify_ham'
+        || (_effect.name === 'contact_send' && _effectArgs.authorized_in_message === true);
+      if (_needsMessageCouncil) {
+        var _effectDeliveryTarget;
+        if (_effect.name === 'notify_ham') {
+          var _notifyTargetHam = String(_effectArgs.ham_uid || hamUid).trim().toUpperCase();
+          if (_notifyTargetHam !== String(hamUid || '').trim().toUpperCase()) {
+            _effectResults.push({ name:_effect.name, ok:false, reason:'notify_ham_receipt_ham_mismatch' });
+            continue;
+          }
+          _effectArgs.ham_uid = _notifyTargetHam;
+          var _notifyPhone = await resolveNotifyPhone(_notifyTargetHam);
+          if (!_notifyPhone) {
+            _effectResults.push({ name:_effect.name, ok:false, reason:'notify_target_unresolved' });
+            continue;
+          }
+          _effectArgs._resolved_notify_phone = _notifyPhone;
+          _effectDeliveryTarget = { kind:'phone', value:_notifyPhone };
+        } else {
+          var _effectContact = await require('./contacts.js').resolveContact(
+            _effectArgs.ham_uid || hamUid, _effectArgs.contact_query || '');
+          if (!_effectContact || typeof _effectContact.phone !== 'string' || !_effectContact.phone.trim()) {
+            _effectResults.push({ name:_effect.name, ok:false, reason:'contact_target_unresolved' });
+            continue;
+          }
+          _effectArgs._resolved_contact_phone = _effectContact.phone;
+          _effectDeliveryTarget = { kind:'phone', value:_effectContact.phone };
+        }
+        if (!canonicalizeDeliveryTarget(_effectDeliveryTarget)) {
+          _effectResults.push({ name:_effect.name, ok:false, reason:'outbound_effect_target_invalid' });
+          continue;
+        }
+        var _proposedEffectMessage = String(_effectArgs.message || '').slice(0, 1500);
+        if (!_proposedEffectMessage.trim()) {
+          _effectResults.push({ name:_effect.name, ok:false, reason:'outbound_effect_message_required' });
+          continue;
+        }
+        var _effectRequestId = 'pai.effect.' + require('node:crypto').createHash('sha256')
+          .update(JSON.stringify({ parent_request_id:_requestId, parent_cycle_id:_cycleId,
+            index:_effectIndex, name:_effect.name, target:canonicalizeDeliveryTarget(_effectDeliveryTarget),
+            message:_proposedEffectMessage }), 'utf8').digest('hex').slice(0, 32);
+        var _effectDeliberation = 'Finalize the exact external message proposed by a committed parent PAI cycle. '
+          + 'Return only the human-facing message. Do not call a send, write, deploy, calendar, or screen tool.\n\n'
+          + 'PROPOSED MESSAGE:\n' + _proposedEffectMessage;
+        var _effectIdentity = { uid:hamUid, request_id:_effectRequestId,
+          user_message:_proposedEffectMessage, outbound_finalize:true,
+          delivery:{ external:true }, council_context:{ mode:'outbound_effect',
+            parent_request_id:_requestId, parent_cycle_id:_cycleId,
+            delivery_target:_effectDeliveryTarget,
+            verified_evidence:[{ effect:_effect.name,
+              target_ham_uid:_effectArgs.ham_uid || hamUid }] } };
+        var _effectPai = await runPAI(hamUid, _effectDeliberation, 'sms', _effectIdentity);
+        var _effectVerified = requireVerifiedCouncilResult(_effectPai, { hamUid:hamUid,
+          requestId:_effectRequestId, cycleId:_effectPai&&_effectPai.cycleId,
+          question:_proposedEffectMessage, deliberationInput:_effectDeliberation,
+          answer:_effectPai&&_effectPai.answer, deliveryTarget:_effectDeliveryTarget });
+        if (!_effectVerified || !_effectVerified.ok || !compactCouncilProof(_effectPai)) {
+          _effectResults.push({ name:_effect.name, ok:false,
+            reason:_effectPai&&_effectPai.reason || _effectVerified&&_effectVerified.reason
+              || 'outbound_effect_council_unverified' });
+          continue;
+        }
+        _effectArgs.message = _effectVerified.answer;
+        _effectCouncilResult = _effectPai;
+      } else if (_effect.name === 'calendar_book') {
+        // ⬡B:core.tool_loop:GUARD:calendar_effect_exact_artifact_council:20260715⬡
+        // Calendar writes are human-visible external effects too. A deterministic
+        // nested council commits one lossless JSON artifact containing every field
+        // Nylas will receive. The provider boundary re-verifies this full result.
+        var _calendarHam = String(_effectArgs.ham_uid || hamUid).trim().toUpperCase();
+        if (!_calendarHam || _calendarHam !== String(hamUid || '').trim().toUpperCase()) {
+          _effectResults.push({ name:_effect.name, ok:false, reason:'calendar_booking_ham_mismatch' });
+          continue;
+        }
+        var _calendarClaim = JSON.stringify({ title:_effectArgs.title,
+          description:_effectArgs.description == null ? '' : _effectArgs.description,
+          start:_effectArgs.start, end:_effectArgs.end == null ? null : _effectArgs.end });
+        var _calendarTarget = { kind:'ham', value:_calendarHam };
+        var _calendarRequestId = 'pai.effect.calendar.' + require('node:crypto')
+          .createHash('sha256').update(JSON.stringify({ parent_request_id:_requestId,
+            parent_cycle_id:_cycleId, index:_effectIndex, claim:_calendarClaim }), 'utf8')
+          .digest('hex').slice(0, 32);
+        var _calendarDeliberation = 'Finalize this exact calendar write through A\u2019NU\u2019s council. '
+          + 'Return only one JSON object with exactly four keys: title, description, start, end. '
+          + 'The start and end values must be byte-for-byte JSON-equal to the request claim. '
+          + 'You may improve title and description, but add no unsupported facts and call no tools.\n\n'
+          + 'LOSSLESS CALENDAR REQUEST CLAIM:\n' + _calendarClaim;
+        var _calendarIdentity = { uid:_calendarHam, request_id:_calendarRequestId,
+          user_message:_calendarClaim, outbound_finalize:true, delivery:{external:true},
+          council_context:{ mode:'calendar_effect', parent_request_id:_requestId,
+            parent_cycle_id:_cycleId, delivery_target:_calendarTarget } };
+        var _calendarPai = await runPAI(_calendarHam, _calendarDeliberation,
+          'calendar', _calendarIdentity);
+        var _calendarExpected = { hamUid:_calendarHam, requestId:_calendarRequestId,
+          cycleId:_calendarPai&&_calendarPai.cycleId, question:_calendarClaim,
+          deliberationInput:_calendarDeliberation, answer:_calendarPai&&_calendarPai.answer,
+          deliveryTarget:_calendarTarget };
+        var _calendarVerified = requireVerifiedCouncilResult(_calendarPai, _calendarExpected);
+        var _calendarProof = _calendarVerified&&_calendarVerified.ok
+          ? compactCouncilProof(_calendarPai) : null;
+        var _calendarArtifact = null;
+        try { _calendarArtifact = JSON.parse(_calendarVerified&&_calendarVerified.answer || ''); }
+        catch (eCalendarArtifact) { _calendarArtifact = null; }
+        var _calendarKeys = _calendarArtifact && Object.keys(_calendarArtifact).sort().join(',');
+        if (!_calendarVerified || !_calendarVerified.ok || !_calendarProof ||
+            _calendarProof.committed !== true || _calendarProof.readback_verified !== true ||
+            _calendarProof.row_count !== 9 || _calendarKeys !== 'description,end,start,title' ||
+            typeof _calendarArtifact.title !== 'string' || !_calendarArtifact.title.trim() ||
+            typeof _calendarArtifact.description !== 'string' ||
+            JSON.stringify(_calendarArtifact.start) !== JSON.stringify(_effectArgs.start) ||
+            JSON.stringify(_calendarArtifact.end) !== JSON.stringify(
+              _effectArgs.end == null ? null : _effectArgs.end)) {
+          _effectResults.push({ name:_effect.name, ok:false,
+            reason:_calendarPai&&_calendarPai.reason || _calendarVerified&&_calendarVerified.reason
+              || 'calendar_effect_council_unverified' });
+          continue;
+        }
+        _effectArgs.ham_uid = _calendarHam;
+        _effectArgs.title = _calendarArtifact.title;
+        _effectArgs.description = _calendarArtifact.description;
+        _effectArgs.start = _calendarArtifact.start;
+        _effectArgs.end = _calendarArtifact.end;
+        _effectArgs._bookingAuthorization = { councilResult:_calendarPai,
+          expected:_calendarExpected, artifact:_calendarVerified.answer };
+        _effectCouncilResult = _calendarPai;
+      }
+      var _effectRaw = await executeTool(_effect.name, _effectArgs, hamUid, message,
+        Object.assign({ phase:'commit', councilResult:_effectCouncilResult, parentCycleId:_cycleId,
+          parentRequestId:_requestId, userMessage:message },
+        { codaVerified:_effectRuntime.codaVerified === true,
+          activationDecisionRequired:_effectRuntime.activationDecisionRequired === true,
+          codaActivationApproved:_effectRuntime.codaActivationApproved === true,
+          codaActivationDecision:_effectRuntime.codaActivationDecision,
+          codaDecisionSource:_effectRuntime.codaDecisionSource }));
+      var _effectParsed;
+      try { _effectParsed = JSON.parse(_effectRaw); }
+      catch (eEffectParse) { _effectParsed = { ok:false, reason:'effect_result_invalid' }; }
+      _effectResults.push({ name:_effect.name, ok:!!(_effectParsed&&_effectParsed.ok),
+        result:_effectParsed,
+        councilProof:(_needsMessageCouncil || _effect.name === 'calendar_book')
+          ? compactCouncilProof(_effectCouncilResult) : null });
+    } catch (eEffect) {
+      _effectResults.push({ name:_effect.name, ok:false, reason:eEffect.message });
+    }
+  }
+  var _failedEffect = _effectResults.find(function (effectResult) {
+    return !effectResult || effectResult.ok !== true;
+  });
+  if (_failedEffect) {
+    _stampStep('post_council_effect_failed', _failedEffect.name + ': '
+      + (_failedEffect.reason || _failedEffect.result && (_failedEffect.result.reason
+        || _failedEffect.result.error) || 'unknown'));
+    return { ok:false, reason:'post_council_effect_failed', blocked_by:_failedEffect.name,
+      ham:hamObj, cycleId:_cycleId, requestId:_requestId,
+      councilProof:compactCouncilProof(_council), side_effects:_effectResults.map(function (effectResult) {
+        return { name:effectResult.name, ok:effectResult.ok,
+          reason:effectResult.reason || effectResult.result && (effectResult.result.reason
+            || effectResult.result.error) || null };
+      }),
+      tools_used:tools, iterations:iter, ms:Date.now()-t0 };
+  }
+  // ⬡B:core.tool_loop:COMMIT:post_council_effects_only:20260715⬡
+  // No visible screen move and no completion record may precede the committed
+  // council. A failed council therefore leaves no successful side-effect trail.
+  try {
+    if (_screenBlock) {
+      var _screenCommit = require('./stream/screen.awareness.js');
+      if (_screenCommit.hasLiveScreen(hamUid)) {
+        var _screenResult = await _screenCommit.push(hamUid, _screenBlock);
+        _screenPushed = (_screenResult && _screenResult.pushed) || 0;
+      }
+    }
+  } catch (eScreenCommit) {}
+  _stampStep('cycle_end', finalAns.slice(0,80) + (_screenPushed ? (' [screen:'+_screenPushed+']') : ''));
+  try {
+    var _fellTools = tools.filter(function (tu) { return tu && (tu.error || tu.failed); })
+      .map(function (tu) { return tu.name || tu.tool || 'unknown'; });
     var _lineage = require('./lineage.attach.js');
     _stampStep('cycle_receipt', JSON.stringify(_lineage.attachLineage(
-      { cycleId: _cycleId, tools_used: tools, iterations: iter, ms: Date.now() - t0, fell: _fellTools, channel: channel },
-      { chain: ['PAI', 'MemoryBank'], deliveredBy: 'PAI cycle', why: (_fellTools.length ? _fellTools.length + ' tool(s) fell: ' + _fellTools.join(', ') : 'clean cycle, ' + tools.length + ' tool(s) ran'), audience: 'builder' }
+      { cycleId: _cycleId, requestId: _requestId, tools_used: tools, iterations: iter,
+        ms: Date.now() - t0, fell: _fellTools, channel: channel,
+        council_source: _councilReceipt && _councilReceipt.source },
+      { chain: ['PAI', 'MemoryBank'], deliveredBy: 'PAI cycle', why: (_fellTools.length
+        ? _fellTools.length + ' tool(s) fell: ' + _fellTools.join(', ')
+        : 'clean committed cycle, ' + tools.length + ' tool(s) ran'), audience: 'builder' }
     )));
-  } catch (eRcpt) { /* receipt is diagnostic, never block the real answer on it */ }
-  // ⬡B:core.tool.loop:BUILD:universal_tracker_done_on_completion:20260713⬡
-  // The other half of the Architect's tracker: when a real action request completes, it
-  // gets a TRACK DONE with what ran, so "everything has a record" is true on the win side
-  // too, not only when things break. High-signal only: plain chat/greetings are not
-  // tracked (that would be bead-spam / a bleed). Skips the blocked-fallback path above so
-  // one turn is never stamped both DONE and BLOCKED. Never blocks the real answer.
+  } catch (eRcpt) { /* diagnostic only, after the mandatory durable proof */ }
   try {
-    if (!(typeof _blockedFallback !== 'undefined' && _blockedFallback)) {
+    if (!_blockedFallback) {
       var _trkD = require('./tracker.js');
-      if (_trkD.looksLikeActionRequest(message)) {
+      if (_trkD.looksLikeActionRequest(_exactUserMessage)) {
         await _trkD.stampTrack({ hamUid: hamUid, status: 'DONE', kind: 'request',
-          request: String(message||''), channel: channel, cycleId: _cycleId, tools_used: tools,
+          request: _exactUserMessage, channel: channel, cycleId: _cycleId, tools_used: tools,
           outcome: finalAns });
       }
     }
   } catch (eTrkDone) {}
-  return {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
+  var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
+    requestId:_requestId,request_id:_requestId,councilReceipt:_councilReceipt,council_receipt:_councilReceipt,
+    stampProof:_stampProof,stamp_proof:_stampProof,
     tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,
     fcw_contributors:(fcw&&fcw.contributors)||null,
     fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
     fcw_contributors_total:(fcw&&fcw.contributorsTotal)||0,
     _dbg:global._paiLastError||null};
+  // Internal-only exact binding for synthesis re-verification. Non-enumerable so
+  // a route cannot leak the armed deliberation prompt by serializing this result.
+  Object.defineProperty(_successResult, '_councilBinding', { enumerable:false,
+    value:{ question:_exactUserMessage, deliberationInput:String(message||''),
+      deliveryTarget:_councilDeliveryTarget === undefined ? null
+        : canonicalizeDeliveryTarget(_councilDeliveryTarget) } });
+  Object.defineProperty(_successResult, 'side_effects', { enumerable:false,
+    value:_effectResults });
+  // A completed ordinary PAI cycle is the real REACH entry. The handoff first
+  // stamps a durable per-HAM candidate, then lets the existing governed REACH
+  // engine judge timing and channel. Outbound finalizer cycles are excluded so
+  // REACH can never recursively trigger itself.
+  var _reachHandoffMode = String(identity&&identity.council_context&&
+    identity.council_context.mode || '');
+  if (!(identity && (identity.outbound_finalize || identity.delivery&&identity.delivery.external ||
+      /^(outbound|outreach)/.test(_reachHandoffMode)))) {
+    setImmediate(function () {
+      require('./reach/cycle.handoff.js').afterCommittedCycle({ hamUid:hamUid,
+        cycleId:_cycleId, requestId:_requestId, channel:channel, answer:finalAns,
+        world:identity&&identity.world || hamObj&&hamObj.world || null })
+        .catch(function (eReach) { console.error('[REACH] cycle handoff failed:', eReach.message); });
+    });
+  }
+  return _successResult;
 }
-module.exports={runPAI};
+module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
+  prioritizeVerifiedEvidence,regenerateHollowAnswer,scrubLeakedToolProtocol,
+  repositoryReadTerms,repairCodaRepositoryDraft}};
