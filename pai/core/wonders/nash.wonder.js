@@ -28,14 +28,17 @@
 // used ONLY for the judgment cold code cannot make. Woven, not bolted on.
 'use strict';
 
-function brainUrl() { return (process.env.AIBE_BRAIN_URL || '').replace(/\/$/, ''); }
-function brainHeaders(profile, write) {
-  const key = process.env.AIBE_BRAIN_KEY || '';
-  const h = { apikey: key, Authorization: 'Bearer ' + key, 'Accept-Profile': profile };
-  if (write) { h['Content-Profile'] = profile; h['Content-Type'] = 'application/json'; h['Prefer'] = 'return=minimal'; }
-  return h;
-}
-function schemaFor(ham) { return 'ham_' + String(ham).toLowerCase(); }
+// ⬡B:core.wonders.nash:WIRE:dedup_through_brain_client_new_world:20260716⬡
+// CLAIR wiring fix, founder-authorized session. The dedup memory read raw
+// AIBE_BRAIN_URL and wrote to ham_{uid}.abacia -- neither exists on a new
+// per-HAM world, so dedup was silently dead there (every failure swallowed).
+// All bead traffic now flows through the ONE canonical boundary,
+// brain.client, which is world-agnostic by env (MEMORY_BANK_* on a new
+// world, AIBE_BRAIN_* on legacy). Note: legacy dedup beads used source
+// 'nash.surfaced'; this client-addressed lane uses 'NASH.{ham}.surfaced',
+// so a legacy world's dedup memory restarts once -- acceptable, legacy is
+// the read-only archive and live turns run on the new world.
+const brain = require('../brain.client');
 function day() { return new Date().toISOString().slice(0, 10).replace(/-/g, ''); }
 
 // ---- 1. DETECTION (cold) ----------------------------------------------------
@@ -72,24 +75,33 @@ async function detectNews(teamQuery) {
 // ---- 3. DEDUP MEMORY --------------------------------------------------------
 // What has NASH already told this HAM? Read prior surfaced-item ids.
 async function alreadyTold(ham) {
-  const u = brainUrl(); if (!u) return {};
+  // Failed read degrades to zero rows: dedup then filters nothing, the wonder still answers.
+  let rows = [];
   try {
-    const r = await fetch(u + '/rest/v1/abacia?select=content&acl_stamp=ilike.' + encodeURIComponent('*nash.surfaced*') + '&order=created_at.desc&limit=60', { headers: brainHeaders(schemaFor(ham), false) });
-    if (!r.ok) return {};
-    const rows = await r.json();
-    const seen = {};
-    rows.forEach(function (row) { try { (JSON.parse(row.content).ids || []).forEach(function (id) { seen[id] = 1; }); } catch (_) {} });
-    return seen;
-  } catch (_) { return {}; }
+    rows = await brain.readBead({ select: 'content', ham_uid: 'eq.' + ham,
+      source: 'like.NASH.' + ham + '.surfaced*', order: 'created_at.desc', limit: '60' });
+  } catch (e) { console.log('[NASH] dedup read failed: ' + e.message); }
+  const seen = {};
+  rows.forEach(function (row) {
+    try {
+      // jsonb (new bank) arrives as an object; legacy text arrives as a string
+      const c = (typeof row.content === 'string') ? JSON.parse(row.content) : (row.content || false);
+      ((c && c.ids) || []).forEach(function (id) { seen[id] = 1; });
+    } catch (_) {}
+  });
+  return seen;
 }
 async function markTold(ham, ids) {
-  const u = brainUrl(); if (!u || !ids.length) return;
+  // Guard: nothing surfaced means nothing to remember -- explicit receipt, not a bare return.
+  if (!ids.length) return { ok: true, skipped: 'no_ids_to_remember' };
   try {
-    await fetch(u + '/rest/v1/abacia', { method: 'POST', headers: brainHeaders(schemaFor(ham), true),
-      body: JSON.stringify({ ham_uid: ham, agent_global: 'NASH',
-        acl_stamp: '\u2b21B:nash.surfaced:MEMORY:dedup:' + day() + '\u2b21', stamp_type: 'MEMORY', source: 'nash.surfaced', importance: 2,
-        summary: '[NASH dedup] surfaced ' + ids.length + ' item(s)', content: JSON.stringify({ ids: ids, at: Date.now() }) }) });
-  } catch (_) {}
+    await brain.writeBead({ hamUid: ham, agentGlobal: 'NASH',
+      source: 'NASH.' + ham + '.surfaced.' + Date.now(), type: 'MEMORY',
+      content: { ids: ids, at: Date.now() }, importance: 2,
+      summary: '[NASH dedup] surfaced ' + ids.length + ' item(s) ' + day(),
+      edges: [{ type: 'dedup_for', target: 'core.wonders.nash' }] });
+    return { ok: true, remembered: ids.length };
+  } catch (e) { console.log('[NASH] dedup write failed: ' + e.message); return { ok: false, reason: e.message }; }
 }
 
 // ---- 2. DELIBERATION (AI, penny) --------------------------------------------
@@ -117,13 +129,14 @@ async function nashWonder(hamUid, question, league) {
   // 1. detect (cold, parallel)
   const [scores, news] = await Promise.all([detectScores(lg), detectNews(question)]);
   const all = scores.concat(news);
-  if (!all.length) return { ok: true, answer: 'No live ' + lg.toUpperCase() + ' games or fresh news on the board right now.', surfaced: 0 };
+  if (!all.length) { console.log('[NASH] ' + ham + ' ' + lg + ' branch=empty_detection scores=0 news=0'); return { ok: true, answer: 'No live ' + lg.toUpperCase() + ' games or fresh news on the board right now.', surfaced: 0 }; }
   // 3. dedup: drop what he was already told
   const seen = await alreadyTold(ham);
   const fresh = all.filter(function (i) { return !seen[i.id]; });
-  if (!fresh.length) return { ok: true, answer: 'Nothing new since I last filled you in on the ' + lg.toUpperCase() + '.', surfaced: 0, allDedup: true };
+  if (!fresh.length) { console.log('[NASH] ' + ham + ' ' + lg + ' branch=all_dedup detected=' + all.length); return { ok: true, answer: 'Nothing new since I last filled you in on the ' + lg.toUpperCase() + '.', surfaced: 0, allDedup: true }; }
   // 2. deliberate (AI, penny) over ONLY the fresh items
   const answer = await deliberate(question, fresh);
+  console.log('[NASH] ' + ham + ' ' + lg + ' branch=' + (answer ? 'answered' : 'deliberation_empty') + ' detected=' + all.length + ' fresh=' + fresh.length);
   if (!answer) return { ok: false, reason: 'deliberation_empty' };
   // remember what we surfaced so we never repeat it
   await markTold(ham, fresh.slice(0, 8).map(function (i) { return i.id; }));
