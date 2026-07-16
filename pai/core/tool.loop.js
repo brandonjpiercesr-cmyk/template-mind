@@ -350,6 +350,21 @@ function prioritizeVerifiedEvidence(primary, secondary) {
 }
 
 var TOOLS = [
+  // ⬡B:tool.loop:TOOL:awa_verify_job_posting:20260716⬡ C0 cold verification.
+  // Real failure 20260716: a phrase-match location filter rejected 96 of 97 live
+  // postings because the board renders remote/deadline in JavaScript. Structured
+  // fields carry the truth, and prose overrides structured when it narrows residency.
+  {type:'function',function:{name:'verify_job_posting',
+    description:'Verify job postings before acting on them. Cold code, no model, no cost. '
+    +'Checks the deadline is real and future, that remote is genuinely nationwide (a posting can '
+    +'say TELECOMMUTE and Country US in its structured data and then state "must reside in Illinois" '
+    +'in its text -- the text wins), and classifies into caller-supplied tracks. '
+    +'Use this before drafting, sending, or recommending ANY job application.',
+    parameters:{type:'object',required:['postings'],properties:{
+      postings:{type:'array',description:'Parsed postings. Each: {title, employmentType, validThrough, jobLocationType, applicantLocationRequirements, descriptionText, url, org, salary}',
+        items:{type:'object'}},
+      track_spec:{type:'object',description:'Optional {tracks:[{id,titles:[],exclude:[],employment:"FULL_TIME"|"PART_TIME"|null}]}. Omit to skip classification.'},
+      require_nationwide_remote:{type:'boolean',description:'Default true. Set false to allow non-remote roles.'}}}}},
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
@@ -833,6 +848,26 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       }
       return JSON.stringify({ok:false,reason:'nothing_applied'});
     } catch (eUpd) { return JSON.stringify({ok:false,reason:eUpd.message}); }
+  }
+  if (name === 'verify_job_posting') {
+    // ⬡B:tool.loop:WIRE:awa_verify_is_a_tool_on_the_one_cycle:20260716⬡
+    // Lives on the ONE cycle, never on a channel and never inside an advisor holding
+    // its own credentials. Lazy require so a missing module degrades, never crashes load.
+    try {
+      var _awa = require('../agents/awa/verify.js');
+      var _list = (args && args.postings) || [];
+      if (!Array.isArray(_list) || !_list.length) return JSON.stringify({ok:false,reason:'no_postings_supplied'});
+      var _opts = { nowISO: new Date().toISOString(),
+        trackSpec: (args && args.track_spec) || null,
+        requireNationwideRemote: !(args && args.require_nationwide_remote === false) };
+      var _keep = [], _drop = [];
+      _list.slice(0,60).forEach(function(p){
+        var v = _awa.verify(p, _opts);
+        (v.keep ? _keep : _drop).push(v);
+      });
+      return JSON.stringify({ok:true, checked:_list.length, kept:_keep.length, dropped:_drop.length,
+        keep:_keep, drop:_drop.map(function(d){ return {title:d.title, org:d.org, url:d.url, drop_reason:d.drop_reason}; })});
+    } catch (e) { return JSON.stringify({ok:false, reason:'verify_unavailable:'+e.message}); }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
