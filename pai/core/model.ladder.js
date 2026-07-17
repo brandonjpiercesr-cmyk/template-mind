@@ -28,11 +28,13 @@ function hasAcceptedContent(content, opts) {
 }
 
 async function tryRunPodGLM(system, user, opts) {
-  // \u2b21B:core.model.ladder:FIX:glm_runpod_is_the_real_primary_20260715\u2b21 GLM
-  // 5.2 already runs on its own RunPod serverless GPU (endpoint glm-5-2-envolve,
-  // Ollama, model glm4:9b), isolated, scale-to-zero, exactly the same pattern as
-  // Ornith. This is the TRUE first step, not Together/OpenRouter, which are only
-  // the fallback when the RunPod GPU is unreachable.
+  // \u2b21B:core.model.ladder:FIX:local_box_is_fallback_true_52_is_primary:20260716\u2b21
+  // FOUNDER-ORDERED CORRECTION 20260716: the RunPod box serves glm4:9b (GLM-4 9B).
+  // True GLM-5.2 is 744B+ MoE, needs 223GB+ even 1-bit quantized, physically cannot
+  // fit the 24GB 4090, and a big-GPU pair would run ~$12/hr against the penny law.
+  // So the honest ladder: true GLM-5.2 via penny APIs (Together zai-org/GLM-5.2,
+  // OpenRouter z-ai/glm-5.2) is the thinking PRIMARY; this local box is the isolated
+  // last fallback and reports its real name, never the flagship's.
   var url = process.env.GLM_RUNPOD_URL; if (!url) return null;
   try {
     var base = url.replace(/\/+$/, '');
@@ -42,7 +44,7 @@ async function tryRunPodGLM(system, user, opts) {
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.GLM_RUNPOD_KEY || process.env.RUNPOD_API_KEY || '') }, body: JSON.stringify(body), signal: AbortSignal.timeout(Math.max(opts.timeout, 45000)) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'runpod' } : null;
+    return hasAcceptedContent(c, opts) ? { content: c, model: (process.env.GLM_RUNPOD_MODEL || 'glm4:9b') + '-local', via: 'runpod' } : null;
   } catch (e) { return null; }
 }
 async function tryTogetherGLM(system, user, opts) {
@@ -60,7 +62,7 @@ async function tryTogetherGLM(system, user, opts) {
 async function tryOpenRouterGLM(system, user, opts) {
   var key = process.env.OPENROUTER_API_KEY; if (!key) return null;
   try {
-    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-4.6', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(opts.timeout) });
@@ -114,7 +116,7 @@ async function tryGroqFloor(system, user, opts) {
 async function deliberate(system, user, options) {
   var opts = Object.assign({ max_tokens: 900, temperature: 0.4, timeout: 25000, json: false }, options || {});
   var order = (process.env.MODEL_LADDER_ORDER || 'glm,ornith,qwen,groq').split(',').map(function (s) { return s.trim(); });
-  var runners = { glm: async function () { return (await tryRunPodGLM(system, user, opts)) || (await tryTogetherGLM(system, user, opts)) || (await tryOpenRouterGLM(system, user, opts)); },
+  var runners = { glm: async function () { return (await tryTogetherGLM(system, user, opts)) || (await tryOpenRouterGLM(system, user, opts)) || (await tryRunPodGLM(system, user, opts)); },
     ornith: function () { return tryOrnith(system, user, opts); },
     qwen: function () { return tryQwen(system, user, opts); },
     groq: function () { return tryGroqFloor(system, user, opts); } };
