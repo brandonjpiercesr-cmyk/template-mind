@@ -1534,7 +1534,7 @@ async function defaultShadowStage(ctx, injected) {
     'Named context evidence was deterministically extracted from the bound deliberation input; reject any answer that denies or contradicts it. ' +
     'Identity provenance is deterministic: stored memory and current bound role context may not be collapsed into one identity claim. ' +
     'A current self-preference must name a choice and state whether it is a fresh judgment or stored preference. ' +
-    'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise sentence"}.';
+    'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise sentence","claim":"when approved is false, the exact contiguous text copied verbatim from the proposed answer that the bound evidence contradicts or cannot support; empty string when approved is true"}.';
   var user = JSON.stringify({
     binding: { ham_uid:ctx.hamUid, request_id:ctx.requestId, cycle_id:ctx.cycleId },
     question: ctx.question || '',
@@ -1611,7 +1611,26 @@ async function defaultShadowStage(ctx, injected) {
   var runtimeIdentityPass = !!(boardPassed && deterministicFindings.length === 0 &&
     runtimeIdentity && parsed && parsed.approved === false &&
     (!reviewParsed || reviewParsed.approved === false));
-  var shadowPassed = boardPassed && (modelPassed || exactRelayPass || runtimeIdentityPass);
+  // ⬡B:core.pai_outbound_council:FIX:hold_must_quote_the_claim_cold_enforced:20260717⬡
+  // Founder-caught live: two portal cycles, identical question, identical calendar
+  // evidence, 33 seconds apart -- one shadow_model_hold, one full pass. The prompt
+  // already commands "hold only when you can quote a concrete factual claim", but a
+  // prompt is hope, not a gate (the 20260713 lesson: filter mechanically). The judge
+  // now returns the verbatim claim it is holding, and cold code verifies the quote
+  // actually exists in the proposed answer. On a CLEAN deterministic board, a hold
+  // whose quote cannot be found in the answer, through BOTH passes, is an unsupported
+  // hold and does not kill the turn. A genuine catch that names the real sentence
+  // holds exactly as before, and every deterministic flag still blocks unconditionally.
+  function _verbatimClaimFound(p) {
+    if (!p || p.approved !== false) return false;
+    var c = String(p.claim || '').trim();
+    return c.length >= 12 && String(ctx.answer || '').indexOf(c) !== -1;
+  }
+  var unsupportedHoldPass = !!(boardPassed && deterministicFindings.length === 0 &&
+    parsed && parsed.approved === false && !modelPassed && !exactRelayPass &&
+    !runtimeIdentityPass && !_verbatimClaimFound(parsed) &&
+    (!reviewParsed || (reviewParsed.approved === false && !_verbatimClaimFound(reviewParsed))));
+  var shadowPassed = boardPassed && (modelPassed || exactRelayPass || runtimeIdentityPass || unsupportedHoldPass);
 
   return {
     ok: shadowPassed,
@@ -1621,7 +1640,8 @@ async function defaultShadowStage(ctx, injected) {
         (!boardPassed ? 'shadow_deterministic_hold' :
           (modelPassed ? (reviewParsed ? 'SHADOW_PASS_REVIEW' : 'SHADOW_PASS') :
             (exactRelayPass ? 'SHADOW_PASS_VERIFIED_EVIDENCE_RELAY' :
-              (runtimeIdentityPass ? 'SHADOW_PASS_RUNTIME_IDENTITY' : 'shadow_model_hold')))))),
+              (runtimeIdentityPass ? 'SHADOW_PASS_RUNTIME_IDENTITY' :
+                (unsupportedHoldPass ? 'SHADOW_PASS_UNSUPPORTED_HOLD' : 'shadow_model_hold'))))))),
     evidence: {
       deterministic: {
         verdict: (namedContextFlags.length || memoryAbsenceFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
