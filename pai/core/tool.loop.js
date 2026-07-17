@@ -1,5 +1,22 @@
 // ⬡B:core.tool.loop:MODULE:pai_executor:20260630⬡
-var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '700', 10); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
+var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '700', 10);
+// ⬡B:core.tool_loop:WIRE:coda_was_deciding_on_five_percent_of_the_file:20260717⬡
+// Founder-caught 20260717. The consult_coda handler compacted every repository read
+// to parsed.files.slice(0, 2) and excerpt.slice(0, 900). Every coding decision CODA
+// has ever made was made on at most 1800 characters. pai/core/find.js is 17,835
+// characters, so she was asked to name exact paths and concrete acceptance checks
+// for a file she could see 5.0% of -- and then held, correctly, for being vague
+// about it. Twice today. She said it herself when asked straight: "I was vague
+// because 2 files at 900 characters is not enough to name exact paths and concrete
+// acceptance checks... I would need to see the complete and untruncated code of the
+// relevant files, including pai/core/find.js, as well as any other files that it
+// depends on or interacts with."
+// Default derived from her own file, not a guess: 20000 clears find.js (17,835)
+// whole. 4 files covers "find.js as well as any other files it depends on". Both
+// env-driven, same pattern as REPAIR:configurable_token_cap:20260707 above, so the
+// budget is tunable without a deploy and no number is hardcoded into judgment.
+var CODA_READ_EXCERPT_CHARS = parseInt(process.env.CODA_READ_EXCERPT_CHARS || '20000', 10);
+var CODA_READ_MAX_FILES = parseInt(process.env.CODA_READ_MAX_FILES || '4', 10); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
 // Real incident: GUIDE pass 2 (strict JSON, 12 fields per destination) was
@@ -775,9 +792,10 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         try {
           var parsed = JSON.parse(raw);
           if (!parsed || !parsed.found || !Array.isArray(parsed.files)) return parsed;
-          return { ok:parsed.ok, found:true, query:terms[index], files:parsed.files.slice(0, 2).map(function (file) {
+          return { ok:parsed.ok, found:true, query:terms[index],
+            files:parsed.files.slice(0, CODA_READ_MAX_FILES).map(function (file) {
             return { file:file.file, startLine:file.startLine, endLine:file.endLine,
-              excerpt:String(file.excerpt || '').slice(0, 900) };
+              excerpt:String(file.excerpt || '').slice(0, CODA_READ_EXCERPT_CHARS) };
           }) };
         } catch (eCompact) { return { ok:false, query:terms[index], note:'unparseable repository result' }; }
       });
