@@ -1474,7 +1474,30 @@ async function defaultShadowStage(ctx, injected) {
   var namedContextFlags = namedContextContradictions(ctx.answer, namedContextEvidence);
   var memoryAbsenceFlag = await categoricalMemoryContradiction(ctx, injected);
   var memoryAbsenceFlags = memoryAbsenceFlag ? [memoryAbsenceFlag] : [];
-  var preferenceFlags = preferenceJudgmentFindings(ctx.question, ctx.answer, ctx);
+  // ⬡B:core.pai_outbound_council:WIRE:engineering_select_is_not_a_favourite_here_too:20260717⬡
+  // Second site of the same founder-caught bug. core/tool.loop.js guards the draft
+  // and retry path; SHADOW's deterministic board calls preferenceJudgmentFindings
+  // again right here, and that copy was missed. Live proof 20260717: asked to answer
+  // "exactly ONE of these two words: EXTEND or NEW", CODA answered NEW, the glm-5.2
+  // judgment APPROVED the draft in full -- "grounds every factual claim in E1-E9...
+  // chooses NEW based on E6" -- and the deterministic board held it anyway with
+  // current_preference_choice_missing, option_terms ["EXTEND","NEW"], because
+  // "pick one" plus two ALL-CAPS tokens reads as a favourite question and the law
+  // then demands the grammar "my pick is X". A bounded build decision cannot say
+  // that, so the founder got silence while his own judge was saying yes.
+  // Same derivation as the tool.loop guard and the WRIT wiring: a coding turn is not
+  // a favourite question. The law stays fully active on every other turn.
+  var _shadowTurnIsEngineering = (function () {
+    var mode = String((ctx.context && ctx.context.mode) || '').toLowerCase();
+    var chan = String(ctx.channel || '').toLowerCase();
+    var used = (ctx.context && ctx.context.tools_used) || [];
+    return mode === 'coding' || mode === 'internal' ||
+      chan === 'coding' || chan === 'internal' ||
+      (Array.isArray(used) && (used.indexOf('consult_coda') !== -1 ||
+        used.indexOf('read_own_code') !== -1));
+  })();
+  var preferenceFlags = _shadowTurnIsEngineering ? [] :
+    preferenceJudgmentFindings(ctx.question, ctx.answer, ctx);
   var relayRoleFlags = codingRelayContradictions(ctx.answer, ctx.context || {});
   var provenanceLedger = ctx.context && ctx.context.identity_provenance;
   var provenanceCheck = identityProvenance.validateDraft(ctx.answer, provenanceLedger);
