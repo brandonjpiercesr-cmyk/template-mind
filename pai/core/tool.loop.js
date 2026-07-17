@@ -1214,12 +1214,21 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // Targets are verified resolvable: 'pai.cycle.' + cycleId returns real rows.
     // Cold code, zero LLM, no new call. If lineage is absent the bead writes exactly
     // as it does today with no edges -- this can never block a write.
+    // Live test 20260717 caught this: bead 365982 was written after the first
+    // version of this wiring deployed and STILL came out with edges []. Reason:
+    // write_to_brain is a MUTATION, so GUARD:mutations_release_after_council_commit
+    // :20260715 queues it and the deliberation runtime at :2661 never executes it.
+    // It runs on the commit path at :3384, which builds a FRESH runtime object with
+    // parentCycleId / parentRequestId -- different key names. runtime.cycleId was
+    // undefined there, so nothing attached. Read both shapes.
+    var _edgeCycle = runtime && (runtime.cycleId || runtime.parentCycleId);
+    var _edgeRequest = runtime && (runtime.requestId || runtime.parentRequestId);
     var _beadEdges = [];
-    if (runtime && runtime.cycleId) {
-      _beadEdges.push({ type:'RELATES_TO', target:'pai.cycle.' + runtime.cycleId });
+    if (_edgeCycle) {
+      _beadEdges.push({ type:'RELATES_TO', target:'pai.cycle.' + _edgeCycle });
     }
-    if (runtime && runtime.requestId) {
-      _beadEdges.push({ type:'CAUSED_BY', target:'pai.request.' + runtime.requestId });
+    if (_edgeRequest) {
+      _beadEdges.push({ type:'CAUSED_BY', target:'pai.request.' + _edgeRequest });
     }
     if (_beadEdges.length) {
       _beadEdges.push({ type:'PRODUCED_BY', target:'pai.tool.write_to_brain' });
