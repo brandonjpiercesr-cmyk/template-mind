@@ -62,7 +62,7 @@ async function tryTogetherGLM(system, user, opts) {
 async function tryOpenRouterGLM(system, user, opts) {
   var key = process.env.OPENROUTER_API_KEY; if (!key) return null;
   try {
-    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature, reasoning: { effort: 'low' } }; // ⬡B:core.model.ladder:FIX:reasoning_effort_low_stops_content_starvation:20260716⬡ verified live: tiny caps returned empty content until effort pinned low, same pattern as ornith think:false 20260714
     if (opts.json) body.response_format = { type: 'json_object' };
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(opts.timeout) });
