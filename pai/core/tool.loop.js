@@ -1468,8 +1468,30 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       }
       if (!_cr) return JSON.stringify({ok:false, ham_uid:_calHam, reason:'calendar_source_unreachable', note:'the calendar source did not respond; this is NOT an empty day, say the calendar cannot be reached right now'});
       var _realEvents = _cr.events || [];
-      var _out = {ok:true, ham_uid:_calHam, events: _realEvents.slice(0,20)};
-      if (!_realEvents.length) _out.note = 'the calendar source answered and genuinely has no events in this window';
+      // ⬡B:core.tool.loop:FIX:cold_code_does_the_date_math:20260717⬡ The source returns
+      // epoch milliseconds; handing raw 1784073600000 to a penny model and hoping it does
+      // timezone arithmetic is how "your calendar is open today" shipped against 20 real
+      // events, and how named-event guesses earned honest SHADOW holds. Cold code now
+      // resolves every event to a human date in the HAM's timezone and flags which are
+      // TODAY; the model only phrases what is already true.
+      var _tz = process.env.HAM_TIMEZONE || 'America/New_York';
+      var _fmtDate = new Intl.DateTimeFormat('en-US', { timeZone:_tz, weekday:'long', year:'numeric', month:'long', day:'numeric' });
+      var _fmtTime = new Intl.DateTimeFormat('en-US', { timeZone:_tz, hour:'numeric', minute:'2-digit' });
+      var _todayStr = _fmtDate.format(new Date());
+      var _shaped = _realEvents.slice(0,20).map(function(ev){
+        var _at = Number(ev.at || ev.start || 0);
+        var _d = _at ? new Date(_at) : null;
+        var _dateStr = _d ? _fmtDate.format(_d) : null;
+        return { title: ev.title || ev.summary || '', org: ev.org || '', date: _dateStr,
+          time: (_d && !ev.allDay) ? _fmtTime.format(_d) : (ev.allDay ? 'all day' : null),
+          is_today: !!(_dateStr && _dateStr === _todayStr), location: ev.location || '' };
+      });
+      var _todayCount = _shaped.filter(function(ev){ return ev.is_today; }).length;
+      var _out = {ok:true, ham_uid:_calHam, today_is:_todayStr,
+        events_today:_todayCount, events:_shaped,
+        note: _todayCount ? (_todayCount + ' event(s) fall on today, ' + _todayStr + '; every other listed event is another day, never present it as today')
+          : (_realEvents.length ? 'events exist in the window but NONE fall on today, ' + _todayStr + '; today itself is open'
+            : 'the calendar source answered and genuinely has no events in this window') };
       return JSON.stringify(_out);
     } catch (eCalReal) { return JSON.stringify({ok:false, reason:'calendar_read_failed: '+eCalReal.message}); }
   }
