@@ -143,17 +143,25 @@ async function pickWeave(hamUid) {
 // Record that the HAM told her to STOP mentioning something. pickWeave then never surfaces
 // any reminder whose text contains this keyword. Founder-caught: he said stop and nothing
 // recorded it, so it kept firing.
-async function suppressWeave(hamUid, keyword) {
+async function suppressWeave(hamUid, keyword, options) {
+  options = options || {};
   if (!_bu() || !_bk() || !hamUid || !keyword) return { ok:false };
   try {
     var kw = String(keyword).toLowerCase().trim();
     var ymd = new Date().toISOString().slice(0,10).replace(/-/g,'');
+    if (options.abortSignal && options.abortSignal.aborted) {
+      return { ok:false, reason:'voice_turn_cancelled' };
+    }
+    if (typeof options.isCancelled === 'function' && await options.isCancelled()) {
+      return { ok:false, reason:'voice_turn_cancelled' };
+    }
     await fetch(_bu() + '/rest/v1/' + _tbl(), { method:'POST', headers: wh(),
       body: JSON.stringify({ ham_uid:String(hamUid).toUpperCase(), agent_global:'PAI', stamp_type:'SUPPRESS_WEAVE',
         acl_stamp:'\u2b21B:core.reminderWeave:SUPPRESS_WEAVE:'+kw.replace(/[^a-z0-9]/g,'_').slice(0,30)+':'+ymd+'\u2b21',
         source:'suppress.weave.'+String(hamUid).toUpperCase()+'.'+Date.now(),
         summary:'[SUPPRESS_WEAVE] stop mentioning: '+kw.slice(0,60),
-        content: JSON.stringify({ keyword:kw, setAt:new Date().toISOString() }), importance:6 }) });
+        content: JSON.stringify({ keyword:kw, setAt:new Date().toISOString() }), importance:6 }),
+      signal:options.abortSignal });
     return { ok:true, keyword:kw };
   } catch (e) { return { ok:false, error:e.message }; }
 }

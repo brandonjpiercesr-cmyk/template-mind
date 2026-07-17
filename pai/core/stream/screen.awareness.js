@@ -84,7 +84,13 @@ function extract(answer) {
   // completely ordinary conversational behavior -- broke the match, and the entire raw
   // block leaked through untouched. Fixed to find the block ANYWHERE and splice it out,
   // regardless of what comes before or after it.
-  const m = text.match(/\[\[\s*SCREEN\s*(\{[\s\S]*?\})\s*\]\]/);
+  let m = text.match(/\[\[\s*SCREEN\s*(\{[\s\S]*?\})\s*\]\]/);
+  // B:core.stream.screen_awareness:FIX:code_fence_leak_20260714 911, founder screenshot:
+  // she stopped using the [[SCREEN {...}]] tag and drifted to a markdown code fence
+  // (```json {...}```) instead -- a different, untagged format the extractor never
+  // matched, so the entire raw fence rendered as her spoken words. Catching that shape
+  // too so a format drift can never leak raw JSON onto the glass again.
+  if (!m) m = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/i);
   if (!m) return { answer: text, block: null };
   let block = null;
   try { block = JSON.parse(m[1]); } catch (e) { block = null; }
@@ -98,35 +104,65 @@ function isRealValue(v) {
   return typeof v === 'string' && v.trim().length > 0 && !/[<>]/.test(v);
 }
 
+async function cancellationRequested(options) {
+  options = options || {};
+  if (options.abortSignal && options.abortSignal.aborted) return true;
+  if (typeof options.isCancelled !== 'function') return false;
+  try { return await options.isCancelled() === true; } catch (e) { return true; }
+}
+
 // Convert a validated block into directives and push to every live session of the HAM.
-async function push(hamUid, block) { // ⬡B async: pulls real live pieces before rendering
+async function push(hamUid, block, options) { // ⬡B async: pulls real live pieces before rendering
+  options = options || {};
   if (!block || typeof block !== 'object') return { pushed: 0, applied: [] };
+  if (await cancellationRequested(options)) {
+    return { pushed:0, applied:[], reason:'voice_turn_cancelled' };
+  }
+  // B:core.stream.screen_awareness:FIX:normalize_drifted_pieces_shape_20260714 911: the
+  // model drifted to a top-level pieces:["calendar"] array (invalid shape) instead of
+  // cards:[{piece:"calendar"}] (the real one). background/preset/skywrite are real
+  // top-level fields and would have worked; only pieces was wrong. Rather than silently
+  // drop her intent, bridge the common drift into the real shape she should have used.
+  if (Array.isArray(block.pieces) && !Array.isArray(block.cards)) {
+    block = Object.assign({}, block, { cards: block.pieces.filter(function (p) { return typeof p === 'string'; })
+      .map(function (p) { return { region: 'right', piece: p }; }) });
+  }
   const applied = [];
   const toHam = function (dir) { return registry.pushToHam(hamUid, 'directive', dir); };
   let pushed = 0;
-  const send = function (dir) {
+  let cancellationObserved = false;
+  const send = async function (dir) {
+    if (await cancellationRequested(options)) {
+      cancellationObserved = true;
+      return { ok:false, reason:'voice_turn_cancelled' };
+    }
     const r = consumer.gatedPush(hamUid, toHam, dir, 'pai_screen_block');
     if (r.ok) pushed++;
     return r;
   };
 
   if (isRealValue(block.background) && BACKGROUND_IDS.indexOf(block.background) !== -1) {
-    send(vocab.updateComponents('__ambience__', [{ type: 'background', name: block.background }]));
+    await send(vocab.updateComponents('__ambience__', [{ type: 'background', name: block.background }]));
+    if (cancellationObserved) return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
     applied.push('background');
   }
   if (isRealValue(block.preset) && reflex.PRESETS[block.preset]) {
-    send(reflex.layoutDirective(reflex.PRESETS[block.preset]));
+    await send(reflex.layoutDirective(reflex.PRESETS[block.preset]));
+    if (cancellationObserved) return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
     applied.push('preset');
   }
   if (isRealValue(block.skywrite)) {
-    send(vocab.updateComponents('__ambience__', [{ type: 'skywrite', text: block.skywrite.trim().slice(0, 140) }]));
+    await send(vocab.updateComponents('__ambience__', [{ type: 'skywrite', text: block.skywrite.trim().slice(0, 140) }]));
+    if (cancellationObserved) return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
     applied.push('skywrite');
   }
   if (block.voice === true) {
     const agentId = process.env.ELEVENLABS_AGENT_ID;
     if (agentId) {
-      send(vocab.createSurface('vara_session', { region: 'center', title: 'VARA' }));
-      send(vocab.updateComponents('vara_session', [{ type: 'vara_embed', agentId: agentId, llmPath: '/vara/llm' }]));
+      await send(vocab.createSurface('vara_session', { region: 'center', title: 'VARA' }));
+      if (cancellationObserved) return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
+      await send(vocab.updateComponents('vara_session', [{ type: 'vara_embed', agentId: agentId, llmPath: '/vara/llm' }]));
+      if (cancellationObserved) return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
     }
   }
   if (Array.isArray(block.cards)) {
@@ -238,12 +274,19 @@ async function push(hamUid, block) { // ⬡B async: pulls real live pieces befor
         comps.push({ type: 'image', url: card.image, caption: isRealValue(card.caption) ? String(card.caption).slice(0, 140) : '' });
       }
       (Array.isArray(card.items) ? card.items : []).filter(isRealValue).slice(0, 8).forEach(function (it) { comps.push({ type: 'card', text: String(it).slice(0, 240) }); });
-      if (piecePromises.length) { const __r = await Promise.all(piecePromises); }
+      if (piecePromises.length) {
+        const __r = await Promise.all(piecePromises);
+        if (await cancellationRequested(options)) {
+          return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
+        }
+      }
       if (!comps.length && isRealValue(card.text)) comps.push({ type: 'card', text: String(card.text).slice(0, 400) });
       if (!comps.length) continue; // hollow-skip: no empty surfaces, and never a fabricated or echoed placeholder
-      const c = send(vocab.createSurface(sid, { region: region, title: title }));
+      const c = await send(vocab.createSurface(sid, { region: region, title: title }));
+      if (cancellationObserved) return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
       if (c.ok) {
-        send(vocab.updateComponents(sid, comps));
+        await send(vocab.updateComponents(sid, comps));
+        if (cancellationObserved) return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
         // ⬡B:core.stream.screen_awareness:BUILD:agui_state_delta_emit_20260711⬡ ALSO
         // emit the same surface as an AG-UI STATE_DELTA (RFC6902 patch) so the glass
         // can consume the industry-standard event. Non-breaking: legacy components
@@ -252,7 +295,8 @@ async function push(hamUid, block) { // ⬡B async: pulls real live pieces befor
           var surface = { cards: comps.filter(function (k) { return k.type !== 'face_control' && k.type !== 'app_window'; }),
             apps: comps.filter(function (k) { return k.type === 'app_window'; }),
             face: (comps.find(function (k) { return k.type === 'face_control'; }) || {}).position };
-          send({ event: 'agui', payload: agui.stateDelta(surface) });
+          await send({ event: 'agui', payload: agui.stateDelta(surface) });
+          if (cancellationObserved) return { pushed:pushed, applied:applied, reason:'voice_turn_cancelled' };
         } catch (eAg) { /* standard path is additive; legacy already delivered */ }
         comps.forEach(function (k) { if (applied.indexOf('card:' + k.type) === -1) applied.push('card:' + k.type); });
       }

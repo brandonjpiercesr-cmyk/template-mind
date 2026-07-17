@@ -99,11 +99,9 @@ async function callGLM(system, userContent, maxTokens) {
 
 // ⬡B:core.outreach:WIRE:real_phone_call:20260702⬡
 // Founder, verbatim: "she still never calls me." Reach was text-only. Now: when her
-// judgment says importance >= 9, she CALLS — the ElevenLabs agent (her voice world,
-// /vara/llm streams her PAI) rings his phone. Below 9, a text. The ElevenLabs
-// outbound endpoint is tried in its documented shapes (twilio-managed, then
-// sip-trunk) because the number's provisioning type isn't visible from here. A
-// provider receipt ID is required before the call is reported as accepted.
+// judgment says importance >= 9, she CALLS through the owned Pipecat worker:
+// telephony carries media, Deepgram hears, PAI judges, and ElevenLabs renders TTS.
+// Below 9, a text. A provider receipt ID is required before a call is accepted.
 async function placeCall(toPhone, callReason, councilResult) {
   // ⬡B:core.outreach:GUARD:provider_call_requires_full_council_pair:20260715⬡
   // This exported provider boundary used to accept any caller-supplied words.
@@ -173,7 +171,10 @@ async function placeCall(toPhone, callReason, councilResult) {
   // call alongside it closes the gap without inventing a new mechanism.
   if (callReason) {
     var handoffSessionId = 'vara.handoff.' + crypto.randomUUID();
-    var handoffExpiresAt = Date.now() + 10 * 60 * 1000;
+    // Keep the exact-call lease valid for a real conversation, not only for a
+    // short demo. Twilio's canonical media stream can remain open for 60
+    // minutes; the five-minute setup margin matches the authorization cap.
+    var handoffExpiresAt = Date.now() + 65 * 60 * 1000;
     var handoffNonce = crypto.randomUUID();
     var handoffInput = { hamUid:dv.ham_uid, message:String(callReason),
       receiptDigest:providerProof.receipt_digest,
@@ -196,14 +197,37 @@ async function placeCall(toPhone, callReason, councilResult) {
     dv.initial_message_session_id = handoffSessionId;
     dv.initial_message_expires_at = handoffExpiresAt;
     dv.initial_message_nonce = handoffNonce;
+
+    // ⬡B:core.outreach:GUARD:pipecat_voice_session_bound_to_exact_ham:20260716⬡
+    // The signed opener authorizes one exact sentence for one phone target; it
+    // does not authorize later caller transcripts to select a HAM. Mint the
+    // existing voice-session binding beside it, using the same verified council
+    // receipt and logical call session but a HAM delivery target and independent
+    // nonce. Pipecat forwards these fields unchanged and /voice/pai-turn verifies
+    // them before any Memory Bank read or model call.
+    var voiceSessionNonce = crypto.randomUUID();
+    var voiceSessionInput = { hamUid:dv.ham_uid, message:'voice_session_bind',
+      receiptDigest:providerProof.receipt_digest,
+      requestId:providerProof.request_id, cycleId:providerProof.cycle_id,
+      deliveryTarget:{ kind:'ham', value:dv.ham_uid },
+      sessionId:handoffSessionId, expiresAt:handoffExpiresAt,
+      nonce:voiceSessionNonce, purpose:'voice_session_bind' };
+    dv.voice_session_receipt_digest = providerProof.receipt_digest;
+    dv.voice_session_request_id = voiceSessionInput.requestId;
+    dv.voice_session_cycle_id = voiceSessionInput.cycleId;
+    dv.voice_session_target_kind = 'ham';
+    dv.voice_session_target_value = dv.ham_uid;
+    dv.voice_session_id = handoffSessionId;
+    dv.voice_session_expires_at = handoffExpiresAt;
+    dv.voice_session_nonce = voiceSessionNonce;
+    dv.voice_session_authorization = require('./pai.outbound.authorization.js')
+      .signInitialMessage(voiceSessionInput);
+    if (!dv.voice_session_authorization) {
+      return { ok:false, reason:'voice_session_bind_unavailable' };
+    }
   }
   const pipecatUrl = String(process.env.PIPECAT_CALL_URL || '').replace(/\/$/, '');
-  const XK = process.env.ELEVENLABS_API_KEY || '';
-  const AGENT = process.env.ELEVENLABS_AGENT_ID || '';
-  const PHONE = process.env.ELEVENLABS_PHONE_ID || process.env.ELEVENLABS_PHONE_NUMBER_ID || '';
-  if (!pipecatUrl && (!XK || !AGENT || !PHONE)) {
-    return { ok:false, reason:'provider_not_configured' };
-  }
+  if (!pipecatUrl) return { ok:false, reason:'provider_not_configured' };
   var effectClaim = await require('./outbound.effect.js').claimProviderAttempt({
     hamUid:recipientEnvelope.ham_uid, channel:'vara_call',
     deliveryTarget:{ kind:'phone', value:toPhone }, artifact:String(callReason),
@@ -212,85 +236,58 @@ async function placeCall(toPhone, callReason, councilResult) {
   });
   if (!effectClaim.ok) return { ok:false, reason:effectClaim.reason,
     effectKey:effectClaim.effectKey || null };
-  // Pipecat is the canonical call owner: Telnyx carries the media, Deepgram is
-  // the ear, A'NEW/PAI owns every response, and ElevenLabs is voice synthesis
-  // only. The legacy ElevenLabs ConvAI dialer remains a migration fallback only
-  // when the Pipecat service is not configured or definitively says the route
-  // does not exist. An ambiguous Pipecat response can never fall through and
-  // create a duplicate call.
-  if (pipecatUrl) {
-    try {
-      const pipecatHeaders = { 'Content-Type':'application/json',
-        'Idempotency-Key':effectClaim.idempotencyKey };
-      if (process.env.PIPECAT_BRIDGE_KEY) {
-        pipecatHeaders.Authorization = 'Bearer ' + process.env.PIPECAT_BRIDGE_KEY;
-      }
-      const pipecatResponse = await fetch(pipecatUrl + '/start', {
-        method:'POST', headers:pipecatHeaders,
-        body:JSON.stringify({ phone_number:toPhone, body:{
-          ham_uid:dv.ham_uid, ham_name:dv.ham_name, world:dv.world,
-          initial_message:dv.initial_message || '', request_id:providerProof.request_id,
-          cycle_id:providerProof.cycle_id, receipt_digest:providerProof.receipt_digest
-        } })
-      });
-      const pipecatBody = await pipecatResponse.json().catch(function(){ return {}; });
-      const pipecatId = pipecatBody.call_control_id || pipecatBody.call_sid || null;
-      if (pipecatResponse.ok && pipecatId) {
-        return { ok:true, via:'pipecat_' + (pipecatBody.provider || 'telephony'),
-          conversation_id:pipecatId };
-      }
-      if (pipecatResponse.ok) return { ok:false, reason:'provider_unverified' };
-      if (pipecatResponse.status !== 404 && pipecatResponse.status !== 405) {
-        return { ok:false, reason:pipecatResponse.status >= 500 ||
-          [408,425,429].indexOf(pipecatResponse.status) !== -1
-          ? 'provider_uncertain' : 'provider_rejected' };
-      }
-    } catch (ePipecat) { return { ok:false, reason:'provider_uncertain' }; }
-  }
-
-  if (!XK || !AGENT || !PHONE) return { ok:false, reason:'provider_not_configured' };
-  const body = JSON.stringify({
-    agent_id: AGENT, agent_phone_number_id: PHONE, to_number: toPhone,
-    conversation_initiation_client_data: {
-      dynamic_variables: dv,
-      custom_llm_extra_body: dv
+  // Pipecat is the only REACH conversation owner: telephony carries media,
+  // Deepgram is the ear, A'NEW/PAI owns every response, and ElevenLabs is TTS
+  // only inside the worker. Fail closed here instead of reviving ConvAI when
+  // the owned service is missing or rejects its route; a second conversation
+  // owner would make both identity and same-call proof ambiguous.
+  try {
+    const pipecatHeaders = { 'Content-Type':'application/json',
+      'Idempotency-Key':effectClaim.idempotencyKey };
+    if (process.env.PIPECAT_BRIDGE_KEY) {
+      pipecatHeaders.Authorization = 'Bearer ' + process.env.PIPECAT_BRIDGE_KEY;
     }
-  });
-  const heads = { 'xi-api-key': XK, 'Content-Type': 'application/json' };
-  heads['Idempotency-Key'] = effectClaim.idempotencyKey;
-  // Documented current endpoint is the hyphenated twilio path; underscore form kept
-  // as fallback since it was the shape this function previously reached on.
-  for (const url of ['https://api.elevenlabs.io/v1/convai/twilio/outbound-call',
-                     'https://api.elevenlabs.io/v1/convai/twilio/outbound_call',
-                     'https://api.elevenlabs.io/v1/convai/sip-trunk/outbound-call']) {
-    try {
-      const r = await fetch(url, { method: 'POST', headers: heads, body });
-      const d = await r.json().catch(function(){ return {}; });
-      const providerId = d.conversation_id || d.callSid || null;
-      if (r.ok && providerId) {
-        return { ok: true, via: url.indexOf('sip') >= 0 ? 'sip' : 'twilio',
-          conversation_id: providerId };
-      }
-      // A 2xx without a receipt is ambiguous: the provider may already have
-      // accepted the call. Stop here so a fallback endpoint cannot ring twice.
-      if (r.ok) return { ok:false, reason:'provider_unverified' };
-      // A server error or timeout is not proof of rejection. Stop without
-      // another endpoint or channel because the first request may have landed.
-      if (r.status >= 500 || r.status === 408 || r.status === 425 || r.status === 429) {
-        return { ok:false, reason:'provider_uncertain' };
-      }
-      // Only a missing/unsupported endpoint shape is safe to try at the next
-      // documented URL. Other 4xx responses are definitive rejections.
-      if (r.status !== 404 && r.status !== 405) {
-        return { ok:false, reason:'provider_rejected' };
-      }
-    } catch (e) {
-      // A network failure after submission is also ambiguous. Retrying another
-      // endpoint could duplicate a call that the first endpoint accepted.
-      return { ok:false, reason:'provider_uncertain' };
+    const pipecatResponse = await fetch(pipecatUrl + '/start', {
+      method:'POST', headers:pipecatHeaders,
+      body:JSON.stringify({ phone_number:toPhone, body:{
+        ham_uid:dv.ham_uid, ham_name:dv.ham_name, world:dv.world,
+        initial_message:dv.initial_message || '', call_reason:dv.call_reason || '',
+        request_id:providerProof.request_id, cycle_id:providerProof.cycle_id,
+        receipt_digest:providerProof.receipt_digest,
+        session_id:dv.voice_session_id,
+        initial_message_receipt_digest:dv.initial_message_receipt_digest,
+        initial_message_authorization:dv.initial_message_authorization,
+        initial_message_request_id:dv.initial_message_request_id,
+        initial_message_cycle_id:dv.initial_message_cycle_id,
+        initial_message_target_kind:dv.initial_message_target_kind,
+        initial_message_target_value:dv.initial_message_target_value,
+        initial_message_session_id:dv.initial_message_session_id,
+        initial_message_expires_at:dv.initial_message_expires_at,
+        initial_message_nonce:dv.initial_message_nonce,
+        voice_session_receipt_digest:dv.voice_session_receipt_digest,
+        voice_session_request_id:dv.voice_session_request_id,
+        voice_session_cycle_id:dv.voice_session_cycle_id,
+        voice_session_target_kind:dv.voice_session_target_kind,
+        voice_session_target_value:dv.voice_session_target_value,
+        voice_session_id:dv.voice_session_id,
+        voice_session_expires_at:dv.voice_session_expires_at,
+        voice_session_nonce:dv.voice_session_nonce,
+        voice_session_authorization:dv.voice_session_authorization
+      } })
+    });
+    const pipecatBody = await pipecatResponse.json().catch(function(){ return {}; });
+    const pipecatId = pipecatBody.call_control_id || pipecatBody.call_sid || null;
+    if (pipecatResponse.ok && pipecatId) {
+      return { ok:true, via:'pipecat_' + (pipecatBody.provider || 'telephony'),
+        conversation_id:pipecatId, providerStatus:pipecatResponse.status };
     }
-  }
-  return { ok:false, reason:'provider_rejected' };
+    if (pipecatResponse.ok) return { ok:false, reason:'provider_unverified',
+      providerStatus:pipecatResponse.status };
+    return { ok:false, reason:pipecatResponse.status >= 500 ||
+      [408,425,429].indexOf(pipecatResponse.status) !== -1
+      ? 'provider_uncertain' : 'provider_rejected',
+      providerStatus:pipecatResponse.status };
+  } catch (ePipecat) { return { ok:false, reason:'provider_uncertain' }; }
 }
 
 const BU = process.env.AIBE_BRAIN_URL;
@@ -331,19 +328,28 @@ async function commitReachMessage(kind, proposedMessage, facts, channel) {
     }
   }
   var factRows = (facts || []).slice(0, 12).map(function (fact) {
-    return '[' + String(fact.stamp_type || 'FACT') + '] ' + String(fact.summary || '').slice(0, 300);
+    return formatReachFact(fact);
   });
   var question = 'Autonomous A\u2019NU ' + String(kind || 'reach')
-    + ' event from verified Memory Bank facts.';
+    + ' event from these exact verified Memory Bank facts:\n'
+    + (factRows.join('\n') || '(none)');
+  var voiceOpenerRule = /^voice$/i.test(channel || '')
+    ? ' This is spoken after the person answers. State the verified purpose and ask one grounded question. '
+      + 'Do not mention a phone number, authorization mechanics, Memory Bank, journals, proof-writing, '
+      + 'provider actions, or anything you are about to do.'
+    : '';
   var prompt = 'Finalize one human-facing A\u2019NU message for this autonomous reach event. '
     + 'Use only the verified facts below. Return only the exact message the person should receive. '
-    + 'Do not narrate the process, do not call a send/write/deploy tool, and do not add unsupported facts.\n\n'
+    + 'Do not narrate the process, do not call a send/write/deploy tool, and do not add unsupported facts.'
+    + voiceOpenerRule + '\n\n'
     + 'VERIFIED FACTS:\n' + (factRows.join('\n') || '(none)')
     + '\n\nREACH DEPARTMENT PROPOSAL:\n' + String(proposedMessage);
   var requestId = 'outreach.' + Date.now() + '.' + require('crypto').randomBytes(6).toString('hex');
   var evidence = (facts || []).slice(0, 8).map(function (fact) {
-    return { source:fact.source || null, stamp_type:fact.stamp_type || null,
-      summary:String(fact.summary || '').slice(0,500) };
+    return { ham_uid:hamUid, provenance:'memory_bank.exact_ham',
+      source:fact.source || null, stamp_type:fact.stamp_type || null,
+      summary:String(fact.summary || '').slice(0,500),
+      evidence:formatReachFact(fact) };
   });
   try {
     var { runPAI } = require('./tool.loop.js');
@@ -415,7 +421,7 @@ function sameAlertRecently(lastSentSummary, newMessage, withinMs) {
 async function gatherFacts(sinceIso) {
   const uid = founderUid();
   const url = _bu() + '/rest/v1/' + _tbl() + ''
-    + '?ham_uid=eq.' + uid
+    + '?ham_uid=eq.' + encodeURIComponent(uid)
     + '&importance=gte.8'
     + '&created_at=gte.' + encodeURIComponent(sinceIso)
     // ⬡B:core.outreach:FIX:three_ray_chatter_leaking_into_real_alerts:20260706⬡
@@ -429,7 +435,7 @@ async function gatherFacts(sinceIso) {
     // same category: real, but meant for the build/other chats to read, not
     // a founder-facing alert. Extending the exact pattern already decided
     // and proven on 20260703, not deciding a new one.
-    + '&stamp_type=not.in.(OUTREACH,LOGFUL,MINUTES,AIR_START,AIR_CYCLE,CYCLE_LOCK,RESULT,GAP_FLAGS,TASK,TASK_DONE,TASK_INCOMPLETE,GIVE_UP_TRY,SEAL,KEY_BACKUP,LESSON,CHATTER,ROADMAP,MILESTONE,DIRECTIVE,DECISION,EXIT_DECISION,CYCLE_STEP,CONTRIBUTION,ENRICHED,DIGEST,UNRESOLVED_INBOUND)'
+    + '&stamp_type=not.in.(OUTREACH,LOGFUL,MINUTES,AIR_START,AIR_CYCLE,CYCLE_LOCK,RESULT,GAP_FLAGS,TASK,TASK_DONE,TASK_INCOMPLETE,GIVE_UP_TRY,SEAL,KEY_BACKUP,LESSON,CHATTER,ROADMAP,MILESTONE,DIRECTIVE,DECISION,EXIT_DECISION,CYCLE_STEP,PAI_STAGE,RESPEC,CONTRIBUTION,ENRICHED,DIGEST,UNRESOLVED_INBOUND)'
     // ⬡B:core.outreach:FIX:exit_decision_ops_chatter_leaking_into_reach:20260712⬡
     // Same recurring disease, caught live by the founder: everything reaching him was
     // importance 9. Cause was NOT the judge inflating (its rubric is fine) -- it was
@@ -451,7 +457,7 @@ async function gatherFacts(sinceIso) {
     // at the source query, same mechanism that already excluded MINUTES. What
     // remains reachable: genuinely founder-facing beads (ALERT, MILESTONE, DRAFT,
     // OUTREACH-worthy findings) at importance >= 8. Internal chatter stays internal.
-    + '&order=created_at.desc&limit=12&select=id,source,stamp_type,summary,created_at,importance';
+    + '&order=created_at.desc&limit=12&select=id,source,stamp_type,summary,content,created_at,importance';
   try {
     const r = await fetch(url, { headers: bh() });
     if (!r.ok) return [];
@@ -504,6 +510,33 @@ async function ruleOnRecommendation(rec, verdict) {
   } catch (e) { /* audit-only, never blocks the decision */ }
 }
 
+// The summary is an index label; the content is the fact. REACH previously handed
+// the judge only labels, so a durable ALERT whose content said "call him now" was
+// reduced to its generic title and could be misclassified as routine work. Keep the
+// bounded 12-fact window and a bounded detail excerpt, but give judgment the actual
+// evidence it is supposed to judge.
+function formatReachFact(fact) {
+  var summary = String(fact && fact.summary || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  var rawContent = fact && fact.content;
+  if (rawContent && typeof rawContent !== 'string') {
+    try { rawContent = JSON.stringify(rawContent); } catch (e) { rawContent = ''; }
+  }
+  var detail = String(rawContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+  var line = '[' + String(fact && fact.stamp_type || 'FACT') + ' imp'
+    + Number(fact && fact.importance || 0) + '] ' + summary;
+  if (detail && detail !== summary) line += ' | DETAIL: ' + detail;
+  return line;
+}
+
+function explicitCallRequestFact(facts) {
+  return (facts || []).find(function (fact) {
+    if (String(fact && fact.stamp_type || '').toUpperCase() !== 'ALERT' ||
+        Number(fact && fact.importance || 0) < 8) return false;
+    var text = String(fact.summary || '') + ' ' + String(fact.content || '');
+    return /\b(call|ring|phone) (?:me|you|him|her)\b|\bgiv(?:e|ing) (?:me|you|him|her) (?:\w+ ){0,3}call\b|\bcan you call\b/i.test(text);
+  }) || null;
+}
+
 // Her judgment + her voice, on her real Memory Bank. Returns { reach, importance, message, reason }.
 async function judgeAndCompose(facts, gapHeld) {
   if (!GROQ) return { reach: false, reason: 'no_groq_key' };
@@ -516,6 +549,9 @@ async function judgeAndCompose(facts, gapHeld) {
     + ' behavior, or specifics the facts do not mention -- a fact saying a file was committed is not license to'
     + ' describe what that file supposedly does unless the fact itself says so. When unsure what something does,'
     + ' say that it was built, not what it accomplishes.'
+    + '\nDELIVERY TARGETS ARE PRIVATE PROVIDER STATE: never put a phone number or email address in MESSAGE.'
+    + ' If the right channel is voice, MESSAGE is what you say after the person answers, never a promise that you'
+    + ' are about to call and never an instruction to call a number.'
     // \u2b21B:core.outreach:FIX:importance_score_had_zero_real_calibration:20260708\u2b21
     // Real, live, severe incident, 4:20 AM: the same routine backlog kept
     // scoring importance 9+ and firing every few minutes because nothing
@@ -534,7 +570,7 @@ async function judgeAndCompose(facts, gapHeld) {
     + ' urgency of the content, independently, every time.'
     + '\nAnswer in EXACTLY this shape:\nREACH: YES or REACH: NO\nIMPORTANCE: 1-10\nREASON: one sentence\nMESSAGE: the exact text to send, in your own voice, as long as the real substance actually requires, or NONE';
   const user = facts.length
-    ? 'Recent facts from your world:\n' + facts.map(f => '[' + f.stamp_type + ' imp' + f.importance + '] ' + (f.summary || '').slice(0, 140)).join('\n')
+    ? 'Recent facts from your world:\n' + facts.map(formatReachFact).join('\n')
     : 'No high-importance facts in the window.';
   try {
     let out = await callGLM(sys, user, 1200);
@@ -688,6 +724,19 @@ async function outreachPass(force) {
   const floorIso = lastSent ? lastSent.created_at : new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
   const facts = await gatherFacts(floorIso);
   const judgment = await judgeAndCompose(facts, gapHeld && !force);
+  // COLD doctrine: an explicit, durable ask wins. The judgment model may still
+  // paraphrase "call now" while contradictorily emitting REACH:NO or MESSAGE:NONE.
+  // Correct only that mechanical contradiction here; the fact remains an uncommitted
+  // proposal and the canonical PAI/council still authors every delivered byte.
+  const explicitCallFact = explicitCallRequestFact(facts);
+  if (explicitCallFact) {
+    judgment.reach = true;
+    judgment.importance = Math.max(9, Number(judgment.importance || 0),
+      Number(explicitCallFact.importance || 0));
+    if (!judgment.message || /^none\b/i.test(String(judgment.message).trim())) {
+      judgment.message = String(explicitCallFact.content || explicitCallFact.summary || '');
+    }
+  }
   const result = { facts_count: facts.length, gapHeld, judgment, sent: false };
 
   // THE HANDSHAKE: rule on every pending station recommendation. A'NEW is the
@@ -819,7 +868,8 @@ async function outreachPass(force) {
   // explicit ask, and deliberates the one right channel within the defined purposes.
   // Additive and fail-open, the cold ladder stands if the department cannot run.
   try {
-    var _rd = await require('../reach/reach.department.js').decideReach(judgment, result.proposedChannel, {});
+    var _rd = await require('../reach/reach.department.js').decideReach(judgment,
+      result.proposedChannel, { verifiedEvidence:facts.map(formatReachFact).join('\n') });
     if (_rd && _rd.channel) { result.proposedChannel = _rd.channel; result.proposedWhy = _rd.why || result.proposedWhy; result.reachSource = _rd.source; }
   } catch (eRd) { /* fail open: cold ladder decision stands */ }
 
@@ -1357,4 +1407,4 @@ async function checkDailyDigest() {
 }
 
 module.exports = { outreachPass, outreachPassForHam, startOutreach, placeCall, checkDailyDigest,
-  _test:{ gapHeldSinceSent } };
+  _test:{ gapHeldSinceSent, formatReachFact, explicitCallRequestFact } };

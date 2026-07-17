@@ -68,9 +68,9 @@ async function resolveHam(phone) {
 // ⬡B:core.wren.reply:WIRE:one_hardened_tap_provider:20260715⬡
 // Keep the historic export for callers, but remove the duplicate raw provider.
 // Every text now crosses the same TAP boundary with HAM + full council proof.
-async function tapSend(phone, text, hamUid, councilResult) {
+async function tapSend(phone, text, hamUid, councilResult, options) {
   var result = await require('../../reach/tap/tap.js')
-    .tapSend(phone, text, hamUid, councilResult);
+    .tapSend(phone, text, hamUid, councilResult, options);
   if (result && result.ok === true) rememberOutbound(text);
   return result;
 }
@@ -207,7 +207,7 @@ async function handleReply(req) {
   // Send the real response back via Blooio
   var sendResult = await tapSend(sender, outText, hamUid, paiResult);
   require('../outbound.trace.js').stampOutbound({ hamUid: hamUid, channel: 'blooio', sent: !!(sendResult && (sendResult.message_id || sendResult.ok)), textPreview: outText, sigil: synth.sigil ? synth.sigil.stamp : null, tools_used: synth.tools_used }).catch(function(){});
-    require('../../logful/index.js').logfulStore({ hamUid: hamUid, agent: 'ANU', type: 'channel_turn',
+    require('../logful/index.js').logfulStore({ hamUid: hamUid, agent: 'ANU', type: 'channel_turn',
       data: { channel: 'text', inputData: text, answer: outText },
       summary: '[TEXT turn] ' + String(text).slice(0, 80), importance: 5 }).catch(function(){}); // \u2b21B:memory.unification:BUILD:every_channel_saves_full_turns_20260710\u2b21
 

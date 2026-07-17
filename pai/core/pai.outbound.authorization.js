@@ -9,7 +9,10 @@
 var crypto = require('crypto');
 
 var VERSION = 'anew.pai.provider-handoff.v2';
-var MAX_LIFETIME_MS = 30 * 60 * 1000;
+// Twilio keeps the canonical media stream open for at most 60 minutes. Give
+// the signed handoff five bounded minutes for dial/setup so authorization can
+// never expire while the provider is still carrying the same verified call.
+var MAX_LIFETIME_MS = 65 * 60 * 1000;
 
 function key(env) {
   env = env || process.env;

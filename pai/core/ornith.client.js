@@ -49,17 +49,6 @@ async function callOrnith(system, userContent, maxTokens) {
       }
       if (statusResp && statusResp.status === 'FAILED') return null;
     }
-    // ⬡B:core.ornith.client:WIRE:cancel_abandoned_jobs_kill_zombie_queue:20260716⬡
-    // Give-up path: this client used to walk away from jobs it stopped polling,
-    // leaving them alive in the RunPod queue forever. A non-empty queue keeps the
-    // QUEUE_DELAY scaler holding paid GPU workers awake around the clock, which is
-    // the queue half of the balance drain (611 zombie jobs purged 20260716). Every
-    // job this client abandons is now cancelled so the queue can actually empty.
-    try {
-      await fetch(ORNITH_URL.replace(/\/$/, '') + '/cancel/' + jobId, {
-        method: 'POST', headers: { Authorization: 'Bearer ' + RUNPOD_KEY }
-      });
-    } catch (e2) {}
     return null;
   } catch (e) { return null; }
 }

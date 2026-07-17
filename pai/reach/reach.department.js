@@ -48,7 +48,8 @@ async function decideReach(judgment, ladderChannel, ctx) {
   ctx = ctx || {};
   judgment = judgment || {};
   var imp = judgment.importance || 0;
-  var txt = ((judgment.reason || '') + ' ' + (judgment.message || '')).toLowerCase();
+  var txt = ((judgment.reason || '') + ' ' + (judgment.message || '') + ' '
+    + (ctx.verifiedEvidence || '')).toLowerCase();
   // COLD: an explicit ask wins, that is its defined purpose.
   if (/\b(call|ring|phone) (?:me|you|him|her)\b|\bgiv(?:e|ing) (?:me|you|him|her) (?:\w+ ){0,3}call\b|\bcan you call\b/.test(txt) || ctx.userRequestedChannel === 'voice') {
     return { channel: 'voice', why: 'the founder explicitly asked to be called', escalate: false, source: 'explicit_request' };

@@ -11,6 +11,7 @@ var crypto = require('crypto');
 // ⬡B:core.pai_outbound_council:WIRE:shadow_checks_canonical_coding_relay:20260715⬡
 var codingRelay = require('./coding.relay.contract.js');
 var identityProvenance = require('./identity.provenance.js');
+var voiceConversationPolicy = require('./voice.conversation.policy.js');
 
 var STAGE_ORDER = Object.freeze([
   'PAM',
@@ -333,6 +334,10 @@ function validateInput(input) {
     }
   }
   return null;
+}
+
+function councilCancellationRequested(input) {
+  return !!(input && input.signal && input.signal.aborted);
 }
 
 function parseStrictJsonObject(raw) {
@@ -1205,6 +1210,93 @@ async function defaultPamStage(ctx) {
   };
 }
 
+function verifiedVoiceCallHandoff(ctx) {
+  var context = ctx && ctx.context;
+  if (!ctx || String(ctx.channel || '').toLowerCase() !== 'voice' ||
+      !context || context.mode !== 'voice' ||
+      !Array.isArray(context.pending_effects) || context.pending_effects.length > 0 ||
+      !Array.isArray(context.verified_evidence)) return null;
+  var handoffs = context.verified_evidence.filter(function (candidate) {
+    return candidate && candidate.tool === 'voice_call_handoff' &&
+      candidate.provenance === 'pipecat.signed_provider_call_handoff';
+  });
+  if (handoffs.length !== 1) return null;
+  var item = handoffs[0];
+  var result = item.result;
+  var expectedHam = String(ctx.hamUid || '').toUpperCase();
+  if (!expectedHam || !result || typeof result !== 'object' ||
+      String(item.ham_uid || '').toUpperCase() !== expectedHam ||
+      item.call_id !== context.call_id || item.session_id !== context.session_id ||
+      item.turn_id !== context.turn_id || String(ctx.requestId || '') !== context.turn_id ||
+      result.call_id !== context.call_id || result.session_id !== context.session_id ||
+      result.turn_id !== context.turn_id ||
+      result.binding_digest !== context.call_binding_digest ||
+      typeof result.call_purpose !== 'string' || !result.call_purpose.trim() ||
+      typeof result.committed_opener !== 'string' || !result.committed_opener.trim() ||
+      result.provider_call_binding_verified !== true ||
+      !/^[A-Za-z0-9._:-]{8,180}$/.test(String(item.call_id || '')) ||
+      !/^[A-Za-z0-9._:-]{8,220}$/.test(String(item.session_id || '')) ||
+      !/^[A-Za-z0-9._:-]{8,160}$/.test(String(item.turn_id || '')) ||
+      !String(item.turn_id || '').startsWith(String(item.session_id || '') + '.turn.') ||
+      !/^[1-9][0-9]{0,8}$/.test(String(item.turn_id || '')
+        .slice((String(item.session_id || '') + '.turn.').length)) ||
+      !/^[A-Za-z0-9._:-]{8,180}$/.test(String(item.request_id || '')) ||
+      !/^[A-Za-z0-9._:-]{8,220}$/.test(String(item.cycle_id || '')) ||
+      !/^[a-f0-9]{64}$/.test(String(item.receipt_digest || '')) ||
+      !/^[a-f0-9]{64}$/.test(String(context.call_binding_digest || ''))) return null;
+  var expectedDigest = digestText(JSON.stringify([
+    expectedHam, item.session_id, item.call_id, item.turn_id, result.call_purpose,
+    result.committed_opener, item.request_id, item.cycle_id, item.receipt_digest
+  ]));
+  if (expectedDigest !== context.call_binding_digest) return null;
+  return {
+    ham_uid: expectedHam,
+    session_id: item.session_id,
+    call_id: item.call_id,
+    turn_id: item.turn_id,
+    request_id: item.request_id,
+    cycle_id: item.cycle_id,
+    binding_digest: context.call_binding_digest,
+    call_purpose: result.call_purpose,
+    committed_opener: result.committed_opener
+  };
+}
+
+function verifiedExactVoiceHandoffRelay(ctx, handoff) {
+  handoff = handoff || verifiedVoiceCallHandoff(ctx);
+  if (!handoff || !voiceConversationPolicy.isCallPurposeQuestion(ctx.question)) return null;
+  var answer = String(ctx.answer || '');
+  var field = answer === handoff.call_purpose ? 'call_purpose' :
+    (answer === handoff.committed_opener ? 'committed_opener' : null);
+  if (!field) return null;
+  return {
+    ham_uid: handoff.ham_uid,
+    session_id: handoff.session_id,
+    call_id: handoff.call_id,
+    turn_id: handoff.turn_id,
+    binding_digest: handoff.binding_digest,
+    answer_field: field,
+    question_digest: digestText(ctx.question),
+    answer_digest: digestText(answer)
+  };
+}
+
+function verifiedTrivialVoiceGreeting(ctx, handoff) {
+  handoff = handoff || verifiedVoiceCallHandoff(ctx);
+  if (!handoff || !voiceConversationPolicy.isPureGreeting(ctx.question) ||
+      !voiceConversationPolicy.isTrivialGreetingAnswer(ctx.answer)) return null;
+  return {
+    ham_uid: handoff.ham_uid,
+    session_id: handoff.session_id,
+    call_id: handoff.call_id,
+    turn_id: handoff.turn_id,
+    binding_digest: handoff.binding_digest,
+    grammar: 'fact_free_voice_greeting.v1',
+    question_digest: digestText(ctx.question),
+    answer_digest: digestText(ctx.answer)
+  };
+}
+
 // ⬡B:core.pai_outbound_council:WIRE:exact_coda_relay_binds_shadow_judgment:20260715⬡
 // A model judgment still runs on every SHADOW stage. Its negative verdict may
 // not mislabel exact, positively scored server evidence as fabricated when the
@@ -1274,6 +1366,44 @@ function verifiedExactNamedEvidenceRelay(ctx, namedEvidence) {
     }
   }
   return null;
+}
+
+function verifiedRuntimeIdentityBinding(ctx) {
+  if (!ctx || !/\bwho\s+are\s+you\b|\bwho\s+am\s+i\b|\bhow\s+do\s+you\s+know\b|\bprove\s+it\b/i
+      .test(String(ctx.question || ''))) return null;
+  var evidence = ctx.context && Array.isArray(ctx.context.verified_evidence)
+    ? ctx.context.verified_evidence : [];
+  var ham = String(ctx.hamUid || '').toUpperCase();
+  var requestId = String(ctx.requestId || '');
+  var cycleId = String(ctx.cycleId || '');
+  var binding = evidence.find(function (item) {
+    return item && item.name === 'runtime_identity_binding' &&
+      item.provenance === 'pai.current_turn.server_identity' &&
+      String(item.ham_uid || '').toUpperCase() === ham &&
+      String(item.request_id || '') === requestId &&
+      String(item.cycle_id || '') === cycleId && item.assistant && item.human;
+  });
+  if (!binding) return null;
+  function tokens(value) {
+    return String(value || '').toLowerCase().replace(/[\u2018\u2019']/g, '')
+      .replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(function (word) {
+        return word.length > 1;
+      });
+  }
+  var answerTokens = tokens(ctx.answer);
+  var assistantTokens = tokens(binding.assistant.name);
+  var humanTokens = tokens(binding.human.name);
+  if (!assistantTokens.length || !humanTokens.length ||
+      !assistantTokens.every(function (word) { return answerTokens.indexOf(word) >= 0; }) ||
+      answerTokens.indexOf(humanTokens[0]) < 0) return null;
+  return {
+    ham_uid:ham,
+    request_id:requestId,
+    cycle_id:cycleId,
+    assistant_name_digest:digestText(String(binding.assistant.name)),
+    human_name_digest:digestText(String(binding.human.name)),
+    evidence_source:String(binding.human.source || '').slice(0, 260)
+  };
 }
 
 function identityEvidenceReceiptContradictions(ctx) {
@@ -1353,15 +1483,37 @@ async function defaultShadowStage(ctx, injected) {
   var deterministicFindings = ((boardResult && boardResult.flags) || [])
     .concat(namedContextFlags, memoryAbsenceFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
       identityReceiptFlags);
+  var boardPassed = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
+    ((boardResult && boardResult.flags) || []).length === 0 &&
+    namedContextFlags.length === 0 && memoryAbsenceFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
+    provenanceFlags.length === 0 && identityReceiptFlags.length === 0);
+  var verifiedVoiceHandoff = verifiedVoiceCallHandoff(ctx);
+  var exactVoiceHandoffRelay = verifiedExactVoiceHandoffRelay(ctx, verifiedVoiceHandoff);
+  var trivialVoiceGreeting = verifiedTrivialVoiceGreeting(ctx, verifiedVoiceHandoff);
+  var deterministicVoicePassReason = boardPassed && deterministicFindings.length === 0 &&
+    (exactVoiceHandoffRelay || trivialVoiceGreeting)
+    ? (exactVoiceHandoffRelay ? 'SHADOW_PASS_VERIFIED_VOICE_HANDOFF' :
+      'SHADOW_PASS_TRIVIAL_VOICE_GREETING') : null;
 
   var system = 'You are SHADOW, the required factual-integrity judgment in an outbound council. ' +
     'Judge whether the proposed answer invents facts, attributes claims without evidence, or states uncertainty as certainty. ' +
     'Judge factual integrity only; do not reject for style, brevity, completeness, or helpfulness because other council stages own those concerns. ' +
+    // ⬡B:core.pai_outbound_council:REPAIR:paraphrase_is_not_contradiction:20260716⬡
+    // The judge was holding faithful paraphrases of bound evidence as
+    // contradictions and warm greeting language as invention, which held the
+    // door on most SEATED entries. A hold must now quote a concrete claim the
+    // evidence contradicts or cannot support. Verified locally: six of six
+    // honest evidence-grounded welcomes approved, three of three fabricated
+    // answers still held with the contradicting evidence named.
+    'A faithful paraphrase of the bound evidence is not a contradiction and is not invention; treat wording differences that preserve meaning as supported. ' +
+    'Greeting, welcome, encouragement, and tone language makes no factual claim and is never grounds to hold. ' +
+    'Hold only when you can quote a concrete factual claim from the proposed answer that the bound evidence contradicts or cannot support. ' +
     'Named context evidence was deterministically extracted from the bound deliberation input; reject any answer that denies or contradicts it. ' +
     'Identity provenance is deterministic: stored memory and current bound role context may not be collapsed into one identity claim. ' +
     'A current self-preference must name a choice and state whether it is a fresh judgment or stored preference. ' +
     'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise sentence"}.';
   var user = JSON.stringify({
+    binding: { ham_uid:ctx.hamUid, request_id:ctx.requestId, cycle_id:ctx.cycleId },
     question: ctx.question || '',
     proposed_answer: ctx.answer,
     channel: ctx.channel || 'unknown',
@@ -1377,38 +1529,94 @@ async function defaultShadowStage(ctx, injected) {
     verified_evidence: verifiedEvidence,
     pending_effects: boundedEvidence(ctx.context && ctx.context.pending_effects || [])
   });
-  var judgment = await modelLadder.deliberate(system, user, {
-    max_tokens: 240,
-    temperature: 0,
-    timeout: 25000,
-    json: true
-  });
-  var parsed = judgment && parseStrictJsonObject(judgment.content);
-  var boardPassed = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
-    ((boardResult && boardResult.flags) || []).length === 0 &&
-    namedContextFlags.length === 0 && memoryAbsenceFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
-    provenanceFlags.length === 0 && identityReceiptFlags.length === 0);
+  var voiceRealtime = String(ctx.channel || '').toLowerCase() === 'voice';
+  var judgment = null;
+  var parsed = null;
+  // ⬡B:core.pai_outbound_council:REPAIR:exact_voice_shadow_no_network:20260717⬡
+  // SHADOW still runs and emits its normal durable stage receipt. Only the
+  // probabilistic network judgment is unnecessary when cold checks are clean
+  // and the entire answer is either exact signed-handoff bytes or a closed,
+  // fact-free greeting. Any paraphrase, extra claim, effect, or binding defect
+  // falls through to the unchanged model and review path.
+  if (deterministicVoicePassReason) {
+    parsed = { approved:true, reason:deterministicVoicePassReason };
+  } else {
+    judgment = await modelLadder.deliberate(system, user, {
+      max_tokens: 240,
+      temperature: 0,
+      timeout: voiceRealtime ? 1800 : 25000,
+      json: true,
+      realtime: voiceRealtime,
+      signal:ctx.signal
+    });
+    parsed = judgment && parseStrictJsonObject(judgment.content);
+  }
   var modelPassed = !!(parsed && parsed.approved === true && isNonEmpty(parsed.reason));
   var exactRelay = verifiedExactNamedEvidenceRelay(ctx, namedContextEvidence);
   var exactRelayPass = !!(boardPassed && deterministicFindings.length === 0 &&
     parsed && parsed.approved === false && isNonEmpty(parsed.reason) && exactRelay);
-  var shadowPassed = boardPassed && (modelPassed || exactRelayPass);
+  var runtimeIdentity = verifiedRuntimeIdentityBinding(ctx);
+  // ⬡B:core.pai_outbound_council:REPAIR:clean_shadow_hold_gets_independent_review:20260716⬡
+  // A clean deterministic board must not turn one probabilistic false positive
+  // into a dead chat turn. Give a negative model-only judgment one independent,
+  // bounded factual review. The reviewer sees the same bound evidence plus the
+  // first reason, cannot cure any deterministic flag, and the exact answer still
+  // crosses the unchanged council, STAMP, and durable readback before release.
+  var reviewJudgment = null;
+  var reviewParsed = null;
+  if (boardPassed && deterministicFindings.length === 0 && judgment && parsed &&
+      parsed.approved === false && isNonEmpty(parsed.reason) && !exactRelayPass) {
+    var reviewSystem = system + ' This is an independent review of a prior model-only hold. ' +
+      'Hold only when you can identify a concrete factual claim in the proposed answer that is unsupported or contradicted by the bound evidence. ' +
+      'Do not hold merely because the answer is brief, does not provide every possible proof detail, or carefully limits what it knows.';
+    var reviewUser = JSON.stringify({
+      prior_hold_reason: String(parsed.reason).slice(0, 500),
+      bound_review: JSON.parse(user)
+    });
+    reviewJudgment = await modelLadder.deliberate(reviewSystem, reviewUser, {
+      max_tokens: 240,
+      temperature: 0,
+      timeout: voiceRealtime ? 1800 : 25000,
+      json: true,
+      realtime: voiceRealtime,
+      signal:ctx.signal
+    });
+    reviewParsed = reviewJudgment && parseStrictJsonObject(reviewJudgment.content);
+    modelPassed = !!(reviewParsed && reviewParsed.approved === true &&
+      isNonEmpty(reviewParsed.reason));
+  }
+  var runtimeIdentityPass = !!(boardPassed && deterministicFindings.length === 0 &&
+    runtimeIdentity && parsed && parsed.approved === false &&
+    (!reviewParsed || reviewParsed.approved === false));
+  var shadowPassed = boardPassed && (modelPassed || exactRelayPass || runtimeIdentityPass);
 
   return {
     ok: shadowPassed,
     answer: ctx.answer,
-    reason: !judgment ? 'shadow_model_unavailable' :
+    reason: deterministicVoicePassReason || (!judgment ? 'shadow_model_unavailable' :
       (!parsed ? 'shadow_judgment_invalid' :
         (!boardPassed ? 'shadow_deterministic_hold' :
-          (modelPassed ? 'SHADOW_PASS' :
-            (exactRelayPass ? 'SHADOW_PASS_VERIFIED_EVIDENCE_RELAY' : 'shadow_model_hold')))),
+          (modelPassed ? (reviewParsed ? 'SHADOW_PASS_REVIEW' : 'SHADOW_PASS') :
+            (exactRelayPass ? 'SHADOW_PASS_VERIFIED_EVIDENCE_RELAY' :
+              (runtimeIdentityPass ? 'SHADOW_PASS_RUNTIME_IDENTITY' : 'shadow_model_hold')))))),
     evidence: {
       deterministic: {
         verdict: (namedContextFlags.length || memoryAbsenceFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
         flags: deterministicFindings,
         claims_checked: (boardResult && boardResult.claimsChecked) || 0
       },
-      judgment: judgment ? {
+      judgment: deterministicVoicePassReason ? {
+        approved: true,
+        reason: deterministicVoicePassReason,
+        model: null,
+        via: 'deterministic_voice_evidence',
+        response_digest: digestObject({
+          reason:deterministicVoicePassReason,
+          proof:exactVoiceHandoffRelay || trivialVoiceGreeting
+        }),
+        model_skipped: true,
+        overridden_by_exact_named_evidence_relay: false
+      } : judgment ? {
         approved: parsed && parsed.approved === true,
         reason: parsed && parsed.reason,
         model: judgment.model,
@@ -1416,7 +1624,17 @@ async function defaultShadowStage(ctx, injected) {
         response_digest: digestText(judgment.content || ''),
         overridden_by_exact_named_evidence_relay: exactRelayPass
       } : { approved: false, reason: 'no_real_judgment' },
+      review_judgment: reviewJudgment ? {
+        approved: reviewParsed && reviewParsed.approved === true,
+        reason: reviewParsed && reviewParsed.reason,
+        model: reviewJudgment.model,
+        via: reviewJudgment.via,
+        response_digest: digestText(reviewJudgment.content || '')
+      } : null,
       exact_named_evidence_relay: exactRelay,
+      exact_voice_handoff_relay: exactVoiceHandoffRelay,
+      trivial_voice_greeting: trivialVoiceGreeting,
+      runtime_identity_binding: runtimeIdentity,
       named_context_evidence: boundedEvidence(namedContextEvidence),
       categorical_memory_absence: boundedEvidence(memoryAbsenceFlag),
       current_preference_provenance: boundedEvidence(preferenceFlags),
@@ -1942,6 +2160,7 @@ function buildStageContext(input, currentAnswer, quillRequired, stages, extra) {
     activeWorld: input.activeWorld || null,
     delivery: input.delivery || {},
     context: input.context || {},
+    signal: input.signal || null,
     quillRequired: quillRequired,
     stages: stages.slice()
   }, extra || {});
@@ -1985,6 +2204,9 @@ async function runOutboundCouncil(input, injected) {
   input = Object.assign({}, input);
   if (suppliedTarget !== undefined) input.deliveryTarget = canonicalizeDeliveryTarget(suppliedTarget);
   delete input.delivery_target;
+  if (councilCancellationRequested(input)) {
+    return { ok:false, reason:'council_cancelled', blocked_by:'CANCELLED', stages:[] };
+  }
   // ⬡B:core.pai_outbound_council:GUARD:identity_receipt_before_stages:20260715⬡
   // A provenance-required cycle cannot begin unless the exact injected result
   // bytes verify against the same receipt carried by the ledger and context.
@@ -2012,6 +2234,9 @@ async function runOutboundCouncil(input, injected) {
 
   for (var i = 0; i < STAGE_ORDER.length - 1; i++) {
     var stage = STAGE_ORDER[i];
+    if (councilCancellationRequested(input)) {
+      return failureResult('council_cancelled', 'CANCELLED', stages, input, currentAnswer);
+    }
     if (stage === 'QUILL' && !quillRequired) {
       var skippedAt = nowMs(deps);
       stages.push(makeStageReceipt(stage, i, false, false, true, currentAnswer, currentAnswer,
@@ -2037,6 +2262,9 @@ async function runOutboundCouncil(input, injected) {
         evidence: {}
       };
     }
+    if (councilCancellationRequested(input)) {
+      return failureResult('council_cancelled', 'CANCELLED', stages, input, currentAnswer);
+    }
     var ended = nowMs(deps);
     var humanStageAnswer = isHumanFacingAnswer(normalized.answer);
     var receipt = makeStageReceipt(stage, i, true, true, normalized.ok && humanStageAnswer,
@@ -2053,6 +2281,9 @@ async function runOutboundCouncil(input, injected) {
   }
 
   var stampIndex = STAGE_ORDER.length - 1;
+  if (councilCancellationRequested(input)) {
+    return failureResult('council_cancelled', 'CANCELLED', stages, input, currentAnswer);
+  }
   var stampHandler = deps.stages.STAMP;
   if (typeof stampHandler !== 'function') {
     return failureResult('stage_handler_missing', 'STAMP', stages, input, currentAnswer);
@@ -2071,6 +2302,9 @@ async function runOutboundCouncil(input, injected) {
       answer: currentAnswer,
       evidence: {}
     };
+  }
+  if (councilCancellationRequested(input)) {
+    return failureResult('council_cancelled', 'CANCELLED', stages, input, currentAnswer);
   }
   var stampEnded = nowMs(deps);
   if (!stampResult.ok || stampResult.answer !== currentAnswer ||
@@ -2107,11 +2341,45 @@ async function runOutboundCouncil(input, injected) {
   });
   var preStampDurable = [];
   try {
-    requestDurable = await persistAndReadRow(requestBead, deps,
-      { kind: 'request', stage: null }, sameRequestReadback);
-    for (var rowIndex = 0; rowIndex < preStampRows.length; rowIndex++) {
-      preStampDurable.push(await persistAndReadRow(preStampRows[rowIndex], deps,
-        { kind: 'stage', stage: STAGE_ORDER[rowIndex] }, sameStageReadback));
+    if (String(input.channel || '').toLowerCase() === 'voice') {
+      // These seven rows describe stages that have already completed. Their
+      // graph edges bind canonical source strings, not generated row ids, so
+      // voice can durably represent/read them in parallel without changing
+      // stage authority or the final receipt -> STAMP commit dependency.
+      var evidenceSpecs = [{ row:requestBead,
+        meta:{ kind:'request', stage:null }, validator:sameRequestReadback }]
+        .concat(preStampRows.map(function (row, rowIndex) {
+          return { row:row, meta:{ kind:'stage', stage:STAGE_ORDER[rowIndex] },
+            validator:sameStageReadback };
+        }));
+      var evidenceSources = evidenceSpecs.map(function (spec) { return spec.row.source; });
+      if (evidenceSpecs.length !== 7 || new Set(evidenceSources).size !== evidenceSpecs.length) {
+        throw new Error('evidence_source_collision');
+      }
+      // allSettled is intentional: Promise.all would return on the first
+      // rejection while other durable writes were still running. Wait for the
+      // complete bounded wave, then fail closed before final receipt or STAMP.
+      var evidenceSettled = await Promise.allSettled(evidenceSpecs.map(function (spec) {
+        return persistAndReadRow(spec.row, deps, spec.meta, spec.validator);
+      }));
+      var evidenceFailure = evidenceSettled.find(function (result) {
+        return result.status === 'rejected';
+      });
+      if (evidenceFailure) {
+        throw evidenceFailure.reason instanceof Error
+          ? evidenceFailure.reason : new Error(String(evidenceFailure.reason || 'evidence_failed'));
+      }
+      requestDurable = evidenceSettled[0].value;
+      preStampDurable = evidenceSettled.slice(1).map(function (result) {
+        return result.value;
+      });
+    } else {
+      requestDurable = await persistAndReadRow(requestBead, deps,
+        { kind: 'request', stage: null }, sameRequestReadback);
+      for (var rowIndex = 0; rowIndex < preStampRows.length; rowIndex++) {
+        preStampDurable.push(await persistAndReadRow(preStampRows[rowIndex], deps,
+          { kind: 'stage', stage: STAGE_ORDER[rowIndex] }, sameStageReadback));
+      }
     }
   } catch (evidenceError) {
     return failureResult('stamp_evidence_persistence_failed:' + errorReason(evidenceError),
@@ -2620,6 +2888,9 @@ module.exports = {
     boundedVerifiedEvidence: boundedVerifiedEvidence,
     namedContextContradictions: namedContextContradictions,
     verifiedExactNamedEvidenceRelay: verifiedExactNamedEvidenceRelay,
+    verifiedVoiceCallHandoff: verifiedVoiceCallHandoff,
+    verifiedExactVoiceHandoffRelay: verifiedExactVoiceHandoffRelay,
+    verifiedTrivialVoiceGreeting: verifiedTrivialVoiceGreeting,
     verifiedCodingRelay: verifiedCodingRelay,
     codingRelayContradictions: codingRelayContradictions,
     categoricalMemoryAbsenceClaim: categoricalMemoryAbsenceClaim,

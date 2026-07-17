@@ -18,10 +18,38 @@
 // ⬡B:core.fcw.builder:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
-const { findIdentity, findAgentJDs, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = require('./find.js');
+const { findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = require('./find.js');
+const identityProvenance = require('./identity.provenance.js');
+
+// A HAM may have several identifier events (device links, OMI links, aliases).
+// Only the canonical HAM identity record, or a person-shaped legacy fallback,
+// may supply the human name used in conversation.
+function selectHamIdentityBead(beads, hamUid) {
+  var ham = String(hamUid || '').toUpperCase();
+  var rows = (Array.isArray(beads) ? beads : []).filter(function (row) {
+    return row && row.stamp_type === 'HAM_IDENTIFIER' &&
+      (!row.ham_uid || String(row.ham_uid).toUpperCase() === ham);
+  });
+  function score(row) {
+    var source = String(row && row.source || '').toLowerCase();
+    var summary = String(row && row.summary || '');
+    var content = row && row.content;
+    try { if (typeof content === 'string') content = JSON.parse(content); }
+    catch (e) { content = null; }
+    var value = 0;
+    if (source.indexOf('ham.identifier.' + ham.toLowerCase()) === 0) value += 100;
+    if (content && typeof content === 'object' &&
+        (content.tier != null || content.trust_level != null || content.world)) value += 40;
+    if (/\blinked\s+to\b/i.test(summary) || /(?:^|\.)link(?:\.|$)/i.test(source)) value -= 100;
+    value += Math.min(10, Number(row && row.importance) || 0);
+    return value;
+  }
+  rows.sort(function (left, right) { return score(right) - score(left); });
+  return rows.length && score(rows[0]) >= 0 ? rows[0] : null;
+}
 
 // Build complete Memory Bank for a HAM turn
 // Returns: { system_prompt, ham, agents, context, tools_summary, ms }
@@ -53,8 +81,38 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // LLM, doctrine-correct: cold code detects a known class, deterministically loads
   // it): a favorites/tastes question pre-loads the person's PREFERENCE beads into
   // the wall, so the answer is already in context and the model never has to guess.
-  var _q = String(question || '').toLowerCase();
+  // ⬡B:core.fcw.builder:FIX:armed_bcw_uses_exact_user_question:20260715⬡
+  // Coding turns arrive with a large server-built armory prepended. Pulling names
+  // from that whole string spends the eight-name budget on headings such as LIVE,
+  // DOCTRINE, and WINDOW before reaching the actual builder message. The identity
+  // envelope is the exact user-message authority. Older/internal callers without
+  // that envelope fall back to the text after the LAST builder marker, then raw.
+  var _rawQuestion = String(question || '');
+  var _questionFocus = '';
+  if (identity && typeof identity.user_message === 'string' && identity.user_message) {
+    _questionFocus = identity.user_message;
+  } else if (identity && typeof identity.userMessage === 'string' && identity.userMessage) {
+    _questionFocus = identity.userMessage;
+  }
+  if (!_questionFocus) {
+    var _builderMarker = '=== BUILDER MESSAGE ===';
+    var _builderMarkerIndex = _rawQuestion.lastIndexOf(_builderMarker);
+    _questionFocus = _builderMarkerIndex >= 0
+      ? _rawQuestion.slice(_builderMarkerIndex + _builderMarker.length).trim()
+      : _rawQuestion;
+  }
+  var _q = _questionFocus.toLowerCase();
   var _isPreferenceQ = /\bfavou?rite\b|\bprefer(ence|red)?\b|what do i (like|love|enjoy)\b|\bmy taste\b/.test(_q);
+  // ⬡B:core.fcw.builder:WIRE:question_named_agent_preload:20260715⬡
+  // If a person explicitly names ELI-like uppercase agent globals, exact-match
+  // their own HAM's newest records before deliberation. Bounded cold extraction;
+  // no static roster, no aliases, and an ordinary mixed-case sentence adds no read.
+  var _namedAgentGlobals = (_questionFocus.match(/\b[A-Z][A-Z0-9_]{2,31}\b/g) || [])
+    .filter(function (name, i, all) { return all.indexOf(name) === i; }).slice(0, 8);
+  // ⬡B:core.fcw.builder:WIRE:mixed_case_identity_subjects:20260715⬡
+  // Identity provenance is not an agent-roster lookup: title-case people and
+  // uppercase stations enter the same bounded exact-HAM reader.
+  var _identitySubjects = identityProvenance.extractIdentitySubjects(_questionFocus);
   // ⬡B:core.fcw.builder:FIX:cold_wondergames_detection_20260714⬡
   // Same class of bug as the preference fix above, caught live by the founder: a
   // question about Wonder Games or the coding cook-off returned no-info even though
@@ -65,17 +123,27 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var _isWonderGamesQ = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/.test(_q);
   var _batch = [
     findIdentity(hamUid),
-    findAgentJDs(),
+    findAgentJDs(hamUid),
     findContext(hamUid, 5),
     findRecentResults(5),
     findDoctrine(hamUid, 3),
     findPersonProfile(hamUid)
   ];
-  var _prefIdx = -1, _wgIdx = -1;
-  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); }
-  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); }
+  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile'];
+  var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1;
+  if (_namedAgentGlobals.length) {
+    _namedAgentsIdx = _batch.length;
+    _batch.push(findNamedAgentRecords(hamUid, _namedAgentGlobals));
+    _labels.push('namedAgentRecords');
+  }
+  if (_identitySubjects.length) {
+    _identityEvidenceIdx = _batch.length;
+    _batch.push(findIdentityEvidence(hamUid, _questionFocus));
+    _labels.push('identityEvidence');
+  }
+  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); _labels.push('preferences'); }
+  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); _labels.push('wonderGames'); }
   var _results = await Promise.allSettled(_batch);
-  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'preferences'];
   _results.forEach(function (r, i) {
     if (r.status === 'rejected') console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + (r.reason && r.reason.message || r.reason));
   });
@@ -100,7 +168,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     // Only a real HAM_IDENTIFIER bead describes who this person is.
     // DIRECTIVE beads are action items, often about unrelated engineering
     // work filed under this ham_uid, and must never be read as identity facts.
-    var ib = beadIdentity.beads.find(function(b) { return b.stamp_type === 'HAM_IDENTIFIER'; });
+    var ib = selectHamIdentityBead(beadIdentity.beads, hamUid);
     if (ib) {
       if (hamName === 'Unknown') hamName = ib.summary || hamName;
       try {
@@ -115,23 +183,71 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var agentList = '';
   if (agentJDs && agentJDs.beads) {
     agentList = agentJDs.beads.slice(0, 15).map(function(b) {
-      return '- ' + (b.summary || b.source || '?').slice(0, 80);
+      // ⬡B:core.fcw.builder:WIRE:agent_role_from_live_definition:20260715⬡
+      // AGENT_JD and the New World SCW fallback both carry structured role data.
+      // Put that real definition on the wall instead of reducing every station to
+      // an opaque source name. No roster or role is invented here.
+      var c = b && b.content;
+      try { if (typeof c === 'string') c = JSON.parse(c); } catch (e) { c = null; }
+      var name = c && (c.agent || c.name || c.world);
+      var role = c && (c.role || c.purpose);
+      var summary = (b && (b.summary || b.source)) || '?';
+      if (name && role) return '- ' + String(name).toUpperCase().slice(0, 40) + ': ' + String(role).slice(0, 160);
+      if (name) return '- ' + String(name).toUpperCase().slice(0, 40) + ': ' + String(summary).slice(0, 160);
+      return '- ' + String(summary).slice(0, 160);
     }).join('\n');
   }
 
   // Build context summary (recent minutes + results)
   var contextStr = '';
   var allContext = [];
-  // preferences (7th finder) rides the FRONT of context when it was a favorites
-  // question, so it is never truncated out of the wall by the slice below.
+  // Question-specific exact reads ride ahead of ordinary recent context so they
+  // are not truncated out of the wall or SHADOW's bounded evidence window.
+  var _namedAgents = (_namedAgentsIdx >= 0 && _results[_namedAgentsIdx] && _results[_namedAgentsIdx].status === 'fulfilled') ? _results[_namedAgentsIdx].value : null;
+  // ⬡B:core.fcw.builder:GUARD:identity_unavailable_is_not_empty:20260715⬡
+  // A rejected identity read must retain its unavailable state. Only a successful
+  // read may represent a genuinely empty set.
+  var _identityEvidence;
+  if (_identityEvidenceIdx < 0) {
+    _identityEvidence = { schema:identityProvenance.EVIDENCE_RESULT_SCHEMA,
+      ok:true, available:true, ham_uid:String(hamUid || '').toUpperCase(),
+      subjects:_identitySubjects, records:[], count:0, ms:0 };
+  } else if (_results[_identityEvidenceIdx] &&
+      _results[_identityEvidenceIdx].status === 'fulfilled') {
+    _identityEvidence = _results[_identityEvidenceIdx].value;
+  } else {
+    var _identityReadError = _results[_identityEvidenceIdx] &&
+      _results[_identityEvidenceIdx].reason;
+    _identityEvidence = { schema:identityProvenance.EVIDENCE_RESULT_SCHEMA,
+      ok:false, available:false, ham_uid:String(hamUid || '').toUpperCase(),
+      subjects:_identitySubjects, records:[], count:0,
+      reason:'identity_evidence_read_rejected',
+      error:String(_identityReadError && _identityReadError.message ||
+        _identityReadError || 'unknown').slice(0, 160), ms:0 };
+  }
   var _prefs = (_prefIdx >= 0 && _results[_prefIdx] && _results[_prefIdx].status === 'fulfilled') ? _results[_prefIdx].value : null;
   var _wg = (_wgIdx >= 0 && _results[_wgIdx] && _results[_wgIdx].status === 'fulfilled') ? _results[_wgIdx].value : null;
+  // ⬡B:core.fcw.builder:WIRE:named_agent_exact_rows_internal:20260715⬡
+  // Preserve the already-read exact-name rows on a dedicated internal lane. The
+  // tool loop can deliver these same records through the model's attended tool
+  // channel without querying the bank twice or manufacturing a roster/answer.
+  var _exactHamUid = String(hamUid || '').toUpperCase();
+  var _namedAgentRecords = (_namedAgents && Array.isArray(_namedAgents.beads)
+    ? _namedAgents.beads : []).filter(function (row) {
+      var globalName = String(row && row.agent_global || '');
+      return row && String(row.ham_uid || '').toUpperCase() === _exactHamUid
+        && _namedAgentGlobals.indexOf(globalName) >= 0
+        && /^[A-Z][A-Z0-9_]{2,31}$/.test(globalName);
+    }).slice(0, 8);
+  // Named-agent evidence leads so both the initial draft and the later SHADOW
+  // evidence window receive it; the exact same rows are returned as fcw.context.
+  if (_namedAgentRecords.length) allContext = allContext.concat(_namedAgentRecords);
   if (_prefs && _prefs.beads && _prefs.beads.length) allContext = allContext.concat(_prefs.beads);
   if (_wg && _wg.beads && _wg.beads.length) allContext = allContext.concat(_wg.beads);
   if (context && context.beads) allContext = allContext.concat(context.beads);
   if (recent && recent.beads) allContext = allContext.concat(recent.beads);
   contextStr = allContext.slice(0, 8).map(function(b) {
-    return '[' + (b.stamp_type||'?') + '] ' + (b.summary||b.source||'').slice(0,100);
+    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '') + '] ' + (b.summary||b.source||'').slice(0,100);
   }).join('\n');
 
   // ⬡B:core.fcw.builder:WIRE:doctrine_in_fcw_20260701⬡
@@ -275,18 +391,18 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // MINUTES bead per build), importance 2 so it never competes with real signal, and
   // fail-silent so a logging hiccup never breaks the wall it is describing. Which
   // contributors resolved vs came back empty is the note -- that is the self-heal.
+  var contributors = {
+    identity: !!(identityBeads && identityBeads.beads && identityBeads.beads.length),
+    agentJDs: !!(agentJDs && agentJDs.beads && agentJDs.beads.length),
+    context: !!(context && context.beads && context.beads.length),
+    recent: !!(recent && recent.beads && recent.beads.length),
+    doctrine: !!(doctrine && doctrine.beads && doctrine.beads.length),
+    profile: !!(profile && profile.beads && profile.beads.length)
+  };
+  var empties = Object.keys(contributors).filter(function (k) { return !contributors[k]; });
   try {
-    var _BU = process.env.AIBE_BRAIN_URL, _BK = process.env.AIBE_BRAIN_KEY;
+    var _BU = _bu(), _BK = _bk();
     if (_BU && _BK) {
-      var contributors = {
-        identity: !!(identityBeads && identityBeads.beads && identityBeads.beads.length),
-        agentJDs: !!(agentJDs && agentJDs.beads && agentJDs.beads.length),
-        context: !!(context && context.beads && context.beads.length),
-        recent: !!(recent && recent.beads && recent.beads.length),
-        doctrine: !!(doctrine && doctrine.beads && doctrine.beads.length),
-        profile: !!(profile && profile.beads && profile.beads.length)
-      };
-      var empties = Object.keys(contributors).filter(function (k) { return !contributors[k]; });
       var _wm = Date.now();
       fetch(_bu() + '/rest/v1/' + _tbl() + '', {
         method: 'POST',
@@ -317,6 +433,12 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     ham: { uid: hamUid, name: hamName, tier: hamTier, world: hamWorld },
     agents: agentJDs ? agentJDs.beads : [],
     context: allContext,
+    named_agent_records: _namedAgentRecords,
+    identity_evidence: _identityEvidence,
+    identity_record: ib || null,
+    contributors: contributors,
+    contributorsResolved: Object.keys(contributors).length - empties.length,
+    contributorsTotal: Object.keys(contributors).length,
     ms: ms,
     find_ms: {
       identity: beadIdentity ? beadIdentity.ms : 0,
@@ -329,4 +451,4 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
 // ⬡B:core.fcw_builder:ALIAS:memory_bank_doctrine_name_20260712⬡ BIND doctrine: Memory
 // Bank is the name, Memory Bank is retired. The builder is renamed to its doctrine-correct
 // name; the old export stays only so the not-yet-migrated reach paths keep working.
-module.exports = { buildMemoryBank }; // dead name buildFCW fully retired system-wide; internal fn name is legacy-only
+module.exports = { buildMemoryBank, _test:{ selectHamIdentityBead } }; // dead name buildFCW fully retired system-wide; internal fn name is legacy-only

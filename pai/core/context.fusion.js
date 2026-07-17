@@ -24,22 +24,46 @@ function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
 
 const BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
 
-async function readCalendarNext24h() {
-  const key = process.env.NYLAS_SANDBOX_KEY, grant = process.env.NYLAS_GRANT_ID;
-  if (!key || !grant) return { available: false, events: [] };
+async function readCalendarNext24h(hamUid) {
+  // B:context_fusion:FIX:ebc_firewall_multigrant_founder_only_20260712 CRITICAL EBC
+  // GUARD: the multi-grant read (personal+GMG+BDIF+Mediators+MH Action merged) is
+  // ONLY lawful for the founder's OWN personal world, which is his private command
+  // center and allowed to see everything he owns. For ANY other world/HAM (a BDIF,
+  // Mediators, or MH Action advisor/email cycle), merging grants would leak a sibling
+  // world's calendar into that world's context -- the exact three-way firewall breach
+  // that went live on 2026-07-11. So: founder personal -> all grants; any other world
+  // -> no cross-world calendar at all. Isolation preserved.
+  const FOUNDER = String(process.env.FOUNDER_HAM_UID || '');
+  const isFounderPersonal = FOUNDER && String(hamUid || '').toUpperCase() === FOUNDER.toUpperCase();
+  if (!isFounderPersonal) return { available: false, events: [] }; // never merge grants for a non-founder world
+  const NY = 'https://api.us.nylas.com/v3/grants/';
+  const KEY = process.env.NYLAS_API_KEY;
+  if (!KEY) return { available: false, events: [] };
+  const H = { Authorization: 'Bearer ' + KEY, 'Content-Type': 'application/json' };
+  const grants = [process.env.NYLAS_PERSONAL_GRANT, process.env.NYLAS_GMG_GRANT, process.env.NYLAS_BDIF_GRANT,
+    process.env.NYLAS_MEDIATORS_GRANT, process.env.NYLAS_MH_ACTION_GRANT].filter(Boolean);
+  if (!grants.length) return { available: false, events: [] };
+  const now = Math.floor(Date.now() / 1000), end = now + 24 * 3600;
+  const events = [];
   try {
-    const now = Math.floor(Date.now() / 1000), end = now + 24 * 3600;
-    const r = await fetch('https://api.us.nylas.com/v3/grants/' + encodeURIComponent(grant)
-      + '/events?calendar_id=primary&start=' + now + '&end=' + end + '&limit=6',
-      { headers: { Authorization: 'Bearer ' + key, Accept: 'application/json' } });
-    if (!r.ok) return { available: false, events: [] };
-    const d = await r.json();
-    const events = (d.data || []).map(function (e) {
-      const when = e.when || {};
-      const startTs = when.start_time || (when.start_date ? Date.parse(when.start_date) / 1000 : null);
-      return { title: String(e.title || 'untitled').slice(0, 80), start: startTs ? new Date(startTs * 1000).toISOString() : null };
-    }).filter(function (e) { return e.start; });
-    return { available: true, events: events };
+    await Promise.all(grants.map(async function (gid) {
+      try {
+        const cr = await fetch(NY + gid + '/calendars?limit=10', { headers: H });
+        if (!cr.ok) return;
+        const cals = (await cr.json()).data || [];
+        const primary = cals.find(function (c) { return c.is_primary || (c.name && c.name.indexOf('@') !== -1); }) || cals[0];
+        if (!primary) return;
+        const er = await fetch(NY + gid + '/events?calendar_id=' + encodeURIComponent(primary.id) + '&start=' + now + '&end=' + end + '&limit=15', { headers: H });
+        if (!er.ok) return;
+        (((await er.json()).data) || []).forEach(function (e) {
+          const when = e.when || {};
+          const startTs = when.start_time || when.time || (when.start_date ? Math.floor(new Date(when.start_date + 'T00:00:00').getTime() / 1000) : 0);
+          events.push({ title: String(e.title || 'untitled').slice(0, 80), start: startTs ? new Date(startTs * 1000).toISOString() : null, allDay: !!when.start_date });
+        });
+      } catch (eg) { /* one grant failing never blinds the rest */ }
+    }));
+    events.sort(function (a, b) { return (a.start || '').localeCompare(b.start || ''); });
+    return { available: true, events: events.slice(0, 12) };
   } catch (e) { return { available: false, events: [] }; }
 }
 
@@ -64,7 +88,7 @@ async function readChannelActivity(hamUid) {
 
 async function runFuse(hamUid) {
   if (!hamUid) return { ok: false, reason: 'hamUid required' };
-  const cal = await readCalendarNext24h();
+  const cal = await readCalendarNext24h(hamUid);
   const channels = await readChannelActivity(hamUid);
   let screen = { live: false };
   try {

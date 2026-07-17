@@ -23,6 +23,17 @@ function taskSource(roadmapSource, task, allowedPaths, repository) {
   return 'span.task.roadmap.' + digest;
 }
 
+async function cancellationRequested(options) {
+  var cancellation = options && options.cancellation || options;
+  var signal = cancellation && (cancellation.signal || cancellation.abortSignal);
+  if (signal && signal.aborted) return true;
+  if (cancellation && typeof cancellation.isCancelled === 'function') {
+    try { return await cancellation.isCancelled(true) === true; }
+    catch (eCancel) { return true; }
+  }
+  return false;
+}
+
 async function activate(spec, deps) {
   deps = deps || {};
   spec = spec || {};
@@ -34,6 +45,9 @@ async function activate(spec, deps) {
   const repository = String(spec.repository || '').trim();
   const acceptance = cleanList(spec.acceptance);
   const allowedPaths = cleanList(spec.allowed_paths || spec.allowedPaths);
+  if (await cancellationRequested(deps)) {
+    return { ok:false, reason:'voice_turn_cancelled' };
+  }
   if (!hamUid) return { ok: false, reason: 'ham_uid_required' };
   if (!roadmapSource) return { ok: false, reason: 'roadmap_source_required' };
   if (!task) return { ok: false, reason: 'bounded_task_required' };
@@ -47,6 +61,9 @@ async function activate(spec, deps) {
   }
 
   const roadmap = await brain.findBySource(roadmapSource);
+  if (await cancellationRequested(deps)) {
+    return { ok:false, reason:'voice_turn_cancelled' };
+  }
   if (!roadmap || String(roadmap.stamp_type || '').toUpperCase() !== 'ROADMAP') {
     return { ok: false, reason: 'exact_roadmap_not_found', roadmap_source: roadmapSource };
   }
@@ -67,6 +84,9 @@ async function activate(spec, deps) {
     build_owner: 'CANEW',
     sequence_owner: 'SPAN'
   };
+  if (await cancellationRequested(deps)) {
+    return { ok:false, reason:'voice_turn_cancelled' };
+  }
   const queued = await queue.enqueueTask({
     ham_uid: hamUid,
     agent_global: 'SPAN',
@@ -75,7 +95,7 @@ async function activate(spec, deps) {
     summary: '[SPAN][ROADMAP] ' + task.slice(0, 180),
     content: content,
     importance: Number(spec.importance || 8)
-  });
+  }, deps.cancellation || deps);
   if (!queued || queued.ok !== true) return Object.assign({ ok: false, source: source }, queued || {});
   return {
     ok: true,

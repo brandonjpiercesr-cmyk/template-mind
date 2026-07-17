@@ -424,11 +424,17 @@ async function send(to, subject, body, world, opts) {
 
 // Explicit internal identity, same mandatory council and provider boundary.
 async function sendFromClaudette(to, subject, body, opts) {
-  var grant = process.env.NYLAS_ABA_GRANT;
-  var key = process.env.NYLAS_API_KEY;
+  // A'NU's mailbox moved to the production Nylas application. The old path
+  // still paired that grant with the default/sandbox key, so a fully committed
+  // email reached Nylas and failed with grant.not_found. Prefer the canonical
+  // A'NU grant and resolve its owning application key at the provider boundary.
+  var grant = process.env.NYLAS_ANU_GRANT || process.env.NYLAS_ABA_GRANT;
+  var key = null;
+  try { key = require('../core/nylasKeys.js').keyForGrant(grant); }
+  catch (eKey) { key = null; }
   if (!grant || !key) return fail('no_nylas_config');
   return sendThroughCommittedBoundary({ to: to, subject: subject, body: body, world: null,
-    opts: opts || {}, grant: grant, key: key, sender: 'claudette' });
+    opts: opts || {}, grant: grant, key: key, sender: 'anu' });
 }
 
 // Resolve a HAM's contact read-only, then bind that exact HAM into the same send.

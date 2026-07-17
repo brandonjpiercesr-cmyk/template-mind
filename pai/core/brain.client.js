@@ -1,3 +1,5 @@
+// ⬡B:core.brain.client:MODULE:acl_header_added_in_audit:20260711⬡
+// Header added during the July 11 full audit; file predates the ACL law.
 // core/brain.client.js
 // entered via the ABAHAM door, serving channel MESSAGES (every bead written or read
 // for a HAM flows through here; the canonical brain client for all bead operations).

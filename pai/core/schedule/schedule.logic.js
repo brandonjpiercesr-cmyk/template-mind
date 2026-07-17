@@ -43,6 +43,24 @@ const PREFS_DEFAULT = {
 };
 const MEM        = '\u2B21';
 
+function abortSignal(options) {
+  return options && (options.signal || options.abortSignal) || null;
+}
+
+async function cancellationRequested(options) {
+  const signal = abortSignal(options);
+  if (signal && signal.aborted) return true;
+  if (options && typeof options.isCancelled === 'function') {
+    try { return await options.isCancelled(true) === true; }
+    catch (eCancel) { return true; }
+  }
+  return false;
+}
+
+function cancelled(extra) {
+  return Object.assign({ ok:false, reason:'voice_turn_cancelled' }, extra || {});
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function hamSchema(uid) {
@@ -67,7 +85,7 @@ function parseBody(req) {
 }
 
 // All ABACIA reads scoped to the HAM's schema via Accept-Profile — no cross-HAM access possible
-function abaGet(schema, path) {
+function abaGet(schema, path, options) {
   return new Promise((resolve, reject) => {
     if (!ABA_SERVER_SRK) return reject(new Error('ABA_SERVER_SERVICE_ROLE_KEY not configured'));
     const url = new URL(ABA_SERVER_URL);
@@ -81,6 +99,8 @@ function abaGet(schema, path) {
         'Accept-Profile': schema,
       },
     };
+    const signal = abortSignal(options);
+    if (signal) opts.signal = signal;
     const req = https.request(opts, res => {
       let d = '';
       res.on('data', c => d += c);
@@ -95,7 +115,7 @@ function abaGet(schema, path) {
   });
 }
 
-function abaPost(schema, path, payload) {
+function abaPost(schema, path, payload, options) {
   return new Promise((resolve, reject) => {
     if (!ABA_SERVER_SRK) return reject(new Error('ABA_SERVER_SERVICE_ROLE_KEY not configured'));
     const url = new URL(ABA_SERVER_URL);
@@ -113,6 +133,8 @@ function abaPost(schema, path, payload) {
         Prefer: 'return=representation,resolution=merge-duplicates',
       },
     };
+    const signal = abortSignal(options);
+    if (signal) opts.signal = signal;
     const req = https.request(opts, res => {
       let d = '';
       res.on('data', c => d += c);
@@ -128,7 +150,7 @@ function abaPost(schema, path, payload) {
   });
 }
 
-function nylasReq(path, method = 'GET', body = null, extraHeaders) {
+function nylasReq(path, method = 'GET', body = null, extraHeaders, options) {
   return new Promise((resolve, reject) => {
     if (!NYLAS_KEY) return reject(new Error('NYLAS_API_KEY not configured'));
     const opts = {
@@ -141,6 +163,8 @@ function nylasReq(path, method = 'GET', body = null, extraHeaders) {
         'Content-Type': 'application/json',
       }, extraHeaders || {}),
     };
+    const signal = abortSignal(options);
+    if (signal) opts.signal = signal;
     const req = https.request(opts, res => {
       let d = '';
       res.on('data', c => d += c);
@@ -186,17 +210,20 @@ function verifiedScheduleStamp(response, source, exactContent) {
 // speech. The exception is narrow: the email must resolve back to this HAM,
 // the final kill switch must be readable and clear, exact subject/body/target
 // receive one durable effect claim, and success requires a Nylas message ID.
-async function imanNotify(uid, grantId, toEmail, subject, htmlBody, sourceKey) {
+async function imanNotify(uid, grantId, toEmail, subject, htmlBody, sourceKey, options) {
+  if (await cancellationRequested(options)) return cancelled();
   if (!NYLAS_KEY || !grantId || !uid || !toEmail) {
     return { ok:false, reason:'transactional_notification_unconfigured' };
   }
   var envelope;
   try { envelope = await require('../atmosphere.gate.js').resolveAtmosphere({ email:toEmail }); }
   catch (eIdentity) { return { ok:false, reason:'notification_identity_uncertain' }; }
+  if (await cancellationRequested(options)) return cancelled();
   if (!envelope || String(envelope.ham_uid || '').toUpperCase() !== String(uid).toUpperCase()) {
     return { ok:false, reason:'notification_target_ham_mismatch' };
   }
   var kill = await requireClearKillSwitch(uid);
+  if (await cancellationRequested(options)) return cancelled();
   if (!kill.ok) return kill;
   var message = { subject:String(subject), body:String(htmlBody),
     to:[{ email:String(toEmail).trim().toLowerCase() }] };
@@ -204,6 +231,7 @@ async function imanNotify(uid, grantId, toEmail, subject, htmlBody, sourceKey) {
   var requestId = stableTransactionalId('schedule.notify',
     String(sourceKey || '') + '\n' + String(uid).toUpperCase() + '\n' + artifact);
   var cycleId = stableTransactionalId('schedule.transactional', requestId);
+  if (await cancellationRequested(options)) return cancelled();
   var claim = await require('../outbound.effect.js').claimProviderAttempt({
     hamUid:String(uid).toUpperCase(), channel:'schedule_notification',
     deliveryTarget:{ kind:'email', value:message.to }, artifact:artifact,
@@ -211,11 +239,14 @@ async function imanNotify(uid, grantId, toEmail, subject, htmlBody, sourceKey) {
   });
   if (!claim.ok) return { ok:false, reason:claim.reason,
     effectKey:claim.effectKey || null };
+  if (await cancellationRequested(options)) return cancelled({
+    effectKey:claim.effectKey || null });
   var result;
   try {
     result = await nylasReq(`/v3/grants/${grantId}/messages/send`, 'POST', message,
-      { 'Idempotency-Key':claim.idempotencyKey });
-  } catch (eProvider) { return { ok:false, reason:'provider_uncertain' }; }
+      { 'Idempotency-Key':claim.idempotencyKey }, options);
+  } catch (eProvider) { return { ok:false, reason:'provider_uncertain',
+    cancelled:!!(abortSignal(options) && abortSignal(options).aborted) }; }
   var messageId = result && result.status >= 200 && result.status < 300 &&
     result.body && result.body.data && result.body.data.id;
   if (typeof messageId !== 'string' || !messageId) return { ok:false,
@@ -264,10 +295,10 @@ async function getHamPrefs(uid) {
 // Read calendar grant from ham_{uid}.abacia — source=nylas.grant.calendar
 // NO hardcoded fallback. Returns null if not found → caller returns 503.
 // This is the HAM bleed fix: if no grant bead exists for this HAM, we stop.
-async function getCalendarGrant(uid) {
+async function getCalendarGrant(uid, options) {
   try {
     const r = await abaGet(hamSchema(uid),
-      '/rest/v1/abacia?source=eq.nylas.grant.calendar&select=content&limit=1');
+      '/rest/v1/abacia?source=eq.nylas.grant.calendar&select=content&limit=1', options);
     if (r.status === 200 && r.body && r.body.length > 0) {
       const parsed = JSON.parse(r.body[0].content);
       return {
@@ -417,7 +448,7 @@ function computeFreeSlots(busyEvents, prefs = PREFS_DEFAULT) {
 }
 
 
-async function writeBead(uid, source, content, tags, importance = 7) {
+async function writeBead(uid, source, content, tags, importance = 7, options) {
   const stamp = `${MEM}B:${source}:RESULT:schedule:20260606${MEM}`;
   return abaPost(hamSchema(uid), '/rest/v1/abacia', {
     acl_stamp: stamp, ham_uid: uid.toUpperCase(),
@@ -428,7 +459,7 @@ async function writeBead(uid, source, content, tags, importance = 7) {
     memory_type: 'schedule', importance, tags,
     categories: ['schedule', 'booking'],
     metadata: { written_at: new Date().toISOString() },
-  });
+  }, options);
 }
 
 // ─── route handlers ───────────────────────────────────────────────────────────
@@ -468,23 +499,33 @@ async function handleAvailability(req, res, uid) {
   }
 }
 
-async function handleBook(req, res, uid) {
+async function handleBook(req, res, uid, options) {
+  options = options || (req && req.signal ? { signal:req.signal } : null);
   console.log(`[SCHED] Book: uid=${uid}`);
   try {
     const body = await parseBody(req);
+    if (await cancellationRequested(options)) {
+      return reply(res, 409, { error:'voice_turn_cancelled' });
+    }
     const { bookerName, bookerEmail, slotStart, slotEnd } = body;
     if (!bookerName || !bookerEmail || !slotStart || !slotEnd) {
       return reply(res, 400, { error: 'Required: bookerName, bookerEmail, slotStart, slotEnd' });
     }
 
     // Grant — hard fail if not found
-    const grant = await getCalendarGrant(uid);
+    const grant = await getCalendarGrant(uid, options);
+    if (await cancellationRequested(options)) {
+      return reply(res, 409, { error:'voice_turn_cancelled' });
+    }
     if (!grant) {
       return reply(res, 503, { error: 'Calendar not configured for this HAM', uid });
     }
 
     const hamEmail  = await getHamEmail(uid);
     const expected  = await isExpectedBooker(uid, bookerEmail, bookerName);
+    if (await cancellationRequested(options)) {
+      return reply(res, 409, { error:'voice_turn_cancelled' });
+    }
     const startDT   = new Date(slotStart * 1000).toLocaleString('en-US', {
       timeZone: 'America/New_York', weekday: 'long', month: 'long',
       day: 'numeric', hour: 'numeric', minute: '2-digit',
@@ -503,7 +544,13 @@ async function handleBook(req, res, uid) {
       const externalRequestId = stableTransactionalId('schedule.external.book',
         uid + '\n' + String(bookerEmail).toLowerCase() + '\n' + slotStart + '\n' + slotEnd);
       const edgeKill = await requireClearKillSwitch(uid);
+      if (await cancellationRequested(options)) {
+        return reply(res, 409, { error:'voice_turn_cancelled' });
+      }
       if (!edgeKill.ok) return reply(res, 503, { error:edgeKill.reason });
+      if (await cancellationRequested(options)) {
+        return reply(res, 409, { error:'voice_turn_cancelled' });
+      }
       const externalClaim = await require('../outbound.effect.js').claimProviderAttempt({
         hamUid:uid, channel:'schedule_external_booking',
         deliveryTarget:{ kind:'email', value:[{ email:String(bookerEmail).trim().toLowerCase() }] },
@@ -514,9 +561,12 @@ async function handleBook(req, res, uid) {
       if (!externalClaim.ok) return reply(res,
         externalClaim.reason === 'provider_effect_already_claimed' ? 409 : 503,
         { error:externalClaim.reason });
+      if (await cancellationRequested(options)) {
+        return reply(res, 409, { error:'voice_turn_cancelled' });
+      }
       const eventRes = await nylasReq(
         `/v3/grants/${grant.grantId}/events?calendar_id=${encodeURIComponent(grant.calendarId)}`,
-        'POST', eventPayload, { 'Idempotency-Key':externalClaim.idempotencyKey }
+        'POST', eventPayload, { 'Idempotency-Key':externalClaim.idempotencyKey }, options
       );
       const eventId = eventRes && eventRes.status >= 200 && eventRes.status < 300 &&
         eventRes.body && eventRes.body.data && eventRes.body.data.id;
@@ -529,8 +579,12 @@ async function handleBook(req, res, uid) {
       const confirmedSource = `schedule.confirmed.${bookerEmail.replace(/[@.]/g, '_')}.${slotStart}`;
       const confirmedContent = { bookerName, bookerEmail, slotStart, slotEnd,
         eventId, status: 'confirmed' };
+      if (await cancellationRequested(options)) {
+        return reply(res, 409, { error:'voice_turn_cancelled', providerAccepted:true,
+          eventId:eventId });
+      }
       const bookingStamp = await writeBead(uid, confirmedSource, confirmedContent,
-        ['schedule', 'confirmed_booking', 'expected'], 8);
+        ['schedule', 'confirmed_booking', 'expected'], 8, options);
       if (!verifiedScheduleStamp(bookingStamp, confirmedSource, confirmedContent)) {
         return reply(res, 502, { error:'booking_stamp_unverified', eventId:eventId,
           providerAccepted:true });
@@ -542,7 +596,7 @@ async function handleBook(req, res, uid) {
         notification1 = await imanNotify(uid, notifGrant1, hamEmail,
           `1:1 Booked - ${bookerName}`,
           `<p>Hey!</p><p><strong>${bookerName}</strong> booked a 1:1 for <strong>${startDT} EST</strong>. Auto-confirmed, calendar event created.</p><p>Thanks,<br>A&#8217;NU</p>`,
-          'confirmed.' + bookerEmail + '.' + slotStart);
+          'confirmed.' + bookerEmail + '.' + slotStart, options);
       }
       reply(res, 200, { status: 'confirmed', eventId:eventId,
         notification:notification1 || { ok:false, reason:'notification_not_configured' },
@@ -554,8 +608,11 @@ async function handleBook(req, res, uid) {
       const pendingId = `schedule.pending.${bookerEmail.replace(/[@.]/g, '_')}.${slotStart}`;
       const pendingContent = { bookerName, bookerEmail, slotStart, slotEnd,
         status: 'pending' };
+      if (await cancellationRequested(options)) {
+        return reply(res, 409, { error:'voice_turn_cancelled' });
+      }
       const pendingStamp = await writeBead(uid, pendingId, pendingContent,
-        ['schedule', 'pending_booking', 'cold'], 7);
+        ['schedule', 'pending_booking', 'cold'], 7, options);
       if (!verifiedScheduleStamp(pendingStamp, pendingId, pendingContent)) {
         return reply(res, 502, { error:'pending_booking_stamp_unverified' });
       }
@@ -566,7 +623,7 @@ async function handleBook(req, res, uid) {
         notification2 = await imanNotify(uid, notifGrant2, hamEmail,
           `1:1 Request - ${bookerName} (needs your OK)`,
           `<p>Hey!</p><p><strong>${bookerName}</strong> (${bookerEmail}) wants a 1:1 for <strong>${startDT} EST</strong>. Not on your expected list. Reply approve or decline.</p><p>Pending ID: ${pendingId}</p><p>Thanks,<br>A&#8217;NU</p>`,
-          pendingId);
+          pendingId, options);
       }
       reply(res, 200, { status: 'pending',
         notification:notification2 || { ok:false, reason:'notification_not_configured' },
@@ -580,15 +637,15 @@ async function handleBook(req, res, uid) {
 
 // ─── export ───────────────────────────────────────────────────────────────────
 
-async function handleScheduleRoute(req, res, pathname, method) {
+async function handleScheduleRoute(req, res, pathname, method, options) {
   const m = pathname.match(/^\/api\/schedule\/([A-Z0-9]+)\/(availability|book|bookings|confirm|manager-auth)$/i);
   if (!m) return false;
   const uid    = m[1].toUpperCase();
   const action = m[2].toLowerCase();
   if (action === 'availability'  && method === 'GET')  { await handleAvailability(req, res, uid); return true; }
-  if (action === 'book'          && method === 'POST')  { await handleBook(req, res, uid); return true; }
+  if (action === 'book'          && method === 'POST')  { await handleBook(req, res, uid, options); return true; }
   if (action === 'bookings'      && method === 'GET')   { await handleBookings(req, res, uid); return true; }
-  if (action === 'confirm'       && method === 'POST')  { await handleConfirm(req, res, uid); return true; }
+  if (action === 'confirm'       && method === 'POST')  { await handleConfirm(req, res, uid, options); return true; }
   if (action === 'manager-auth'  && method === 'POST')  { await handleManagerAuth(req, res, uid); return true; }
   return false;
 }
@@ -609,6 +666,7 @@ async function handleScheduleRoute(req, res, pathname, method) {
 async function bookEvent(uid, opts) {
   opts = opts || {};
   try {
+    if (await cancellationRequested(opts)) return cancelled();
     if (!uid) return { ok: false, reason: 'no_uid' };
     uid = String(uid).trim().toUpperCase();
     const authorization = opts.bookingAuthorization;
@@ -660,14 +718,17 @@ async function bookEvent(uid, opts) {
     const startEpoch = toEpoch(artifact.start);
     const endEpoch = toEpoch(artifact.end);
     if (!startEpoch || !endEpoch || endEpoch <= startEpoch) return { ok: false, reason: 'bad_times' };
-    const grant = await getCalendarGrant(uid);
+    const grant = await getCalendarGrant(uid, opts);
+    if (await cancellationRequested(opts)) return cancelled();
     if (!grant) return { ok: false, reason: 'no_calendar', uid: uid };
     const edgeKill = await requireClearKillSwitch(uid);
+    if (await cancellationRequested(opts)) return cancelled();
     if (!edgeKill.ok) return edgeKill;
     const eventPayload = { title: title,
       when: { start_time: startEpoch, end_time: endEpoch },
       description: artifact.description };
     const providerArtifact = JSON.stringify({ approved:artifactText, event:eventPayload });
+    if (await cancellationRequested(opts)) return cancelled();
     const effectClaim = await require('../outbound.effect.js').claimProviderAttempt({
       hamUid:uid, channel:'calendar_booking',
       deliveryTarget:{ kind:'ham', value:uid }, artifact:providerArtifact,
@@ -675,12 +736,21 @@ async function bookEvent(uid, opts) {
     });
     if (!effectClaim.ok) return { ok:false, reason:effectClaim.reason,
       effectKey:effectClaim.effectKey || null };
-    const eventRes = await nylasReq(
+    if (await cancellationRequested(opts)) return cancelled({
+      effectKey:effectClaim.effectKey || null });
+    let eventRes;
+    try { eventRes = await nylasReq(
       `/v3/grants/${grant.grantId}/events?calendar_id=${encodeURIComponent(grant.calendarId)}`,
       'POST',
       eventPayload,
-      { 'Idempotency-Key':effectClaim.idempotencyKey }
-    );
+      { 'Idempotency-Key':effectClaim.idempotencyKey }, opts
+    ); } catch (eProvider) {
+      if (abortSignal(opts) && abortSignal(opts).aborted) {
+        return { ok:false, reason:'provider_uncertain', cancelled:true,
+          effectKey:effectClaim.effectKey || null };
+      }
+      throw eProvider;
+    }
     const eventId = eventRes && eventRes.status >= 200 && eventRes.status < 300 &&
       eventRes.body && eventRes.body.data && eventRes.body.data.id;
     if (typeof eventId !== 'string' || !eventId) return { ok:false,
@@ -693,8 +763,10 @@ async function bookEvent(uid, opts) {
       startEpoch: startEpoch, endEpoch: endEpoch, eventId: eventId,
       status: 'confirmed', bookedBy: 'A\u2019NU', requestId:expected.requestId,
       cycleId:expected.cycleId };
+    if (await cancellationRequested(opts)) return cancelled({
+      providerAccepted:true, eventId:eventId, effectKey:effectClaim.effectKey || null });
     const bookingStamp = await writeBead(uid, stampSource, stampContent,
-      ['schedule', 'self_booking'], 6);
+      ['schedule', 'self_booking'], 6, opts);
     if (!verifiedScheduleStamp(bookingStamp, stampSource, stampContent)) {
       return { ok:false, reason:'booking_stamp_unverified', providerAccepted:true,
         eventId:eventId, requestId:expected.requestId, cycleId:expected.cycleId,
@@ -778,10 +850,14 @@ async function handleBookings(req, res, uid) {
 }
 
 // ─── /confirm — HAM confirms or declines a pending booking ────────────────────
-async function handleConfirm(req, res, uid) {
+async function handleConfirm(req, res, uid, options) {
+  options = options || (req && req.signal ? { signal:req.signal } : null);
   console.log(`[SCHED] Confirm: uid=${uid}`);
   try {
     const body   = await parseBody(req);
+    if (await cancellationRequested(options)) {
+      return reply(res, 409, { error:'voice_turn_cancelled' });
+    }
     const { source, action, token } = body;
     const authed = await validateManagerToken(uid, token);
     if (!authed) return reply(res, 401, { error: 'Manager token required' }); // action: 'confirm' | 'decline'
@@ -794,12 +870,18 @@ async function handleConfirm(req, res, uid) {
 
     // Read the pending bead
     const r = await abaGet(hamSchema(uid),
-      `/rest/v1/abacia?source=eq.${encodeURIComponent(source)}&select=content&limit=1`);
+      `/rest/v1/abacia?source=eq.${encodeURIComponent(source)}&select=content&limit=1`, options);
+    if (await cancellationRequested(options)) {
+      return reply(res, 409, { error:'voice_turn_cancelled' });
+    }
     if (r.status !== 200 || !r.body || !r.body.length) {
       return reply(res, 404, { error: 'Booking not found' });
     }
     const booking = JSON.parse(r.body[0].content);
-    const grant   = await getCalendarGrant(uid);
+    const grant   = await getCalendarGrant(uid, options);
+    if (await cancellationRequested(options)) {
+      return reply(res, 409, { error:'voice_turn_cancelled' });
+    }
     let eventId = null;
 
     if (action === 'confirm') {
@@ -825,7 +907,13 @@ async function handleConfirm(req, res, uid) {
       const requestId = stableTransactionalId('schedule.manager.confirm',
         uid + '\n' + source + '\n' + artifact);
       const edgeKill = await requireClearKillSwitch(uid);
+      if (await cancellationRequested(options)) {
+        return reply(res, 409, { error:'voice_turn_cancelled' });
+      }
       if (!edgeKill.ok) return reply(res, 503, { error:edgeKill.reason });
+      if (await cancellationRequested(options)) {
+        return reply(res, 409, { error:'voice_turn_cancelled' });
+      }
       const effectClaim = await require('../outbound.effect.js').claimProviderAttempt({
         hamUid:uid, channel:'schedule_manager_confirmation',
         deliveryTarget:{ kind:'email', value:[{ email:String(booking.bookerEmail).trim().toLowerCase() }] },
@@ -835,9 +923,12 @@ async function handleConfirm(req, res, uid) {
       if (!effectClaim.ok) return reply(res,
         effectClaim.reason === 'provider_effect_already_claimed' ? 409 : 503,
         { error:effectClaim.reason });
+      if (await cancellationRequested(options)) {
+        return reply(res, 409, { error:'voice_turn_cancelled' });
+      }
       const eventRes = await nylasReq(
         `/v3/grants/${grant.grantId}/events?calendar_id=${encodeURIComponent(grant.calendarId)}`,
-        'POST', eventPayload, { 'Idempotency-Key':effectClaim.idempotencyKey }
+        'POST', eventPayload, { 'Idempotency-Key':effectClaim.idempotencyKey }, options
       );
       eventId = eventRes && eventRes.status >= 200 && eventRes.status < 300 &&
         eventRes.body && eventRes.body.data && eventRes.body.data.id;
@@ -854,8 +945,13 @@ async function handleConfirm(req, res, uid) {
     const statusContent = { ...booking,
       status: action === 'confirm' ? 'confirmed' : 'declined' };
     if (eventId) statusContent.eventId = eventId;
+    if (await cancellationRequested(options)) {
+      return reply(res, 409, { error:'voice_turn_cancelled',
+        providerAccepted:!!eventId, eventId:eventId });
+    }
     const statusStamp = await writeBead(uid, newSource, statusContent,
-      ['schedule', action === 'confirm' ? 'confirmed_booking' : 'declined_booking'], 8);
+      ['schedule', action === 'confirm' ? 'confirmed_booking' : 'declined_booking'], 8,
+      options);
     if (!verifiedScheduleStamp(statusStamp, newSource, statusContent)) {
       return reply(res, 502, { error:'booking_status_stamp_unverified',
         providerAccepted:!!eventId, eventId:eventId });

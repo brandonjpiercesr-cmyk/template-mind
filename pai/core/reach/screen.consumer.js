@@ -171,7 +171,7 @@ async function composeWorldContext(hamUid) {
   rows.forEach(function (r) {
     var t = String(r.summary || '');
     t = t.replace(/\[[^\]]*\]/g, ' ').replace(/\b(conf|air|tasks|healed|recon|EANEW|EXIT|OPUS|CLAIR|seat|builds):[^\s]*/gi, ' ').replace(/\s+/g, ' ').trim();
-    if (/HEAL|RESPEC|CANON|\.js\b|shipped with|hold\(s\)|agents?\/|core\/|routes?\//i.test(String(r.summary||''))) return; if (t.length < 20) return; // husk, nothing human left
+    if (/HEAL|RESPEC|CANON|\.js\b|shipped with|hold\(s\)|agents?\/|core\/|routes?\/|FOR PAI|friction signal|self-review|no-tool|silent turn|real fix|advisors?\/|CANEW|station\(s\)|repeating the same failure/i.test(String(r.summary||''))) return; if (t.length < 20) return; // husk, nothing human left
     // a friendly label instead of the raw stamp_type
     var label = ({ REMINDER: 'Reminder', ADVISOR: 'From your advisors', BRIEF: 'Worth knowing', NUDGE: 'A nudge', INSIGHT: 'Insight', ALERT: 'Heads up', TASK: 'To do', CALENDAR: 'On your calendar', EMAIL: 'In your inbox', LIFE: 'Your world' })[r.stamp_type] || 'Worth knowing';
     items.push({ type: 'context_item', kind: label, importance: r.importance, text: t.slice(0, 140) });

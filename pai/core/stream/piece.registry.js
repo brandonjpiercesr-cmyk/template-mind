@@ -96,7 +96,7 @@ var PIECES = {
       // reminders -- a firewall breach between coding-world and life-world. A personal
       // reminder never mentions a .js file, a CANON hold, an agent name, or a build
       // tag. Those are filtered out; only real life reminders survive.
-      var CODE_NOISE = /HEAL|RESPEC|CANON|\.js\b|shipped with|deploy|commit|hold\(s\)|agents?\/|core\/|routes?\//i;
+      var CODE_NOISE = /HEAL|RESPEC|CANON|\.js\b|shipped with|deploy|commit|hold\(s\)|agents?\/|core\/|routes?\/|FOR PAI|friction signal|self-review|no-tool|silent turn|real fix|advisors?\/|CANEW|station\(s\)|repeating the same failure/i;
       var items = (rows || []).map(function (r) { return String(r.summary || ''); })
         .filter(function (raw) { return !CODE_NOISE.test(raw); })
         .map(function (raw) { return raw.replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim(); })

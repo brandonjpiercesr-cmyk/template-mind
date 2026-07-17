@@ -15,15 +15,25 @@ function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
 var BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
 function rh() { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Content-Type': 'application/json', 'Content-Profile': _schema(), 'Accept-Profile': _schema() }; }
 
+async function cancelled(options) {
+  options = options || {};
+  if (options.abortSignal && options.abortSignal.aborted) return true;
+  if (typeof options.isCancelled !== 'function') return false;
+  try { return await options.isCancelled() === true; } catch (e) { return true; }
+}
+
 // save a named layout (list of piece names) for a ham
-async function save(hamUid, name, pieces) {
+async function save(hamUid, name, pieces, options) {
+  options = options || {};
   if (!_bu() || !_bk() || !hamUid || !name || !Array.isArray(pieces) || !pieces.length) return { ok: false, reason: 'name and pieces required' };
   var clean = pieces.map(function (p) { return String(p).toLowerCase().trim(); }).filter(Boolean).slice(0, 6);
   if (!clean.length) return { ok: false, reason: 'no real pieces' };
   var body = [{ ham_uid: hamUid, agent_global: 'A_NU', stamp_type: 'DASHBOARD_LAYOUT',
     source: 'layout.' + String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40),
     summary: String(name).slice(0, 60), content: JSON.stringify({ name: name, pieces: clean }), importance: 4 }];
-  var r = await fetch(_bu() + '/rest/v1/' + _tbl() + '', { method: 'POST', headers: rh(), body: JSON.stringify(body) }).catch(function () { return null; });
+  if (await cancelled(options)) return { ok:false, reason:'voice_turn_cancelled' };
+  var r = await fetch(_bu() + '/rest/v1/' + _tbl() + '', { method: 'POST', headers: rh(),
+    body: JSON.stringify(body), signal:options.abortSignal }).catch(function () { return null; });
   return { ok: !!(r && r.ok), name: name, pieces: clean };
 }
 
@@ -45,16 +55,18 @@ async function recall(hamUid, name) {
 }
 
 // update a saved layout: add and/or remove pieces, re-save under the same name
-async function update(hamUid, name, addPieces, removePieces) {
+async function update(hamUid, name, addPieces, removePieces, options) {
+  options = options || {};
   if (!_bu() || !_bk() || !hamUid || !name) return { ok: false, reason: 'name required' };
   var current = await recall(hamUid, name);
+  if (await cancelled(options)) return { ok:false, reason:'voice_turn_cancelled' };
   if (!current) return { ok: false, reason: 'no layout named that' };
   var set = current.slice();
   (addPieces || []).forEach(function (p) { var n = String(p).toLowerCase().trim(); if (n && set.indexOf(n) === -1) set.push(n); });
   (removePieces || []).forEach(function (p) { var n = String(p).toLowerCase().trim(); set = set.filter(function (x) { return x !== n; }); });
   set = set.slice(0, 6);
   if (!set.length) return { ok: false, reason: 'a layout cannot be empty' };
-  return await save(hamUid, name, set);
+  return await save(hamUid, name, set, options);
 }
 
 // list saved layout names for a ham

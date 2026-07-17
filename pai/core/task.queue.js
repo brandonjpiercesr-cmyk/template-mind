@@ -64,6 +64,18 @@ function claimReadHeaders() {
   return { apikey: BRAIN_KEY, Authorization: 'Bearer ' + BRAIN_KEY,
     'Accept-Profile': 'abacia_core' };
 }
+function abortSignal(options) {
+  return options && (options.signal || options.abortSignal) || null;
+}
+async function cancellationRequested(options) {
+  const signal = abortSignal(options);
+  if (signal && signal.aborted) return true;
+  if (options && typeof options.isCancelled === 'function') {
+    try { return await options.isCancelled(true) === true; }
+    catch (eCancel) { return true; }
+  }
+  return false;
+}
 async function execSql(sql) {
   const res = await fetch(BRAIN_URL + '/rest/v1/rpc/exec_sql', {
     method: 'POST',
@@ -83,8 +95,11 @@ async function ensureAttemptsColumn() {
 // ---------- ENQUEUE, idempotent ----------
 // source is the idempotency key. A doubled webhook re-sends the same source;
 // the existing check returns the existing bead instead of minting a twin.
-async function enqueueTask(bead) {
+async function enqueueTask(bead, options) {
   if (!bead || !bead.source) return { ok: false, reason: 'source_required_as_idempotency_key' };
+  if (await cancellationRequested(options)) {
+    return { ok:false, reason:'voice_turn_cancelled' };
+  }
   // ⬡B:core.task.queue:WIRE:spawn_guard_l7:20260706⬡ Enqueue IS the spawn
   // point for queued work. The guard judges lineage + budget carried in
   // content; when armed (SPAWN_GUARD_ENFORCE=true) a bad spec is REFUSED at
@@ -98,19 +113,36 @@ async function enqueueTask(bead) {
       return { ok: false, refused: true, reasons: guardVerdict.reasons };
     }
   } catch (eGuard) { guardVerdict = { ok: false, reasons: ['content_unparseable'] }; }
+  const signal = abortSignal(options);
+  const readRequest = { headers: readHeaders() };
+  if (signal) readRequest.signal = signal;
   const existing = await fetch(
     _bu() + '/rest/v1/' + _tbl() + '?select=id,stamp_type&source=eq.' + encodeURIComponent(bead.source)
       + '&stamp_type=in.(TASK,TASK_CLAIMED,TASK_REVIEW,TASK_DONE,TASK_DEAD)&limit=1',
-    { headers: readHeaders() }
+    readRequest
   ).then(r => r.ok ? r.json() : []).catch(() => []);
+  if (await cancellationRequested(options)) {
+    return { ok:false, reason:'voice_turn_cancelled' };
+  }
   if (existing.length) return { ok: true, duplicate: true, id: existing[0].id, state: existing[0].stamp_type };
   const row = Object.assign({ stamp_type: 'TASK', importance: bead.importance || 7 }, bead, { stamp_type: 'TASK' });
   if (_tbl() !== 'aibe_brain' && row.spawned_by === undefined) {
     row.spawned_by = (bead.source && String(bead.source).split('.')[0]) || 'SPAN';
   }
-  const res = await fetch(_bu() + '/rest/v1/' + _tbl() + '', {
-    method: 'POST', headers: writeHeaders({ Prefer: 'return=representation' }), body: JSON.stringify(row)
-  });
+  if (await cancellationRequested(options)) {
+    return { ok:false, reason:'voice_turn_cancelled' };
+  }
+  const writeRequest = { method:'POST',
+    headers:writeHeaders({ Prefer:'return=representation' }), body:JSON.stringify(row) };
+  if (signal) writeRequest.signal = signal;
+  let res;
+  try { res = await fetch(_bu() + '/rest/v1/' + _tbl() + '', writeRequest); }
+  catch (eWrite) {
+    if (signal && signal.aborted) {
+      return { ok:false, reason:'task_enqueue_uncertain', cancelled:true };
+    }
+    throw eWrite;
+  }
   if (!res.ok) return { ok: false, reason: 'insert_failed_' + res.status };
   const inserted = await res.json().catch(() => []);
   return { ok: true, duplicate: false, id: inserted[0] && inserted[0].id, spawnGuard: guardVerdict };

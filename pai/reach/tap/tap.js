@@ -13,11 +13,19 @@ var BLOOIO_BASE = process.env.BLOOIO_BASE_URL || 'https://backend.blooio.com/v2/
 var BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 var council = require('../../core/pai.outbound.council.js');
 
+async function cancellationRequested(options) {
+  options = options || {};
+  if (options.abortSignal && options.abortSignal.aborted) return true;
+  if (typeof options.isCancelled !== 'function') return false;
+  try { return await options.isCancelled() === true; } catch (e) { return true; }
+}
+
 // ⬡B:reach.tap.tap:GUARD:provider_requires_full_committed_pai:20260715⬡
 // This is the raw iMessage/SMS provider boundary. It accepts no caller-authored
 // bypass: the exact outbound bytes must equal the answer in a full, locally
 // verifiable council result whose non-enumerable request binding is still intact.
-async function tapSend(to, message, hamUid, councilResult) {
+async function tapSend(to, message, hamUid, councilResult, options) {
+  options = options || {};
   if (typeof to !== 'string' || !to.trim() || typeof message !== 'string' || !message || !hamUid) {
     return { ok: false, reason: 'to_message_ham_required' };
   }
@@ -36,6 +44,10 @@ async function tapSend(to, message, hamUid, councilResult) {
       councilResult.answer !== message || !proof || proof.committed !== true ||
       proof.readback_verified !== true || proof.row_count !== 9) {
     return { ok: false, reason: 'pai_council_result_required' };
+  }
+  if (await cancellationRequested(options)) {
+    return { ok:false, sent:false, reason:'voice_turn_cancelled',
+      requestId:requestId, cycleId:cycleId, councilProof:proof };
   }
 
   // ⬡B:reach.tap.tap:GUARD:exact_provider_target_digest:20260715⬡
@@ -63,11 +75,19 @@ async function tapSend(to, message, hamUid, councilResult) {
     return { ok: false, sent: false, reason: 'kill_switch_unverified',
       requestId: requestId, cycleId: cycleId, councilProof: proof };
   }
+  if (await cancellationRequested(options)) {
+    return { ok:false, sent:false, reason:'voice_turn_cancelled',
+      requestId:requestId, cycleId:cycleId, councilProof:proof };
+  }
 
   var blooioKey = process.env.BLOOIO_API_KEY;
   var tk = process.env.TELNYX_API_KEY, from = process.env.TELNYX_PHONE_NUMBER;
   if (!blooioKey && !(tk && from)) {
     return { ok:false, sent:false, channel:null, reason:'no_text_channel_configured',
+      requestId:requestId, cycleId:cycleId, councilProof:proof };
+  }
+  if (await cancellationRequested(options)) {
+    return { ok:false, sent:false, reason:'voice_turn_cancelled',
       requestId:requestId, cycleId:cycleId, councilProof:proof };
   }
   var effectClaim = await require('../../core/outbound.effect.js').claimProviderAttempt({
@@ -77,11 +97,21 @@ async function tapSend(to, message, hamUid, councilResult) {
   if (!effectClaim.ok) return { ok:false, sent:false, reason:effectClaim.reason,
     requestId:requestId, cycleId:cycleId, councilProof:proof,
     effectKey:effectClaim.effectKey || null };
+  if (await cancellationRequested(options)) {
+    return { ok:false, sent:false, reason:'voice_turn_cancelled',
+      requestId:requestId, cycleId:cycleId, councilProof:proof,
+      effectKey:effectClaim.effectKey || null };
+  }
 
   var result = null;
 
   if (blooioKey) {
     try {
+      if (await cancellationRequested(options)) {
+        return { ok:false, sent:false, reason:'voice_turn_cancelled',
+          requestId:requestId, cycleId:cycleId, councilProof:proof,
+          effectKey:effectClaim.effectKey || null };
+      }
       var chatId = encodeURIComponent(to);
       var res = await fetch(BLOOIO_BASE + '/chats/' + chatId + '/messages', {
         method: 'POST',
@@ -93,7 +123,7 @@ async function tapSend(to, message, hamUid, councilResult) {
           'Accept-Language': 'en-US,en;q=0.9',
           'Idempotency-Key': effectClaim.idempotencyKey
         },
-        body: JSON.stringify({ text: message })
+        body: JSON.stringify({ text: message }), signal:options.abortSignal
       });
       var d = await res.json();
       result = res.ok && d.message_id
@@ -110,11 +140,17 @@ async function tapSend(to, message, hamUid, councilResult) {
   if (!blooioKey) {
     if (tk && from) {
       try {
+        if (await cancellationRequested(options)) {
+          return { ok:false, sent:false, reason:'voice_turn_cancelled',
+            requestId:requestId, cycleId:cycleId, councilProof:proof,
+            effectKey:effectClaim.effectKey || null };
+        }
         var tr = await fetch('https://api.telnyx.com/v2/messages', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + tk, 'Content-Type': 'application/json',
             'Idempotency-Key':effectClaim.idempotencyKey },
-          body: JSON.stringify({ from, to:canonicalTarget.value, text: message })
+          body: JSON.stringify({ from, to:canonicalTarget.value, text: message }),
+          signal:options.abortSignal
         });
         var td = await tr.json();
         result = tr.ok && td.data && td.data.id
@@ -133,7 +169,9 @@ async function tapSend(to, message, hamUid, councilResult) {
     cycleId: cycleId,
     councilProof: proof
   });
-  if (_bu() && _bk()) {
+  var cancelledAfterDispatch = await cancellationRequested(options);
+  if (cancelledAfterDispatch) result.cancelled_after_dispatch = true;
+  if (!cancelledAfterDispatch && _bu() && _bk()) {
     fetch(_bu() + '/rest/v1/' + _tbl() + '', { method: 'POST',
       headers: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Content-Profile': _schema(),
                  'Content-Type': 'application/json', Prefer: 'return=minimal' },

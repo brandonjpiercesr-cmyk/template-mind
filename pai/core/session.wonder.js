@@ -41,6 +41,18 @@ function _schema() { return process.env.BRAIN_SCHEMA || 'abacia_core'; }
 function _rh() { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() }; }
 function _wh() { var h = _rh(); h['Content-Profile'] = 'abacia_core'; h['Content-Type'] = 'application/json'; h.Prefer = 'return=minimal'; return h; }
 
+async function _cancellationRequested(options) {
+  options = options || {};
+  if (options.abortSignal && options.abortSignal.aborted) return true;
+  if (typeof options.isCancelled !== 'function') return false;
+  try { return await options.isCancelled() === true; } catch (e) { return true; }
+}
+
+function _cancelledSession(stage, extra) {
+  return Object.assign({ ok:false, convened:false, reason:'voice_turn_cancelled',
+    cancel_stage:stage }, extra || {});
+}
+
 function _requestId(value) {
   var candidate = typeof value === 'string' ? value.trim() : '';
   return candidate && /^[A-Za-z0-9._:-]{8,160}$/.test(candidate)
@@ -65,6 +77,9 @@ function _parseCalendarArtifact(value) {
 // Agenda judgment remains internal context. Every calendar description or
 // A'NU message is the exact answer committed by the canonical PAI council.
 async function _committedSessionText(input) {
+  if (await _cancellationRequested(input)) {
+    return { ok:false, reason:'voice_turn_cancelled', requestId:_requestId(input.requestId) };
+  }
   var requestId = _requestId(input.requestId);
   var identity = {
     uid: input.hamUid,
@@ -73,8 +88,18 @@ async function _committedSessionText(input) {
     delivery: input.delivery || {},
     council_context: Object.assign({ mode: input.mode || 'session_wonder' }, input.context || {})
   };
+  if (input.abortSignal || typeof input.isCancelled === 'function') {
+    Object.defineProperty(identity, '_voiceCancellation', {
+      value:{ signal:input.abortSignal, isCancelled:input.isCancelled },
+      enumerable:false, writable:false
+    });
+  }
   var pai = await _runPAI(input.hamUid, input.deliberationInput,
     input.channel || 'portal', identity, [], null);
+  if (await _cancellationRequested(input)) {
+    return { ok:false, reason:'voice_turn_cancelled', requestId:requestId,
+      cycleId:pai && (pai.cycleId || pai.cycle_id) || null };
+  }
   var cycleId = pai && (pai.cycleId || pai.cycle_id);
   var actualRequestId = pai && (pai.requestId || pai.request_id) || requestId;
   if (!cycleId || actualRequestId !== requestId) {
@@ -234,7 +259,8 @@ function buildAgendaText(agenda) {
 // gathers, and protects time that should go to other work instead of a meeting. Grounded
 // strictly in the real cold anchor so it invents nothing. This is the teeth: advisers
 // reasoning about the work, not a canned agenda.
-async function reasonAgenda(hamUid, coldAnchorText) {
+async function reasonAgenda(hamUid, coldAnchorText, options) {
+  options = options || {};
   // DIRECT, focused triage -- NOT the full dispatch team. Routing this through maybeDispatch
   // made planTeam shatter it into generic station jobs (a RESEARCHER researching "audit and
   // compliance", a DRAFTER building a "remediation framework"), which is exactly the
@@ -256,7 +282,8 @@ async function reasonAgenda(hamUid, coldAnchorText) {
   try {
     var r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.2, max_tokens: 500, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] })
+      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.2, max_tokens: 500, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] }),
+      signal:options.abortSignal
     }).then(function (x) { return x.json(); });
     var out = r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content;
     if (typeof out === 'string' && /\S/.test(out) && Buffer.byteLength(out, 'utf8') > 10) {
@@ -294,12 +321,15 @@ async function proposeSession(hamUid, opts) {
   try {
     var HAM = String(hamUid || '').toUpperCase();
     if (!HAM) return { ok: false, reason: 'no_ham' };
+    if (await _cancellationRequested(opts)) return _cancelledSession('before_agenda');
     // 1) cold ground truth (real beads) -- the anchor the reasoning is not allowed to leave
     var agenda = await gatherAgenda(HAM);
+    if (await _cancellationRequested(opts)) return _cancelledSession('after_agenda');
     if (!worthSession(agenda)) return { ok: true, convened: false, reason: 'not_enough_real_material', count: agenda.count };
     var anchorText = buildAgendaText(agenda);
     // 2) REAL REASONING: LIFE's team judges the work and builds the true agenda
-    var reasoned = await reasonAgenda(HAM, anchorText);
+    var reasoned = await reasonAgenda(HAM, anchorText, opts);
+    if (await _cancellationRequested(opts)) return _cancelledSession('after_reasoning');
     if (reasoned.reasoned && reasoned.declined) {
       return { ok: true, convened: false, reason: 'advisers_judged_no_session_needed', count: agenda.count };
     }
@@ -307,8 +337,10 @@ async function proposeSession(hamUid, opts) {
     var agendaText = reasoned.reasoned ? reasoned.brief : anchorText;
     // 3) a real open slot, coordinated (the reasoning already flagged protected time)
     var slot = await pickSlot(HAM, 30);
+    if (await _cancellationRequested(opts)) return _cancelledSession('after_slot');
     // 4) a real way to meet
     var mode = await resolveModality(HAM);
+    if (await _cancellationRequested(opts)) return _cancelledSession('after_modality');
     var modalityLine = _modalityLine(mode, HAM, process.env.PORTAL_BASE_URL);
     // 5) book it (gated), carrying the agenda and the modality
     var insideExistingCycle = !(typeof opts.requestId === 'string' &&
@@ -346,8 +378,14 @@ async function proposeSession(hamUid, opts) {
         delivery: { external: true },
         mode: 'session_calendar_artifact',
         context: { session_mode: mode, slot_start: slot.startISO,
-          delivery_target: { kind:'ham', value:HAM } }
+          delivery_target: { kind:'ham', value:HAM } },
+        abortSignal:opts.abortSignal,
+        isCancelled:opts.isCancelled
       });
+      if (await _cancellationRequested(opts)) {
+        return _cancelledSession('after_calendar_council', {
+          requestId:calendarCouncil.requestId, cycleId:calendarCouncil.cycleId });
+      }
       if (!calendarCouncil.ok) {
         return { ok: false, convened: false,
           reason: 'calendar_description_council_failed:' + calendarCouncil.reason,
@@ -364,11 +402,21 @@ async function proposeSession(hamUid, opts) {
       // ⬡B:core.session:GUARD:calendar_bytes_council_bound:20260715⬡
       // Both human-visible calendar fields are exact substrings of one committed
       // artifact. No cold title or post-STAMP rewrite reaches the provider.
+      if (await _cancellationRequested(opts)) {
+        return _cancelledSession('before_calendar_provider', {
+          requestId:calendarCouncil.requestId, cycleId:calendarCouncil.cycleId });
+      }
       booked = await _sched.bookEvent(HAM, { title: calendarArtifact.title,
         start: calendarArtifact.start, end: calendarArtifact.end,
         description: calendarArtifact.description,
         bookingAuthorization:{ councilResult:calendarCouncil.pai,
-          expected:calendarCouncil.binding, artifact:calendarCouncil.answer } });
+          expected:calendarCouncil.binding, artifact:calendarCouncil.answer },
+        abortSignal:opts.abortSignal, isCancelled:opts.isCancelled });
+      if (await _cancellationRequested(opts)) {
+        return _cancelledSession('after_calendar_provider', {
+          booked:booked && booked.ok ? booked : null,
+          requestId:calendarCouncil.requestId, cycleId:calendarCouncil.cycleId });
+      }
       if (!booked || booked.ok !== true) {
         return { ok: false, convened: false, reason: 'calendar_booking_failed',
           requestId: calendarCouncil.requestId, cycleId: calendarCouncil.cycleId,
@@ -386,6 +434,7 @@ async function proposeSession(hamUid, opts) {
     var slotCaveat = (slot && slot.verified === false) ? ' One straight thing: I have not fully synced your calendar yet, so confirm that time is actually open for you before I lock it.' : '';
     var draftContext = head + slotCaveat + '\n\n' + agendaText + '\n\n' + modalityLine;
     if (insideExistingCycle) {
+      if (await _cancellationRequested(opts)) return _cancelledSession('before_outer_commit');
       return { ok: true, convened: true, reasoned: reasoned.reasoned,
         booked: null, slot: slot, mode: mode, agenda: agenda,
         requires_outer_commit: true, proposal_context: draftContext };
@@ -407,8 +456,15 @@ async function proposeSession(hamUid, opts) {
       mode: 'session_proposal_message',
       context: { session_mode: mode, autobook: autobook,
         booking_succeeded: !!(booked && booked.ok), slot_start: slot && slot.startISO || null,
-        delivery_target: opts.deliveryTarget || null }
+        delivery_target: opts.deliveryTarget || null },
+      abortSignal:opts.abortSignal,
+      isCancelled:opts.isCancelled
     });
+    if (await _cancellationRequested(opts)) {
+      return _cancelledSession('after_outbound_council', {
+        booked:booked && booked.ok ? booked : null,
+        requestId:outboundCouncil.requestId, cycleId:outboundCouncil.cycleId });
+    }
     if (!outboundCouncil.ok) {
       return { ok: false, convened: false,
         reason: 'session_outbound_council_failed:' + outboundCouncil.reason,
@@ -420,6 +476,11 @@ async function proposeSession(hamUid, opts) {
     // without writing it, and direct proposals write it only after their exact
     // outward message has a verified receipt plus STAMP pair.
     try {
+      if (await _cancellationRequested(opts)) {
+        return _cancelledSession('before_session_record', {
+          booked:booked && booked.ok ? booked : null,
+          requestId:outboundCouncil.requestId, cycleId:outboundCouncil.cycleId });
+      }
       var sessionSource = 'session.' + HAM + '.' + outboundCouncil.requestId;
       var sessionResponse = await fetch(_bu() + '/rest/v1/' + _tbl(), {
         method:'POST', headers:Object.assign({}, _wh(), { Prefer:'return=representation' }),
@@ -435,7 +496,7 @@ async function proposeSession(hamUid, opts) {
           calendarCouncilProof: calendarCouncil && calendarCouncil.councilProof || null,
           outboundCouncilProof: outboundCouncil.councilProof }),
         importance: 7
-      }) });
+      }), signal:opts.abortSignal });
       var sessionRows = sessionResponse.ok
         ? await sessionResponse.json().catch(function(){return null;}) : null;
       if (!sessionResponse.ok || !Array.isArray(sessionRows) || !sessionRows[0] ||
@@ -466,7 +527,7 @@ module.exports = { proposeSession, verifySessionOutbound, gatherAgenda, worthSes
 // honestly. It NEVER calls on a guess: it only fires when the HAM has explicitly set
 // MEETING_MODE to 'call' (a real, deliberate preference, not the default 'either'), and only
 // for a session that was actually BOOKED (a real calendar write happened, not just proposed).
-// It reuses the proven /vara/call endpoint (ElevenLabs outbound, live since 20260628) rather
+// It reuses the proven /vara/call endpoint (the canonical Pipecat provider boundary) rather
 // than building a parallel call path -- this Wonder never rebuilds voice infrastructure, it
 // only reaches through the door that already exists. Mirrors outreach.js's own cold interval
 // pattern: poll, single-flight, brain is the record of what already fired.

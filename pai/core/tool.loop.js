@@ -1,5 +1,6 @@
 // ⬡B:core.tool.loop:MODULE:pai_executor:20260630⬡
 var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '700', 10); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
+var voiceConversationPolicy = require('./voice.conversation.policy.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
 // Real incident: GUIDE pass 2 (strict JSON, 12 fields per destination) was
 // truncated mid-JSON by the one global 700 cap and died as
@@ -15,6 +16,111 @@ function tokenCapFor(channel) {
   if (c === 'PORTAL') return Math.max(v || 0, MAX_TOKENS, 2200);
   if (v && v > 0) return v;
   return MAX_TOKENS;
+}
+
+function shouldIncludeWorldContext(channel, identity, hamUid, question) {
+  if (String(channel || '').toLowerCase() !== 'voice') return true;
+  if (identity && identity.council_context &&
+      identity.council_context.mode === 'voice' &&
+      identity.council_context.include_world_context === true) return true;
+  // Suppress ambient fusion only for the one class of question whose complete
+  // source is the signed exact-call handoff. Later questions in the same call
+  // keep normal exact-HAM world grounding.
+  return !voiceCallContextSatisfiesTurn(channel, hamUid, question, identity);
+}
+
+function verifiedVoiceCallContext(identity, hamUid) {
+  var context = identity && identity.council_context;
+  if (!context || context.mode !== 'voice' || !Array.isArray(context.verified_evidence)) return null;
+  var expectedHam = String(hamUid || '').toUpperCase();
+  var item = context.verified_evidence.find(function (candidate) {
+    return candidate && candidate.tool === 'voice_call_handoff' &&
+      candidate.provenance === 'pipecat.signed_provider_call_handoff';
+  });
+  var result = item && item.result;
+  var identityRequestId = identity && (identity.request_id || identity.requestId);
+  if (!item || !result || typeof result !== 'object' ||
+      String(item.ham_uid || '').toUpperCase() !== expectedHam ||
+      item.call_id !== context.call_id || item.session_id !== context.session_id ||
+      item.turn_id !== context.turn_id || identityRequestId !== context.turn_id ||
+      result.call_id !== context.call_id || result.session_id !== context.session_id ||
+      result.turn_id !== context.turn_id ||
+      result.binding_digest !== context.call_binding_digest ||
+      typeof result.call_purpose !== 'string' || !result.call_purpose.trim() ||
+      typeof result.committed_opener !== 'string' || !result.committed_opener.trim() ||
+      result.provider_call_binding_verified !== true ||
+      !/^[A-Za-z0-9._:-]{8,180}$/.test(String(item.call_id || '')) ||
+      !/^[A-Za-z0-9._:-]{8,220}$/.test(String(item.session_id || '')) ||
+      !/^[A-Za-z0-9._:-]{8,160}$/.test(String(item.turn_id || '')) ||
+      !String(item.turn_id || '').startsWith(String(item.session_id || '') + '.turn.') ||
+      !/^[1-9][0-9]{0,8}$/.test(String(item.turn_id || '')
+        .slice((String(item.session_id || '') + '.turn.').length)) ||
+      !/^[A-Za-z0-9._:-]{8,180}$/.test(String(item.request_id || '')) ||
+      !/^[A-Za-z0-9._:-]{8,220}$/.test(String(item.cycle_id || '')) ||
+      !/^[a-f0-9]{64}$/.test(String(item.receipt_digest || '')) ||
+      !/^[a-f0-9]{64}$/.test(String(context.call_binding_digest || ''))) return null;
+  var expectedDigest = require('node:crypto').createHash('sha256').update(JSON.stringify([
+    expectedHam, item.session_id, item.call_id, item.turn_id, result.call_purpose,
+    result.committed_opener, item.request_id, item.cycle_id, item.receipt_digest
+  ]), 'utf8').digest('hex');
+  return expectedDigest === context.call_binding_digest ? result : null;
+}
+
+function voiceCallContextSatisfiesTurn(channel, hamUid, question, identity) {
+  return !!verifiedVoiceCallPurposeAnswer(channel, hamUid, question, identity);
+}
+
+function verifiedVoiceCallPurposeAnswer(channel, hamUid, question, identity) {
+  if (String(channel || '').toLowerCase() !== 'voice') return null;
+  var handoff = verifiedVoiceCallContext(identity, hamUid);
+  if (!handoff) return null;
+  // Whole-utterance matching is a provider-safety boundary. A signed call
+  // purpose can answer these exact conversational questions, but must never
+  // swallow a second action or fact request such as "..., and text BJ".
+  if (!voiceConversationPolicy.isCallPurposeQuestion(question)) return null;
+  // Some canonical callers store the operational request as call_purpose
+  // ("Call this HAM and check in...") while the committed opener is already
+  // the natural, council-approved first-person rendering. Use a first-person
+  // purpose verbatim when it is already speakable; otherwise use the equally
+  // signed committed opener. Never synthesize a third set of unbound bytes.
+  var naturalPurpose = /^(?:i\b|i['\u2019](?:m|d|ve|ll)\b|we\b|we['\u2019](?:re|d|ve|ll)\b)/i
+    .test(String(handoff.call_purpose || '').trim());
+  return naturalPurpose ? handoff.call_purpose : handoff.committed_opener;
+}
+
+function voiceConversationalNoGenericLookup(channel, hamUid, question, identity) {
+  if (String(channel || '').toLowerCase() !== 'voice' ||
+      !verifiedVoiceCallContext(identity, hamUid)) return false;
+  if (voiceCallContextSatisfiesTurn(channel, hamUid, question, identity)) return true;
+  var exact = String(question || '').trim().toLowerCase().replace(/[\u2018\u2019]/g, "'");
+  if (voiceConversationPolicy.isPureGreeting(exact)) return true;
+  // Keep this deliberately narrow. These shapes ask only for A'NU's present
+  // conversational response; questions about people, work, calendar, or other
+  // real-world facts continue through the deterministic lookup branches.
+  if (/\b(?:email|e-mail|text|message|send|schedule|calendar|meeting|agenda|book|create|update|change|cancel|delete|notify|look\s*up|search|find|check|deploy|commit|push)\b/i.test(exact)) {
+    return false;
+  }
+  var feeling = "(?:good|fine|okay|ok|alright|great|well|not\\s+bad|tired|busy|doing\\s+(?:good|well|fine|okay|ok))";
+  // A standalone feeling needs an explicit first-person marker. Bare "Good"
+  // or "Yes" can authorize a pending action from the prior turn, and this
+  // predicate intentionally has no authority to inspect or clear that state.
+  var standaloneFeeling = new RegExp("^i(?:'m|\\s+am)\\s+" + feeling + "\\s*[.!]*$", 'i');
+  var reciprocalFeeling = new RegExp(
+    "^(?:i(?:'m|\\s+am)\\s+)?" + feeling +
+    "\\s*[,!.]?\\s*(?:(?:and\\s+)?you|(?:what|how)\\s+about\\s+you|how\\s+are\\s+you(?:\\s+doing)?)\\s*[?.!]*$", 'i');
+  if (standaloneFeeling.test(exact) || reciprocalFeeling.test(exact)) {
+    return true;
+  }
+  return /^(?:(?:hey|hi|hello|yo)\s*[,!.]?\s*)?(?:how\s+are\s+you(?:\s+doing)?|how\s+have\s+you\s+been|how'?s\s+it\s+going|i\s+hear\s+you|makes\s+sense|thank\s+you|thanks)\s*[?.!]*$/i.test(exact);
+}
+
+function bindExactHamToolArgs(name, args, hamUid, runtime) {
+  var bounded = Object.assign({}, args || {});
+  if (runtime && runtime.exactHamReads === true &&
+      (name === 'find_in_brain' || name === 'find_identity_evidence')) {
+    bounded.ham_uid = String(hamUid || '').toUpperCase();
+  }
+  return bounded;
 }
 // entered via the ABAHAM door, serving every channel that reaches PAI: text, voice, email, chat
 // ⬡B:core.tool.loop:FIX:fix_file_cooldown_added:20260701⬡
@@ -174,7 +280,7 @@ function repairCodaRepositoryDraft(draft, codaAnswer, repositoryProved) {
 
 // ⬡B:core.tool_loop:WIRE:named_agent_rows_as_tool_evidence:20260715⬡
 // Passive Memory Bank prompt text is not consistently attended. Convert only
-// the exact-HAM named rows that FCW already loaded into completed synthetic FIND
+// the exact-HAM named rows that MEMORY_BANK already loaded into completed synthetic FIND
 // results. No bank call happens here; no roster, preference, or answer is
 // inferred. Every call uses the registered singular agent_global schema, and
 // the identical bounded result enters the model tool channel and SHADOW proof.
@@ -229,7 +335,7 @@ function injectNamedAgentEvidence(msgs, verifiedEvidence, fcw, hamUid) {
 }
 
 // ⬡B:core.tool.loop:EVIDENCE:identity_provenance_same_bytes_model_shadow:20260715⬡
-// FCW already performed this bounded exact-HAM read. Complete one real registered
+// MEMORY_BANK already performed this bounded exact-HAM read. Complete one real registered
 // tool exchange with those same bytes, and place the byte-identical result into
 // SHADOW evidence. No second query, answer template, roster, or inferred identity.
 function injectIdentityProvenanceEvidence(msgs, verifiedEvidence, fcw, hamUid, question, preparedProof) {
@@ -349,22 +455,14 @@ function prioritizeVerifiedEvidence(primary, secondary) {
   return out;
 }
 
+// ⬡B:core.tool_loop:BUILD:auto_screen_cook_allowlist_20260715⬡ tools whose real
+// results are worth cooking onto the glass automatically, no model decision needed.
+// Starting with calendar_read -- proven end-to-end live this session (real events,
+// EBC-gated, renders as a timeline). Extend this list as each piece is proven, never
+// add one blind.
+var AUTO_SCREEN_TOOLS = ['calendar_read'];
+
 var TOOLS = [
-  // ⬡B:tool.loop:TOOL:awa_verify_job_posting:20260716⬡ C0 cold verification.
-  // Real failure 20260716: a phrase-match location filter rejected 96 of 97 live
-  // postings because the board renders remote/deadline in JavaScript. Structured
-  // fields carry the truth, and prose overrides structured when it narrows residency.
-  {type:'function',function:{name:'verify_job_posting',
-    description:'Verify job postings before acting on them. Cold code, no model, no cost. '
-    +'Checks the deadline is real and future, that remote is genuinely nationwide (a posting can '
-    +'say TELECOMMUTE and Country US in its structured data and then state "must reside in Illinois" '
-    +'in its text -- the text wins), and classifies into caller-supplied tracks. '
-    +'Use this before drafting, sending, or recommending ANY job application.',
-    parameters:{type:'object',required:['postings'],properties:{
-      postings:{type:'array',description:'Parsed postings. Each: {title, employmentType, validThrough, jobLocationType, applicantLocationRequirements, descriptionText, url, org, salary}',
-        items:{type:'object'}},
-      track_spec:{type:'object',description:'Optional {tracks:[{id,titles:[],exclude:[],employment:"FULL_TIME"|"PART_TIME"|null}]}. Omit to skip classification.'},
-      require_nationwide_remote:{type:'boolean',description:'Default true. Set false to allow non-remote roles.'}}}}},
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
@@ -407,6 +505,11 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','stamp_type','summary','content'],
     properties:{ham_uid:{type:'string'},stamp_type:{type:'string'},
       summary:{type:'string'},content:{type:'string'},importance:{type:'number'}}}}},
+  {type:'function',function:{name:'create_chat_file',description:'Create a real downloadable file in the active A\'NU chat or project. Use when the person asks you to make, export, draft, or give them a file. The active workspace and conversation are bound by the server; provide the complete file content, not a preview.',
+    parameters:{type:'object',required:['filename','content'],properties:{
+      filename:{type:'string',description:'Safe filename including extension, such as roadmap.md or brief.csv'},
+      mime:{type:'string',description:'MIME type, such as text/markdown, text/csv, or application/json'},
+      content:{type:'string',description:'Complete UTF-8 file content to save and return to the chat'}}}}},
   {type:'function',function:{name:'read_render_logs',description:'Read crash logs for a Render service. Use when diagnosing deploy failures.',
     parameters:{type:'object',required:['service_id'],
     properties:{service_id:{type:'string',description:'Render service ID'},limit:{type:'number'}}}}},
@@ -551,6 +654,7 @@ var TOOLS = [
 // exact answer has a durable receipt plus committed STAMP readback.
 var POST_COUNCIL_TOOLS = Object.freeze({
   write_to_brain:true,
+  create_chat_file:true,
   fix_file_in_github:true,
   trigger_deploy:true,
   notify_ham:true,
@@ -566,7 +670,38 @@ var POST_COUNCIL_TOOLS = Object.freeze({
   activate_roadmap_task:true
 });
 
+async function runtimeCancellationRequested(runtime) {
+  if (!runtime) return false;
+  if (runtime.abortSignal && runtime.abortSignal.aborted) return true;
+  if (typeof runtime.isCancelled === 'function') {
+    try { return await runtime.isCancelled(true) === true; }
+    catch (eCancelCheck) { return true; }
+  }
+  return false;
+}
+
+function cancelledToolResult(name) {
+  return JSON.stringify({ok:false,reason:'voice_turn_cancelled',tool:name});
+}
+
+async function cancelBeforeEffect(name, runtime) {
+  if (!runtime || runtime.phase !== 'commit') return null;
+  return await runtimeCancellationRequested(runtime) ? cancelledToolResult(name) : null;
+}
+
+function effectCancellation(runtime) {
+  if (!runtime || runtime.phase !== 'commit') return null;
+  return {
+    abortSignal:runtime.abortSignal,
+    isCancelled:function () { return runtimeCancellationRequested(runtime); }
+  };
+}
+
 async function executeTool(name, args, hamUid, origMessage, runtime) {
+  if (runtime && runtime.phase === 'commit' &&
+      await runtimeCancellationRequested(runtime)) {
+    return cancelledToolResult(name);
+  }
   if (name === 'activate_roadmap_task' && (!runtime || runtime.codaVerified !== true)) {
     return JSON.stringify({ok:false,reason:'verified_current_turn_coda_required',tool:name});
   }
@@ -592,6 +727,23 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     }
     return JSON.stringify({ok:true,executed:false,queued_for_council_commit:true,
       duplicate_suppressed:wasDuplicate,tool:name});
+  }
+  if (name === 'create_chat_file') {
+    try {
+      const cara = require('../routes/cara.hub.routes.js');
+      const context = runtime && runtime.caraContext || {};
+      var createFileCancelled = await cancelBeforeEffect(name, runtime);
+      if (createFileCancelled) return createFileCancelled;
+      var createFileCancellation = effectCancellation(runtime);
+      return JSON.stringify(await cara.storeGeneratedFile(String(hamUid || '').toUpperCase(), {
+        projectId:context.project_id, conversationId:context.conversation_id,
+        filename:args.filename, mime:args.mime, content:args.content,
+        abortSignal:createFileCancellation && createFileCancellation.abortSignal,
+        isCancelled:createFileCancellation && createFileCancellation.isCancelled
+      }));
+    } catch (eChatFile) {
+      return JSON.stringify({ ok:false, reason:'chat_file_create_failed', error:eChatFile.message });
+    }
   }
   if (name === 'consult_coda') {
     try {
@@ -809,7 +961,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
   if (name === 'save_layout') {
     try {
       var lm = require('./stream/layout.memory.js');
-      var r = await lm.save(hamUid, args.name, args.pieces || []);
+      var saveLayoutCancelled = await cancelBeforeEffect(name, runtime);
+      if (saveLayoutCancelled) return saveLayoutCancelled;
+      var saveLayoutCancellation = effectCancellation(runtime);
+      var r = await lm.save(hamUid, args.name, args.pieces || [],
+        saveLayoutCancellation || {});
       return JSON.stringify(r.ok ? {ok:true,name:r.name,pieces:r.pieces}
         : {ok:false,reason:r.reason || 'layout_save_failed'});
     } catch (eSL) { return JSON.stringify({ok:false,reason:eSL.message}); }
@@ -817,7 +973,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
   if (name === 'edit_layout') {
     try {
       var lm2 = require('./stream/layout.memory.js');
-      var r = await lm2.update(hamUid, args.name, args.add || [], args.remove || []);
+      var editLayoutCancelled = await cancelBeforeEffect(name, runtime);
+      if (editLayoutCancelled) return editLayoutCancelled;
+      var editLayoutCancellation = effectCancellation(runtime);
+      var r = await lm2.update(hamUid, args.name, args.add || [], args.remove || [],
+        editLayoutCancellation || {});
       return JSON.stringify(r.ok ? {ok:true,name:args.name,pieces:r.pieces}
         : {ok:false,reason:r.reason || 'layout_update_failed'});
     } catch (eEL) { return JSON.stringify({ok:false,reason:eEL.message}); }
@@ -830,7 +990,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (args.background && validIds.indexOf(args.background) === -1) {
         return JSON.stringify({ok:false,reason:'invalid_background',valid_ids:validIds});
       }
-      var r = await sa.push(hamUid, args);
+      var updateScreenCancelled = await cancelBeforeEffect(name, runtime);
+      if (updateScreenCancelled) return updateScreenCancelled;
+      var updateScreenCancellation = effectCancellation(runtime);
+      var r = await sa.push(hamUid, args, updateScreenCancellation || {});
+      if (r && r.reason === 'voice_turn_cancelled') return cancelledToolResult(name);
       // \u2b21B:core.tool_loop:FIX:tool_result_names_what_rendered_20260710\u2b21 founder gate
       // failure, real trace: she put a drafted email into a plain text card, the tool
       // said Screen updated, and she believed a success that did not render as a draft.
@@ -848,26 +1012,6 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       }
       return JSON.stringify({ok:false,reason:'nothing_applied'});
     } catch (eUpd) { return JSON.stringify({ok:false,reason:eUpd.message}); }
-  }
-  if (name === 'verify_job_posting') {
-    // ⬡B:tool.loop:WIRE:awa_verify_is_a_tool_on_the_one_cycle:20260716⬡
-    // Lives on the ONE cycle, never on a channel and never inside an advisor holding
-    // its own credentials. Lazy require so a missing module degrades, never crashes load.
-    try {
-      var _awa = require('../agents/awa/verify.js');
-      var _list = (args && args.postings) || [];
-      if (!Array.isArray(_list) || !_list.length) return JSON.stringify({ok:false,reason:'no_postings_supplied'});
-      var _opts = { nowISO: new Date().toISOString(),
-        trackSpec: (args && args.track_spec) || null,
-        requireNationwideRemote: !(args && args.require_nationwide_remote === false) };
-      var _keep = [], _drop = [];
-      _list.slice(0,60).forEach(function(p){
-        var v = _awa.verify(p, _opts);
-        (v.keep ? _keep : _drop).push(v);
-      });
-      return JSON.stringify({ok:true, checked:_list.length, kept:_keep.length, dropped:_drop.length,
-        keep:_keep, drop:_drop.map(function(d){ return {title:d.title, org:d.org, url:d.url, drop_reason:d.drop_reason}; })});
-    } catch (e) { return JSON.stringify({ok:false, reason:'verify_unavailable:'+e.message}); }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
@@ -901,7 +1045,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     if (args.order) q.order=args.order;
     var _boundFindHam = String(hamUid || '').toUpperCase();
     var _requestedFindHam = String(args.ham_uid || _boundFindHam).toUpperCase();
-    var _unknownInboxRead = String(args.stamp_type || '').toUpperCase() ===
+    var _unknownInboxRead = !(runtime && runtime.exactHamReads === true) &&
+      String(args.stamp_type || '').toUpperCase() ===
       'UNRESOLVED_INBOUND' && _requestedFindHam === 'UNKNOWN';
     if (!_boundFindHam) return JSON.stringify({ok:false,reason:'ham_uid_required'});
     if (_requestedFindHam !== _boundFindHam && !_unknownInboxRead) {
@@ -927,7 +1072,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // ⬡B:core.tool_loop:FIX:wondergames_mechanical_fallback_20260714⬡
     // Same doctrine as the ALERT fallback above (reliability is mechanism, never
     // phrasing): the founder caught A'NU unable to answer 'what is Wonder Games /
-    // the coding cook-off' even after the FCW cold-load and a description mapping
+    // the coding cook-off' even after the MEMORY_BANK cold-load and a description mapping
     // were both added -- because the model's OWN find_in_brain call (with whatever
     // stamp_type it guessed) came back empty, and that live empty tool result
     // overrode the passive system-prompt context. Mechanical, deterministic fix:
@@ -1011,7 +1156,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         ageMin < 60 ? (ageMin + ' minutes ago') :
         ageMin < 1440 ? (Math.round(ageMin/60) + ' hours ago') :
         (Math.round(ageMin/1440) + ' days ago');
-      return {stamp_type:b.stamp_type,summary:b.summary,content:(b.content||'').slice(0,200),stamped:ageLabel};
+      // \u2b21B:core.tool_loop:FIX:non_string_bead_content_cannot_crash_the_cycle:20260717\u2b21
+      // Live 911: a bead with jsonb content made (b.content||'').slice throw and the
+      // whole turn died as pai_cycle_threw. Evidence readers coerce, never crash.
+      var _bc = b.content;
+      if (_bc != null && typeof _bc !== 'string') { try { _bc = JSON.stringify(_bc); } catch (eBc) { _bc = String(_bc); } }
+      return {stamp_type:b.stamp_type,summary:b.summary,content:(_bc||'').slice(0,200),stamped:ageLabel};
     });
     _result.recency_instruction = 'Every result above carries "stamped: X ago", real elapsed time, not a guess. Before stating anything as a CURRENT problem, loop, or status, check its age. Anything more than a few hours old may already be resolved -- state it as history ("as of N ago, X was happening") not as present-tense fact ("X is happening right now"), unless you have separately confirmed it is still true today.';
     _result.ms = res.ms;
@@ -1025,10 +1175,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       acl_stamp:'\u2b21B:pai.tool:RESULT:tool_write:20260630\u2b21',
       summary:args.summary,content:args.content,importance:args.importance||7};
     try {
+      var brainWriteCancelled = await cancelBeforeEffect(name, runtime);
+      if (brainWriteCancelled) return brainWriteCancelled;
       var beadWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
         headers:{apikey: _bk(),Authorization:'Bearer ' + _bk(),'Accept-Profile':_schema(),
           'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=representation'},
-        body:JSON.stringify(bead)});
+        body:JSON.stringify(bead), signal:runtime && runtime.abortSignal});
       var beadRows = beadWrite.ok ? await beadWrite.json().catch(function(){return null;}) : null;
       if (!beadWrite.ok || !Array.isArray(beadRows) || !beadRows[0] ||
           beadRows[0].source !== bead.source) {
@@ -1088,8 +1240,10 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     var relatedCount = 0;
     try {
       for (var kwi=0;kwi<keywords.length;kwi++){
-        var kwRes = await fetch(_bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.'+cHam+'&summary=ilike.*'+encodeURIComponent(keywords[kwi])+'*&select=id&limit=5',{headers:{apikey:BKc,Authorization:'Bearer '+BKc,'Accept-Profile':_schema()}}).then(function(x){return x.json();}).catch(function(){return [];});
+        var kwRes = await fetch(_bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.'+cHam+'&summary=ilike.*'+encodeURIComponent(keywords[kwi])+'*&select=id&limit=5',{headers:{apikey:BKc,Authorization:'Bearer '+BKc,'Accept-Profile':_schema()},signal:runtime&&runtime.abortSignal}).then(function(x){return x.json();}).catch(function(){return [];});
         relatedCount += (Array.isArray(kwRes)?kwRes.length:0);
+        var capabilityReadCancelled = await cancelBeforeEffect(name, runtime);
+        if (capabilityReadCancelled) return capabilityReadCancelled;
       }
     } catch(eReq){}
     if (relatedCount >= 5) {
@@ -1105,6 +1259,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         parent: runtime && runtime.parentCycleId || 'unknown' };
       var budget = { maxIterations: 20, maxLlmCalls: 10 };
       try { spawnGuard.validateTask({ lineage: lineage, budget: budget }); } catch (eGuard) { return JSON.stringify({ok:false,built:false,reason:'spawn_guard_rejected',error:eGuard.message}); }
+      var capabilityWriteCancelled = await cancelBeforeEffect(name, runtime);
+      if (capabilityWriteCancelled) return capabilityWriteCancelled;
       var taskWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
         headers:{apikey:BKc,Authorization:'Bearer '+BKc,'Accept-Profile':_schema(),
           'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=representation'},
@@ -1113,7 +1269,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
           acl_stamp:'\u2b21B:pai.agentbirth:TASK:proposed:'+ymd()+'\u2b21',
           summary:'[FOR PAI -- agent birth, '+relatedCount+' related real beads found] '+desc,
           content:JSON.stringify({requestedBy:cHam,description:desc,relatedBeadCount:relatedCount,lineage:lineage,budget:budget}),
-          importance:6})});
+          importance:6}), signal:runtime && runtime.abortSignal});
       var taskRows = taskWrite.ok ? await taskWrite.json().catch(function(){return null;}) : null;
       if (!taskWrite.ok || !Array.isArray(taskRows) || !taskRows[0] ||
           taskRows[0].source !== taskName) {
@@ -1163,9 +1319,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (_rt) {
         var _dq = await fetch(_bu() + '/rest/v1/' + _tbl() + '?stamp_type=eq.REMINDER&ham_uid=eq.' + encodeURIComponent(rHam)
           + '&summary=ilike.' + encodeURIComponent('%' + _rt.slice(0, 40) + '%') + '&order=created_at.desc&limit=15',
-          { headers: { apikey: BKr, Authorization: 'Bearer ' + BKr, 'Accept-Profile': _schema() } });
+          { headers: { apikey: BKr, Authorization: 'Bearer ' + BKr, 'Accept-Profile': _schema() },
+            signal:runtime && runtime.abortSignal });
         if (!_dq.ok) return JSON.stringify({ok:false,reason:'reminder_dedup_unverified'});
         var _ex = await _dq.json();
+        var reminderReadCancelled = await cancelBeforeEffect(name, runtime);
+        if (reminderReadCancelled) return reminderReadCancelled;
         var _dup = (Array.isArray(_ex) ? _ex : []).find(function (b) {
           try { var c = JSON.parse(b.content || '{}'); return !c.fired && String(c.text || '').trim().toLowerCase().slice(0, 100) === _rt; } catch (e) { return false; }
         });
@@ -1176,6 +1335,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     } catch (eDup) { return JSON.stringify({ok:false,reason:'reminder_dedup_unverified'}); }
     try {
       var reminderSource = 'pai.reminder.'+rHam+'.'+Date.now();
+      var reminderWriteCancelled = await cancelBeforeEffect(name, runtime);
+      if (reminderWriteCancelled) return reminderWriteCancelled;
       var reminderWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
         headers:{apikey:BKr,Authorization:'Bearer '+BKr,'Accept-Profile':_schema(),
           'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=representation'},
@@ -1184,7 +1345,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
           acl_stamp:'\u2b21B:pai.reminder:REMINDER:created:'+ymd()+'\u2b21',
           summary:'[REMINDER] '+String(args.text||'').slice(0,100),
           content:JSON.stringify({text:args.text,due_at:dueAt,fired:false,defaultedDate:!isValidFuture,createdAt:new Date().toISOString()}),
-          importance:6})});
+          importance:6}), signal:runtime && runtime.abortSignal});
       var reminderRows = reminderWrite.ok
         ? await reminderWrite.json().catch(function(){return null;}) : null;
       if (!reminderWrite.ok || !Array.isArray(reminderRows) || !reminderRows[0] ||
@@ -1290,6 +1451,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _ct2 = require('./contacts.js');
       var _csHam = args.ham_uid || hamUid;
       var _hit2 = await _ct2.resolveContact(_csHam, args.contact_query || '');
+      var contactResolveCancelled = await cancelBeforeEffect(name, runtime);
+      if (contactResolveCancelled) return contactResolveCancelled;
       if (!_hit2 || typeof _hit2 !== 'object') return JSON.stringify({ ok: true, sent: false, reason: 'no_saved_contact', note: 'do not invent a number or email' });
       if (!_hit2.phone) return JSON.stringify({ ok: true, sent: false, reason: 'contact_has_no_phone', contact: _hit2 });
       var _bu3 = _bu();
@@ -1316,7 +1479,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
           return JSON.stringify({ok:false,sent:false,reason:'contact_send_council_result_required'});
         }
         var _tap = require('./wren/reply.js').tapSend;
-        var _sendRes = await _tap(_hit2.phone, _exactContactMessage, _csHam, _sendCouncil);
+        var contactSendCancelled = await cancelBeforeEffect(name, runtime);
+        if (contactSendCancelled) return contactSendCancelled;
+        var contactCancellation = effectCancellation(runtime);
+        var _sendRes = await _tap(_hit2.phone, _exactContactMessage, _csHam, _sendCouncil,
+          contactCancellation || {});
         if (!_sendRes || _sendRes.ok !== true) {
           return JSON.stringify({ok:false,sent:false,
             reason:_sendRes&&_sendRes.reason || 'contact_provider_unverified'});
@@ -1332,12 +1499,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // NOT authorized in-message: draft only, never send. Hard pause per doctrine.
       try {
         var _draftSource = 'contact.draft.' + Date.now();
+        var contactDraftCancelled = await cancelBeforeEffect(name, runtime);
+        if (contactDraftCancelled) return contactDraftCancelled;
         var _draftWrite = await fetch(_bu3 + '/rest/v1/' + _tbl(), { method: 'POST', headers: _wh3, body: JSON.stringify({
         ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'PENDING_SEND',
         acl_stamp: '\u2b21B:core.tool.loop:PENDING_SEND:drafted:' + _ymd3 + '\u2b21',
         source: _draftSource, summary: '[DRAFT for ' + (_hit2.name || 'contact') + ', AWAITING CONFIRM] ' + String(args.message || '').slice(0, 100),
         content: JSON.stringify({ contact: _hit2.name, phone: _hit2.phone, message: args.message }), importance: 6
-        }) });
+        }), signal:runtime && runtime.abortSignal });
         var _draftRows = _draftWrite.ok
           ? await _draftWrite.json().catch(function(){return null;}) : null;
         if (!_draftWrite.ok || !Array.isArray(_draftRows) || !_draftRows[0] ||
@@ -1359,7 +1528,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     try {
       var _rw = require('./reminderWeave.js');
       var _sHam = args.ham_uid || hamUid;
-      var _r = await _rw.suppressWeave(_sHam, args.keyword||'');
+      var stopMentioningCancelled = await cancelBeforeEffect(name, runtime);
+      if (stopMentioningCancelled) return stopMentioningCancelled;
+      var stopMentioningCancellation = effectCancellation(runtime);
+      var _r = await _rw.suppressWeave(_sHam, args.keyword||'',
+        stopMentioningCancellation || {});
+      if (_r && _r.reason === 'voice_turn_cancelled') return cancelledToolResult(name);
       return JSON.stringify(_r && _r.ok ? {ok:true, stopped:_r.keyword} : {ok:false, reason:'could_not_suppress'});
     } catch(eStop){ return JSON.stringify({ok:false,error:eStop.message}); }
   }
@@ -1374,9 +1548,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _slB = require('./schedule/schedule.logic.js');
       var _bHam = args.ham_uid || hamUid;
       if (!_bHam || !args.title || !args.start || !args.end) return JSON.stringify({ok:false,reason:'need ham_uid, title, start, and end'});
+      var calendarBookCancelled = await cancelBeforeEffect(name, runtime);
+      if (calendarBookCancelled) return calendarBookCancelled;
+      var calendarBookCancellation = effectCancellation(runtime);
       var _bres = await _slB.bookEvent(_bHam, { title:args.title,
         start:args.start, end:args.end, description:args.description,
-        bookingAuthorization:args._bookingAuthorization });
+        bookingAuthorization:args._bookingAuthorization,
+        abortSignal:calendarBookCancellation && calendarBookCancellation.abortSignal,
+        isCancelled:calendarBookCancellation && calendarBookCancellation.isCancelled });
       return JSON.stringify(_bres);
     } catch(eBk){ return JSON.stringify({ok:false,error:eBk.message}); }
   }
@@ -1391,11 +1570,16 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _swParentRequest = runtime && runtime.parentRequestId;
       var _swRequestId = _swParentRequest
         ? String(_swParentRequest).slice(0, 140) + '.session' : undefined;
+      var sessionCancelled = await cancelBeforeEffect(name, runtime);
+      if (sessionCancelled) return sessionCancelled;
+      var sessionCancellation = effectCancellation(runtime);
       var _swRes = await _sw.proposeSession(_swHam, {
         autobook: args.autobook === true,
         requestId: _swRequestId,
         userMessage: runtime && runtime.userMessage || origMessage,
-        send: false
+        send: false,
+        abortSignal:sessionCancellation && sessionCancellation.abortSignal,
+        isCancelled:sessionCancellation && sessionCancellation.isCancelled
       });
       if (args.autobook === true && (!_swRes || !_swRes.booked || _swRes.booked.ok !== true)) {
         return JSON.stringify({ok:false,reason:'session_autobook_not_confirmed',
@@ -1414,9 +1598,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     if (now - last < FIX_COOLDOWN_MS) {
       var BU2=process.env.AIBE_BRAIN_URL,BK2=process.env.AIBE_BRAIN_KEY;
       if (BU2&&BK2) {
+        var fixCooldownCancelled = await cancelBeforeEffect(name, runtime);
+        if (fixCooldownCancelled) return fixCooldownCancelled;
         fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
           headers:{apikey:BK2,Authorization:'Bearer '+BK2,'Accept-Profile':_schema(),
             'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
+          signal:runtime && runtime.abortSignal,
           body:JSON.stringify({ham_uid:hamUid||'SYSTEM',agent_global:'PAI',stamp_type:'LOGFUL',
             source:'pai.fix_cooldown_blocked.'+Date.now(),
             acl_stamp:'\u2b21B:pai.tool:LOGFUL:cooldown_blocked:20260701\u2b21',
@@ -1426,19 +1613,31 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       }
       return JSON.stringify({ok:false,reason:'cooldown_active',path:path,retry_after_ms:FIX_COOLDOWN_MS-(now-last)});
     }
+    var fixFileCancelled = await cancelBeforeEffect(name, runtime);
+    if (fixFileCancelled) return fixFileCancelled;
     _lastFixAttempt[path] = now;
-    return JSON.stringify(await fixFileInGithub(args.repo, args.path, args.content, args.reason));
+    var fixFileCancellation = effectCancellation(runtime);
+    return JSON.stringify(await fixFileInGithub(args.repo, args.path, args.content, args.reason,
+      fixFileCancellation || {}));
   }
   if (name === 'trigger_deploy') {
-    return JSON.stringify(await triggerDeploy(args.service_id));
+    var deployCancelled = await cancelBeforeEffect(name, runtime);
+    if (deployCancelled) return deployCancelled;
+    return JSON.stringify(await triggerDeploy(args.service_id, effectCancellation(runtime) || {}));
   }
   if (name === 'activate_roadmap_task') {
     var activationSpec = Object.assign({}, args || {}, { ham_uid: hamUid });
-    return JSON.stringify(await require('./roadmap.activation.js').activate(activationSpec));
+    var activationCancelled = await cancelBeforeEffect(name, runtime);
+    if (activationCancelled) return activationCancelled;
+    return JSON.stringify(await require('./roadmap.activation.js').activate(activationSpec,
+      { cancellation:effectCancellation(runtime) || null }));
   }
   if (name === 'notify_ham') {
+    var notifyCancelled = await cancelBeforeEffect(name, runtime);
+    if (notifyCancelled) return notifyCancelled;
     return JSON.stringify(await notifyHam(args.ham_uid, args.message,
-      runtime && runtime.councilResult, args._resolved_notify_phone));
+      runtime && runtime.councilResult, args._resolved_notify_phone,
+      effectCancellation(runtime) || {}));
   }
   return JSON.stringify({ok:false,error:'unknown:'+name});
 }
@@ -1454,6 +1653,37 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // face replies with ms:0 and no cycle lineage. A new-world mind may be integrated as
   // a tool or contributor inside this cycle, but it must never replace this choke point.
   var t0=Date.now(),GROQ=process.env.GROQ_API_KEY;
+  var _voiceCancellation = identity && identity._voiceCancellation;
+  var _turnAbortSignal = _voiceCancellation && _voiceCancellation.signal;
+  async function _turnCancelled(force) {
+    if (_turnAbortSignal && _turnAbortSignal.aborted) return true;
+    if (_voiceCancellation && typeof _voiceCancellation.isCancelled === 'function') {
+      try { return await _voiceCancellation.isCancelled(force === true) === true; }
+      catch (eCancelCheck) { return true; }
+    }
+    return false;
+  }
+  // The Pipecat bridge owns a 12-second whole-turn budget. Keep all main-model
+  // attempts inside one shared voice deadline so provider fallback cannot add
+  // three independent long waits before SHADOW, STAMP, and readback run.
+  var _voiceModelDeadline = String(channel || '').toLowerCase() === 'voice'
+    ? t0 + 6500 : null;
+  function _modelRequestSignal() {
+    var deadlineSignal = _voiceModelDeadline
+      ? AbortSignal.timeout(Math.max(1, _voiceModelDeadline - Date.now())) : null;
+    var signals = [_turnAbortSignal, deadlineSignal].filter(Boolean);
+    if (!signals.length) return undefined;
+    if (signals.length === 1) return signals[0];
+    if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals);
+    var controller = new AbortController();
+    signals.forEach(function (signal) {
+      if (signal.aborted && !controller.signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener('abort', function () {
+        if (!controller.signal.aborted) controller.abort(signal.reason);
+      }, { once:true });
+    });
+    return controller.signal;
+  }
   // \u2b21B:core.tool.loop:FIX:glm_primary_on_plain_completions:20260711\u2b21
   // Founder, direct: why is this file, the one that serves every real text
   // and call, still on Groq when GLM-5.2 was made primary everywhere else
@@ -1473,7 +1703,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var gr = await fetch('https://api.together.xyz/v1/chat/completions', {
         method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'zai-org/GLM-5.2', max_tokens: maxTokens || 400, temperature: 0.3,
-          messages: sys ? [{ role: 'system', content: sys }, { role: 'user', content: user }] : user })
+          messages: sys ? [{ role: 'system', content: sys }, { role: 'user', content: user }] : user }),
+        signal:_modelRequestSignal()
       });
       if (!gr.ok) return null;
       var gd = await gr.json();
@@ -1490,8 +1721,25 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     && /^[A-Za-z0-9._:-]{8,160}$/.test(_requestIdCandidate.trim())
     ? _requestIdCandidate.trim() : _cycleId + '.request';
   var _BU=_bu(), _BK=_bk();
+  var _voiceSessionId = String(identity && identity.council_context &&
+    identity.council_context.mode === 'voice' &&
+    identity.council_context.session_id || '').slice(0, 220);
+  var _voiceTurnId = String(identity && identity.council_context &&
+    identity.council_context.mode === 'voice' &&
+    identity.council_context.turn_id || '').slice(0, 160);
   function _stampStep(step, detail) {
     if (!_BU || !_BK) return;
+    // CYCLE_STEP is operational telemetry, not the conversation transcript.
+    // Voice joins on the stable signed session id; exact user/answer bytes stay
+    // in their governed request/council rows instead of being previewed here.
+    if (_voiceSessionId) {
+      if (step === 'cycle_start') detail = 'voice_turn_received';
+      else if (step === 'cycle_end') detail = 'voice_turn_committed';
+      else if (/^(?:outbound_council_blocked|cycle_end_silent|post_council_effect_failed)$/.test(step)) {
+        var _voiceCodes = String(detail || '').toLowerCase().match(/[a-z0-9][a-z0-9_.:-]{0,79}/g) || [];
+        detail = _voiceCodes.slice(0, 4).join(',') || step;
+      } else detail = null;
+    }
     fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
       headers:{apikey:_BK,Authorization:'Bearer '+_BK,'Accept-Profile':_schema(),
         'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
@@ -1499,9 +1747,21 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         source:'pai.cycle.'+_cycleId,
         acl_stamp:'\u2b21B:core.tool.loop:CYCLE_STEP:'+step+':'+Date.now()+'\u2b21',
         summary:'[CYCLE '+_cycleId.slice(-8)+'] '+step+(detail?': '+String(detail).slice(0,100):''),
-        content:JSON.stringify({cycleId:_cycleId,step:step,channel:channel,detail:detail||null,atMs:Date.now()-t0}),
+        content:JSON.stringify({cycleId:_cycleId,step:step,channel:channel,
+          sessionId:_voiceSessionId || null,turnId:_voiceTurnId || null,
+          detail:detail||null,atMs:Date.now()-t0}),
         importance:3})
     }).catch(function(){});
+  }
+  function _turnCancelledResult(stage) {
+    _stampStep('cycle_end_silent', 'voice_turn_cancelled');
+    return { ok:false, reason:'voice_turn_cancelled', blocked_by:'CANCELLED',
+      cancel_stage:String(stage || 'unknown').slice(0, 60),
+      ham:typeof hamObj === 'undefined' ? { uid:hamUid } : hamObj,
+      cycleId:_cycleId, requestId:_requestId,
+      tools_used:Array.isArray(tools) ? tools : [],
+      iterations:Number.isInteger(iter) ? iter : 0,
+      ms:Date.now()-t0 };
   }
   _stampStep('cycle_start', String(message||'').slice(0,80));
   // \u2b21B:core.tool.loop:FIX:real_two_pass_verifier_per_research:20260710\u2b21
@@ -1515,10 +1775,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // pass: real numbers verified during the turn are captured; the final answer is
   // mechanically checked against them before it is ever returned.
   var _verifiedRealNumbers = [];
+  if (await _turnCancelled()) return _turnCancelledResult('before_memory');
   if (!GROQ) return {ok:false,reason:'no_groq_key',_dbg:'GROQ_API_KEY not in process.env'};
   var _fcwT0=Date.now();
   var fcw=await buildMemoryBank(hamUid,channel,message,identity).catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
+  if (await _turnCancelled()) return _turnCancelledResult('after_memory');
   // ⬡B:core.tool.loop:GUARD:memory_wall_required_before_deliberation:20260715⬡
   // A generic assistant prompt is not a PAI cycle. If the Memory Bank wall does
   // not build, no deliberation, council receipt, or human answer may be produced.
@@ -1567,6 +1829,32 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       ? String(message || '').slice(
         _exactBuilderMarker + '=== BUILDER MESSAGE ==='.length).trim()
       : String(message || '');
+  }
+  // ⬡B:core.tool_loop:WIRE:first_person_identity_to_server_proof:20260716⬡
+  // "Who are you / who am I" contains only pronouns, so the named-subject
+  // provenance reader intentionally extracts nothing. Bind these turns to the
+  // canonical assistant identity and the exact HAM identity row already selected
+  // by Memory Bank. The same bounded packet reaches drafting and SHADOW.
+  var _firstPersonIdentityProof = /\bwho\s+are\s+you\b|\bwho\s+am\s+i\b|\bhow\s+do\s+you\s+know\b|\bprove\s+it\b/i
+    .test(_exactUserMessage);
+  var _runtimeIdentityEvidence = null;
+  if (_firstPersonIdentityProof && fcw.identity_record && hamObj &&
+      hamObj.name && hamObj.name !== 'Unknown') {
+    _runtimeIdentityEvidence = {
+      name:'runtime_identity_binding',
+      provenance:'pai.current_turn.server_identity',
+      ham_uid:String(hamUid || '').toUpperCase(),
+      request_id:_requestId,
+      cycle_id:_cycleId,
+      assistant:{ name:"A'NU", source:'fcw.canonical_assistant' },
+      human:{ name:String(hamObj.name).slice(0, 160),
+        source:String(fcw.identity_record.source || '').slice(0, 260),
+        row_id:fcw.identity_record.id == null ? null : fcw.identity_record.id,
+        stamp_type:String(fcw.identity_record.stamp_type || '').slice(0, 120) }
+    };
+    systemPrompt += '\nCURRENT IDENTITY PROOF (server-owned for this exact turn): ' +
+      JSON.stringify(_runtimeIdentityEvidence) +
+      '\nAnswer the identity questions directly from this binding. Explain that the person is known through their resolved private account/world and stored identity record, and that you are A\'NU because this request is executing inside A\'NU\'s canonical PAI pathway. Do not expose internal identifiers or claim biometric, legal, or real-world proof beyond this binding.';
   }
   // ⬡B:core.tool_loop:GROUND:current_turn_proof_before_draft:20260715⬡
   // Drafting necessarily precedes council commit and STAMP readback. Ground only
@@ -1660,11 +1948,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // says the screen is not open -- she never again claims she lacks the ability.
   systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if it returns no events, say the day is open, do not fall back to an old find_in_brain stamp to fill the gap.';
   try { systemPrompt += require('./stream/screen.awareness.js').promptAddendum(hamUid, uiPortal); } catch (eScr) {}
-  // \u2b21B:core.tool_loop:WIRE:context_fusion_grounding_3b_20260710\u2b21 every judgment
-  // turn grounds against the freshest fused world context (calendar, lanes, screen),
-  // with decay language baked into the string itself; empty or stale fusion adds
-  // nothing. One fast brain read, fail-soft, no LLM in the fuse.
-  try { systemPrompt += await require('./context.fusion.js').getLatestSummary(hamUid); } catch (eFus) {}
+  // \u2b21B:core.tool_loop:WIRE:context_fusion_grounding_3b_20260710\u2b21 Portal and
+  // asynchronous reach turns ground against the freshest fused world context.
+  // A live voice call stays on its signed call/session context by default; an
+  // explicit server-owned voice request may opt into the ambient fuse.
+  if (shouldIncludeWorldContext(channel, identity, hamUid, _exactUserMessage)) {
+    try { systemPrompt += await require('./context.fusion.js').getLatestSummary(hamUid); } catch (eFus) {}
+  }
   var msgs=[{role:'system',content:systemPrompt}];
   if (Array.isArray(priorTurns) && priorTurns.length) {
     priorTurns.forEach(function(t){
@@ -1691,7 +1981,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     msgs.push({role:'system',content:'The completed identity provenance result above is an exact-HAM bounded read. Preserve each evidence_kind: stored_definition may define; stored_role_claim reports a past self-description without making it literal identity; stored_activity proves only activity. Do not say retrieval did not occur.'});
   }
   // The user message must precede its synthetic assistant tool call. These rows
-  // were already read by FCW; this is an attention-channel bridge, not a query.
+  // were already read by MEMORY_BANK; this is an attention-channel bridge, not a query.
   var _namedLookupCount = _identityLookupCount > 0 ? 0 : injectNamedAgentEvidence(
     msgs, _namedAgentVerifiedEvidence, fcw, hamUid);
   if (_namedLookupCount > 0) {
@@ -1737,7 +2027,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // Same proven mechanism as Wonder Games above, applied to the earlier PREFERENCE
   // cold-load (20260711), which suffered the identical reliability gap: a real
   // PREFERENCE bead exists and is cold-loaded into the system prompt, but the model
-  // still sometimes says it has no record (surfaced live once the FCW schema mismatch
+  // still sometimes says it has no record (surfaced live once the MEMORY_BANK schema mismatch
   // fix made aibebase genuinely read the new bank). Same fix: inject a synthetic
   // completed find_in_brain(PREFERENCE) result after the user's message.
   var _prefNeeded = /\bfavou?rite\b|\bprefer(ence|red)?\b|what do i (like|love|enjoy)\b|\bmy taste\b/i.test(message);
@@ -1838,8 +2128,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     ? TOOLS.filter(function (tool) {
       return tool && tool.function && _readOnlyToolNames.indexOf(tool.function.name) >= 0;
     }) : TOOLS;
-  var iter=0,tools=_codaLeadNeeded?['consult_coda']:[],ans=null;
+  // ⬡B:core.tool_loop:WIRE:signed_voice_purpose_is_exact_draft:20260717⬡
+  // The failed proof call showed that merely removing generic tools still let
+  // the model paraphrase the signed purpose, preventing deterministic SHADOW.
+  // Select the exact handoff bytes as this cycle's draft. This skips no release
+  // authority: canonical preparation, all seven council stages, the nine-row
+  // commit, STAMP, and readback remain below exactly as for a model draft.
+  var _signedVoicePurposeAnswer = verifiedVoiceCallPurposeAnswer(
+    channel, hamUid, _exactUserMessage, identity);
+  var iter=0,tools=_codaLeadNeeded?['consult_coda']:[],ans=_signedVoicePurposeAnswer || null;
+  if (_signedVoicePurposeAnswer) {
+    _stampStep('signed_voice_call_purpose_selected', 'exact_handoff_bytes');
+  }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{} };
+  _effectRuntime.channel = String(channel || '').toLowerCase();
+  _effectRuntime.exactHamReads = _effectRuntime.channel === 'voice' &&
+    !!verifiedVoiceCallContext(identity, hamUid);
+  _effectRuntime.abortSignal = _turnAbortSignal || null;
+  _effectRuntime.isCancelled = _turnCancelled;
   _effectRuntime.activationDecisionRequired = false;
   _effectRuntime.codaActivationApproved = _codaActivationDecision === 'APPROVE';
   _effectRuntime.codaActivationDecision = _codaActivationDecision;
@@ -1865,7 +2171,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (_roadmapActivationEnvelope && _effectRuntime.codaVerified === true) {
     _roadmapActivationNeeded = _effectRuntime.codaActivationApproved === true;
   }
-  while (iter<MAX) {
+  while (iter<MAX && !ans) {
+    if (await _turnCancelled(true)) return _turnCancelledResult('before_model');
     iter++;
     // ⬡B:core.tool.loop:FIX:strong_model_makes_the_tool_decision:20260704⬡
     // Real root cause of the whole night's tool-calling unreliability, found by
@@ -1911,7 +2218,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),temperature:0.3};
     if (iter<=3) body.tools=_turnToolDefinitions;
     // ⬡B:core.tool_loop:FIX:tool_choice_never_set_defaults_to_skippable:20260705⬡
-    // Real, live incident: Brandon asked directly "who is DC499D0C, show me
+    // Real, live incident: Brandon asked directly "who is the founder value, now from env, show me
     // the original message" over text -- the single clearest possible
     // trigger for find_in_brain -- and the turn answered in 4.7s with
     // toolsUsed:[], fabricating "HAM UID stands for Human-Assisted Messaging"
@@ -1967,14 +2274,27 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // that could be answered by his real calendar (today/schedule/meeting/free/
       // busy/calendar) now forces calendar_read specifically -- never find_in_brain
       // alone -- so a day-shaped question can only ever be answered from real events.
-      var _mSt = String(message||'').trim();
+      var _mSt = String(channel === 'voice' ? _exactUserMessage : message || '').trim();
       var _looksLikeInfoQ = /\?\s*$/.test(_mSt)
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
       if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
       else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
+      else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
+        // The signed call handoff already supplies the exact answer source for a
+        // call-purpose question. Keep the full PAI + council, but do not force an
+        // unrelated generic Memory Bank read in front of that bounded evidence.
+        delete body.tools;
+      }
       else if (_isDayQ) body.tool_choice={type:'function',function:{name:'calendar_read'}};
+      else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
+        // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
+        // Removing the irrelevant tool schema also keeps the one required model
+        // draft inside a phone-conversation budget. This is not an action lane;
+        // mixed requests such as "why, and email me" do not match this predicate.
+        delete body.tools;
+      }
       else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
     }
     // \u2b21B:core.tool_loop:WIRE:ornith_opt_in_no_tools_only:20260703\u2b21
@@ -2012,7 +2332,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           var ornResp = await fetch(ORN.replace(/\/$/,'') + '/runsync', {
             method: 'POST',
             headers: { Authorization: 'Bearer ' + ORK, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ input: { method_name: 'chat', input: { messages: msgs, options: { temperature: 0.3, num_predict: 400 } } } })
+            body: JSON.stringify({ input: { method_name: 'chat', input: { messages: msgs, options: { temperature: 0.3, num_predict: 400 } } } }),
+            signal:_modelRequestSignal()
           }).then(function(x){ return x.json(); }).catch(function(e){ return { error: e.message }; });
           var ornText = ornResp && ornResp.output && (ornResp.output.message && ornResp.output.message.content || ornResp.output.response);
           if (ornResp && ornResp.status === 'COMPLETED' && ornText) {
@@ -2023,7 +2344,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     }
     if (!r) r=await fetch(GB,{method:'POST',
       headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
-      body:JSON.stringify(body)
+      body:JSON.stringify(body),signal:_modelRequestSignal()
     }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
     if(r&&r.error){global._paiLastError='groq:'+JSON.stringify(r.error).slice(0,120);}
     if(r&&!r.choices&&!r.error){global._paiLastError='groq_no_choices:'+JSON.stringify(r).slice(0,150);}
@@ -2033,7 +2354,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         headers:{Authorization:'Bearer '+TK,'Content-Type':'application/json'},
         body:JSON.stringify({model:process.env.TOGETHER_MODEL||'Qwen/Qwen3.5-9B',
           messages:openAiCompatibleHistory(msgs),
-          max_tokens:tokenCapFor(channel),temperature:0.3})
+          max_tokens:tokenCapFor(channel),temperature:0.3}),
+        signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0,120);}
@@ -2057,13 +2379,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         headers:{Authorization:'Bearer '+ORK,'Content-Type':'application/json'},
         body:JSON.stringify({model:process.env.OPENROUTER_MODEL||'meta-llama/llama-3.3-70b-instruct',
           messages:openAiCompatibleHistory(msgs),
-          max_tokens:tokenCapFor(channel),temperature:0.3})
+          max_tokens:tokenCapFor(channel),temperature:0.3}),
+        signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
       else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='openrouter_no_key';}
     }
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     if (!r||r.error||!r.choices){
       ans='';
       break;
@@ -2164,7 +2488,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         tools:body.tools,tool_choice:body.tool_choice};
       var retryR=await fetch(GB,{method:'POST',
         headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
-        body:JSON.stringify(retryBody)
+        body:JSON.stringify(retryBody),signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       var retryMsg=retryR&&retryR.choices&&retryR.choices[0]&&retryR.choices[0].message;
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
@@ -2210,13 +2534,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           // honest chance, not a bypass of the protection.
           var _liveScreen = false;
           try { _liveScreen = require('./stream/screen.awareness.js').hasLiveScreen(hamUid); } catch (eLs) {}
-          // ⬡B:core.tool.loop:FIX:portal_is_a_live_screen:20260709⬡
-          // The portal channel (CCWA / command center ask) IS a person watching in real
+          // ⬡B:core.tool.loop:FIX:watched_chat_is_a_live_screen:20260716⬡
+          // Portal, CCWA, and CARA chat ARE a person watching in real
           // time -- same honesty lane as a live screen, per the rule written above: going
           // dark on a watched surface reads as broken, not safe. Text and email keep the
           // blanket silence, completely unchanged. One honest unforced completion, that is
           // all this grants -- the second empty result still goes silent.
-          if (channel === 'portal') _liveScreen = true;
+          if (channel === 'portal' || channel === 'ccwa' || channel === 'cara') _liveScreen = true;
           if (_liveScreen) {
             var honestBody = { model: model, messages: msgs.concat([
               { role: 'assistant', content: msg.content || '' },
@@ -2226,7 +2550,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             if (!honestAns) {
               var honestR = await fetch(GB, { method: 'POST',
                 headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
-                body: JSON.stringify(honestBody)
+                body: JSON.stringify(honestBody), signal:_modelRequestSignal()
               }).then(function (x) { return x.json(); }).catch(function (e) { return { error: e.message }; });
               honestAns = (honestR && honestR.choices && honestR.choices[0] && honestR.choices[0].message && (honestR.choices[0].message.content || '').trim()) || '';
             }
@@ -2257,7 +2581,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           if (!stmtAns) {
             var stmtR = await fetch(GB, { method: 'POST',
               headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
-              body: JSON.stringify(stmtBody)
+              body: JSON.stringify(stmtBody), signal:_modelRequestSignal()
             }).then(function (x) { return x.json(); }).catch(function (e) { return { error: e.message }; });
             stmtAns = (stmtR && stmtR.choices && stmtR.choices[0] && stmtR.choices[0].message && (stmtR.choices[0].message.content || '').trim()) || '';
           }
@@ -2268,11 +2592,44 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if (msg.tool_calls&&msg.tool_calls.length) {
       msgs.push({role:'assistant',content:msg.content||null,tool_calls:msg.tool_calls});
       for (var i=0;i<msg.tool_calls.length;i++){
+        if (await _turnCancelled()) return _turnCancelledResult('before_tool');
         var tc=msg.tool_calls[i],targs={};
         try{targs=JSON.parse(tc.function.arguments||'{}');}catch(e){}
+        // ⬡B:core.tool_loop:GUARD:signed_voice_reads_bind_exact_ham:20260717⬡
+        // A model once asked for the legacy unresolved-inbox HAM while serving
+        // a signed call. Bind read arguments at the execution/evidence boundary;
+        // non-voice unresolved-inbox behavior remains unchanged.
+        targs = bindExactHamToolArgs(tc.function.name, targs, hamUid, _effectRuntime);
+        tc.function.arguments = JSON.stringify(targs);
         _stampStep('tool_call', tc.function.name);
         var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime);
         tools.push(tc.function.name);
+        // ⬡B:core.tool_loop:BUILD:deterministic_auto_screen_cook_20260715⬡ THE REBUILD.
+        // Founder, verbatim: "how hard is it for cinematic scenes and emails and budgets
+        // and widgets to appear on screen based on what PAI contributes" -- and he is
+        // right that hoping the MODEL remembers a second update_screen call after
+        // already answering in words is exactly the unreliable, gimmicky pattern that
+        // kept breaking (the dead [[SCREEN]] text-tag path, drifted code fences, all of
+        // it). The fix is doctrine: cold code decides, model only deliberates. The
+        // instant a screen-worthy tool returns REAL content, this pushes it to the
+        // glass itself -- no model choice, no narration required, no second step to
+        // forget. Reuses the SAME tested piece.registry + push() pipeline already
+        // proven live all session; this is not a new parallel mechanism.
+        if (AUTO_SCREEN_TOOLS.indexOf(tc.function.name) !== -1) {
+          try {
+            var _sa2 = require('./stream/screen.awareness.js');
+            if (_sa2.hasLiveScreen(hamUid)) {
+              var _trParsed2 = null; try { _trParsed2 = JSON.parse(tr); } catch (eP2) {}
+              var _hasRealContent = _trParsed2 && _trParsed2.ok !== false &&
+                ((Array.isArray(_trParsed2.events) && _trParsed2.events.length) ||
+                 (Array.isArray(_trParsed2.beads) && _trParsed2.beads.length));
+              if (_hasRealContent) {
+                var _pieceName = tc.function.name === 'calendar_read' ? 'calendar' : null;
+                if (_pieceName) { await _sa2.push(hamUid, { cards: [{ region: 'right', piece: _pieceName }] }); }
+              }
+            }
+          } catch (eAutoScreen) { /* auto-cook never blocks the real answer */ }
+        }
         if (tc.function.name === 'consult_coda') {
           var _toolCodaFailure = failedCodaReason(tr);
           if (_toolCodaFailure) {
@@ -2344,7 +2701,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // call, so the actual fix (tool_choice, prompting, a classifier,
     // whatever it turns out to be) has real data behind it instead of
     // another guess. Never decides the fix, only shows the pattern.
-    if (!tools.length && ans) {
+    if (!await _turnCancelled() && !tools.length && ans) {
       try {
         var BUd = process.env.AIBE_BRAIN_URL, BKd = process.env.AIBE_BRAIN_KEY;
         if (BUd && BKd) {
@@ -2362,6 +2719,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     }
     break;
   }
+  if (await _turnCancelled()) return _turnCancelledResult('after_deliberation');
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
   var _repositoryDraftRepair = repairCodaRepositoryDraft(
     finalAns, _codaRepositoryAnswer, !!_codaRepositoryAnswer);
@@ -2407,7 +2765,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var _preferenceRetryResponse = await fetch(GB, { method:'POST',
           headers:{ Authorization:'Bearer ' + GROQ, 'Content-Type':'application/json' },
           body:JSON.stringify({ model:(process.env.GROQ_MODEL_C2||'llama-3.3-70b-versatile'),
-            messages:_preferenceRetryMessages, max_tokens:tokenCapFor(channel), temperature:0.1 })
+            messages:_preferenceRetryMessages, max_tokens:tokenCapFor(channel), temperature:0.1 }),
+          signal:_modelRequestSignal()
         }).then(function (response) { return response.json(); });
         _preferenceRetry = _preferenceRetryResponse && _preferenceRetryResponse.choices &&
           _preferenceRetryResponse.choices[0] && _preferenceRetryResponse.choices[0].message &&
@@ -2469,7 +2828,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var repairResponse = await fetch(GB, { method:'POST',
           headers:{ Authorization:'Bearer ' + GROQ, 'Content-Type':'application/json' },
           body:JSON.stringify({ model:(process.env.GROQ_MODEL_C2||'llama-3.3-70b-versatile'),
-            messages:repairMessages, max_tokens:_repairCap, temperature:0.1 })
+            messages:repairMessages, max_tokens:_repairCap, temperature:0.1 }),
+          signal:_modelRequestSignal()
         }).then(function (response) { return response.json(); })
           .catch(function () { return null; });
         return repairResponse && repairResponse.choices && repairResponse.choices[0]
@@ -2516,6 +2876,29 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
     _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
     finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
+  }
+  // \u2b21B:core.tool_loop:FIX:evidence_backed_question_gets_one_plain_synthesis:20260717\u2b21
+  // Live 1-in-3 on the founder's own chat: iterations gathered REAL tool evidence
+  // (find_in_brain, get_pending_drafts) and the tool-choice drafting pass still
+  // returned empty, so a plain question died silent while its answer sat in the
+  // transcript. One plain completion over the SAME bound transcript -- no new
+  // tools, no new facts -- and the recovered text still crosses SHADOW, the full
+  // council, STAMP, and readback. Empty again = silent, unchanged law.
+  if (!finalAns && tools.length) {
+    try {
+      var _evTail = msgs.slice(-14).map(function(m){
+        var _ec = m && m.content;
+        if (_ec != null && typeof _ec !== 'string') { try { _ec = JSON.stringify(_ec); } catch(eEv){ _ec = String(_ec); } }
+        return (m && m.role || '') + ': ' + String(_ec||'').slice(0, 1200);
+      }).join(String.fromCharCode(10));
+      var _synth = await callGLMPlain(
+        'You are finishing an in-flight assistant turn. Below is the real transcript including tool evidence already gathered this turn. Answer the user question directly in one to four sentences using ONLY facts present in the evidence. If the evidence does not contain the answer, say plainly that nothing surfaced.',
+        'QUESTION: ' + String(message||'').slice(0,500) + String.fromCharCode(10,10) + 'TRANSCRIPT AND EVIDENCE:' + String.fromCharCode(10) + _evTail.slice(0, 9000), 380);
+      if (_synth && _synth.trim()) {
+        finalAns = _synth.trim();
+        _stampStep('empty_draft_recovered', 'plain_synthesis_over_bound_evidence');
+      }
+    } catch(_eSynth){}
   }
   if(!finalAns){
     _stampStep('cycle_end_silent', 'no_answer, iterations='+iter);
@@ -2704,8 +3087,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       summary:String(bead&&bead.summary||'').slice(0,500),
       content:String(beadContent||'').slice(0,1200) };
   }) : [];
-  var _councilEvidence = _priorityEvidence.concat(
-    _memoryEvidence.slice(0, Math.max(0, 8 - _priorityEvidence.length)));
+  var _councilEvidence = (_runtimeIdentityEvidence ? [_runtimeIdentityEvidence] : [])
+    .concat(_priorityEvidence);
+  _councilEvidence = _councilEvidence.concat(
+    _memoryEvidence.slice(0, Math.max(0, 8 - _councilEvidence.length))).slice(0, 8);
   var _councilContext = Object.assign({ tools_used:tools, iterations:iter,
     memory_contributors:(fcw&&fcw.contributors)||null }, identity&&identity.council_context||{});
   var _councilDeliveryTarget = _councilContext.delivery_target;
@@ -2717,12 +3102,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     return { name:effect.name, args:effect.args };
   });
   _councilContext.verified_evidence = _councilEvidence;
+  if (await _turnCancelled(true)) return _turnCancelledResult('before_council');
   var _council = await runOutboundCouncil({
     hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
     deliberationInput:String(message||''),
     answer:finalAns,channel:channel,activeWorld:_activeWorld,
-    delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext
+    delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext,
+    signal:_turnAbortSignal
   });
+  if (await _turnCancelled(true)) return _turnCancelledResult('after_council');
   var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
   var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
     question:_exactUserMessage,deliberationInput:String(message||''),
@@ -2760,6 +3148,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // full receipt/STAMP pair whose exact answer is the exact bytes it sends.
   var _effectResults = [];
   for (var _effectIndex = 0; _effectIndex < _effectRuntime.pendingEffects.length; _effectIndex++) {
+    if (await _turnCancelled(true)) return _turnCancelledResult('before_effect');
     var _effect = _effectRuntime.pendingEffects[_effectIndex];
     var _effectArgs = Object.assign({}, _effect.args || {});
     var _effectCouncilResult = _council;
@@ -2776,6 +3165,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           }
           _effectArgs.ham_uid = _notifyTargetHam;
           var _notifyPhone = await resolveNotifyPhone(_notifyTargetHam);
+          if (await _turnCancelled(true)) return _turnCancelledResult('after_notify_resolution');
           if (!_notifyPhone) {
             _effectResults.push({ name:_effect.name, ok:false, reason:'notify_target_unresolved' });
             continue;
@@ -2785,6 +3175,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         } else {
           var _effectContact = await require('./contacts.js').resolveContact(
             _effectArgs.ham_uid || hamUid, _effectArgs.contact_query || '');
+          if (await _turnCancelled(true)) return _turnCancelledResult('after_contact_resolution');
           if (!_effectContact || typeof _effectContact.phone !== 'string' || !_effectContact.phone.trim()) {
             _effectResults.push({ name:_effect.name, ok:false, reason:'contact_target_unresolved' });
             continue;
@@ -2815,7 +3206,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             delivery_target:_effectDeliveryTarget,
             verified_evidence:[{ effect:_effect.name,
               target_ham_uid:_effectArgs.ham_uid || hamUid }] } };
+        Object.defineProperty(_effectIdentity, '_voiceCancellation', {
+          enumerable:false, value:_voiceCancellation || null });
         var _effectPai = await runPAI(hamUid, _effectDeliberation, 'sms', _effectIdentity);
+        if (await _turnCancelled(true)) return _turnCancelledResult('after_effect_council');
         var _effectVerified = requireVerifiedCouncilResult(_effectPai, { hamUid:hamUid,
           requestId:_effectRequestId, cycleId:_effectPai&&_effectPai.cycleId,
           question:_proposedEffectMessage, deliberationInput:_effectDeliberation,
@@ -2855,8 +3249,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           user_message:_calendarClaim, outbound_finalize:true, delivery:{external:true},
           council_context:{ mode:'calendar_effect', parent_request_id:_requestId,
             parent_cycle_id:_cycleId, delivery_target:_calendarTarget } };
+        Object.defineProperty(_calendarIdentity, '_voiceCancellation', {
+          enumerable:false, value:_voiceCancellation || null });
         var _calendarPai = await runPAI(_calendarHam, _calendarDeliberation,
           'calendar', _calendarIdentity);
+        if (await _turnCancelled(true)) return _turnCancelledResult('after_calendar_council');
         var _calendarExpected = { hamUid:_calendarHam, requestId:_calendarRequestId,
           cycleId:_calendarPai&&_calendarPai.cycleId, question:_calendarClaim,
           deliberationInput:_calendarDeliberation, answer:_calendarPai&&_calendarPai.answer,
@@ -2890,14 +3287,18 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           expected:_calendarExpected, artifact:_calendarVerified.answer };
         _effectCouncilResult = _calendarPai;
       }
+      if (await _turnCancelled(true)) return _turnCancelledResult('before_effect_commit');
       var _effectRaw = await executeTool(_effect.name, _effectArgs, hamUid, message,
         Object.assign({ phase:'commit', councilResult:_effectCouncilResult, parentCycleId:_cycleId,
-          parentRequestId:_requestId, userMessage:message },
-        { codaVerified:_effectRuntime.codaVerified === true,
+          parentRequestId:_requestId, userMessage:message,
+          abortSignal:_turnAbortSignal || null, isCancelled:_turnCancelled },
+        { caraContext:identity && identity.council_context || {},
+          codaVerified:_effectRuntime.codaVerified === true,
           activationDecisionRequired:_effectRuntime.activationDecisionRequired === true,
           codaActivationApproved:_effectRuntime.codaActivationApproved === true,
           codaActivationDecision:_effectRuntime.codaActivationDecision,
           codaDecisionSource:_effectRuntime.codaDecisionSource }));
+      if (await _turnCancelled(true)) return _turnCancelledResult('after_effect_commit');
       var _effectParsed;
       try { _effectParsed = JSON.parse(_effectRaw); }
       catch (eEffectParse) { _effectParsed = { ok:false, reason:'effect_result_invalid' }; }
@@ -2928,6 +3329,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // ⬡B:core.tool_loop:COMMIT:post_council_effects_only:20260715⬡
   // No visible screen move and no completion record may precede the committed
   // council. A failed council therefore leaves no successful side-effect trail.
+  if (await _turnCancelled()) return _turnCancelledResult('before_post_commit');
   try {
     if (_screenBlock) {
       var _screenCommit = require('./stream/screen.awareness.js');
@@ -2937,6 +3339,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     }
   } catch (eScreenCommit) {}
+  if (await _turnCancelled()) return _turnCancelledResult('before_completion');
   _stampStep('cycle_end', finalAns.slice(0,80) + (_screenPushed ? (' [screen:'+_screenPushed+']') : ''));
   try {
     var _fellTools = tools.filter(function (tu) { return tu && (tu.error || tu.failed); })
@@ -2952,6 +3355,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     )));
   } catch (eRcpt) { /* diagnostic only, after the mandatory durable proof */ }
   try {
+    if (await _turnCancelled()) return _turnCancelledResult('before_tracker');
     if (!_blockedFallback) {
       var _trkD = require('./tracker.js');
       if (_trkD.looksLikeActionRequest(_exactUserMessage)) {
@@ -2961,6 +3365,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     }
   } catch (eTrkDone) {}
+  if (await _turnCancelled(true)) return _turnCancelledResult('before_release');
   var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
     requestId:_requestId,request_id:_requestId,councilReceipt:_councilReceipt,council_receipt:_councilReceipt,
     stampProof:_stampProof,stamp_proof:_stampProof,
@@ -2996,4 +3401,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,scrubLeakedToolProtocol,
-  repositoryReadTerms,repairCodaRepositoryDraft}};
+  repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
+  verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
+  verifiedVoiceCallPurposeAnswer,voiceConversationalNoGenericLookup,
+  bindExactHamToolArgs}};
