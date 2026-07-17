@@ -2397,7 +2397,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           var ornResp = await fetch(ORN.replace(/\/$/,'') + '/runsync', {
             method: 'POST',
             headers: { Authorization: 'Bearer ' + ORK, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ input: { method_name: 'chat', input: { messages: msgs, options: { temperature: 0.3, num_predict: 400 } } } }),
+            body: JSON.stringify({ input: { method_name: 'chat', input: { messages: msgs, options: { temperature: 0.3, num_predict: tokenCapFor(channel) } } } }),
             signal:_modelRequestSignal()
           }).then(function(x){ return x.json(); }).catch(function(e){ return { error: e.message }; });
           var ornText = ornResp && ornResp.output && (ornResp.output.message && ornResp.output.message.content || ornResp.output.response);
@@ -2458,6 +2458,32 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       break;
     }
     var ch=r.choices[0],msg=ch.message;
+    // ⬡B:core.tool_loop:FIX:continuation_stitch_kills_the_guillotine:20260717⬡
+    // Founder's question, answered in code: why a cap at all? Because a provider requires
+    // a number and a runaway generation burns money forever without one. The cap is a
+    // circuit breaker, never a length policy. So when a real answer hits the ceiling
+    // mid-thought (finish_reason 'length'), cold code continues the generation and
+    // stitches, up to three times, instead of shipping a cut sentence. A genuine runaway
+    // still dies at the breaker; a genuine answer always finishes.
+    if(!_structuredReachPolicy&&msg&&!((msg.tool_calls||[]).length)&&msg.content){
+      var _stitchTries=0;
+      while(ch.finish_reason==='length'&&_stitchTries<3){
+        _stitchTries++;
+        var _stitchMsgs=openAiCompatibleHistory(msgs).concat([
+          {role:'assistant',content:String(msg.content||'')},
+          {role:'user',content:'Your previous message was cut off by a length limit mid-generation. Continue it exactly where it stopped, starting with the very next word. No preamble, no apology, no repetition of anything already written.'}]);
+        var _stitchR=await fetch(GB,{method:'POST',
+          headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
+          body:JSON.stringify({model:model,messages:_stitchMsgs,max_tokens:tokenCapFor(channel),temperature:0.1}),
+          signal:_modelRequestSignal()
+        }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+        var _stitchCh=_stitchR&&_stitchR.choices&&_stitchR.choices[0];
+        var _stitchTxt=_stitchCh&&_stitchCh.message&&_stitchCh.message.content;
+        if(!_stitchTxt)break;
+        msg.content=String(msg.content||'')+_stitchTxt;
+        ch.finish_reason=_stitchCh.finish_reason;
+      }
+    }
     // ⬡B:core.tool_loop:FIX:safe_tool_text_salvage_20260710⬡
     // Founder 1B gate failure, exact receipt from her own trace: cycle_end contained
     // <function(update_screen){"cards":[... -- Groq emitted the tool call as plain
