@@ -1192,6 +1192,39 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       source:'pai.tool.write.'+(args.ham_uid||hamUid)+'.'+Date.now(),
       acl_stamp:'\u2b21B:pai.tool:RESULT:tool_write:20260630\u2b21',
       summary:args.summary,content:args.content,importance:args.importance||7};
+    // ⬡B:core.tool_loop:WIRE:knowledge_beads_are_born_with_no_edges:20260717⬡
+    // Founder-caught 20260717. Counted live: 337,987 beads, 0 null edges, and
+    // 328,003 with edges = []. Only 9,984 carry a real edge -- 2.95% -- and every
+    // one of those is PAI_STAGE, CYCLE_RECEIPT or REQUEST_CLAIM. Cycle telemetry.
+    // ZERO FINDING, DECISION, TASK or DOCTRINE beads carry an edge, because this
+    // writer -- the one every knowledge bead is born through -- never had an edges
+    // field at all. The graph the doctrine says FIND must hop was never written for
+    // knowledge. Only for plumbing.
+    // CODA ruled on this directly, ok:true through a full council, after first
+    // deciding the opposite on CLAIR's false 'graph is complete' evidence:
+    //   "Yes, T3 and T4 change my decision... a traverser would not be effective in
+    //    this context. Therefore, piece one should be whatever writes edges onto
+    //    knowledge beads."
+    //   "The live data vocabulary wins... RELATES_TO, PRODUCED_BY, and CAUSED_BY,
+    //    which are different from the edge types mentioned in the JD (contains,
+    //    related_to, part_of). Since the JD's edge vocabulary does not match the
+    //    actual data, it is the live data vocabulary that should be used."
+    // So: live vocabulary, not the JD's. Same shape stageEdges() already writes at
+    // pai.outbound.council.js:1907, same REQUIRED_EDGE_TYPES whitelist at :26.
+    // Targets are verified resolvable: 'pai.cycle.' + cycleId returns real rows.
+    // Cold code, zero LLM, no new call. If lineage is absent the bead writes exactly
+    // as it does today with no edges -- this can never block a write.
+    var _beadEdges = [];
+    if (runtime && runtime.cycleId) {
+      _beadEdges.push({ type:'RELATES_TO', target:'pai.cycle.' + runtime.cycleId });
+    }
+    if (runtime && runtime.requestId) {
+      _beadEdges.push({ type:'CAUSED_BY', target:'pai.request.' + runtime.requestId });
+    }
+    if (_beadEdges.length) {
+      _beadEdges.push({ type:'PRODUCED_BY', target:'pai.tool.write_to_brain' });
+      bead.edges = _beadEdges;
+    }
     try {
       var brainWriteCancelled = await cancelBeforeEffect(name, runtime);
       if (brainWriteCancelled) return brainWriteCancelled;
@@ -2159,6 +2192,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     _stampStep('signed_voice_call_purpose_selected', 'exact_handoff_bytes');
   }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{} };
+  // ⬡B:core.tool_loop:WIRE:knowledge_beads_are_born_with_no_edges:20260717⬡
+  // The writer had no lineage in scope, so it had nothing true to point an edge at.
+  // Carry the cycle it is running inside. Read-only, never used for control flow.
+  _effectRuntime.cycleId = _cycleId || null;
+  _effectRuntime.requestId = _requestId || null;
   _effectRuntime.channel = String(channel || '').toLowerCase();
   _effectRuntime.exactHamReads = _effectRuntime.channel === 'voice' &&
     !!verifiedVoiceCallContext(identity, hamUid);
