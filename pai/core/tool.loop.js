@@ -1452,10 +1452,24 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _calHam = args.ham_uid || hamUid;
       if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
       var _selfBase = process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
-      var _cr = await fetch(_selfBase + '/os/calendar/' + _calHam).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
-      var _realEvents = (_cr && _cr.events) || [];
+      // ⬡B:core.tool.loop:FIX:unreachable_is_not_empty:20260717⬡ Founder-chain root cause:
+      // this fetch lands on aibebase, which redeploys constantly; a mid-deploy 502 came
+      // back as null and was reported as ok:true events:[] "no calendar events found",
+      // stating a network failure as a fact about his day. The draft then named real
+      // events off the wall, the evidence swore the day was empty, and SHADOW held the
+      // contradiction correctly. She went silent because the wiring lied to the judge.
+      // Now: one retry over the deploy window, and a dead source reports itself as
+      // unreachable so the answer says "I cannot reach your calendar right now" instead
+      // of "your day is open."
+      var _cr = null;
+      for (var _calTry = 0; _calTry < 2 && !_cr; _calTry++) {
+        if (_calTry) await new Promise(function(rs){setTimeout(rs,4000);});
+        _cr = await fetch(_selfBase + '/os/calendar/' + _calHam).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+      }
+      if (!_cr) return JSON.stringify({ok:false, ham_uid:_calHam, reason:'calendar_source_unreachable', note:'the calendar source did not respond; this is NOT an empty day, say the calendar cannot be reached right now'});
+      var _realEvents = _cr.events || [];
       var _out = {ok:true, ham_uid:_calHam, events: _realEvents.slice(0,20)};
-      if (!_realEvents.length) _out.note = 'no calendar events found for this HAM right now';
+      if (!_realEvents.length) _out.note = 'the calendar source answered and genuinely has no events in this window';
       return JSON.stringify(_out);
     } catch (eCalReal) { return JSON.stringify({ok:false, reason:'calendar_read_failed: '+eCalReal.message}); }
   }
