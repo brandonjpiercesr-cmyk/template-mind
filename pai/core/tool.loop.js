@@ -2479,7 +2479,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // mid-thought (finish_reason 'length'), cold code continues the generation and
     // stitches, up to three times, instead of shipping a cut sentence. A genuine runaway
     // still dies at the breaker; a genuine answer always finishes.
-    if(!_structuredReachPolicy&&msg&&!((msg.tool_calls||[]).length)&&msg.content){
+    if((typeof _structuredReachPolicy==='undefined'||!_structuredReachPolicy)&&msg&&!((msg.tool_calls||[]).length)&&msg.content){
       var _stitchTries=0;
       while(ch.finish_reason==='length'&&_stitchTries<3){
         _stitchTries++;
