@@ -3093,6 +3093,22 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     _memoryEvidence.slice(0, Math.max(0, 8 - _councilEvidence.length))).slice(0, 8);
   var _councilContext = Object.assign({ tools_used:tools, iterations:iter,
     memory_contributors:(fcw&&fcw.contributors)||null }, identity&&identity.council_context||{});
+  // ⬡B:core.tool_loop:WIRE:writ_knows_a_coding_turn_from_the_turn:20260717⬡
+  // Real incident 20260717, founder-caught. WRIT hard-fails INTERNAL_SYSTEM_TERMS
+  // ('bead', 'abacia', 'stamp_type'...) unless isInternalContext(context) is true,
+  // which reads context.mode. board/writ FIX:internal_terms_allowed_for_internal_channels
+  // :20260715 already established that coding work must be able to name its own
+  // machinery -- but nothing ever set the mode, so the escape hatch never opened.
+  // _codaLeadNeeded only sees a CALLER-declared identity.council_context.mode, so a
+  // real coding turn arriving on any ordinary channel was gagged for the founder's
+  // own vocabulary and he got silence. The turn itself is the evidence: if she
+  // actually consulted the coding department or read her own code, this IS internal
+  // work. Derived from tools already used this turn, never assumed, never widened
+  // beyond that. Every other WRIT law stays active.
+  if (!_councilContext.mode && Array.isArray(tools) &&
+      (tools.indexOf('consult_coda') !== -1 || tools.indexOf('read_own_code') !== -1)) {
+    _councilContext.mode = 'coding';
+  }
   var _councilDeliveryTarget = _councilContext.delivery_target;
   delete _councilContext.delivery_target;
   _councilContext.identity_provenance = _identityProvenanceLedger;
