@@ -127,8 +127,8 @@ async function chat(tier, messages, opts) {
     sysMsg = messages[0].content; rest = messages.slice(1);
   }
   var body = isAnthropic
-    ? { model:r.model, messages:rest, max_tokens:(opts&&opts.maxTokens)||400 }
-    : { model:r.model, messages:messages, max_tokens:(opts&&opts.maxTokens)||400 };
+    ? { model:r.model, messages:rest, max_tokens:(opts&&opts.maxTokens)||2000 }
+    : { model:r.model, messages:messages, max_tokens:(opts&&opts.maxTokens)||2000 };
   if (isAnthropic && sysMsg) body.system = sysMsg;
   if (opts && opts.temperature !== undefined) body.temperature = opts.temperature;
   var hdrs = isAnthropic

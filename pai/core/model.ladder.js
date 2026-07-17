@@ -175,7 +175,7 @@ async function rankedAccepted(factories, opts) {
 // THE LADDER, founder's authorized order: GLM 5.2 -> Ornith -> Qwen -> the Groq
 // floor last, only if the open-weight authorized set is unreachable.
 async function deliberate(system, user, options) {
-  var opts = Object.assign({ max_tokens: 900, temperature: 0.4, timeout: 25000, json: false }, options || {});
+  var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: 25000, json: false }, options || {});
   var order = (process.env.MODEL_LADDER_ORDER || 'glm,ornith,qwen,groq').split(',').map(function (s) { return s.trim(); });
   // \u2b21B:core.model_ladder:FIX:glm_provider_order_is_env_truth:20260717\u2b21
   // Live receipt: the RunPod pod is serving glm4:9b, a small quantized model, and

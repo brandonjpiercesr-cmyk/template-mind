@@ -48,7 +48,7 @@ async function callOrnith(system, userContent, maxTokens) {
   if (!ORNITH_URL || !RUNPOD_KEY) return null;
   try {
     const payload = { input: { mode: 'chat', model: ORNITH_MODEL,
-      options: { num_predict: maxTokens || 300, temperature: 0.3 },
+      options: { num_predict: maxTokens || 1500, temperature: 0.3 },
       messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }] } };
     const jobResp = await fetch(ORNITH_URL.replace(/\/$/, '') + '/run', {
       method: 'POST', headers: { Authorization: 'Bearer ' + RUNPOD_KEY, 'Content-Type': 'application/json' },
@@ -88,7 +88,7 @@ async function callGLM(system, userContent, maxTokens) {
   try {
     const r = await fetch('https://api.together.xyz/v1/chat/completions', {
       method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'zai-org/GLM-5.2', max_tokens: maxTokens || 1200, temperature: 0.3,
+      body: JSON.stringify({ model: 'zai-org/GLM-5.2', max_tokens: maxTokens || 3000, temperature: 0.3,
         messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }] })
     });
     if (!r.ok) return null;
@@ -579,7 +579,7 @@ async function judgeAndCompose(facts, gapHeld) {
       const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: (process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b'), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], max_tokens: 1200, temperature: 0.4 })
+        body: JSON.stringify({ model: (process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b'), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], max_tokens: 3000, temperature: 0.4 })
       });
       if (!r.ok) return { reach: false, reason: 'groq_http_' + r.status };
       const d = await r.json();
@@ -1110,7 +1110,7 @@ async function composeDigest(facts) {
     if (!out) {
       const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST', headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: (process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b'), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], max_tokens: 1500, temperature: 0.4 })
+        body: JSON.stringify({ model: (process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b'), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], max_tokens: 3000, temperature: 0.4 })
       });
       if (!r.ok) return { ok: false, message: '' };
       const d = await r.json();

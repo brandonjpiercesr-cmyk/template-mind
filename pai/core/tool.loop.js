@@ -1,5 +1,5 @@
 // ⬡B:core.tool.loop:MODULE:pai_executor:20260630⬡
-var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '700', 10);
+var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '3000', 10);
 // ⬡B:core.tool_loop:WIRE:coda_was_deciding_on_five_percent_of_the_file:20260717⬡
 // Founder-caught 20260717. The consult_coda handler compacted every repository read
 // to parsed.files.slice(0, 2) and excerpt.slice(0, 900). Every coding decision CODA
@@ -1753,7 +1753,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     try {
       var gr = await fetch('https://api.together.xyz/v1/chat/completions', {
         method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'zai-org/GLM-5.2', max_tokens: maxTokens || 400, temperature: 0.3,
+        body: JSON.stringify({ model: 'zai-org/GLM-5.2', max_tokens: maxTokens || 3000, temperature: 0.3,
           messages: sys ? [{ role: 'system', content: sys }, { role: 'user', content: user }] : user }),
         signal:_modelRequestSignal()
       });
