@@ -83,7 +83,18 @@ app.post('/cycle', async function (req, res) {
     if (!message) return res.status(400).json({ ok: false, reason: 'message required' });
     // the closure reads MEMORY_BANK_* / BEAD_TABLE / BRAIN_SCHEMA from env -- this world's own bank
     const { runPAI } = require('./pai/core/tool.loop.js');
-    const out = await runPAI(HAM, message, body.channel || 'new_world');
+    // ⬡B:mind.entry:WIRE:cycle_door_stopped_dropping_identity:20260717⬡
+    // Founder-caught 20260717. runPAI's signature is
+    // (hamUid, message, channel, identity, priorTurns, uiPortal). This door passed
+    // three. identity was ALWAYS undefined here, so through /cycle -- the primary
+    // door of this world since the 20260713 cutover -- _codaLeadNeeded could never
+    // be true, identity.council_context never reached _councilContext, and WRIT
+    // therefore never saw a coding mode and gagged her on her own vocabulary.
+    // reach/iman.js:278 and core/wren/reply.js:174 both pass identity. Only this
+    // door dropped it. Pass the caller's own values through, defaulting to the exact
+    // prior behaviour when absent, so nothing that works today changes.
+    const out = await runPAI(HAM, message, body.channel || 'new_world',
+      body.identity || null, body.priorTurns || [], body.uiPortal || null);
     // hand the compiled turn to face for persona expression (unchanged organ)
     if (out && out.ok && (out.answer || out.text)) {
       const spoken = await require('./face.js').expressTurn(
