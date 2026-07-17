@@ -2746,8 +2746,29 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     cycleId:_cycleId, question:_exactUserMessage,
     context:{ verified_evidence:_identityVerifiedEvidence
       .concat(_namedAgentVerifiedEvidence, _verifiedToolEvidence) } };
-  var _preferenceDraftFlags = preferenceJudgmentFindings(
-    _exactUserMessage, finalAns, _preferenceEvidenceContext);
+  // ⬡B:core.tool_loop:WIRE:engineering_select_is_not_a_favourite:20260717⬡
+  // Founder-caught 20260717. currentAssistantPreferenceRequest fires on the plain
+  // engineering phrase "select one" via /(choose|pick|select)\s+(one|your favourite
+  // ...)/, then preferenceOptionTerms harvests EVERY ALL-CAPS token as a candidate
+  // "option" via /\b[A-Z][A-Z0-9_]{2,31}\b/g. This founder's entire doctrine is
+  // ALL-CAPS agent names, so CODA CLAIR SHADOW CANON FIND CANEW became a menu of
+  // favourites and the gate demanded the answer be phrased "my pick is X". A bounded
+  // build decision can never satisfy that grammar, so it held forever with
+  // current_preference_unrepaired and he got silence. Proven live: changing only
+  // "Select ONE bounded buildable piece" to "Name the smallest bounded buildable
+  // piece" cleared it, same everything else.
+  // A coding turn is not a favourite question. The law stays fully active for real
+  // preference asks on every other turn. Derived from the turn itself, same evidence
+  // the WRIT wiring uses: she actually consulted the coding department or read her
+  // own code.
+  var _preferenceChannel = String(channel || '').toLowerCase();
+  var _preferenceTurnIsEngineering = _preferenceChannel === 'coding' ||
+    _preferenceChannel === 'internal' ||
+    (Array.isArray(tools) && (tools.indexOf('consult_coda') !== -1 ||
+      tools.indexOf('read_own_code') !== -1));
+  var _preferenceDraftFlags = _preferenceTurnIsEngineering ? [] :
+    preferenceJudgmentFindings(
+      _exactUserMessage, finalAns, _preferenceEvidenceContext);
   if (_preferenceDraftFlags.length) {
     var _preferenceViolationCodes = _preferenceDraftFlags.map(function (flag) {
       return flag.reason;
