@@ -2245,32 +2245,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (_prefNeeded) {
     try {
       var _prefSynthRes = await find([{ stamp_type: 'PREFERENCE', ham_uid: hamUid, limit: 5 }]);
-      // ⬡B:core.tool_loop:FIX:preference_preload_keyword_net_20260718⬡ Founder
-      // caught live and A'NU agreed via the cycle door: the preload only queried
-      // stamp_type PREFERENCE, but a plainly stored fact (the Lakers fact) lives
-      // under CHATTER / CYCLE_STEP / LOGFUL, never PREFERENCE, so the preload
-      // came back empty and she answered "I have nothing" while the fact sat
-      // right there. When PREFERENCE is empty, run a ham-scoped ilike on the
-      // question's key nouns before giving up. Cold code, no model, capped.
-      if (!(_prefSynthRes && _prefSynthRes.beads && _prefSynthRes.beads.length)) {
-        var _pfStop = {the:1,and:1,for:1,you:1,your:1,what:1,whats:1,who:1,whos:1,does:1,did:1,is:1,are:1,my:1,me:1,do:1,i:1,of:1,to:1,about:1,tell:1,show:1,have:1,love:1,like:1,enjoy:1,favorite:1,favourite:1,prefer:1};
-        var _pfKw = String(message||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
-          .filter(function(w){return w.length>=3 && !_pfStop[w];});
-        _pfKw.sort(function(a,b){return b.length-a.length;});
-        _pfKw = _pfKw.slice(0,4);
-        for (var _pfi=0; _pfi<_pfKw.length; _pfi++) {
-          try {
-            var _pfUrl = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + encodeURIComponent(String(hamUid).toUpperCase())
-              + '&summary=ilike.*' + encodeURIComponent(_pfKw[_pfi]) + '*'
-              + '&select=id,stamp_type,source,summary,content,created_at&order=created_at.desc&limit=8';
-            var _pfRows = await fetch(_pfUrl, {headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()}}).then(function(x){return x.json();}).catch(function(){return [];});
-            if (Array.isArray(_pfRows) && _pfRows.length) {
-              _prefSynthRes = { beads:_pfRows, count:_pfRows.length, ham_uid:hamUid, keyword_fallback:_pfKw[_pfi] };
-              break;
-            }
-          } catch (_pfe) {}
-        }
-      }
+      // ⬡B:core.tool_loop:DOCTRINE:cold_ilike_net_removed_organ_decides_meaning:20260718⬡
+      // WONDER CYCLE doctrine (382567), CLAIR's OWN named sin removed. This block used
+      // to guess which nouns in the question mattered (_pfKw), then ilike-search the
+      // bank on them -- cold code deciding MEANING, exactly what the doctrine forbids.
+      // The PREFERENCE-by-stamp_type preload above stays (it serves an organ, it does
+      // not judge). The semantic fallback is gone: it FAILS OPEN to the model organ,
+      // which now has working find_in_brain and decides for itself what to retrieve.
       if (_prefSynthRes && _prefSynthRes.beads && _prefSynthRes.beads.length) {
         var _prefResult = JSON.stringify(_prefSynthRes).slice(0,4000);
         _verifiedToolEvidence.push({ tool:'find_in_brain',
