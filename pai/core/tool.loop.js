@@ -2570,9 +2570,18 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if(r&&!r.choices&&!r.error){global._paiLastError='groq_no_choices:'+JSON.stringify(r).slice(0,150);}
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
-      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'Qwen/Qwen3.5-9B',
+      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'zai-org/GLM-5.2',
           messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
-          temperature:_structuredReachPolicy?0:0.3};
+          temperature:_structuredReachPolicy?0:0.3,
+          // ⬡B:core.tool_loop:FIX:glm_reasoning_burn_returns_empty_content:20260718⬡
+          // GLM-5.2 is a thinking model: with the full system prompt it intermittently
+          // spends the entire token budget on reasoning and returns choices with EMPTY
+          // content -- the chain read that as success, cleared the error, and the turn
+          // died as no_answer with _dbg null. The founder's texts went silent on this.
+          // Thinking is disabled for this reach rung (deliberation quality lives in the
+          // cycle, not in hidden chain-of-thought), and an empty-content result below
+          // now demotes to rung failure so OpenRouter takes the turn.
+          chat_template_kwargs:{enable_thinking:false}};
         if(_structuredReachPolicy)togetherBody.response_format=
           reachPolicyContract.responseFormat();
         r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
@@ -2581,7 +2590,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
+      if(r&&r.choices&&r.choices.length){
+        var _tMsg=(r.choices[0]&&r.choices[0].message)||{};
+        if(!_tMsg.content&&!((_tMsg.tool_calls||[]).length)){
+          global._paiLastError='together_empty_content_reasoning_burn';r=null;
+        } else { global._paiLastError=null; }
+      }
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='together_no_key';}
@@ -2612,7 +2626,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
+      if(r&&r.choices&&r.choices.length){
+        var _oMsg=(r.choices[0]&&r.choices[0].message)||{};
+        if(!_oMsg.content&&!((_oMsg.tool_calls||[]).length)){
+          global._paiLastError='openrouter_empty_content_reasoning_burn';r=null;
+        } else { global._paiLastError=null; }
+      }
       else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='openrouter_no_key';}
@@ -3279,7 +3298,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _fmtDest = (channel === 'text' || channel === 'sms') ? 'sms' : 'command_center';
     finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
   } catch (eFmt) {}
-  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,_dbg:global._paiLastError||null};
   // ⬡B:core.tool_loop:WIRE:prepare_the_exact_council_draft:20260715⬡
   // The older synthesize path used to do these pure output preparations after
   // runPAI returned. They now happen before the durable council so no channel can
