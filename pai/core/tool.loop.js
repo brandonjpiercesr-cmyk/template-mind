@@ -479,7 +479,31 @@ function prioritizeVerifiedEvidence(primary, secondary) {
 // add one blind.
 var AUTO_SCREEN_TOOLS = ['calendar_read'];
 
+// ⬡B:tool.loop:LAW:if_clair_can_reach_a_station_and_she_cannot_clair_failed:20260717⬡
+// FOUNDER LAW 20260717, verbatim: "Make sure you fix her so she can touch them.
+// She can do everything. It's all about her. If there's something that you can do
+// that she can't do, you have failed at your job."
+// The three stations were real and live on aibebase this whole time and she had no
+// tool for any of them. What existed instead: a regex that noticed a cook-off
+// QUESTION and injected a synthetic find_in_brain result so she could TALK about one.
+// She could describe the contest. She could not hold one. His word for that shape is
+// exact: gimmick, call and response.
+// Nothing invented here. These mirror advisors/dispatch.js realCookoff and
+// realWonderCompete, the same contracts the advisers already use.
 var TOOLS = [
+  {type:'function',function:{name:'assemble_bcw',description:'ARM YOURSELF BEFORE YOU BUILD. Calls the real BCW station (Building Context Window). '
+    +'Returns the live doctrine, the standards, the burn book of past mistakes, the proof checklist, and a pathway scan of what ALREADY EXISTS on this topic, '
+    +'so existing ground gets upgraded and never twinned. BCW core rule: check first, never duplicate. '
+    +'Use this BEFORE proposing or judging any build, agent, or wonder. Never ask anyone to paste context at you, go get it yourself.',
+    parameters:{type:'object',properties:{topic:{type:'string',description:'what the build is about, e.g. "AIR" or "model ladder" or "FIND agent"'}},required:['topic']}}},
+  {type:'function',function:{name:'run_cookoff',description:'RUN A REAL CODING COOK-OFF. One build task, three contestants (Ornith on RunPod, GLM 5.2, Opus 4.8). Fable 5 reads all three, grades on the rubric, writes course corrections and names a winner. Fable is the JUDGE, never a contestant. '
+    +'Rubric: correctness, completeness, doctrine adherence, cost, craft. This is a REAL contest that really runs and really stamps a receipt in your bank, not a description of one. '
+    +'Use it when a build task has more than one honest answer and you want the best one proven instead of chosen. Takes up to 150 seconds.',
+    parameters:{type:'object',properties:{task:{type:'string',description:'the exact build task the three contestants compete on'}},required:['task']}}},
+  {type:'function',function:{name:'run_wonder_games',description:'RUN THE WONDER GAMES. Scores existing candidates head to head on a real task and lets a seat be earned or lost on CANON-graded runs. '
+    +'Contestants are the authorized open-weight set: Ornith 35B, GLM 5.2, Qwen 3. '
+    +'Use it to decide whether something is actually a wonder yet instead of asserting that it is. Takes up to 150 seconds.',
+    parameters:{type:'object',properties:{task:{type:'string',description:'the task the candidates compete on'}},required:['task']}}},
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
@@ -718,6 +742,43 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
   if (runtime && runtime.phase === 'commit' &&
       await runtimeCancellationRequested(runtime)) {
     return cancelledToolResult(name);
+  }
+  // ⬡B:tool.loop:LAW:her_hands_on_the_real_stations:20260717⬡
+  // Real calls to the real live stations, same base resolver and same request shapes
+  // advisors/dispatch.js already uses. Nothing new invented.
+  if (name === 'assemble_bcw' || name === 'run_cookoff' || name === 'run_wonder_games') {
+    var _stationBase = process.env.STATIONS_URL || process.env.AIBEBASE_URL
+      || process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
+    try {
+      if (name === 'assemble_bcw') {
+        var _topic = String(args.topic || '').trim();
+        if (!_topic) return JSON.stringify({ok:false,note:'no topic given'});
+        var _b = await fetch(_stationBase + '/bcw?topic=' + encodeURIComponent(_topic),
+          { signal: AbortSignal.timeout(90000) }).then(function (x) { return x.json(); });
+        if (!_b || !_b.bcw) return JSON.stringify({ok:false,note:'BCW station returned nothing'});
+        return JSON.stringify({ok:true,topic:_topic,chars:_b.chars,armory:String(_b.bcw).slice(0,14000)});
+      }
+      if (name === 'run_cookoff') {
+        var _task = String(args.task || '').trim();
+        if (!_task) return JSON.stringify({ok:false,note:'no task given'});
+        var _c = await fetch(_stationBase + '/cookoff/run', { method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ task:_task, invoked_by:'anew_cycle' }),
+          signal: AbortSignal.timeout(150000) }).then(function (x) { return x.json(); });
+        if (!_c || !_c.ok) return JSON.stringify({ok:false,reason:(_c && _c.reason) || 'cookoff_no_result'});
+        var _j = (_c.result && _c.result.judge) || {};
+        return JSON.stringify({ok:true,winner:_c.winner,why:_j.why||'',correction:_j.correction||'',
+          note:'Real cook-off. Fable 5 judged three real contestants and the receipt is stamped in your bank.'});
+      }
+      var _wtask = String(args.task || '').trim();
+      if (!_wtask) return JSON.stringify({ok:false,note:'no task given'});
+      var _w = await fetch(_stationBase + '/wonder-games/compete', { method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ task:_wtask, hamUid: hamUid }),
+        signal: AbortSignal.timeout(150000) }).then(function (x) { return x.json(); });
+      if (!_w) return JSON.stringify({ok:false,reason:'wonder_games_no_result'});
+      return JSON.stringify({ok:true,result:_w});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
   }
   if (name === 'activate_roadmap_task' && (!runtime || runtime.codaVerified !== true)) {
     return JSON.stringify({ok:false,reason:'verified_current_turn_coda_required',tool:name});
@@ -2062,9 +2123,28 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // ⬡B:tool.loop:NUDGE:nash_routing_20260711⬡ cold keyword router: a sports
   // question MUST reach NASH; the model was answering "no real-time access"
   // instead of deploying the wonder it already has.
-  var _nashNeeded = /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|score|scores|playoffs?|game (to)?night|did .{1,40}(win|lose|beat)|final score)\b/i.test(message);
+  // ⬡B:tool.loop:FIX:nash_stops_hijacking_turns_on_an_ordinary_english_word:20260717⬡
+  // The problem was never NASH, it was FORCING her hand off a keyword with no idea what
+  // the turn is about. Proven live 20260717, one-word A/B on an identical question about
+  // bead counts:
+  //   "...your judge only scores against the evidence" -> tools [consult_coda, nash_sports]
+  //   "...your judge only grades against the evidence" -> tools [consult_coda, find_in_brain]
+  // One word. The bare token 'scores' hijacked a coding turn into a sports call. Worse:
+  // the CLAIR bootstrap tells every future chat to write that exact sentence, and the
+  // Wonder Contract stamped 20260717 contains "Wonder Games to score, CANON grades",
+  // which BCW now serves as live doctrine. The founder's own doctrine pipeline was
+  // force-firing a sports tool on every armed build question.
+  // Same disease as the preference gate firing on "select one": a cold regex reading a
+  // raw string with no intent and no window, then OVERRIDING the mind that has both.
+  // Fix is his own doctrine, not a tighter regex: a keyword may NUDGE, it may never
+  // COMMAND. Require a real sports subject alongside the verb, keep the nudge that solved
+  // the original 20260711 bug (she used to claim no real-time access instead of deploying
+  // the wonder she already has), and drop the forced tool_choice so she decides.
+  var _nashSubject = /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|epl|mls|premier league|world cup|playoffs?|box ?score|final score|game ?night)\b/i.test(message);
+  var _nashVerb = /\b(score|scores|scored|win|won|lose|lost|beat|play|playing|game|games|match|standings)\b/i.test(message);
+  var _nashNeeded = _nashSubject && _nashVerb;
   if (_nashNeeded) {
-    msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
+    msgs.push({role:'system',content:'NASH is standing by. If this question is really about a game or a team, call the nash_sports tool (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH. If the question is not actually about sports, ignore this note entirely.'});
   }
   var _verifiedToolEvidence = [];
   var _identityVerifiedEvidence = [];
@@ -2381,7 +2461,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
       if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
-      else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
+      // ⬡B:tool.loop:FIX:a_keyword_may_nudge_it_may_never_command:20260717⬡
+      // The forced tool_choice is gone. NASH is offered, not ordered. The system note
+      // above already carries the nudge that fixed the original 20260711 bug, and the
+      // mind reading the actual turn is a better router than a substring ever was.
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
         // call-purpose question. Keep the full PAI + council, but do not force an
