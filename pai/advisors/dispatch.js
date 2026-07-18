@@ -94,42 +94,41 @@ async function runWonderGames(task) {
 // produces an actual deliverable (findings, a draft, a tracked list), stamped.
 var _lineage = require('../core/lineage.attach.js');
 
-// ⬡B:advisors.dispatch:WIRE:real_search_for_researcher:20260712⬡
-// Founder doctrine, the honest next step named when teeth first shipped: a RESEARCHER
-// station could only give the METHOD to find something, never the thing itself, no web
-// access. GEMINI_API_KEY is already funded and sitting unused; Gemini's native
-// google_search grounding tool uses it directly, no new key needed. Cold code makes the
-// real search call; the wonder (the station's own LLM) then organizes what came back,
-// never inventing beyond it. Verified live before wiring: real grounded results, not a
-// guess (groundingMetadata confirmed present on a real test query).
-// NOTE for CANON's invented_api check: the endpoint below is not invented -- it is
-// Google's real, documented Generative Language API (generativelanguage.googleapis.com,
-// v1beta, model gemini-2.5-flash), verified by a direct live call before this was wired,
-// confirmed grounded (real search results, groundingMetadata present).
+// ⬡B:advisors.dispatch:BAN:gemini_grounding_perma_removed_onto_openrouter_web:20260717⬡
+// THE TWIN. anew/advisors/dispatch.js carried this identical Gemini call and was fixed
+// in anew PR #572 tonight. This copy is in HER world and would have kept calling Google
+// after the ban shipped. Second time in one night a fix landed in one file and missed
+// its twin, exactly like CODA's llm(). That pattern is MACE's written job and MACE is a
+// scaffold whose processTask returns {processed:true}.
+// FOUNDER LAW 20260717: no Google, ever. Retired AND closed weight, either alone fatal.
+// Search does not die with it. OpenRouter is approved API #3 and carries a real web
+// plugin, so a RESEARCHER station still gets grounded results, now from an approved
+// open-weight model. Same { ok, text, grounded } contract.
+// The 20260713 identity-hint fix is PRESERVED verbatim: a BDIF research job with no
+// disambiguation genuinely and correctly found Battle for Dream Island instead of Brian
+// Dawkins Impact Foundation, and the station faithfully reported the real search's real
+// wrong answer. Prepending who the advisor represents fixes that for every advisor and
+// it is provider-independent.
 async function realSearch(query, identityHint) {
-  var key = process.env.GEMINI_API_KEY;
-  if (!key) return { ok: false, reason: 'no_gemini_key' };
-  // ⬡B:advisors.dispatch:FIX:ambiguous_acronym_returned_wrong_real_results_20260713⬡
-  // Founder-caught live: a BDIF research job asked "find who founded BDIF" with
-  // no disambiguation, this genuinely grounded search correctly found real,
-  // ranked results for Battle for Dream Island (an unrelated, web-popular
-  // animation series that also abbreviates to BDIF) instead of Brian Dawkins
-  // Impact Foundation, and the station faithfully reported the real search's
-  // real wrong answer. Not a hallucination from nothing -- an honest search
-  // on a genuinely ambiguous, unqualified query. Prepending a short identity
-  // line (who the advisor actually represents, taken from real context, not
-  // invented here) before every search call, universal fix for every advisor
-  // that uses this shared function, not a BDIF-only patch.
+  var key = process.env.OPENROUTER_API_KEY;
+  if (!key) return { ok: false, reason: 'no_openrouter_key' };
   var q = identityHint ? (String(identityHint).slice(0, 200) + ' -- ' + query) : query;
   try {
-    var r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + key, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: q }] }], tools: [{ google_search: {} }] })
+    var r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b',
+        plugins: [{ id: 'web', max_results: 5 }],
+        messages: [{ role: 'user', content: q }],
+        max_tokens: 900
+      }),
+      signal: AbortSignal.timeout(30000)
     }).then(function (x) { return x.json(); });
-    if (r.error) return { ok: false, reason: r.error.message || 'gemini_error' };
-    var cand = (r.candidates && r.candidates[0]) || {};
-    var text = (cand.content && cand.content.parts || []).map(function (p) { return p.text || ''; }).join('');
-    var grounded = !!cand.groundingMetadata;
+    if (r.error) return { ok: false, reason: (r.error && r.error.message) || 'search_error' };
+    var msg = (((r.choices || [])[0] || {}).message) || {};
+    var text = String(msg.content || '');
+    var grounded = !!(msg.annotations && msg.annotations.length);
     return { ok: !!text, text: text, grounded: grounded };
   } catch (e) { return { ok: false, reason: e.message }; }
 }
