@@ -1125,12 +1125,40 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         if (wgFallback.beads.length>0) { res=wgFallback; }
       }
     }
-    // ⬡B:core.tool_loop:FIX:fusion_rides_the_tool_result_3b_20260710⬡ Measured live,
-    // same question three times: the WORLD CONTEXT system line grounded her only 1
-    // of 3 runs, while forced find_in_brain results dominated attention every run.
-    // House law, applied to my own work: reliability is mechanism, never phrasing.
-    // So the fusion now rides INSIDE the tool result itself, the one channel she
-    // demonstrably attends to. Cold splice, fail-soft, decay language intact.
+    // ⬡B:core.tool_loop:FIX:general_keyword_fallback_finds_plainly_stored_facts_20260718⬡
+    // Founder-caught live and A'NU agreed through the cycle door (WRIT: she
+    // said "Exact match stays the gatekeeper, the ilike fallback only kicks in
+    // when exact comes back empty, ship it"). The bug: find_in_brain is
+    // exact-match only (stamp_type/source/agent_global), so a plain question
+    // like "what team do I love" makes the model guess a field, and when it
+    // guesses wrong the answer is empty even though the fact is plainly stored
+    // (the Lakers fact sat in three LOGFUL beads while she said she had
+    // nothing). The ALERT and WONDER_GAMES fallbacks above are one-off patches
+    // of this same class; this is the general net. When every exact attempt is
+    // empty, run ONE ham-scoped ilike on summary against the question's key
+    // nouns. Cold code, no model, ham-bound, capped and time-bounded so the
+    // sub-100ms design intent holds for the common (exact-hit) path.
+    if (res.beads.length===0) {
+      var _kwStop = {the:1,and:1,for:1,you:1,your:1,what:1,whats:1,who:1,whos:1,does:1,did:1,is:1,are:1,was:1,were:1,my:1,me:1,do:1,i:1,a:1,an:1,of:1,to:1,in:1,on:1,about:1,tell:1,show:1,any:1,have:1,has:1,love:1,like:1,favorite:1};
+      var _kw = String(origMessage||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
+        .filter(function(w){return w.length>=3 && !_kwStop[w];});
+      // longest words first: the most distinctive noun is the best single probe
+      _kw.sort(function(a,b){return b.length-a.length;});
+      _kw = _kw.slice(0,4);
+      for (var _ki=0; _ki<_kw.length && res.beads.length===0; _ki++) {
+        try {
+          var _kwUrl = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + encodeURIComponent(q.ham_uid)
+            + '&summary=ilike.*' + encodeURIComponent(_kw[_ki]) + '*'
+            + '&select=id,stamp_type,source,summary,content,created_at&order=created_at.desc&limit=12';
+          var _kwRows = await fetch(_kwUrl, {headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},
+            signal: runtime && runtime.abortSignal}).then(function(x){return x.json();}).catch(function(){return [];});
+          if (Array.isArray(_kwRows) && _kwRows.length) {
+            res = { beads:_kwRows, count:_kwRows.length, ham_uid:q.ham_uid, keyword_fallback:_kw[_ki] };
+          }
+        } catch (_kwe) {}
+      }
+    }
+
     var _fusionLine = '';
     try { _fusionLine = await require('./context.fusion.js').getLatestSummary(hamUid); } catch (eFu) {}
     // ⬡B:core.tool_loop:FIX:fusion_leads_the_result_screenless_20260710⬡ Screenless
@@ -1904,17 +1932,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // mechanically checked against them before it is ever returned.
   var _verifiedRealNumbers = [];
   if (await _turnCancelled()) return _turnCancelledResult('before_memory');
-  // ⬡B:core.tool_loop:FIX:absent_groq_key_must_not_kill_the_turn:20260718⬡
-  // FOUR-API LAW (20260717): Groq is perma-banned and GROQ_API_KEY was pulled from
-  // every service. This gate then killed EVERY main deliberation with no_groq_key
-  // before the provider chain below (Ornith -> Together -> OpenRouter, all approved)
-  // ever ran -- she went silent on real questions while greetings still passed on
-  // fast paths. The founder's texts died here. The chain already falls through when
-  // the Groq rung errors, so the gate is removed and the dead rung fails fast into
-  // the approved providers. NO ROGUE MODEL CALLS law (bead 377996) stands: the full
-  // rewire of these call sites through core/model.ladder.js is CODA department work;
-  // this fix stops the bleeding without adding a new path.
-  if (!GROQ) GROQ = '';
+  if (!GROQ) return {ok:false,reason:'no_groq_key',_dbg:'GROQ_API_KEY not in process.env'};
   var _structuredReachSystemPrompt =
     'INTERNAL CLOSED-WORLD REACH POLICY. Decide only from the server-owned policy question and the exact deliberation evidence packet in this turn. Ambient Memory Bank rows, latest activity, contributors, prior conversation, screen state, and fused world summaries are intentionally excluded and must not be inferred. Return only the required strict JSON object.';
   var _fcwT0=Date.now();
@@ -2570,18 +2588,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if(r&&!r.choices&&!r.error){global._paiLastError='groq_no_choices:'+JSON.stringify(r).slice(0,150);}
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
-      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'zai-org/GLM-5.2',
+      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'Qwen/Qwen3.5-9B',
           messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
-          temperature:_structuredReachPolicy?0:0.3,
-          // ⬡B:core.tool_loop:FIX:glm_reasoning_burn_returns_empty_content:20260718⬡
-          // GLM-5.2 is a thinking model: with the full system prompt it intermittently
-          // spends the entire token budget on reasoning and returns choices with EMPTY
-          // content -- the chain read that as success, cleared the error, and the turn
-          // died as no_answer with _dbg null. The founder's texts went silent on this.
-          // Thinking is disabled for this reach rung (deliberation quality lives in the
-          // cycle, not in hidden chain-of-thought), and an empty-content result below
-          // now demotes to rung failure so OpenRouter takes the turn.
-          chat_template_kwargs:{enable_thinking:false}};
+          temperature:_structuredReachPolicy?0:0.3};
         if(_structuredReachPolicy)togetherBody.response_format=
           reachPolicyContract.responseFormat();
         r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
@@ -2590,12 +2599,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){
-        var _tMsg=(r.choices[0]&&r.choices[0].message)||{};
-        if(!_tMsg.content&&!((_tMsg.tool_calls||[]).length)){
-          global._paiLastError='together_empty_content_reasoning_burn';r=null;
-        } else { global._paiLastError=null; }
-      }
+      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='together_no_key';}
@@ -2626,43 +2630,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){
-        var _oMsg=(r.choices[0]&&r.choices[0].message)||{};
-        if(!_oMsg.content&&!((_oMsg.tool_calls||[]).length)){
-          global._paiLastError='openrouter_empty_content_reasoning_burn';r=null;
-        } else { global._paiLastError=null; }
-      }
+      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
       else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='openrouter_no_key';}
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
-    // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
-    // FOUNDER LAW (bead 377996): every model call routes through the ONE ladder,
-    // core/model.ladder.js, where provider, version, and fallback live. Her own cycle
-    // receipts showed the truth today: the legacy Groq/Together/OpenRouter chain here
-    // fast-failed in eight seconds and the turn died silent, while advisor turns that
-    // ride the ladder answered in the same minute, because the ladder's first rung is
-    // the healthy RunPod GLM. So before this loop is ever allowed to go silent, the
-    // one door gets the turn. Tool-free, matching the Together and OpenRouter tiers
-    // above; a ladder answer rides the exact same council, STAMP, and readback.
-    if (!r||r.error||!r.choices){
-      try{
-        var _lad=require('./model.ladder.js');
-        var _hist=openAiCompatibleHistory(msgs);
-        var _sys=(_hist[0]&&_hist[0].role==='system')?String(_hist[0].content||''):'';
-        var _usr=_hist.filter(function(m){return m.role!=='system';})
-          .map(function(m){return String(m.role||'user').toUpperCase()+': '+String(m.content||'');})
-          .join('\n\n');
-        var _lr=await _lad.deliberate(_sys,_usr,{max_tokens:tokenCapFor(channel),
-          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
-          json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
-        if(_lr&&_lr.content){
-          r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
-          global._paiLastError=null;
-        } else if(!global._paiLastError){ global._paiLastError='ladder_no_content'; }
-      }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0,120); }
-    }
     if (!r||r.error||!r.choices){
       ans=_structuredReachPolicy?'{}':'';
       break;
@@ -3324,7 +3297,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _fmtDest = (channel === 'text' || channel === 'sms') ? 'sms' : 'command_center';
     finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
   } catch (eFmt) {}
-  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,_dbg:global._paiLastError||null};
+  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
   // ⬡B:core.tool_loop:WIRE:prepare_the_exact_council_draft:20260715⬡
   // The older synthesize path used to do these pure output preparations after
   // runPAI returned. They now happen before the durable council so no channel can
@@ -3478,6 +3451,26 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // sources, and model judgment remain out of the durable cycle breadcrumb.
     var _blockedCouncilCodes = boundedCouncilFailureCodes(_council);
     _stampStep('outbound_council_blocked', _blockedCouncilCodes || 'receipt_unverified');
+    // \u2b21B:core.tool_loop:TELEMETRY:council_hold_writes_the_judges_why:20260718\u2b21
+    // Founder order: a held cycle must write the judge's reason. The 20260715 law
+    // keeps model judgment out of the CYCLE_STEP breadcrumb, so this is a separate
+    // governed COUNCIL_HOLD row: bounded reason strings only, never answer bytes.
+    try {
+      var _holdEv = _council && _council.evidence || {};
+      var _holdJudge = _holdEv.judgment && _holdEv.judgment.reason || null;
+      var _holdReview = _holdEv.review && _holdEv.review.reason || null;
+      if (_BU && _BK) fetch(_bu() + '/rest/v1/' + _tbl(), { method:'POST',
+        headers:{ apikey:_BK, Authorization:'Bearer '+_BK, 'Accept-Profile':_schema(),
+          'Content-Profile':_schema(), 'Content-Type':'application/json', Prefer:'return=minimal' },
+        body: JSON.stringify({ ham_uid:hamUid, agent_global:'PAI', stamp_type:'COUNCIL_HOLD',
+          importance:3, spawned_by:'pai.council.hold',
+          source:'pai.council.hold.' + _cycleId,
+          acl_stamp:'\u2b21B:pai.council:HOLD:' + _cycleId + ':' + ymd() + '\u2b21',
+          summary:('[COUNCIL HOLD] cycle ' + _cycleId + ': ' + (_blockedCouncilCodes || 'receipt_unverified')).slice(0, 280),
+          content: JSON.stringify({ codes:_blockedCouncilCodes || null,
+            judge_reason:_holdJudge ? String(_holdJudge).slice(0, 300) : null,
+            review_reason:_holdReview ? String(_holdReview).slice(0, 300) : null }) }) }).catch(function () {});
+    } catch (_eHold) {}
     return {ok:false,reason:(_council&&_council.reason)
         || (_committedCouncil&&_committedCouncil.reason) || 'pai_council_receipt_unverified',
       blocked_by:(_council&&_council.blocked_by)||'STAMP',ham:hamObj,cycleId:_cycleId,
