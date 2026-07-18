@@ -2024,7 +2024,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // mechanically checked against them before it is ever returned.
   var _verifiedRealNumbers = [];
   if (await _turnCancelled()) return _turnCancelledResult('before_memory');
-  if (!GROQ) return {ok:false,reason:'no_groq_key',_dbg:'GROQ_API_KEY not in process.env'};
+  // ⬡B:core.tool_loop:FIX:absent_groq_key_must_not_kill_the_turn:20260718⬡
+  // RESTORED after the RE-GRAFT clobber. Groq is perma-banned (four-API law) and the
+  // key is pulled; this gate killed every main deliberation before the approved chain
+  // below ever ran. The dead rung fails fast into approved providers instead.
+  if (!GROQ) GROQ = '';
   var _structuredReachSystemPrompt =
     'INTERNAL CLOSED-WORLD REACH POLICY. Decide only from the server-owned policy question and the exact deliberation evidence packet in this turn. Ambient Memory Bank rows, latest activity, contributors, prior conversation, screen state, and fused world summaries are intentionally excluded and must not be inferred. Return only the required strict JSON object.';
   var _fcwT0=Date.now();
@@ -2680,9 +2684,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if(r&&!r.choices&&!r.error){global._paiLastError='groq_no_choices:'+JSON.stringify(r).slice(0,150);}
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
-      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'Qwen/Qwen3.5-9B',
+      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'zai-org/GLM-5.2',
           messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
-          temperature:_structuredReachPolicy?0:0.3};
+          temperature:_structuredReachPolicy?0:0.3,
+          // ⬡B:core.tool_loop:FIX:glm_reasoning_burn_returns_empty_content:20260718⬡
+          // RESTORED after the RE-GRAFT clobber. GLM-5.2 thinking intermittently spent
+          // the whole budget on reasoning and returned empty content read as success.
+          chat_template_kwargs:{enable_thinking:false}};
         if(_structuredReachPolicy)togetherBody.response_format=
           reachPolicyContract.responseFormat();
         r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
@@ -2691,7 +2699,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
+      if(r&&r.choices&&r.choices.length){
+        var _tMsg=(r.choices[0]&&r.choices[0].message)||{};
+        if(!_tMsg.content&&!((_tMsg.tool_calls||[]).length)){
+          global._paiLastError='together_empty_content_reasoning_burn';r=null;
+        } else { global._paiLastError=null; }
+      }
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='together_no_key';}
@@ -2722,12 +2735,39 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
+      if(r&&r.choices&&r.choices.length){
+        var _oMsg=(r.choices[0]&&r.choices[0].message)||{};
+        if(!_oMsg.content&&!((_oMsg.tool_calls||[]).length)){
+          global._paiLastError='openrouter_empty_content_reasoning_burn';r=null;
+        } else { global._paiLastError=null; }
+      }
       else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='openrouter_no_key';}
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
+    // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
+    // RESTORED after the RE-GRAFT clobber. Per bead 377996 the ONE ladder
+    // (core/model.ladder.js) gets the turn before this loop may go silent; receipts
+    // showed the legacy chain fast-failing in 8s while ladder-riding advisor turns
+    // answered in the same minute on the healthy RunPod GLM rung.
+    if (!r||r.error||!r.choices){
+      try{
+        var _lad=require('./model.ladder.js');
+        var _hist=openAiCompatibleHistory(msgs);
+        var _sys=(_hist[0]&&_hist[0].role==='system')?String(_hist[0].content||''):'';
+        var _usr=_hist.filter(function(m){return m.role!=='system';})
+          .map(function(m){return String(m.role||'user').toUpperCase()+': '+String(m.content||'');})
+          .join('\n\n');
+        var _lr=await _lad.deliberate(_sys,_usr,{max_tokens:tokenCapFor(channel),
+          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
+          json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
+        if(_lr&&_lr.content){
+          r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
+          global._paiLastError=null;
+        } else if(!global._paiLastError){ global._paiLastError='ladder_no_content'; }
+      }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0,120); }
+    }
     if (!r||r.error||!r.choices){
       ans=_structuredReachPolicy?'{}':'';
       break;
@@ -3389,7 +3429,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _fmtDest = (channel === 'text' || channel === 'sms') ? 'sms' : 'command_center';
     finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
   } catch (eFmt) {}
-  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,_dbg:global._paiLastError||'emptied_after_model_by_scrub_or_format'};
   // ⬡B:core.tool_loop:WIRE:prepare_the_exact_council_draft:20260715⬡
   // The older synthesize path used to do these pure output preparations after
   // runPAI returned. They now happen before the durable council so no channel can
