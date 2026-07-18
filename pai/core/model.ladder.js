@@ -15,8 +15,26 @@
 // Validate the requested wire contract at each provider boundary so a malformed
 // verdict falls through to the next authorized provider. If none returns one
 // strict JSON object, deliberate() still returns null and the caller fails closed.
-function hasAcceptedContent(content, opts) {
+// ⬡B:core.model_ladder:911:truncated_glm_must_fall_through_she_goes_dumb_on_hard_questions:20260718⬡
+// FOUNDER 911, verified live 20260718: on a HARD multi-part question, GLM (rung 1)
+// enters reasoning mode and spends its ENTIRE token budget thinking, returning
+// finish_reason 'length' with ONE character of actual content. hasAcceptedContent
+// accepted any non-empty string, so that 1-char reply won the ladder and Qwen (which
+// answers the SAME question fully in 21s, finish 'stop', 3423 chars) was never tried.
+// Result: her turn returned no_answer and died silent. She got DUMBER exactly as the
+// question got HARDER. Every easy question passed because GLM finished before it burned
+// out; every hard one died. That is the whole bug behind 'she holds on hard questions.'
+// Fix: a truncated response (finish_reason length/max_tokens) is a FAILURE, not a win,
+// so the ladder falls through to the next rung. Also a real answer has substance: a
+// couple of chars is not an answer. The caller passes finishReason and we judge both.
+function hasAcceptedContent(content, opts, finishReason) {
   if (typeof content !== 'string' || !content.trim()) return false;
+  // A truncated generation is not an accepted answer. Fall through to the next rung.
+  if (finishReason === 'length' || finishReason === 'max_tokens') {
+    if (content.trim().length < 40) return false;
+  }
+  // Substance floor: an answer under a few characters is a non-answer regardless.
+  if (content.trim().length < 2) return false;
   if (!opts || opts.json !== true) return true;
   var text = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   try {
@@ -61,8 +79,8 @@ async function tryRunPodGLM(system, user, opts) {
     var timeout = opts.realtime === true ? opts.timeout : Math.max(opts.timeout, 45000);
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.GLM_RUNPOD_KEY || process.env.RUNPOD_API_KEY || '') }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'runpod' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
+    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'glm-5.2', via: 'runpod' } : null;
   } catch (e) { return null; }
 }
 async function tryTogetherGLM(system, user, opts) {
@@ -73,8 +91,8 @@ async function tryTogetherGLM(system, user, opts) {
     var r = await fetch('https://api.together.xyz/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'together' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
+    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'glm-5.2', via: 'together' } : null;
   } catch (e) { return null; }
 }
 async function tryOpenRouterGLM(system, user, opts) {
@@ -85,8 +103,8 @@ async function tryOpenRouterGLM(system, user, opts) {
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'openrouter' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
+    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'glm-5.2', via: 'openrouter' } : null;
   } catch (e) { return null; }
 }
 async function tryOrnith(system, user, opts) {
@@ -102,8 +120,8 @@ async function tryOrnith(system, user, opts) {
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.ORNITH_KEY || process.env.RUNPOD_API_KEY || '') },
       body: JSON.stringify(body), signal: requestSignal(opts, Math.min(opts.timeout, 10000)) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'ornith', via: 'runpod' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
+    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'ornith', via: 'runpod' } : null;
   } catch (e) { return null; }
 }
 async function tryQwen(system, user, opts) {
@@ -112,8 +130,8 @@ async function tryQwen(system, user, opts) {
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature }), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'qwen3-235b', via: 'openrouter' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
+    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'qwen3-235b', via: 'openrouter' } : null;
   } catch (e) { return null; }
 }
 // ⬡B:core.model_ladder:CLEANUP:groq_runner_deleted_stack_spotless:20260717⬡
