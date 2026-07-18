@@ -74,7 +74,7 @@ async function tryRunPodGLM(system, user, opts) {
   try {
     var base = url.replace(/\/+$/, '');
     var full = /\/(chat\/)?completions$/.test(base) ? base : (/\/openai\/v1$/.test(base) ? base + '/chat/completions' : base + '/openai/v1/chat/completions');
-    var body = { model: process.env.GLM_RUNPOD_MODEL || 'glm4:9b', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    var body = { model: process.env.GLM_RUNPOD_MODEL || 'glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
     var timeout = opts.realtime === true ? opts.timeout : Math.max(opts.timeout, 45000);
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.GLM_RUNPOD_KEY || process.env.RUNPOD_API_KEY || '') }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
@@ -98,7 +98,14 @@ async function tryTogetherGLM(system, user, opts) {
 async function tryOpenRouterGLM(system, user, opts) {
   var key = process.env.OPENROUTER_API_KEY; if (!key) return null;
   try {
-    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-4.6', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+        // ⬡B:core.model_ladder:911:glm_4.6_was_EIGHT_versions_old_now_5.2:20260718⬡
+    // FOUNDER CAUGHT IT 20260718: this rung was hardcoded to z-ai/glm-4.6, EIGHT
+    // versions behind the current z-ai/glm-5.2 that OpenRouter serves right now
+    // (5.2, 5.1, 5, 4.7, 4.6...). The RunPod rung was worse: glm4:9b, a 9B GLM-4.
+    // A stale default model string silently pins the whole system to an old brain.
+    // Now 5.2 everywhere, env-overridable. Truncation fall-through (same file) covers
+    // 5.2's reasoning-burn so an empty never wins.
+    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
