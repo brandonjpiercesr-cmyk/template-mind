@@ -2916,6 +2916,20 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var retryMsg=retryR&&retryR.choices&&retryR.choices[0]&&retryR.choices[0].message;
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
+      } else if (!GROQ || !retryMsg || (retryR&&retryR.error)) {
+        // ⬡B:core.tool_loop:FIX:a_dead_tool_rung_is_not_a_refusal:20260718⬡
+        // FOUNDER 911, cornered by her own receipts: model_rung_result showed a
+        // 579-char real answer, six seconds before cycle_end_silent. The silence
+        // rule below was written when a LIVE tool-capable provider refused the
+        // forced find_in_brain call twice. Groq is perma-banned under the four-API
+        // law and its key is pulled, so the retry above can never succeed, and
+        // this branch was throwing away every fallback answer to every real
+        // question on text and email -- the gaslight cycle itself. A dead rung is
+        // not a refusal. The plain words continue into the full council;
+        // wonder-SHADOW and the deterministic board own fabrication-catching, and
+        // hollow-reply law still applies to whatever they hold.
+        _stampStep('forced_tool_unavailable_words_to_council',
+          'tool-capable rung dead; '+String((msg&&msg.content)||'').length+' chars continue to council');
       } else {
         if (_roadmapActivationNeeded) {
           return { ok:false, reason:'roadmap_activation_tool_call_missing', blocked_by:'SPAN_ACTIVATION',
