@@ -1558,12 +1558,18 @@ async function defaultShadowStage(ctx, injected) {
   var provenanceCheck = identityProvenance.validateDraft(ctx.answer, provenanceLedger);
   var provenanceFlags = provenanceCheck.findings || [];
   var identityReceiptFlags = identityEvidenceReceiptContradictions(ctx);
+  // ⬡B:core.pai_outbound_council:FIX:memory_absence_phrasing_is_evidence_not_a_veto:20260718⬡
+  // FOUNDER LAW: categorical_memory_absence is a regex PHRASING heuristic; it held the
+  // honest sentence "I don't have anything newer confirmed on my end" and silenced a
+  // clean public-fact answer. Wording heuristics are EVIDENCE the wonder weighs, never
+  // a veto. Mechanical byte-level catches below remain unconditional blocks.
   var deterministicFindings = ((boardResult && boardResult.flags) || [])
-    .concat(namedContextFlags, memoryAbsenceFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
+    .concat(namedContextFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
       identityReceiptFlags);
+  var advisoryMemoryAbsence = memoryAbsenceFlags;
   var boardPassed = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
     ((boardResult && boardResult.flags) || []).length === 0 &&
-    namedContextFlags.length === 0 && memoryAbsenceFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
+    namedContextFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
     provenanceFlags.length === 0 && identityReceiptFlags.length === 0);
   var verifiedVoiceHandoff = verifiedVoiceCallHandoff(ctx);
   var exactVoiceHandoffRelay = verifiedExactVoiceHandoffRelay(ctx, verifiedVoiceHandoff);
@@ -1692,8 +1698,9 @@ async function defaultShadowStage(ctx, injected) {
     var reviewUser = JSON.stringify({
       prior_hold_reason: String(parsed.reason || '').slice(0, 500),
       prior_hold_quoted_claim_found_in_answer: _verbatimClaimFound(parsed),
+      advisory_memory_absence_phrasing: boundedEvidence(advisoryMemoryAbsence),
       deterministic_proofs: {
-        deterministic_board: 'PASS with zero flags, no fabrication found mechanically',
+        deterministic_board: 'PASS with zero blocking flags, no fabrication found mechanically',
         exact_verified_evidence_relay: !!exactRelay,
         runtime_identity_binding_verified: !!runtimeIdentity
       },
@@ -1748,7 +1755,7 @@ async function defaultShadowStage(ctx, injected) {
             'shadow_wonder_hold'))),
     evidence: {
       deterministic: {
-        verdict: (namedContextFlags.length || memoryAbsenceFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
+        verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
         flags: deterministicFindings,
         claims_checked: (boardResult && boardResult.claimsChecked) || 0
       },
