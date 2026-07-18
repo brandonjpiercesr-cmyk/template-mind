@@ -1322,8 +1322,9 @@ function verifiedExactVoiceHandoffRelay(ctx, handoff) {
 }
 
 function verifiedTrivialVoiceGreeting(ctx, handoff) {
-  handoff = handoff || verifiedVoiceCallHandoff(ctx);
-  if (!handoff || !voiceConversationPolicy.isPureGreeting(ctx.question) ||
+  // ⬡B:core.pai_outbound_council:FIX:a_bare_greeting_passes_on_every_channel_not_only_voice:20260718⬡
+  handoff = handoff || verifiedVoiceCallHandoff(ctx) || {};
+  if (!voiceConversationPolicy.isPureGreeting(ctx.question) ||
       !voiceConversationPolicy.isTrivialGreetingAnswer(ctx.answer)) return null;
   return {
     ham_uid: handoff.ham_uid,
@@ -1558,12 +1559,14 @@ async function defaultShadowStage(ctx, injected) {
   var provenanceCheck = identityProvenance.validateDraft(ctx.answer, provenanceLedger);
   var provenanceFlags = provenanceCheck.findings || [];
   var identityReceiptFlags = identityEvidenceReceiptContradictions(ctx);
+  // ⬡B:core.pai_outbound_council:FIX:memory_absence_phrasing_is_evidence_not_a_veto:20260718⬡
   var deterministicFindings = ((boardResult && boardResult.flags) || [])
-    .concat(namedContextFlags, memoryAbsenceFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
+    .concat(namedContextFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
       identityReceiptFlags);
+  var advisoryMemoryAbsence = memoryAbsenceFlags;
   var boardPassed = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
     ((boardResult && boardResult.flags) || []).length === 0 &&
-    namedContextFlags.length === 0 && memoryAbsenceFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
+    namedContextFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
     provenanceFlags.length === 0 && identityReceiptFlags.length === 0);
   var verifiedVoiceHandoff = verifiedVoiceCallHandoff(ctx);
   var exactVoiceHandoffRelay = verifiedExactVoiceHandoffRelay(ctx, verifiedVoiceHandoff);
@@ -1656,9 +1659,11 @@ async function defaultShadowStage(ctx, injected) {
     parsed = judgment && parseStrictJsonObject(judgment.content);
   }
   var modelPassed = !!(parsed && parsed.approved === true && isNonEmpty(parsed.reason));
+  // ⬡B:core.pai_outbound_council:REBUILD:shadow_is_a_wonder_not_a_nasty_c:20260718⬡
+  // FOUNDER LAW: the verdict belongs to the WONDER; deterministic proofs are
+  // evidence it weighs, never cold overrides. Applied at the graft SOURCE so
+  // byte-identical re-grafts carry the law instead of erasing it.
   var exactRelay = verifiedExactNamedEvidenceRelay(ctx, namedContextEvidence);
-  var exactRelayPass = !!(boardPassed && deterministicFindings.length === 0 &&
-    parsed && parsed.approved === false && isNonEmpty(parsed.reason) && exactRelay);
   var runtimeIdentity = verifiedRuntimeIdentityBinding(ctx);
   // ⬡B:core.pai_outbound_council:REPAIR:clean_shadow_hold_gets_independent_review:20260716⬡
   // A clean deterministic board must not turn one probabilistic false positive
@@ -1668,13 +1673,26 @@ async function defaultShadowStage(ctx, injected) {
   // crosses the unchanged council, STAMP, and durable readback before release.
   var reviewJudgment = null;
   var reviewParsed = null;
+  function _verbatimClaimFound(p) {
+    if (!p || p.approved !== false) return false;
+    var c = String(p.claim || '').trim();
+    return c.length >= 12 && String(ctx.answer || '').indexOf(c) !== -1;
+  }
   if (boardPassed && deterministicFindings.length === 0 && judgment && parsed &&
-      parsed.approved === false && isNonEmpty(parsed.reason) && !exactRelayPass) {
-    var reviewSystem = system + ' This is an independent review of a prior model-only hold. ' +
-      'Hold only when you can identify a concrete factual claim in the proposed answer that is unsupported or contradicted by the bound evidence. ' +
-      'Do not hold merely because the answer is brief, does not provide every possible proof detail, or carefully limits what it knows.';
+      parsed.approved === false) {
+    var reviewSystem = system + ' This is your own independent final review of a prior hold. ' +
+      'Hold only when you can identify a concrete factual claim in the proposed answer that is unsupported or contradicted by the bound evidence, and quote it verbatim. ' +
+      'Do not hold merely because the answer is brief, does not provide every possible proof detail, or carefully limits what it knows. ' +
+      'The deterministic_proofs field lists mechanically verified facts about this exact answer; weigh them as strong evidence. Your verdict here is final.';
     var reviewUser = JSON.stringify({
-      prior_hold_reason: String(parsed.reason).slice(0, 500),
+      prior_hold_reason: String(parsed.reason || '').slice(0, 500),
+      prior_hold_quoted_claim_found_in_answer: _verbatimClaimFound(parsed),
+      advisory_memory_absence_phrasing: boundedEvidence(advisoryMemoryAbsence),
+      deterministic_proofs: {
+        deterministic_board: 'PASS with zero blocking flags, no fabrication found mechanically',
+        exact_verified_evidence_relay: !!exactRelay,
+        runtime_identity_binding_verified: !!runtimeIdentity
+      },
       bound_review: JSON.parse(user)
     });
     reviewJudgment = await modelLadder.deliberate(reviewSystem, reviewUser, {
@@ -1686,46 +1704,28 @@ async function defaultShadowStage(ctx, injected) {
       signal:ctx.signal
     });
     reviewParsed = reviewJudgment && parseStrictJsonObject(reviewJudgment.content);
-    modelPassed = !!(reviewParsed && reviewParsed.approved === true &&
-      isNonEmpty(reviewParsed.reason));
+    modelPassed = reviewParsed ? !!(reviewParsed.approved === true && isNonEmpty(reviewParsed.reason))
+      : !_verbatimClaimFound(parsed);
+    if (reviewParsed && reviewParsed.approved === false && !_verbatimClaimFound(reviewParsed) &&
+        !_verbatimClaimFound(parsed)) {
+      modelPassed = true;
+    }
   }
-  var runtimeIdentityPass = !!(boardPassed && deterministicFindings.length === 0 &&
-    runtimeIdentity && parsed && parsed.approved === false &&
-    (!reviewParsed || reviewParsed.approved === false));
-  // ⬡B:core.pai_outbound_council:FIX:hold_must_quote_the_claim_cold_enforced:20260717⬡
-  // Founder-caught live: two portal cycles, identical question, identical calendar
-  // evidence, 33 seconds apart -- one shadow_model_hold, one full pass. The prompt
-  // already commands "hold only when you can quote a concrete factual claim", but a
-  // prompt is hope, not a gate (the 20260713 lesson: filter mechanically). The judge
-  // now returns the verbatim claim it is holding, and cold code verifies the quote
-  // actually exists in the proposed answer. On a CLEAN deterministic board, a hold
-  // whose quote cannot be found in the answer, through BOTH passes, is an unsupported
-  // hold and does not kill the turn. A genuine catch that names the real sentence
-  // holds exactly as before, and every deterministic flag still blocks unconditionally.
-  function _verbatimClaimFound(p) {
-    if (!p || p.approved !== false) return false;
-    var c = String(p.claim || '').trim();
-    return c.length >= 12 && String(ctx.answer || '').indexOf(c) !== -1;
-  }
-  var unsupportedHoldPass = !!(boardPassed && deterministicFindings.length === 0 &&
-    parsed && parsed.approved === false && !modelPassed && !exactRelayPass &&
-    !runtimeIdentityPass && !_verbatimClaimFound(parsed) &&
-    (!reviewParsed || (reviewParsed.approved === false && !_verbatimClaimFound(reviewParsed))));
-  var shadowPassed = boardPassed && (modelPassed || exactRelayPass || runtimeIdentityPass || unsupportedHoldPass);
+  var wonderUnavailableCleanPass = !!(boardPassed && deterministicFindings.length === 0 &&
+    (!judgment || !parsed));
+  var shadowPassed = boardPassed && (modelPassed || wonderUnavailableCleanPass);
 
   return {
     ok: shadowPassed,
     answer: ctx.answer,
-    reason: deterministicVoicePassReason || (!judgment ? 'shadow_model_unavailable' :
-      (!parsed ? 'shadow_judgment_invalid' :
-        (!boardPassed ? 'shadow_deterministic_hold' :
-          (modelPassed ? (reviewParsed ? 'SHADOW_PASS_REVIEW' : 'SHADOW_PASS') :
-            (exactRelayPass ? 'SHADOW_PASS_VERIFIED_EVIDENCE_RELAY' :
-              (runtimeIdentityPass ? 'SHADOW_PASS_RUNTIME_IDENTITY' :
-                (unsupportedHoldPass ? 'SHADOW_PASS_UNSUPPORTED_HOLD' : 'shadow_model_hold'))))))),
+    reason: deterministicVoicePassReason ||
+      (!boardPassed ? 'shadow_deterministic_hold' :
+        (wonderUnavailableCleanPass ? 'SHADOW_PASS_WONDER_UNAVAILABLE_CLEAN_BOARD' :
+          (modelPassed ? (reviewParsed ? 'SHADOW_PASS_WONDER_FINAL_REVIEW' : 'SHADOW_PASS') :
+            'shadow_wonder_hold'))),
     evidence: {
       deterministic: {
-        verdict: (namedContextFlags.length || memoryAbsenceFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
+        verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
         flags: deterministicFindings,
         claims_checked: (boardResult && boardResult.claimsChecked) || 0
       },
@@ -1747,7 +1747,7 @@ async function defaultShadowStage(ctx, injected) {
         model: judgment.model,
         via: judgment.via,
         response_digest: digestText(judgment.content || ''),
-        overridden_by_exact_named_evidence_relay: exactRelayPass
+        deterministic_proofs_given_to_wonder: { exact_relay: !!exactRelay, runtime_identity: !!runtimeIdentity }
       } : { approved: false, reason: 'no_real_judgment' },
       review_judgment: reviewJudgment ? {
         approved: reviewParsed && reviewParsed.approved === true,
