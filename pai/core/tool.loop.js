@@ -1932,7 +1932,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // mechanically checked against them before it is ever returned.
   var _verifiedRealNumbers = [];
   if (await _turnCancelled()) return _turnCancelledResult('before_memory');
-  if (!GROQ) return {ok:false,reason:'no_groq_key',_dbg:'GROQ_API_KEY not in process.env'};
+  // ⬡B:core.tool_loop:FIX:absent_groq_key_must_not_kill_the_turn:20260718⬡
+  if (!GROQ) GROQ = '';
   var _structuredReachSystemPrompt =
     'INTERNAL CLOSED-WORLD REACH POLICY. Decide only from the server-owned policy question and the exact deliberation evidence packet in this turn. Ambient Memory Bank rows, latest activity, contributors, prior conversation, screen state, and fused world summaries are intentionally excluded and must not be inferred. Return only the required strict JSON object.';
   var _fcwT0=Date.now();
@@ -2614,9 +2615,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if(r&&!r.choices&&!r.error){global._paiLastError='groq_no_choices:'+JSON.stringify(r).slice(0,150);}
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
-      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'Qwen/Qwen3.5-9B',
+      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'zai-org/GLM-5.2',
           messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
-          temperature:_structuredReachPolicy?0:0.3};
+          temperature:_structuredReachPolicy?0:0.3,
+          // ⬡B:core.tool_loop:FIX:glm_reasoning_burn_returns_empty_content:20260718⬡
+          chat_template_kwargs:{enable_thinking:false}};
         if(_structuredReachPolicy)togetherBody.response_format=
           reachPolicyContract.responseFormat();
         r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
@@ -2625,7 +2628,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
+      if(r&&r.choices&&r.choices.length){
+        var _tMsg=(r.choices[0]&&r.choices[0].message)||{};
+        if(!_tMsg.content&&!((_tMsg.tool_calls||[]).length)){
+          global._paiLastError='together_empty_content_reasoning_burn';r=null;
+        } else { global._paiLastError=null; }
+      }
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='together_no_key';}
@@ -2656,12 +2664,46 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
       r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
+      if(r&&r.choices&&r.choices.length){
+        var _oMsg=(r.choices[0]&&r.choices[0].message)||{};
+        if(!_oMsg.content&&!((_oMsg.tool_calls||[]).length)){
+          global._paiLastError='openrouter_empty_content_reasoning_burn';r=null;
+        } else { global._paiLastError=null; }
+      }
       else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0,150);}
       }else{global._paiLastError='openrouter_no_key';}
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
+    // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
+    if (!r||r.error||!r.choices){
+      try{
+        var _lad=require('./model.ladder.js');
+        var _hist=openAiCompatibleHistory(msgs);
+        var _sys=(_hist[0]&&_hist[0].role==='system')?String(_hist[0].content||''):'';
+        var _usr=_hist.filter(function(m){return m.role!=='system';})
+          .map(function(m){return String(m.role||'user').toUpperCase()+': '+String(m.content||'');})
+          .join('\n\n');
+        var _lr=await _lad.deliberate(_sys,_usr,{max_tokens:tokenCapFor(channel),
+          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
+          json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
+        if(_lr&&_lr.content){
+          r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
+          global._paiLastError=null;
+        } else if(!global._paiLastError){ global._paiLastError='ladder_no_content'; }
+      }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0,120); }
+    }
+    try{
+      var _rc=(r&&r.choices&&r.choices[0])||null;
+      _stampStep('model_rung_result',
+        String((r&&r._provider)||'openai_compat')+
+        ' commit='+String(process.env.RENDER_GIT_COMMIT||'?').slice(0,8)+
+        ' choices='+((r&&r.choices&&r.choices.length)||0)+
+        ' content_len='+String(((_rc&&_rc.message&&_rc.message.content)||'')).length+
+        ' tool_calls='+(((_rc&&_rc.message&&_rc.message.tool_calls)||[]).length)+
+        ' err='+String((r&&r.error)?JSON.stringify(r.error).slice(0,80):(global._paiLastError||'none')).slice(0,100)+
+        ' preview='+JSON.stringify(String(((_rc&&_rc.message&&_rc.message.content)||'')).slice(0,110)));
+    }catch(_eRR){}
     if (!r||r.error||!r.choices){
       ans=_structuredReachPolicy?'{}':'';
       break;
@@ -2723,7 +2765,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // the <tool_call> block is ALWAYS stripped from visible content -- tool plumbing
     // never renders as chat text again.
     if (typeof msg.content === 'string' && msg.content.indexOf('<tool_call>') !== -1) {
-      var tcm = msg.content.match(/<tool_call>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([\s\S]*?)(\)\s*<\/tool_call>|\)\s*$|$)/);
+      // ⬡B:core.tool_loop:FIX:glm_json_tool_call_dialect:20260718⬡
+      var jtc = msg.content.match(/<tool_call>\s*(\{[\s\S]*?\})\s*(<\/tool_call>|$)/);
+      if (jtc) {
+        try {
+          var jparsed = JSON.parse(jtc[1]);
+          var jname = jparsed && (jparsed.name || (jparsed.function && jparsed.function.name));
+          var jargs = jparsed && (jparsed.arguments || jparsed.parameters ||
+            (jparsed.function && jparsed.function.arguments)) || {};
+          if (typeof jargs === 'string') { try { jargs = JSON.parse(jargs); } catch (eJa) { jargs = {}; } }
+          if (jname && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(jname))) {
+            var jhuman = msg.content.replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, ' ')
+              .replace(/\s+/g, ' ').trim();
+            msg.content = (jhuman ? jhuman + ' ' : '') + '<function=' + jname + '>' + JSON.stringify(jargs);
+          }
+        } catch (eJtc) { /* not JSON; kwarg matcher below */ }
+      }
+      var tcm = msg.content.indexOf('<tool_call>') !== -1 &&
+        msg.content.match(/<tool_call>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([\s\S]*?)(\)\s*<\/tool_call>|\)\s*$|$)/);
       if (tcm) {
         var kwSrc = tcm[2] || '';
         var argsObj = {};
@@ -2801,6 +2860,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var retryMsg=retryR&&retryR.choices&&retryR.choices[0]&&retryR.choices[0].message;
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
+      } else if (!GROQ || !retryMsg || (retryR&&retryR.error)) {
+        // ⬡B:core.tool_loop:FIX:a_dead_tool_rung_is_not_a_refusal:20260718⬡
+        _stampStep('forced_tool_unavailable_words_to_council',
+          'tool-capable rung dead; '+String((msg&&msg.content)||'').length+' chars continue to council');
       } else {
         if (_roadmapActivationNeeded) {
           return { ok:false, reason:'roadmap_activation_tool_call_missing', blocked_by:'SPAN_ACTIVATION',
@@ -3323,7 +3386,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _fmtDest = (channel === 'text' || channel === 'sms') ? 'sms' : 'command_center';
     finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
   } catch (eFmt) {}
-  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,_dbg:global._paiLastError||'emptied_after_model_by_scrub_or_format'};
   // ⬡B:core.tool_loop:WIRE:prepare_the_exact_council_draft:20260715⬡
   // The older synthesize path used to do these pure output preparations after
   // runPAI returned. They now happen before the durable council so no channel can
