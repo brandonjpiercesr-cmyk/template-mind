@@ -76,7 +76,16 @@ function speak(anewResult, channel, context) {
   context = context || {};
   var mode = String(context.mode || '').toLowerCase();
   if (mode === 'coding' || mode === 'internal' || context.internal === true) {
-    return { output: raw, channel: channel || 'ccwa', blocked: false };
+    // ⬡B:core.anu:WIRE:even_internal_never_sounds_like_a_grading_sheet:20260718⬡
+    // Founder-caught 20260718. Coding/internal artifacts are preserved byte-for-byte
+    // (correct for code, CLI flags, Markdown). But an ESCALATION that surfaces to the
+    // human rode this same path and reached him as "CODA: read the verdict, decide fix
+    // vs respec vs kill" -- a grading sheet, the exact thing the founder killed
+    // 20260626. Real code still passes untouched; the only thing applyPersona changes
+    // on this path is scrubbing internal/dead names and killing a raw em dash to a
+    // comma (WRIT Kill 1), which never occurs in valid code. Her voice holds even here.
+    var persona = require('./persona.js');
+    return { output: persona.applyPersona(raw), channel: channel || 'ccwa', blocked: false };
   }
 
   // ⬡B:core.anu:WIRE:channel_classifier_20260711⬡ the canonical classifier
