@@ -2043,8 +2043,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // can never take a turn down.
       body:JSON.stringify({ham_uid:hamUid,agent_global:'PAI',stamp_type:'CYCLE_STEP',
         source:'pai.cycle.'+_cycleId,
-        edges:(_requestId ? [{type:'CAUSED_BY',target:'pai.request.'+_requestId},
-                             {type:'PRODUCED_BY',target:'pai.tool.loop.stamp_step'}] : []),
+        // ⬡B:core.tool_loop:FIX:every_cycle_step_gets_lineage:20260718⬡
+        // First cut of this wiring only attached edges when _requestId was truthy.
+        // Measured live right after it deployed: CYCLE_STEP went 0% -> 37.5%
+        // connected, not 100%. _requestId is assigned at :1998 from
+        // _requestIdCandidate and is only kept when that candidate is a string, so
+        // on most turns it is simply absent and the guard correctly wrote nothing.
+        // That is the exact mistake brain.client.js made for months: DEMAND lineage
+        // from a caller that does not have it, and get an orphan. The door was fixed
+        // 20260718 to DERIVE what it can (⬡B:core.brain_client:WIRE:
+        // the_antiorphan_throw_made_the_orphans:20260718⬡) and this must do the same.
+        // PRODUCED_BY needs nothing from anybody and is never a guess: it names the
+        // function that wrote the bead. CAUSED_BY is added on top only when there is
+        // a real requestId to point at. No RELATES_TO to the cycle: this bead's own
+        // source IS 'pai.cycle.'+_cycleId and that would be a self-loop.
+        edges:(_requestId
+          ? [{type:'CAUSED_BY',target:'pai.request.'+_requestId},
+             {type:'PRODUCED_BY',target:'pai.tool.loop.stamp_step'}]
+          : [{type:'PRODUCED_BY',target:'pai.tool.loop.stamp_step'}]),
         acl_stamp:'\u2b21B:core.tool.loop:CYCLE_STEP:'+step+':'+Date.now()+'\u2b21',
         summary:'[CYCLE '+_cycleId.slice(-8)+'] '+step+(detail?': '+String(detail).slice(0,100):''),
         content:JSON.stringify({cycleId:_cycleId,step:step,channel:channel,
