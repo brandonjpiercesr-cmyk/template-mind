@@ -1660,20 +1660,34 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _fmtDate = new Intl.DateTimeFormat('en-US', { timeZone:_tz, weekday:'long', year:'numeric', month:'long', day:'numeric' });
       var _fmtTime = new Intl.DateTimeFormat('en-US', { timeZone:_tz, hour:'numeric', minute:'2-digit' });
       var _todayStr = _fmtDate.format(new Date());
+      // ⬡B:core.tool.loop:FIX:all_day_events_are_floating_dates:20260718⬡ Founder caught
+      // this on the glass: Myrtle Beach reported a day early, every single all-day event
+      // shifted back one. My own regression from the timezone fix. An all-day event is a
+      // FLOATING DATE -- the calendar sends it as midnight UTC and it means that calendar
+      // square, not an instant in time. Converting it to Eastern rolls it back to 8pm the
+      // PREVIOUS day, so July 15 became July 14 and a kids week starting Monday became
+      // Sunday. Timed events are real instants and DO belong in the HAM's timezone. So the
+      // rule is per-event, not per-calendar: floating dates read in UTC, instants read local.
+      var _fmtDateUTC = new Intl.DateTimeFormat('en-US', { timeZone:'UTC', weekday:'long', year:'numeric', month:'long', day:'numeric' });
+      var _todayUTCStr = _fmtDateUTC.format(new Date(new Date().toLocaleString('en-US', { timeZone:_tz })));
       var _shaped = _realEvents.slice(0,20).map(function(ev){
         var _at = Number(ev.at || ev.start || 0);
         var _d = _at ? new Date(_at) : null;
-        var _dateStr = _d ? _fmtDate.format(_d) : null;
+        var _dateStr = _d ? (ev.allDay ? _fmtDateUTC.format(_d) : _fmtDate.format(_d)) : null;
+        var _cmpToday = ev.allDay ? _todayUTCStr : _todayStr;
         return { title: ev.title || ev.summary || '', org: ev.org || '', date: _dateStr,
           time: (_d && !ev.allDay) ? _fmtTime.format(_d) : (ev.allDay ? 'all day' : null),
-          is_today: !!(_dateStr && _dateStr === _todayStr), location: ev.location || '' };
+          is_today: !!(_dateStr && _dateStr === _cmpToday),
+          is_past: !!(_dateStr && _d && !(_dateStr === _cmpToday) && _d.getTime() < Date.now() - 86400000),
+          location: ev.location || '' };
       });
       var _todayCount = _shaped.filter(function(ev){ return ev.is_today; }).length;
       var _out = {ok:true, ham_uid:_calHam, today_is:_todayStr,
         events_today:_todayCount, events:_shaped,
-        note: _todayCount ? (_todayCount + ' event(s) fall on today, ' + _todayStr + '; every other listed event is another day, never present it as today')
+        note: (_todayCount ? (_todayCount + ' event(s) fall on today, ' + _todayStr + '; every other listed event is another day, never present it as today')
           : (_realEvents.length ? 'events exist in the window but NONE fall on today, ' + _todayStr + '; today itself is open'
-            : 'the calendar source answered and genuinely has no events in this window') };
+            : 'the calendar source answered and genuinely has no events in this window'))
+          + ' Every event carries is_today and is_past. NEVER describe an event with is_past true as upcoming or coming up; it already happened. Use each event\'s own date field verbatim and do not compute dates yourself.' };
       return JSON.stringify(_out);
     } catch (eCalReal) { return JSON.stringify({ok:false, reason:'calendar_read_failed: '+eCalReal.message}); }
   }
