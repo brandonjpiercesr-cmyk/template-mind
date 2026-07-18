@@ -1513,10 +1513,30 @@ async function defaultShadowStage(ctx, injected) {
   var verifiedVoiceHandoff = verifiedVoiceCallHandoff(ctx);
   var exactVoiceHandoffRelay = verifiedExactVoiceHandoffRelay(ctx, verifiedVoiceHandoff);
   var trivialVoiceGreeting = verifiedTrivialVoiceGreeting(ctx, verifiedVoiceHandoff);
+  // ⬡B:core.pai_outbound_council:FIX:a_bare_greeting_passes_on_every_channel_not_only_voice:20260718⬡
+  // Founder-caught 20260718 with screenshots: A'NU went silent on TEXT and stayed
+  // silent. Root cause traced live: the mind's own /cycle returned shadow_model_hold
+  // with an EMPTY answer on "hey are you there", intermittently (same greeting held
+  // one call, passed the next). SHADOW's MODEL judge randomly holds a bare greeting as
+  // if it were an unverified factual claim, and a hold silences the channel.
+  // The deterministic greeting pass that would prevent this ALREADY EXISTS but was
+  // gated behind verifiedVoiceCallHandoff -- it only fired on a VOICE call, so a TEXT
+  // or email greeting always faced the flaky judge. The founder's own SHADOW doctrine
+  // (line ~1532): "Greeting, welcome, encouragement, and tone language makes no factual
+  // claim and is never grounds to hold." The greeting grammar (isPureGreeting +
+  // isTrivialGreetingAnswer) is a closed, channel-agnostic, claim-free whitelist:
+  // question is exactly "hey/hi/hello/yo [there]", answer is exactly "hey, I'm here /
+  // what's up" with no claim about any person, schedule, memory, or external state.
+  // Passing it deterministically on ANY channel is safe and is what the doctrine says.
+  // Anything outside this closed grammar still gets the ordinary SHADOW model judge.
+  var trivialGreetingAnyChannel = boardPassed && deterministicFindings.length === 0 &&
+    voiceConversationPolicy.isPureGreeting(ctx.question) &&
+    voiceConversationPolicy.isTrivialGreetingAnswer(ctx.answer);
   var deterministicVoicePassReason = boardPassed && deterministicFindings.length === 0 &&
-    (exactVoiceHandoffRelay || trivialVoiceGreeting)
+    (exactVoiceHandoffRelay || trivialVoiceGreeting || trivialGreetingAnyChannel)
     ? (exactVoiceHandoffRelay ? 'SHADOW_PASS_VERIFIED_VOICE_HANDOFF' :
-      'SHADOW_PASS_TRIVIAL_VOICE_GREETING') : null;
+      (trivialVoiceGreeting ? 'SHADOW_PASS_TRIVIAL_VOICE_GREETING' :
+        'SHADOW_PASS_TRIVIAL_GREETING_ANY_CHANNEL')) : null;
 
   var system = 'You are SHADOW, the required factual-integrity judgment in an outbound council. ' +
     'Judge whether the proposed answer invents facts, attributes claims without evidence, or states uncertainty as certainty. ' +
