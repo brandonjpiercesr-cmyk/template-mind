@@ -58,7 +58,25 @@ async function readCalendarNext24h(hamUid) {
         (((await er.json()).data) || []).forEach(function (e) {
           const when = e.when || {};
           const startTs = when.start_time || when.time || (when.start_date ? Math.floor(new Date(when.start_date + 'T00:00:00').getTime() / 1000) : 0);
-          events.push({ title: String(e.title || 'untitled').slice(0, 80), start: startTs ? new Date(startTs * 1000).toISOString() : null, allDay: !!when.start_date });
+          // ⬡B:context_fusion:FIX:human_dates_and_today_flag_for_the_cycle:20260718⬡ the cycle
+          // was handed raw ISO ("Myrtle Beach at 2026-07-15T00:00:00.000Z") and left to do
+          // its own timezone math, which is how it reads a passed all-day event as upcoming.
+          // Cold code stamps the human date and whether it is genuinely today, same rule as
+          // the /os/calendar choke point: all-day is a floating UTC square, timed is a local instant.
+          const _tz = process.env.HAM_TIMEZONE || 'America/New_York';
+          const _fL = new Intl.DateTimeFormat('en-US', { timeZone:_tz, weekday:'long', month:'long', day:'numeric' });
+          const _fU = new Intl.DateTimeFormat('en-US', { timeZone:'UTC', weekday:'long', month:'long', day:'numeric' });
+          const _fT = new Intl.DateTimeFormat('en-US', { timeZone:_tz, hour:'numeric', minute:'2-digit' });
+          const _d = startTs ? new Date(startTs * 1000) : null;
+          const _allDay = !!when.start_date;
+          const _todayL = _fL.format(new Date());
+          const _todayF = _fU.format(new Date(new Date().toLocaleString('en-US', { timeZone:_tz })));
+          const _dateStr = _d ? (_allDay ? _fU.format(_d) : _fL.format(_d)) : null;
+          events.push({ title: String(e.title || 'untitled').slice(0, 80),
+            start: startTs ? new Date(startTs * 1000).toISOString() : null,
+            date: _dateStr, time: _d ? (_allDay ? 'all day' : _fT.format(_d)) : null,
+            is_today: !!(_dateStr && _dateStr === (_allDay ? _todayF : _todayL)),
+            allDay: _allDay });
         });
       } catch (eg) { /* one grant failing never blinds the rest */ }
     }));
@@ -123,9 +141,21 @@ async function getLatestSummary(hamUid) {
     if (ageMin > 180) return ''; // too stale to assert at all
     const parts = [];
     if (f.calendar && f.calendar.available) {
-      parts.push(f.calendar.events.length
-        ? ('calendar next 24h: ' + f.calendar.events.map(function (e) { return e.title + ' at ' + e.start; }).join('; '))
-        : 'your next 24 hours are wide open with nothing scheduled (this is real, known information, not a lack of it)');
+      // ⬡B:context_fusion:FIX:today_not_iso_and_unreachable_is_not_empty:20260718⬡ speak in
+      // human today-terms off the stamped fields, never raw ISO, and separate the events
+      // that are actually TODAY from later ones so the cycle never calls a future or past
+      // day "today". available:false already means unreachable, so wide-open is only ever
+      // asserted when the read genuinely succeeded and returned nothing.
+      var _today = (f.calendar.events || []).filter(function (e) { return e.is_today; });
+      var _later = (f.calendar.events || []).filter(function (e) { return !e.is_today; });
+      if (_today.length) {
+        parts.push('calendar TODAY: ' + _today.map(function (e) { return e.title + (e.allDay ? '' : ' at ' + (e.time || e.start)); }).join('; ') +
+          (_later.length ? (' | later this window (NOT today): ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; ')) : ''));
+      } else if (_later.length) {
+        parts.push('today itself is open; upcoming days hold: ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; ') + ' (never present any of these as today)');
+      } else {
+        parts.push('your next 24 hours are wide open with nothing scheduled (this is real, known information, not a lack of it)');
+      }
     }
     const chKeys = Object.keys(f.channels || {});
     if (chKeys.length) parts.push('recent conversation lanes (24h): ' + chKeys.map(function (k) { return k + ' x' + f.channels[k]; }).join(', '));
