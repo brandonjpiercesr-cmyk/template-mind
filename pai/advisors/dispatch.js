@@ -95,20 +95,23 @@ async function runWonderGames(task) {
 var _lineage = require('../core/lineage.attach.js');
 
 // ⬡B:advisors.dispatch:BAN:gemini_grounding_perma_removed_onto_openrouter_web:20260717⬡
-// THE TWIN. anew/advisors/dispatch.js carried this identical Gemini call and was fixed
-// in anew PR #572 tonight. This copy is in HER world and would have kept calling Google
-// after the ban shipped. Second time in one night a fix landed in one file and missed
-// its twin, exactly like CODA's llm(). That pattern is MACE's written job and MACE is a
-// scaffold whose processTask returns {processed:true}.
-// FOUNDER LAW 20260717: no Google, ever. Retired AND closed weight, either alone fatal.
+// FOUNDER LAW 20260717: no Google, ever. Two reasons, either one fatal on its own:
+// the 2.5 line is retired, and it is closed weight. He ordered Gemini out once
+// already on 20260711 (bead 790) and it grew back here, because the provider gate
+// had generativelanguage.googleapis.com sitting in its PERMITTED column. Both are
+// closed now: this call site and the gate that let it in.
+//
 // Search does not die with it. OpenRouter is approved API #3 and carries a real web
 // plugin, so a RESEARCHER station still gets grounded results, now from an approved
-// open-weight model. Same { ok, text, grounded } contract.
-// The 20260713 identity-hint fix is PRESERVED verbatim: a BDIF research job with no
-// disambiguation genuinely and correctly found Battle for Dream Island instead of Brian
-// Dawkins Impact Foundation, and the station faithfully reported the real search's real
-// wrong answer. Prepending who the advisor represents fixes that for every advisor and
-// it is provider-independent.
+// open-weight model instead of a banned closed one. Same contract as before:
+// { ok, text, grounded }. The station's own wonder organizes what comes back and
+// never invents past it, unchanged.
+//
+// The identity-hint fix from 20260713 is PRESERVED verbatim below, because it was a
+// real founder catch: a BDIF research job with no disambiguation genuinely, correctly
+// found Battle for Dream Island instead of Brian Dawkins Impact Foundation, and the
+// station faithfully reported the real search's real wrong answer. Prepending who the
+// advisor represents fixes that for every advisor, and it is provider-independent.
 async function realSearch(query, identityHint) {
   var key = process.env.OPENROUTER_API_KEY;
   if (!key) return { ok: false, reason: 'no_openrouter_key' };

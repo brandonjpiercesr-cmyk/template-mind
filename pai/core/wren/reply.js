@@ -178,6 +178,29 @@ async function handleReply(req) {
   var committed = requireVerifiedCouncilResult(paiResult, { hamUid: hamUid,
     requestId: paiResult.requestId || paiResult.request_id, cycleId: paiResult.cycleId,
     question: text, deliberationInput: text, answer: paiResult.answer });
+  // ⬡B:core.wren.reply:FIX:one_retry_on_a_flaky_shadow_hold_before_going_silent:20260718⬡
+  // Founder-caught 20260718 with screenshots: A'NU answered a text at 7:40pm, then
+  // went silent at 7:41pm on the very next question and stayed silent. The door was
+  // fine; the cycle ran and returned "did not commit: shadow_model_hold". SHADOW's
+  // MODEL judge is known-flaky on a clean board: the same question, 33 seconds apart,
+  // holds once and passes once (documented at pai.outbound.council.js:1616). There was
+  // no retry, so one unlucky coin flip = permanent silence on text, which reads to the
+  // founder as "she stopped answering me".
+  // One retry, and only when the hold is a bare model hold on a CLEAN deterministic
+  // board (no real integrity flag fired). A genuine deterministic hold
+  // (shadow_deterministic_hold, a named-evidence contradiction, a fabrication catch)
+  // is NOT retried and still goes silent, exactly as the hollow-reply rule requires.
+  // This does not weaken factual integrity; it only gives the flaky model judge a
+  // second look before her voice is silenced on a channel where silence looks broken.
+  if (!committed.ok && String(committed.reason || paiResult.reason || '') === 'shadow_model_hold') {
+    var retryPai = await runPAI(hamUid, text, 'blooio', replyIdentity);
+    if (retryPai.ok) {
+      var retryCommitted = requireVerifiedCouncilResult(retryPai, { hamUid: hamUid,
+        requestId: retryPai.requestId || retryPai.request_id, cycleId: retryPai.cycleId,
+        question: text, deliberationInput: text, answer: retryPai.answer });
+      if (retryCommitted.ok) { paiResult = retryPai; committed = retryCommitted; }
+    }
+  }
   if (!committed.ok) return { ok: false, reason: 'pai_council_uncommitted', ham_uid: hamUid };
 
   var synth = await synthesize(paiResult, text, 'blooio');

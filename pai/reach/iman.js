@@ -4,8 +4,9 @@ var crypto = require('crypto');
 // ⬡B:reach.iman:WIRE:funneled_20260712⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+function _memorySelected(){return !!(process.env.MEMORY_BANK_URL||process.env.MEMORY_BANK_KEY);}
+function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 
 // IMAN — Nylas email. Outbound send + inbox read. No hardcode.
 // Grant resolution: world -> env var. Key resolution: sandbox vs production app.
@@ -34,6 +35,25 @@ function resolveGrant(world) {
 function resolveKey(world) {
   var envKey = WORLD_KEY_ENV[world] || 'NYLAS_API_KEY';
   return process.env[envKey] || null;
+}
+
+// A'NU is the canonical sender for system-originated mail, including REACH.
+// The HAM world still owns PAM/context and recipient identity, but it must never
+// select the sender mailbox: founder worlds such as GMG are sandbox grants while
+// A'NU's mailbox and autonomous terminal webhooks live on the production app.
+function resolveAnuProductionSender() {
+  var grant = String(process.env.NYLAS_ANU_GRANT || '').trim();
+  var productionKey = String(process.env.NYLAS_PRODUCTION_KEY || '').trim();
+  if (!grant || !productionKey) {
+    return { ok:false, reason:'no_nylas_anu_production_config' };
+  }
+  var key = null;
+  try { key = require('../core/nylasKeys.js').keyForGrant(grant); }
+  catch (eKey) { key = null; }
+  if (!key || key !== productionKey) {
+    return { ok:false, reason:'no_nylas_anu_production_config' };
+  }
+  return { ok:true, grant:grant, key:key, sender:'anu' };
 }
 
 // ⬡B:reach.iman:WIRE:getGrant_export_for_calendar:20260710⬡
@@ -199,6 +219,26 @@ async function resolveOutboundIdentity(opts, world) {
   }
 }
 
+async function requireExactRecipientOwnership(recipients, expectedHamUid) {
+  if (!Array.isArray(recipients) || recipients.length !== 1 ||
+      !recipients[0] || typeof recipients[0].email !== 'string') {
+    return fail('recipient_email_identity_unresolved');
+  }
+  var envelope;
+  try {
+    envelope = await require('../core/atmosphere.gate.js')
+      .resolveAtmosphere({ email: recipients[0].email });
+  } catch (eResolve) {
+    return fail('recipient_identity_resolution_uncertain');
+  }
+  if (!envelope || !envelope.ham_uid) return fail('recipient_email_identity_unresolved');
+  if (String(envelope.ham_uid).trim().toUpperCase() !==
+      String(expectedHamUid || '').trim().toUpperCase()) {
+    return fail('recipient_ham_mismatch');
+  }
+  return { ok:true, envelope:envelope };
+}
+
 async function requireClearKillSwitch(hamUid) {
   // A missing bank means the shared brain-backed switch cannot be read. That is
   // uncertainty, not permission to send.
@@ -337,29 +377,69 @@ async function providerSend(input) {
   } catch (eCouncil) {
     return fail('email_delivery_target_unverified');
   }
-  // ⬡B:reach.iman:GUARD:final_edge_switch_and_durable_effect_claim:20260715⬡
-  // Council can take time. Re-read the shared switch at the provider edge,
-  // then acquire one Postgres-backed claim for these exact approved fields,
-  // canonical recipients, and council lineage before Nylas receives bytes.
+  if (input.requireExactHamTarget) {
+    var ownership = await requireExactRecipientOwnership(input.to, input.hamUid);
+    if (!ownership.ok) return ownership;
+  }
+  // Council can take time. Re-read the shared switch at the provider edge.
   var edgeKill = await requireClearKillSwitch(input.hamUid);
   if (!edgeKill.ok) return edgeKill;
   var artifact = JSON.stringify({ subject:input.approved.subject,
     body:input.approved.body });
-  var effectClaim = await require('../core/outbound.effect.js').claimProviderAttempt({
-    hamUid:input.hamUid, channel:'iman_email',
+  var deliverySaga = require('../core/reach/provider.delivery.saga.js');
+  var providerDelivery = deliverySaga.normalizeProvenance(input.providerDelivery);
+  var autonomousReach = !!providerDelivery;
+  var effectBoundary = require('../core/outbound.effect.js');
+  var effectInput = { hamUid:input.hamUid, channel:'iman_email',
     deliveryTarget:{ kind:'email', value:input.to }, artifact:artifact,
-    requestId:input.requestId, cycleId:input.cycleId
-  });
+    requestId:input.requestId, cycleId:input.cycleId };
+  var plannedEffectKey = typeof effectBoundary.effectKey === 'function'
+    ? effectBoundary.effectKey(effectInput) : null;
+  if (!plannedEffectKey) return fail('provider_effect_identity_unverified');
+  var trackingLabel = null, providerIntent = null;
+  if (autonomousReach) {
+    var ready = await require('./iman.webhook.js').requireReadyForKey(input.key);
+    if (!ready.ok) return fail(ready.reason || 'nylas_terminal_webhook_unready');
+    var truthReady = await deliverySaga.prepareStore();
+    if (!truthReady.ok) return fail(truthReady.reason || 'provider_truth_store_unavailable');
+    // This opaque value binds only the actual second/final IMAN council IDs.
+    trackingLabel = 'reach-' + crypto.createHash('sha256').update(JSON.stringify({
+      hamUid:input.hamUid, requestId:input.requestId,
+      cycleId:input.cycleId, effectKey:plannedEffectKey
+    }), 'utf8').digest('hex').slice(0, 48);
+    providerIntent = await deliverySaga.createProviderIntent({
+      hamUid:input.hamUid, provider:'nylas', channel:'email',
+      requestId:input.requestId, cycleId:input.cycleId,
+      correlationKey:'anew-' + plannedEffectKey,
+      providerBinding:input.grant, trackingLabel:trackingLabel,
+      artifact:artifact, councilProof:input.councilProof,
+      provenance:providerDelivery
+    });
+    if (!providerIntent.ok) return fail(providerIntent.reason || 'provider_intent_unverified',
+      { effectKey:plannedEffectKey });
+  }
+  // Intent exists before the long-lived effect claim. A transient intent-store
+  // failure therefore cannot consume the 100-year no-duplicate claim.
+  var effectClaim = await effectBoundary.claimProviderAttempt(effectInput);
   if (!effectClaim.ok) return fail(effectClaim.reason,
-    { effectKey:effectClaim.effectKey || null });
+    { effectKey:effectClaim.effectKey || plannedEffectKey });
+  if (effectClaim.effectKey !== plannedEffectKey ||
+      effectClaim.idempotencyKey !== 'anew-' + plannedEffectKey) {
+    return fail('provider_effect_identity_mismatch', { effectKey:effectClaim.effectKey || null });
+  }
   var response;
   try {
+    var providerBody = { subject: input.approved.subject,
+      body: input.approved.body, to: input.to };
+    if (trackingLabel) providerBody.tracking_options = {
+      label:trackingLabel, opens:true, links:false, thread_replies:true
+    };
     response = await fetch('https://api.us.nylas.com/v3/grants/' + input.grant + '/messages/send', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + input.key,
         'Content-Type': 'application/json', 'Accept': 'application/json',
         'Idempotency-Key':effectClaim.idempotencyKey },
-      body: JSON.stringify({ subject: input.approved.subject, body: input.approved.body, to: input.to })
+      body: JSON.stringify(providerBody)
     });
   } catch (eProvider) {
     return fail('nylas_provider_uncertain');
@@ -374,7 +454,31 @@ async function providerSend(input) {
   catch (eJson) { return fail('nylas_provider_response_uncertain'); }
   var id = data && data.data && data.data.id;
   if (typeof id !== 'string' || !id.trim()) return fail('nylas_provider_response_uncertain');
-  return { ok: true, messageId: id };
+  if (autonomousReach) {
+    var providerAttempt = await deliverySaga.registerProviderAttempt({
+      provider:'nylas', providerMessageId:id,
+      providerIntentSource:providerIntent.source
+    });
+    if (!providerAttempt.ok) {
+      var acceptanceRecovery = await deliverySaga.recordProviderAcceptanceRecovery({
+        provider:'nylas', providerMessageId:id,
+        providerIntentSource:providerIntent.source
+      });
+      return fail('provider_acceptance_binding_unverified', {
+        providerAccepted:true, provider:'nylas', messageId:id,
+        providerAcceptanceRecovery:true,
+        providerRecoveryPersisted:acceptanceRecovery.ok === true,
+        providerRecoverySource:acceptanceRecovery.source || null,
+        providerRecoveryReason:acceptanceRecovery.ok ? null : acceptanceRecovery.reason || null,
+        deliveryTruthReady:false, deliveryTruthReason:providerAttempt.reason,
+        providerIntentSource:providerIntent.source
+      });
+    }
+    return { ok:true, provider:'nylas', messageId:id, deliveryTruthReady:true,
+      providerIntentSource:providerIntent.source,
+      providerAttemptSource:providerAttempt.source };
+  }
+  return { ok:true, messageId:id };
 }
 
 async function sendThroughCommittedBoundary(config) {
@@ -404,11 +508,31 @@ async function sendThroughCommittedBoundary(config) {
   if (!finalized.ok) return finalized;
   var provider = await providerSend({ grant: config.grant, key: config.key, to: recipients,
     approved: finalized.approved, councilResult:finalized._councilResult,
-    hamUid:identity.hamUid, requestId:finalized.requestId, cycleId:finalized.cycleId });
-  var proofResult = { requestId: finalized.requestId, cycleId: finalized.cycleId, councilProof: finalized.councilProof };
+    hamUid:identity.hamUid, requestId:finalized.requestId, cycleId:finalized.cycleId,
+    councilProof:finalized.councilProof,
+    providerDelivery:config.opts && config.opts.providerDelivery,
+    requireExactHamTarget:config.requireExactHamTarget === true });
+  var proofResult = { requestId: finalized.requestId, cycleId: finalized.cycleId,
+    councilProof: finalized.councilProof,
+    approvedSubject:finalized.approved.subject,
+    approvedBody:finalized.approved.body };
   if (!provider.ok) return fail(provider.reason, Object.assign({}, proofResult,
-    provider.status === undefined ? {} : { status: provider.status }));
-  return Object.assign({ ok: true, messageId: provider.messageId, to: recipients },
+    provider.status === undefined ? {} : { status: provider.status },
+    provider.providerAccepted ? { providerAccepted:true,
+      provider:provider.provider || null,
+      messageId:provider.messageId || null, deliveryTruthReady:false,
+      deliveryTruthReason:provider.deliveryTruthReason || null,
+      providerIntentSource:provider.providerIntentSource || null,
+      providerAcceptanceRecovery:provider.providerAcceptanceRecovery === true,
+      providerRecoveryPersisted:provider.providerRecoveryPersisted === true,
+      providerRecoverySource:provider.providerRecoverySource || null,
+      providerRecoveryReason:provider.providerRecoveryReason || null } : {}));
+  return Object.assign({ ok: true, messageId: provider.messageId, to: recipients,
+    provider:provider.provider || null,
+    deliveryTruthReady:provider.deliveryTruthReady,
+    providerIntentSource:provider.providerIntentSource || null,
+    providerAttemptSource:provider.providerAttemptSource || null,
+    deliveryTruthReason:provider.deliveryTruthReason || null },
     config.world ? { world: config.world } : { from: config.sender }, proofResult);
 }
 
@@ -424,40 +548,108 @@ async function send(to, subject, body, world, opts) {
 
 // Explicit internal identity, same mandatory council and provider boundary.
 async function sendFromClaudette(to, subject, body, opts) {
-  // A'NU's mailbox moved to the production Nylas application. The old path
-  // still paired that grant with the default/sandbox key, so a fully committed
-  // email reached Nylas and failed with grant.not_found. Prefer the canonical
-  // A'NU grant and resolve its owning application key at the provider boundary.
-  var grant = process.env.NYLAS_ANU_GRANT || process.env.NYLAS_ABA_GRANT;
-  var key = null;
-  try { key = require('../core/nylasKeys.js').keyForGrant(grant); }
-  catch (eKey) { key = null; }
-  if (!grant || !key) return fail('no_nylas_config');
+  var sender = resolveAnuProductionSender();
+  if (!sender.ok) return fail(sender.reason);
   return sendThroughCommittedBoundary({ to: to, subject: subject, body: body, world: null,
-    opts: opts || {}, grant: grant, key: key, sender: 'anu' });
+    opts: opts || {}, grant: sender.grant, key: sender.key, sender: sender.sender });
 }
 
-// Resolve a HAM's contact read-only, then bind that exact HAM into the same send.
-async function sendToHam(hamUid, subject, body, world, opts) {
+// Accept the already ownership-verified exact address. Re-reading an arbitrary
+// first contact row here created a TOCTOU/cross-HAM seam between the outer
+// council target and Nylas. The same exact address is resolved through
+// ATMOSPHERE again at the provider edge before any effect claim or network send.
+async function sendToHam(hamUid, exactEmail, subject, body, world, opts) {
   if (!world) return fail('world_required_no_silent_fallback');
   if (typeof hamUid !== 'string' || !hamUid.trim()) return fail('ham_uid_required');
-  if (!_bu() || !_bk()) return fail('no_brain');
-  var response, rows;
-  try {
-    response = await fetch(_bu() + '/rest/v1/' + _tbl() + '?source=eq.ham.' + encodeURIComponent(hamUid) + '.contact&limit=1',
-      { headers: { 'apikey': _bk(), 'Authorization': 'Bearer ' + _bk(), 'Accept-Profile': _schema() } });
-    if (!response || response.ok !== true) return fail('contact_lookup_uncertain');
-    rows = await response.json();
-  } catch (eContactRead) {
-    return fail('contact_lookup_uncertain');
-  }
-  if (!Array.isArray(rows)) return fail('contact_lookup_uncertain');
-  var contact = null;
-  try { contact = rows[0] ? JSON.parse(rows[0].content || '{}') : null; }
-  catch (eContactParse) { return fail('contact_record_invalid'); }
-  if (!contact || !contact.email) return fail('no_contact_for_ham');
-  return send([{ email: contact.email, name: contact.name || '' }], subject, body, world,
-    Object.assign({}, opts || {}, { hamUid: hamUid }));
+  var recipient = normalizeRecipients(exactEmail);
+  if (!recipient || recipient.length !== 1) return fail('email_recipient_invalid');
+  var grant = resolveGrant(world);
+  var key = resolveKey(world);
+  if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
+  return sendThroughCommittedBoundary({ to:recipient, subject:subject, body:body,
+    world:world, opts:Object.assign({}, opts || {}, { hamUid:hamUid }),
+    grant:grant, key:key, sender:world, requireExactHamTarget:true });
 }
 
-module.exports = { send: send, sendFromClaudette: sendFromClaudette, sendToHam: sendToHam, listEmails: listEmails, alreadyRepliedOnThread: alreadyRepliedOnThread, getGrant: getGrant, resolveGrant: resolveGrant, resolveKey: resolveKey };
+// ⬡B:reach.iman:WIRE:one_reach_council_email_provider:20260717⬡
+// REACH's one target-bound council may commit a complete RFC822-like artifact.
+// This provider seam parses and sends those exact committed substrings without
+// starting a second PAI cycle or granting IMAN authority to rewrite the body.
+async function sendCommittedToHam(hamUid, exactEmail, artifact, world, authorization, opts) {
+  // This seam cannot redirect or prefix after the REACH council because that
+  // would change the exact target or artifact the receipt authorized. Founder
+  // test routing must therefore be resolved before council. Until that path is
+  // explicitly supplied, only the canonical LIVE target may reach Nylas.
+  if ((process.env.REACH_SEND_MODE || 'PAUSED') !== 'LIVE') {
+    return fail('REACH_SEND_MODE is ' + (process.env.REACH_SEND_MODE || 'PAUSED'),
+      { blocked:true });
+  }
+  if (!world) return fail('world_required_no_silent_fallback');
+  if (typeof hamUid !== 'string' || !hamUid.trim()) return fail('ham_uid_required');
+  if (typeof artifact !== 'string' || !artifact.trim()) return fail('approved_email_artifact_invalid');
+  var recipient = normalizeRecipients(exactEmail);
+  if (!recipient || recipient.length !== 1) return fail('email_recipient_invalid');
+  var sender = resolveAnuProductionSender();
+  if (!sender.ok) return fail(sender.reason);
+  var identity = await resolveOutboundIdentity({ hamUid:hamUid }, world);
+  if (!identity.ok) return identity;
+  var kill = await requireClearKillSwitch(identity.hamUid);
+  if (!kill.ok) return kill;
+  var ownership = await requireExactRecipientOwnership(recipient, identity.hamUid);
+  if (!ownership.ok) return ownership;
+  var approved = parseApprovedEmail(artifact);
+  if (!approved) return fail('approved_email_artifact_invalid');
+  var councilResult = authorization && authorization.councilResult;
+  var councilProof = authorization && authorization.councilProof;
+  var council;
+  var verified;
+  try {
+    council = require('../core/pai.outbound.council.js');
+    verified = council.requireVerifiedCouncilDelivery(councilResult,
+      { kind:'email', value:recipient }, artifact);
+    var compact = council.compactCouncilProof(councilResult);
+    if (!verified || verified.ok !== true || !compact ||
+        JSON.stringify(compact) !== JSON.stringify(councilProof)) {
+      return fail('email_delivery_target_unverified');
+    }
+  } catch (eCouncil) { return fail('email_delivery_target_unverified'); }
+  try {
+    var pam = require('../board/pam/pam.js');
+    var verdict = pam.pamCheck(approved.subject + '\n\n' + approved.body, world);
+    if (!verdict || verdict.ok !== true ||
+        /\bebc\b|firewall/i.test(approved.subject + '\n\n' + approved.body)) {
+      return fail('approved_email_pam_hold', { blocked:true,
+        requestId:councilProof.request_id, cycleId:councilProof.cycle_id,
+        councilProof:councilProof });
+    }
+  } catch (ePam) { return fail('approved_email_pam_uncertain', { blocked:true,
+    requestId:councilProof.request_id, cycleId:councilProof.cycle_id,
+    councilProof:councilProof }); }
+  var provider = await providerSend({ grant:sender.grant, key:sender.key, to:recipient,
+    approved:approved, councilResult:councilResult, hamUid:identity.hamUid,
+    requestId:councilProof.request_id, cycleId:councilProof.cycle_id,
+    councilProof:councilProof, providerDelivery:opts&&opts.providerDelivery,
+    requireExactHamTarget:true });
+  var proofResult={requestId:councilProof.request_id,cycleId:councilProof.cycle_id,
+    councilProof:councilProof,approvedSubject:approved.subject,approvedBody:approved.body};
+  if (!provider.ok) return fail(provider.reason,Object.assign({},proofResult,
+    provider.status===undefined?{}:{status:provider.status},
+    provider.providerAccepted?{providerAccepted:true,messageId:provider.messageId||null,
+      deliveryTruthReady:false,deliveryTruthReason:provider.deliveryTruthReason||null,
+      providerIntentSource:provider.providerIntentSource||null,
+      providerAcceptanceRecovery:provider.providerAcceptanceRecovery||false,
+      providerRecoverySource:provider.providerRecoverySource||null}:{}));
+  return Object.assign({ok:true,messageId:provider.messageId,to:recipient,
+    deliveryTruthReady:provider.deliveryTruthReady,
+    providerIntentSource:provider.providerIntentSource||null,
+    providerAttemptSource:provider.providerAttemptSource||null,
+    providerAcceptanceRecovery:provider.providerAcceptanceRecovery||false,
+    providerRecoverySource:provider.providerRecoverySource||null,world:world},proofResult);
+}
+
+module.exports = { send: send, sendFromClaudette: sendFromClaudette,
+  sendToHam: sendToHam, sendCommittedToHam:sendCommittedToHam, listEmails: listEmails,
+  alreadyRepliedOnThread: alreadyRepliedOnThread, getGrant: getGrant,
+  resolveGrant: resolveGrant, resolveKey: resolveKey,
+  resolveAnuProductionSender:resolveAnuProductionSender,
+  _test:{ providerSend:providerSend, requireExactRecipientOwnership:requireExactRecipientOwnership } };

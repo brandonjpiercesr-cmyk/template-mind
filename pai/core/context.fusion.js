@@ -72,9 +72,10 @@ async function readCalendarNext24h(hamUid) {
           const _todayL = _fL.format(new Date());
           const _todayF = _fU.format(new Date(new Date().toLocaleString('en-US', { timeZone:_tz })));
           const _dateStr = _d ? (_allDay ? _fU.format(_d) : _fL.format(_d)) : null;
+          var _timeStr = _d ? (_allDay ? 'all day' : _fT.format(_d)) : 'time unknown';
           events.push({ title: String(e.title || 'untitled').slice(0, 80),
             start: startTs ? new Date(startTs * 1000).toISOString() : null,
-            date: _dateStr, time: _d ? (_allDay ? 'all day' : _fT.format(_d)) : null,
+            date: _dateStr || 'date unknown', time: _timeStr,
             is_today: !!(_dateStr && _dateStr === (_allDay ? _todayF : _todayL)),
             allDay: _allDay });
         });
@@ -86,7 +87,8 @@ async function readCalendarNext24h(hamUid) {
 }
 
 async function readChannelActivity(hamUid) {
-  if (!_bu() || !_bk()) return {};
+  var _noChannels = Object.create(null);
+  if (!_bu() || !_bk()) return _noChannels;
   try {
     const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
     const rows = await fetch(_bu() + '/rest/v1/' + _tbl() + '?select=source,content&ham_uid=eq.' + encodeURIComponent(hamUid)
@@ -101,7 +103,7 @@ async function readChannelActivity(hamUid) {
       counts[ch] = (counts[ch] || 0) + 1;
     });
     return counts;
-  } catch (e) { return {}; }
+  } catch (e) { return _noChannels; }
 }
 
 async function runFuse(hamUid) {
@@ -141,7 +143,7 @@ async function getLatestSummary(hamUid) {
     if (ageMin > 180) return ''; // too stale to assert at all
     const parts = [];
     if (f.calendar && f.calendar.available) {
-      // ⬡B:context_fusion:FIX:today_not_iso_and_unreachable_is_not_empty:20260718⬡ speak in
+      // ⬡B:context_fusion:FIX:today_not_iso_and_unreachable_is_real:20260718⬡ speak in
       // human today-terms off the stamped fields, never raw ISO, and separate the events
       // that are actually TODAY from later ones so the cycle never calls a future or past
       // day "today". available:false already means unreachable, so wide-open is only ever
@@ -149,8 +151,9 @@ async function getLatestSummary(hamUid) {
       var _today = (f.calendar.events || []).filter(function (e) { return e.is_today; });
       var _later = (f.calendar.events || []).filter(function (e) { return !e.is_today; });
       if (_today.length) {
-        parts.push('calendar TODAY: ' + _today.map(function (e) { return e.title + (e.allDay ? '' : ' at ' + (e.time || e.start)); }).join('; ') +
-          (_later.length ? (' | later this window (NOT today): ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; ')) : ''));
+        var _todayStr = 'calendar TODAY: ' + _today.map(function (e) { return e.title + (e.allDay ? ' (all day)' : ' at ' + (e.time || e.start)); }).join('; ');
+        if (_later.length) { _todayStr += ' | later this window (NOT today): ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; '); }
+        parts.push(_todayStr);
       } else if (_later.length) {
         parts.push('today itself is open; upcoming days hold: ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; ') + ' (never present any of these as today)');
       } else {

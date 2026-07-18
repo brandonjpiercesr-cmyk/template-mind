@@ -18,8 +18,9 @@
 // ⬡B:core.find:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+function _memorySelected(){return !!(process.env.MEMORY_BANK_URL||process.env.MEMORY_BANK_KEY);}
+function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 var identityProvenance = require('./identity.provenance.js');
 
 

@@ -14,13 +14,14 @@
 // ⬡B:reach.correctionLoop:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+function _memorySelected(){return !!(process.env.MEMORY_BANK_URL||process.env.MEMORY_BANK_KEY);}
+function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 
 var BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
 var GROQ = process.env.GROQ_API_KEY;
 function rh() { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() }; }
-function wh() { var h = rh(); h['Content-Profile'] = 'abacia_core'; h['Content-Type'] = 'application/json'; h.Prefer = 'return=minimal'; return h; }
+function wh() { var h = rh(); h['Content-Profile'] = _schema(); h['Content-Type'] = 'application/json'; h.Prefer = 'return=minimal'; return h; }
 function ymd() { return new Date().toISOString().slice(0, 10).replace(/-/g, ''); }
 
 async function llm(system, user, tokens) {

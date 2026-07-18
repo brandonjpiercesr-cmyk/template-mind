@@ -51,34 +51,15 @@ function buildStamp(source, type, suffix) {
  * @returns {Promise<{source: string, ok: boolean}>}
  */
 async function writeBead({ hamUid, agentGlobal, source, type, content, summary, importance, edges }) {
-    // ⬡B:core.brain_client:WIRE:the_antiorphan_throw_made_the_orphans:20260718⬡
-    // Founder-caught 20260717. This throw was written to prevent orphan beads. It is
-    // the reason 328,003 of 337,987 beads ARE orphans.
-    // Counted live: 41 files under pai/ raw-fetch the bead table directly. Only 13 of
-    // them have a cycleId anywhere in the file. TWENTY-EIGHT have no lineage to hand
-    // this door even if they wanted to. So the door threw at them, and they climbed
-    // out the window and POSTed straight to _bu()+'/rest/v1/'+_tbl() with no edges at
-    // all. The throw did not stop a single orphan. It manufactured them, by pushing
-    // every caller around the one door that could have prevented them.
-    // A choke point GUARANTEES lineage. It does not demand it. agentGlobal is already
-    // a required parameter of this function, so PRODUCED_BY is always derivable with
-    // zero help from the caller and is never a guess: it names who wrote the bead.
-    // Vocabulary is REQUIRED_EDGE_TYPES per CODA's ruling 20260717 (bead 365943):
-    // "The live data vocabulary wins... RELATES_TO, PRODUCED_BY, and CAUSED_BY...
-    //  Since the JD's edge vocabulary does not match the actual data, it is the live
-    //  data vocabulary that should be used."
-    // Callers that DO have lineage still pass richer edges and are unchanged. This
-    // only catches the ones that would otherwise have been thrown at.
     if (!edges || !Array.isArray(edges) || edges.length === 0) {
-        edges = [{ type: 'PRODUCED_BY',
-                   target: 'pai.agent.' + String(agentGlobal || 'unknown').toLowerCase() }];
+        throw new Error('Orphan bead: edges array must contain at least one typed edge.');
     }
 
     if (!source) {
         throw new Error('writeBead requires a canonical source address in the form AGENT.hamUid.capability');
     }
 
-    // Embed edges inside content (legacy aibe_brain has no edges column; the graph lived in content.edges)
+    // Embed edges inside content (aibe_brain has no edges column; the graph lives in content.edges)
     const payloadContent = (content && typeof content === 'object') ? Object.assign({}, content, { edges: edges }) : { data: content, edges: edges };
 
     const acl_stamp = buildStamp(source, type, '');
@@ -99,32 +80,6 @@ async function writeBead({ hamUid, agentGlobal, source, type, content, summary, 
     // only when writing to a schema that expects it, so legacy writes stay unchanged.
     if (beadTable() !== 'aibe_brain' && bead.spawned_by === undefined) {
         bead.spawned_by = (source && String(source).split('.')[0]) || 'brain.client';
-    }
-    // ⬡B:core.brain_client:WIRE:the_door_was_writing_to_the_old_house:20260717⬡
-    // Founder-caught 20260717. This is THE door: the only writer that validates a
-    // canonical source address, and the one ~56 raw-fetch callers are meant to be
-    // redirected through. It has been writing the graph into content.edges since the
-    // 20260713 cutover, because of the true-then-false comment above it: legacy
-    // aibe_brain genuinely had no edges column. memory_bank.beads DOES. Verified live:
-    // columns are id, ham_uid, agent_global, stamp_type, acl_stamp, source, summary,
-    // content, importance, spawned_by, superseded_by, created_at, edges.
-    // So every bead written through the door landed with edges COLUMN [] and the real
-    // edge buried in a JSON blob no query can reach. Proof, bead 368796 by FUSION:
-    //   edges column  : []
-    //   content.edges : [{"type":"grounds","target":"DC499D0C.judgment_turns"}]
-    // Counted live: 337,987 beads, 0 null, 328,003 with edges = [], only 9,984 (2.95%)
-    // with a real edges column -- and every one of those 9,984 belongs to council
-    // internals (PAI_OUTBOUND_COUNCIL, SHADOW, PAI_REQUEST_GATE, META_COMMENTARY,
-    // WRIT, PAM) written by stageEdges() at pai.outbound.council.js:1907, which only
-    // ever describes the cycle's own plumbing. The knowledge had no graph. The door
-    // was not skipped because it was inconvenient. It was skipped because it was
-    // pointed at the old house, same as ANEW_OWN_CODE_REPOS, same as the /cycle door
-    // dropping identity, same as eanew's watermark. The 20260713 cutover left pointers
-    // behind and this is the fourth one found today.
-    // Same bank-detection pattern as spawned_by directly above. content.edges is kept
-    // exactly as-is so legacy readers and every current caller are unchanged.
-    if (beadTable() !== 'aibe_brain') {
-        bead.edges = edges;
     }
     const url = `${brainUrl()}/rest/v1/${beadTable()}`;
     const headers = {

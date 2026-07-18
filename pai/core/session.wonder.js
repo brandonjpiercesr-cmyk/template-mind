@@ -593,10 +593,17 @@ async function checkDueSessionCalls() {
           continue;
         }
         var callBase = process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
+        var callBody = { hamUid: HAM, reason: callReason,
+          requestId: callRequestId };
+        var callHeaders = require('./pai.outbound.authorization.js')
+          .internalEffectHeaders('/vara/call', callBody);
+        if (!callHeaders) {
+          blocked++;
+          continue;
+        }
         var callResponse = await fetch(callBase + '/vara/call', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ hamUid: HAM, reason: callReason,
-            requestId: callRequestId })
+          method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' },
+            callHeaders), body: JSON.stringify(callBody)
         });
         var callResult = await callResponse.json().catch(function () { return null; });
         var proof = callResult && callResult.councilProof;

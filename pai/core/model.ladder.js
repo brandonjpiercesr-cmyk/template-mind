@@ -15,26 +15,8 @@
 // Validate the requested wire contract at each provider boundary so a malformed
 // verdict falls through to the next authorized provider. If none returns one
 // strict JSON object, deliberate() still returns null and the caller fails closed.
-// ⬡B:core.model_ladder:911:truncated_glm_must_fall_through_she_goes_dumb_on_hard_questions:20260718⬡
-// FOUNDER 911, verified live 20260718: on a HARD multi-part question, GLM (rung 1)
-// enters reasoning mode and spends its ENTIRE token budget thinking, returning
-// finish_reason 'length' with ONE character of actual content. hasAcceptedContent
-// accepted any non-empty string, so that 1-char reply won the ladder and Qwen (which
-// answers the SAME question fully in 21s, finish 'stop', 3423 chars) was never tried.
-// Result: her turn returned no_answer and died silent. She got DUMBER exactly as the
-// question got HARDER. Every easy question passed because GLM finished before it burned
-// out; every hard one died. That is the whole bug behind 'she holds on hard questions.'
-// Fix: a truncated response (finish_reason length/max_tokens) is a FAILURE, not a win,
-// so the ladder falls through to the next rung. Also a real answer has substance: a
-// couple of chars is not an answer. The caller passes finishReason and we judge both.
-function hasAcceptedContent(content, opts, finishReason) {
+function hasAcceptedContent(content, opts) {
   if (typeof content !== 'string' || !content.trim()) return false;
-  // A truncated generation is not an accepted answer. Fall through to the next rung.
-  if (finishReason === 'length' || finishReason === 'max_tokens') {
-    if (content.trim().length < 40) return false;
-  }
-  // Substance floor: an answer under a few characters is a non-answer regardless.
-  if (content.trim().length < 2) return false;
   if (!opts || opts.json !== true) return true;
   var text = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   try {
@@ -79,8 +61,8 @@ async function tryRunPodGLM(system, user, opts) {
     var timeout = opts.realtime === true ? opts.timeout : Math.max(opts.timeout, 45000);
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.GLM_RUNPOD_KEY || process.env.RUNPOD_API_KEY || '') }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
-    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'glm-5.2', via: 'runpod' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'runpod' } : null;
   } catch (e) { return null; }
 }
 async function tryTogetherGLM(system, user, opts) {
@@ -91,8 +73,8 @@ async function tryTogetherGLM(system, user, opts) {
     var r = await fetch('https://api.together.xyz/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
-    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'glm-5.2', via: 'together' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'together' } : null;
   } catch (e) { return null; }
 }
 async function tryOpenRouterGLM(system, user, opts) {
@@ -110,8 +92,8 @@ async function tryOpenRouterGLM(system, user, opts) {
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
-    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'glm-5.2', via: 'openrouter' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'openrouter' } : null;
   } catch (e) { return null; }
 }
 async function tryOrnith(system, user, opts) {
@@ -127,8 +109,8 @@ async function tryOrnith(system, user, opts) {
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.ORNITH_KEY || process.env.RUNPOD_API_KEY || '') },
       body: JSON.stringify(body), signal: requestSignal(opts, Math.min(opts.timeout, 10000)) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
-    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'ornith', via: 'runpod' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    return hasAcceptedContent(c, opts) ? { content: c, model: 'ornith', via: 'runpod' } : null;
   } catch (e) { return null; }
 }
 async function tryQwen(system, user, opts) {
@@ -137,8 +119,8 @@ async function tryQwen(system, user, opts) {
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature }), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content; var _fr = (((d.choices || [])[0] || {}).finish_reason);
-    return hasAcceptedContent(c, opts, _fr) ? { content: c, model: 'qwen3-235b', via: 'openrouter' } : null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    return hasAcceptedContent(c, opts) ? { content: c, model: 'qwen3-235b', via: 'openrouter' } : null;
   } catch (e) { return null; }
 }
 // ⬡B:core.model_ladder:CLEANUP:groq_runner_deleted_stack_spotless:20260717⬡
@@ -195,13 +177,6 @@ async function rankedAccepted(factories, opts) {
 // floor last, only if the open-weight authorized set is unreachable.
 async function deliberate(system, user, options) {
   var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: 25000, json: false }, options || {});
-  // ⬡B:core.model_ladder:LAW:groq_out_of_the_default_order_perma_ban:20260717⬡
-  // FOUNDER LAW 20260717: no Groq anymore. It was still the default last rung here.
-  // The three open-weight rungs stand, verified live tonight: Qwen answers in ~2s,
-  // GLM 5.2 serves SHADOW's judge from Render right now, Ornith is the coder. The
-  // floor is removed from the default order. It is NOT deleted from the runner map,
-  // so a deliberate MODEL_LADDER_ORDER that still names 'groq' keeps working during
-  // the migration of the direct call sites, but nothing reaches it by default.
   var order = (process.env.MODEL_LADDER_ORDER || 'glm,ornith,qwen').split(',').map(function (s) { return s.trim(); });
   // \u2b21B:core.model_ladder:FIX:glm_provider_order_is_env_truth:20260717\u2b21
   // Live receipt: the RunPod pod is serving glm4:9b, a small quantized model, and
@@ -249,11 +224,6 @@ async function deliberate(system, user, options) {
     var res = await fn();
     if (res) return res;
   }
-  // ⬡B:core.model_ladder:LAW:silence_over_hollow_never_the_banned_floor:20260717⬡
-  // Every authorized open-weight rung failed. The doctrine answer is null: the channel
-  // stays silent rather than send a hollow reply, and it NEVER quietly drops to a banned
-  // provider to avoid an empty. A null here is a real signal that the open-weight rungs
-  // need attention, not a reason to resurrect Groq.
   return null;
 }
 

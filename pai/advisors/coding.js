@@ -220,20 +220,16 @@ async function generateVerifiedLead(prompt, armory, complete, options) {
     evidenceMode:'model_retry' };
 }
 
-// \u2b21B:advisors.coding:WIRE:coda_off_llama_onto_the_authorized_ladder:20260717\u2b21
-// Founder caught this live: CODA, the head of his coding department, ran on
+// ⬡B:advisors.coding:WIRE:coda_off_llama_onto_the_authorized_ladder:20260717⬡
+// Founder caught this live: CODA, head of his coding department, ran
 // groq/llama-3.3-70b-versatile as her PRIMARY. Not a floor, first choice. Every
-// ruling she has ever handed back came from the one model he named as banned,
-// and it retires from Groq on 20260816 regardless.
-// This is a DUPLICATE, not an oversight. advisors/dispatch.js carried the exact
-// same private llm() with the exact same groq/llama-3.3-70b-versatile pair, and
-// it was corrected onto the ladder on 20260715 with a comment naming this same
-// founder complaint. That fix landed in one file and missed its twin here, so
-// the shared advisor path went open-weight and the coding lead stayed on Llama.
-// Catching duplicated logic like this is literally MACE's written job, and MACE
-// is a scaffold whose handle() returns {processed:true}.
-// Same door dispatch.js already walks through, nothing new invented:
-// core/model.ladder.js -> GLM 5.2, Ornith, Qwen, Groq only as the last floor.
+// ruling she ever handed back came from the one model he banned, and Groq retires
+// it 20260816. This was a DUPLICATE, not an oversight: advisors/dispatch.js held
+// the identical private llm() with the identical pair, was moved onto the ladder
+// on 20260715 with a comment naming this same complaint, and its twin here was
+// missed. Catching duplicated logic is literally MACE's written job, and MACE is a
+// scaffold whose processTask returns {processed:true}.
+// Same door dispatch.js already walks through. Nothing new invented.
 async function llm(user, founderCtx) {
   var system = 'You are CODA, the Coding advisor, head of the coding department in a life-assistant system. You deliberate over '
     + 'department state: task queue, wiring debt, build pass rates, drain receipts. Report like a department head: what '

@@ -1,23 +1,8 @@
 // ⬡B:core.tool.loop:MODULE:pai_executor:20260630⬡
-var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '3000', 10);
-// ⬡B:core.tool_loop:WIRE:coda_was_deciding_on_five_percent_of_the_file:20260717⬡
-// Founder-caught 20260717. The consult_coda handler compacted every repository read
-// to parsed.files.slice(0, 2) and excerpt.slice(0, 900). Every coding decision CODA
-// has ever made was made on at most 1800 characters. pai/core/find.js is 17,835
-// characters, so she was asked to name exact paths and concrete acceptance checks
-// for a file she could see 5.0% of -- and then held, correctly, for being vague
-// about it. Twice today. She said it herself when asked straight: "I was vague
-// because 2 files at 900 characters is not enough to name exact paths and concrete
-// acceptance checks... I would need to see the complete and untruncated code of the
-// relevant files, including pai/core/find.js, as well as any other files that it
-// depends on or interacts with."
-// Default derived from her own file, not a guess: 20000 clears find.js (17,835)
-// whole. 4 files covers "find.js as well as any other files it depends on". Both
-// env-driven, same pattern as REPAIR:configurable_token_cap:20260707 above, so the
-// budget is tunable without a deploy and no number is hardcoded into judgment.
-var CODA_READ_EXCERPT_CHARS = parseInt(process.env.CODA_READ_EXCERPT_CHARS || '20000', 10);
-var CODA_READ_MAX_FILES = parseInt(process.env.CODA_READ_MAX_FILES || '4', 10); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
+var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '3000', 10); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
+var voiceCallBinding = require('./voice.call.binding.js');
+var reachPolicyContract = require('./reach/policy.contract.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
 // Real incident: GUIDE pass 2 (strict JSON, 12 fields per destination) was
 // truncated mid-JSON by the one global 700 cap and died as
@@ -40,10 +25,13 @@ function shouldIncludeWorldContext(channel, identity, hamUid, question) {
   if (identity && identity.council_context &&
       identity.council_context.mode === 'voice' &&
       identity.council_context.include_world_context === true) return true;
-  // Suppress ambient fusion only for the one class of question whose complete
-  // source is the signed exact-call handoff. Later questions in the same call
-  // keep normal exact-HAM world grounding.
-  return !voiceCallContextSatisfiesTurn(channel, hamUid, question, identity);
+  // Suppress ambient fusion only when the complete answer source is already
+  // bound to this signed call turn: its exact purpose, or receipt of a closed
+  // hearing check, or a closed farewell. Later questions keep normal exact-HAM
+  // world grounding.
+  return !(voiceCallContextSatisfiesTurn(channel, hamUid, question, identity) ||
+    voiceHearingContextSatisfiesTurn(channel, hamUid, question, identity) ||
+    voiceFarewellContextSatisfiesTurn(channel, hamUid, question, identity));
 }
 
 function verifiedVoiceCallContext(identity, hamUid) {
@@ -62,6 +50,7 @@ function verifiedVoiceCallContext(identity, hamUid) {
       item.turn_id !== context.turn_id || identityRequestId !== context.turn_id ||
       result.call_id !== context.call_id || result.session_id !== context.session_id ||
       result.turn_id !== context.turn_id ||
+      context.call_binding_schema !== voiceCallBinding.SCHEMA ||
       result.binding_digest !== context.call_binding_digest ||
       typeof result.call_purpose !== 'string' || !result.call_purpose.trim() ||
       typeof result.committed_opener !== 'string' || !result.committed_opener.trim() ||
@@ -76,10 +65,7 @@ function verifiedVoiceCallContext(identity, hamUid) {
       !/^[A-Za-z0-9._:-]{8,220}$/.test(String(item.cycle_id || '')) ||
       !/^[a-f0-9]{64}$/.test(String(item.receipt_digest || '')) ||
       !/^[a-f0-9]{64}$/.test(String(context.call_binding_digest || ''))) return null;
-  var expectedDigest = require('node:crypto').createHash('sha256').update(JSON.stringify([
-    expectedHam, item.session_id, item.call_id, item.turn_id, result.call_purpose,
-    result.committed_opener, item.request_id, item.cycle_id, item.receipt_digest
-  ]), 'utf8').digest('hex');
+  var expectedDigest = voiceCallBinding.fromEvidence(expectedHam, item, result);
   return expectedDigest === context.call_binding_digest ? result : null;
 }
 
@@ -105,12 +91,41 @@ function verifiedVoiceCallPurposeAnswer(channel, hamUid, question, identity) {
   return naturalPurpose ? handoff.call_purpose : handoff.committed_opener;
 }
 
+function voiceHearingContextSatisfiesTurn(channel, hamUid, question, identity) {
+  return !!verifiedVoiceHearingAnswer(channel, hamUid, question, identity);
+}
+
+function verifiedVoiceHearingAnswer(channel, hamUid, question, identity) {
+  if (String(channel || '').toLowerCase() !== 'voice') return null;
+  if (!verifiedVoiceCallContext(identity, hamUid) ||
+      !voiceConversationPolicy.isHearingCheck(question)) return null;
+  return voiceConversationPolicy.HEARING_ACKNOWLEDGEMENT;
+}
+
+function voiceFarewellContextSatisfiesTurn(channel, hamUid, question, identity) {
+  return !!verifiedVoiceFarewellAnswer(channel, hamUid, question, identity);
+}
+
+function verifiedVoiceFarewellAnswer(channel, hamUid, question, identity) {
+  if (String(channel || '').toLowerCase() !== 'voice') return null;
+  var context = identity && identity.council_context;
+  var hasPendingField = context && Object.prototype.hasOwnProperty.call(
+    context, 'pending_effects');
+  if ((hasPendingField && (!Array.isArray(context.pending_effects) ||
+      context.pending_effects.length > 0)) ||
+      !verifiedVoiceCallContext(identity, hamUid) ||
+      !voiceConversationPolicy.isFarewell(question)) return null;
+  return voiceConversationPolicy.FAREWELL_ACKNOWLEDGEMENT;
+}
+
 function voiceConversationalNoGenericLookup(channel, hamUid, question, identity) {
   if (String(channel || '').toLowerCase() !== 'voice' ||
       !verifiedVoiceCallContext(identity, hamUid)) return false;
   if (voiceCallContextSatisfiesTurn(channel, hamUid, question, identity)) return true;
   var exact = String(question || '').trim().toLowerCase().replace(/[\u2018\u2019]/g, "'");
   if (voiceConversationPolicy.isPureGreeting(exact)) return true;
+  if (voiceConversationPolicy.isHearingCheck(exact)) return true;
+  if (voiceFarewellContextSatisfiesTurn(channel, hamUid, exact, identity)) return true;
   // Keep this deliberately narrow. These shapes ask only for A'NU's present
   // conversational response; questions about people, work, calendar, or other
   // real-world facts continue through the deterministic lookup branches.
@@ -456,61 +471,17 @@ function scrubLeakedToolProtocol(value) {
 // Named exact-HAM rows are question-bound evidence, so later tool traffic must
 // not evict them from SHADOW's eight-item window. De-duplicate without changing
 // the actual evidence objects or manufacturing any new content.
-// ⬡B:core.tool.loop:FIX:the_cap_was_evicting_the_facts_the_draft_was_built_from:20260717⬡
-// FOUND BY SHADOW ITSELF, 20260717, on the first live use of consult_mace. Her turn
-// called consult_mace twice, once per repo, exactly as a duplication check must. SHADOW
-// then held her and said why, verbatim: "only one MACE read result is present in the
-// bound evidence and it shows sha 09a6817072a3... and size 39471 for the first file,
-// with no evidence for the second file's sha or size."
-//
-// The gate was right and the cause was here. A flat cap of 8 across ALL evidence, filled
-// identity-first, then named-agent, then the turn's own tool results LAST. Reproduced
-// cold before touching a line: 6 identity items plus 4 tool results, and BOTH
-// consult_mace reads are evicted. consult_coda and find_in_brain survive only because
-// they happen to be pushed earlier.
-//
-// This is not a MACE bug and it is not a cap-size bug. Tool results from THIS turn are
-// the facts the draft was literally built from. Evicting them makes SHADOW judge a draft
-// against evidence it was never handed, so it must hold answers that are TRUE. That is a
-// guaranteed false hold, and it gets worse the more identity boilerplate a HAM carries.
-// It also silently punishes exactly the behaviour this system wants most: calling a tool
-// more than once to compare two things. A duplication check is BY DEFINITION two reads.
-//
-// THE RULE: the current turn's tool results are never dropped. They are ground truth, not
-// a nice-to-have. Everything else fills whatever room is left, in the old priority order,
-// under a cap that is now env-tunable instead of a magic 8 nobody can see.
 function prioritizeVerifiedEvidence(primary, secondary) {
-  var cap = Number(process.env.EVIDENCE_BIND_MAX || 16);
-  if (!(cap > 0)) cap = 16;
   var seen = Object.create(null);
   var out = [];
-  function isCurrentTurnToolFact(item) {
-    return !!(item && typeof item === 'object' &&
-      item.provenance === 'pai.current_turn.execute_tool');
-  }
-  function take(item) {
-    if (item == null) return false;
-    var key;
-    try { key = JSON.stringify(item); } catch (e) { key = String(item); }
-    if (seen[key]) return false;
-    seen[key] = true;
-    out.push(item);
-    return true;
-  }
-  var groups = [primary, secondary].map(function (group) {
-    return Array.isArray(group) ? group : [];
-  });
-  // Pass one: every tool fact this turn actually produced, in call order, uncapped.
-  // If the model called it, the judge sees it. No exceptions.
-  groups.forEach(function (group) {
-    group.forEach(function (item) { if (isCurrentTurnToolFact(item)) take(item); });
-  });
-  // Pass two: everything else, original priority order, into whatever room is left.
-  groups.forEach(function (group) {
-    group.forEach(function (item) {
-      if (isCurrentTurnToolFact(item)) return;
-      if (out.length >= cap) return;
-      take(item);
+  [primary, secondary].forEach(function (group) {
+    (Array.isArray(group) ? group : []).forEach(function (item) {
+      if (out.length >= 8 || item == null) return;
+      var key;
+      try { key = JSON.stringify(item); } catch (e) { key = String(item); }
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push(item);
     });
   });
   return out;
@@ -523,79 +494,7 @@ function prioritizeVerifiedEvidence(primary, secondary) {
 // add one blind.
 var AUTO_SCREEN_TOOLS = ['calendar_read'];
 
-// ⬡B:tool.loop:LAW:if_clair_can_reach_a_station_and_she_cannot_clair_failed:20260717⬡
-// FOUNDER LAW 20260717, verbatim: "Make sure you fix her so she can touch them.
-// She can do everything. It's all about her. If there's something that you can do
-// that she can't do, you have failed at your job."
-// The three stations were real and live on aibebase this whole time and she had no
-// tool for any of them. What existed instead: a regex that noticed a cook-off
-// QUESTION and injected a synthetic find_in_brain result so she could TALK about one.
-// She could describe the contest. She could not hold one. His word for that shape is
-// exact: gimmick, call and response.
-// Nothing invented here. These mirror advisors/dispatch.js realCookoff and
-// realWonderCompete, the same contracts the advisers already use.
-// ⬡B:tool.loop:WIRE:consult_mace_her_fifteen_hands_become_yours:20260717⬡
-// A'NU ruled this live, 20260717, armed by her own assemble_bcw call, SHADOW PASS on
-// 7 claims, CODA consulted. Her words: "Give your world a tool that calls MACE's
-// existing live routes, so her fifteen hands become your hands and nothing gets
-// rebuilt. This wins because it honors the founder's law of not rebuilding what
-// already exists and works." CLAIR agreed, so it moved.
-//
-// THE BOOTSTRAP WAS WRONG ABOUT MACE AND SO WAS CLAIR. Both said she was a scaffold
-// returning {processed:true}. Read live: MACE is 58,225 bytes with fifteen real tool
-// routes, a latch, a static deny scan, path denial and hard-breach detection. Her
-// directory says state WIRED, wonder_verdict WONDER, "confirmed by both legacy and
-// reforge audits independently". She shipped three real commits on 20260627. The
-// MACEAgent.js "stub" everyone cited says so in its own body: "MACE work executes
-// through AIR tool dispatch, not through handle()." Nobody read the comment inside
-// the thing they called empty.
-//
-// She is not a stub. She is a STRANDED WONDER. Zero files named mace exist in this
-// world's repo, or the builder's, or the watcher's. She lives in the older stack, and
-// a live POST tonight had her read this world's own coding.js in one call. She could
-// always see us. Nobody here had her number. Same disease as ORNITH_MODEL and the
-// cook-off receipts: the code moved and nothing else followed.
-//
-// WHY THIS IS THE WONDER AND NOT A CONVENIENCE. Her JD, written 20260216: she
-// identifies code duplication and extracts common patterns, and she does not just
-// patch symptoms. On 20260717 duplication cost two live incidents in one night: the
-// coding adviser kept a hardcoded banned model for two days after its twin was
-// corrected, and a banned search provider survived in a second copy of the same file
-// after the first was cleaned. Both are read-two-files-and-compare. That is exactly
-// what read_file and list_files across ANY repo make possible and what read_own_code,
-// scoped by fuzzy search to a fixed repo list, cannot do.
-//
-// SCOPE IS HER OWN LATCH, NOT CLAIR'S OPINION. Verified live tonight: write_file
-// returns 403 mace_write_disabled, "Default OFF on prod". MACE guards her own write,
-// commit, deploy, execute and env hands. Only the read hands are open, so only the
-// read hands are wired here. render_env_put_full in particular has wiped
-// ANTHROPIC_API_KEY before. Opening MACE's write side is the founder's env flip on
-// her service, not a tool CLAIR adds to a mind.
 var TOOLS = [
-  {type:'function',function:{name:'consult_mace',description:'MACE, Master Architecture and Code Engine, the CODING department lead. Her real hands, live. '
-    +'Use her to READ ANY REPOSITORY, not just your own: action "read_file" returns a whole real file with its sha and size, action "list_files" returns every real entry in a directory. '
-    +'THIS IS THE DUPLICATION CATCHER. When a fix lands in one file, use her to read the same function in every other file that might hold a twin, and compare them yourself before saying a thing is fixed. '
-    +'Two live incidents on 20260717 were exactly this: a fix landed in one file and an identical twin in another kept the broken code. '
-    +'Her write, commit, deploy and env hands are latched OFF by her own service and are not offered here. Read-only.',
-    parameters:{type:'object',properties:{
-      action:{type:'string',enum:['read_file','list_files'],description:'read_file for one whole file, list_files for a directory listing'},
-      repo:{type:'string',description:'owner/name, e.g. brandonjpiercesr-cmyk/template-mind or brandonjpiercesr-cmyk/anew'},
-      path:{type:'string',description:'file path for read_file, directory path for list_files'},
-      ref:{type:'string',description:'branch, defaults to main'}},
-      required:['action','repo','path']}}},
-  {type:'function',function:{name:'assemble_bcw',description:'ARM YOURSELF BEFORE YOU BUILD. Calls the real BCW station (Building Context Window). '
-    +'Returns the live doctrine, the standards, the burn book of past mistakes, the proof checklist, and a pathway scan of what ALREADY EXISTS on this topic, '
-    +'so existing ground gets upgraded and never twinned. BCW core rule: check first, never duplicate. '
-    +'Use this BEFORE proposing or judging any build, agent, or wonder. Never ask anyone to paste context at you, go get it yourself.',
-    parameters:{type:'object',properties:{topic:{type:'string',description:'what the build is about, e.g. "AIR" or "model ladder" or "FIND agent"'}},required:['topic']}}},
-  {type:'function',function:{name:'run_cookoff',description:'RUN A REAL CODING COOK-OFF. One build task, three contestants (Ornith on RunPod, GLM 5.2, Opus 4.8). Fable 5 reads all three, grades on the rubric, writes course corrections and names a winner. Fable is the JUDGE, never a contestant. '
-    +'Rubric: correctness, completeness, doctrine adherence, cost, craft. This is a REAL contest that really runs and really stamps a receipt in your bank, not a description of one. '
-    +'Use it when a build task has more than one honest answer and you want the best one proven instead of chosen. Takes up to 150 seconds.',
-    parameters:{type:'object',properties:{task:{type:'string',description:'the exact build task the three contestants compete on'}},required:['task']}}},
-  {type:'function',function:{name:'run_wonder_games',description:'RUN THE WONDER GAMES. Scores existing candidates head to head on a real task and lets a seat be earned or lost on CANON-graded runs. '
-    +'Contestants are the authorized open-weight set: Ornith 35B, GLM 5.2, Qwen 3. '
-    +'Use it to decide whether something is actually a wonder yet instead of asserting that it is. Takes up to 150 seconds.',
-    parameters:{type:'object',properties:{task:{type:'string',description:'the task the candidates compete on'}},required:['task']}}},
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
@@ -838,72 +737,6 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       await runtimeCancellationRequested(runtime)) {
     return cancelledToolResult(name);
   }
-  // ⬡B:tool.loop:WIRE:mace_real_routes_verified_live_20260717⬡
-  // Exact contracts, each confirmed with a real live POST before this was written:
-  //   POST /api/mace/read_file  {repo,path,ref} -> {ok,repo,path,ref,sha,size,encoding,content_text,source_url}
-  //   POST /api/mace/list_files {repo,path,ref} -> {ok,repo,path,ref,count,entries[]}
-  // Nothing guessed. Read-only: MACE latches her own write side at 403.
-  if (name === 'consult_mace') {
-    var _maceBase = process.env.MACE_URL || process.env.ABABASE_URL || 'https://ababase.onrender.com';
-    var _act = String(args.action || '').trim();
-    if (_act !== 'read_file' && _act !== 'list_files') {
-      return JSON.stringify({ok:false,note:'MACE read hands are read_file and list_files. Her write, commit, deploy and env hands are latched off at her own service.'});
-    }
-    var _repo = String(args.repo || '').trim(), _path = String(args.path || '').trim();
-    if (!_repo || !_path) return JSON.stringify({ok:false,note:'need repo and path'});
-    try {
-      var _m = await fetch(_maceBase + '/api/mace/' + _act, { method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ repo:_repo, path:_path, ref: String(args.ref || 'main') }),
-        signal: AbortSignal.timeout(60000) }).then(function (x) { return x.json(); });
-      if (!_m || _m.ok !== true) return JSON.stringify({ok:false,reason:(_m && (_m.error || _m.reason)) || 'mace_no_result',via:'MACE'});
-      if (_act === 'list_files') {
-        return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,count:_m.count,
-          entries:(_m.entries||[]).slice(0,200)});
-      }
-      return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,sha:_m.sha,size:_m.size,
-        content:String(_m.content_text||'').slice(0, Number(process.env.MACE_READ_CHARS||20000)),
-        truncated: String(_m.content_text||'').length > Number(process.env.MACE_READ_CHARS||20000),
-        note:'Read by MACE, the CODING department lead. If you are checking a fix, read the twin in the other repo before you call it done.'});
-    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e),via:'MACE'}); }
-  }
-  // ⬡B:tool.loop:LAW:her_hands_on_the_real_stations:20260717⬡
-  // Real calls to the real live stations, same base resolver and same request shapes
-  // advisors/dispatch.js already uses. Nothing new invented.
-  if (name === 'assemble_bcw' || name === 'run_cookoff' || name === 'run_wonder_games') {
-    var _stationBase = process.env.STATIONS_URL || process.env.AIBEBASE_URL
-      || process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
-    try {
-      if (name === 'assemble_bcw') {
-        var _topic = String(args.topic || '').trim();
-        if (!_topic) return JSON.stringify({ok:false,note:'no topic given'});
-        var _b = await fetch(_stationBase + '/bcw?topic=' + encodeURIComponent(_topic),
-          { signal: AbortSignal.timeout(90000) }).then(function (x) { return x.json(); });
-        if (!_b || !_b.bcw) return JSON.stringify({ok:false,note:'BCW station returned nothing'});
-        return JSON.stringify({ok:true,topic:_topic,chars:_b.chars,armory:String(_b.bcw).slice(0,14000)});
-      }
-      if (name === 'run_cookoff') {
-        var _task = String(args.task || '').trim();
-        if (!_task) return JSON.stringify({ok:false,note:'no task given'});
-        var _c = await fetch(_stationBase + '/cookoff/run', { method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ task:_task, invoked_by:'anew_cycle' }),
-          signal: AbortSignal.timeout(150000) }).then(function (x) { return x.json(); });
-        if (!_c || !_c.ok) return JSON.stringify({ok:false,reason:(_c && _c.reason) || 'cookoff_no_result'});
-        var _j = (_c.result && _c.result.judge) || {};
-        return JSON.stringify({ok:true,winner:_c.winner,why:_j.why||'',correction:_j.correction||'',
-          note:'Real cook-off. Fable 5 judged three real contestants and the receipt is stamped in your bank.'});
-      }
-      var _wtask = String(args.task || '').trim();
-      if (!_wtask) return JSON.stringify({ok:false,note:'no task given'});
-      var _w = await fetch(_stationBase + '/wonder-games/compete', { method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ task:_wtask, hamUid: hamUid }),
-        signal: AbortSignal.timeout(150000) }).then(function (x) { return x.json(); });
-      if (!_w) return JSON.stringify({ok:false,reason:'wonder_games_no_result'});
-      return JSON.stringify({ok:true,result:_w});
-    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
-  }
   if (name === 'activate_roadmap_task' && (!runtime || runtime.codaVerified !== true)) {
     return JSON.stringify({ok:false,reason:'verified_current_turn_coda_required',tool:name});
   }
@@ -977,10 +810,9 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         try {
           var parsed = JSON.parse(raw);
           if (!parsed || !parsed.found || !Array.isArray(parsed.files)) return parsed;
-          return { ok:parsed.ok, found:true, query:terms[index],
-            files:parsed.files.slice(0, CODA_READ_MAX_FILES).map(function (file) {
+          return { ok:parsed.ok, found:true, query:terms[index], files:parsed.files.slice(0, 2).map(function (file) {
             return { file:file.file, startLine:file.startLine, endLine:file.endLine,
-              excerpt:String(file.excerpt || '').slice(0, CODA_READ_EXCERPT_CHARS) };
+              excerpt:String(file.excerpt || '').slice(0, 900) };
           }) };
         } catch (eCompact) { return { ok:false, query:terms[index], note:'unparseable repository result' }; }
       });
@@ -1377,48 +1209,6 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       source:'pai.tool.write.'+(args.ham_uid||hamUid)+'.'+Date.now(),
       acl_stamp:'\u2b21B:pai.tool:RESULT:tool_write:20260630\u2b21',
       summary:args.summary,content:args.content,importance:args.importance||7};
-    // ⬡B:core.tool_loop:WIRE:knowledge_beads_are_born_with_no_edges:20260717⬡
-    // Founder-caught 20260717. Counted live: 337,987 beads, 0 null edges, and
-    // 328,003 with edges = []. Only 9,984 carry a real edge -- 2.95% -- and every
-    // one of those is PAI_STAGE, CYCLE_RECEIPT or REQUEST_CLAIM. Cycle telemetry.
-    // ZERO FINDING, DECISION, TASK or DOCTRINE beads carry an edge, because this
-    // writer -- the one every knowledge bead is born through -- never had an edges
-    // field at all. The graph the doctrine says FIND must hop was never written for
-    // knowledge. Only for plumbing.
-    // CODA ruled on this directly, ok:true through a full council, after first
-    // deciding the opposite on CLAIR's false 'graph is complete' evidence:
-    //   "Yes, T3 and T4 change my decision... a traverser would not be effective in
-    //    this context. Therefore, piece one should be whatever writes edges onto
-    //    knowledge beads."
-    //   "The live data vocabulary wins... RELATES_TO, PRODUCED_BY, and CAUSED_BY,
-    //    which are different from the edge types mentioned in the JD (contains,
-    //    related_to, part_of). Since the JD's edge vocabulary does not match the
-    //    actual data, it is the live data vocabulary that should be used."
-    // So: live vocabulary, not the JD's. Same shape stageEdges() already writes at
-    // pai.outbound.council.js:1907, same REQUIRED_EDGE_TYPES whitelist at :26.
-    // Targets are verified resolvable: 'pai.cycle.' + cycleId returns real rows.
-    // Cold code, zero LLM, no new call. If lineage is absent the bead writes exactly
-    // as it does today with no edges -- this can never block a write.
-    // Live test 20260717 caught this: bead 365982 was written after the first
-    // version of this wiring deployed and STILL came out with edges []. Reason:
-    // write_to_brain is a MUTATION, so GUARD:mutations_release_after_council_commit
-    // :20260715 queues it and the deliberation runtime at :2661 never executes it.
-    // It runs on the commit path at :3384, which builds a FRESH runtime object with
-    // parentCycleId / parentRequestId -- different key names. runtime.cycleId was
-    // undefined there, so nothing attached. Read both shapes.
-    var _edgeCycle = runtime && (runtime.cycleId || runtime.parentCycleId);
-    var _edgeRequest = runtime && (runtime.requestId || runtime.parentRequestId);
-    var _beadEdges = [];
-    if (_edgeCycle) {
-      _beadEdges.push({ type:'RELATES_TO', target:'pai.cycle.' + _edgeCycle });
-    }
-    if (_edgeRequest) {
-      _beadEdges.push({ type:'CAUSED_BY', target:'pai.request.' + _edgeRequest });
-    }
-    if (_beadEdges.length) {
-      _beadEdges.push({ type:'PRODUCED_BY', target:'pai.tool.write_to_brain' });
-      bead.edges = _beadEdges;
-    }
     try {
       var brainWriteCancelled = await cancelBeforeEffect(name, runtime);
       if (brainWriteCancelled) return brainWriteCancelled;
@@ -1630,7 +1420,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // one instance of the real principle: she reaches a real capability whenever it helps,
     // in ANY turn, not one hardcoded path. Same keyless /os/weather source the arrival uses.
     try {
-      var _wxSelf = process.env.OS_API_BASE || 'https://aibebase.onrender.com';
+      var _wxSelf = process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
       var _place = String((args && args.place) || '').trim();
       if (!_place) return JSON.stringify({ ok:false, error:'no place given' });
       var _wr = await fetch(_wxSelf + '/os/weather?place=' + encodeURIComponent(_place))
@@ -1955,6 +1745,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
 // identity: the ATMOSPHERE gate's wake envelope. When a channel has already resolved
 // who this is, the Memory Bank must trust that, the founder was greeted as "unknown, trust
 // tier 0" over live text while the very same request had resolved him at tier 10.
+function structuredReachPolicyMode(channel,identity){
+  return String(channel||'').toLowerCase()==='reach'&&!!(identity&&
+    identity.outbound_finalize===true&&identity.council_context&&
+    identity.council_context.mode==='reach_policy_decision'&&
+    identity.council_context.outbound_finalize===true&&identity.delivery&&
+    identity.delivery.external===false);
+}
+
 async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
@@ -1963,6 +1761,26 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // face replies with ms:0 and no cycle lineage. A new-world mind may be integrated as
   // a tool or contributor inside this cycle, but it must never replace this choke point.
   var t0=Date.now(),GROQ=process.env.GROQ_API_KEY;
+  var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
+  function _validStructuredReachPolicy(value){
+    return!!reachPolicyContract.parseProposal(value);
+  }
+  function _structuredProviderResult(result){
+    if(!_structuredReachPolicy||!result||result.error)return result;
+    if(!Array.isArray(result.choices)||!result.choices.length)
+      return{error:{code:'reach_policy_provider_contract'}};
+    var choice=result.choices[0]||{};
+    var modelMessage=choice.message||{};
+    if(choice.finish_reason==='length'||choice.finish_reason==='content_filter'||
+        modelMessage.refusal||(Array.isArray(modelMessage.tool_calls)&&
+          modelMessage.tool_calls.length))return{error:{code:'reach_policy_provider_contract'}};
+    var canonical=reachPolicyContract.canonicalize(modelMessage.content);
+    if(!canonical.ok)return{error:{code:'reach_policy_provider_contract'}};
+    modelMessage.content=canonical.text;
+    choice.message=modelMessage;
+    result.choices[0]=choice;
+    return result;
+  }
   var _voiceCancellation = identity && identity._voiceCancellation;
   var _turnAbortSignal = _voiceCancellation && _voiceCancellation.signal;
   async function _turnCancelled(force) {
@@ -2053,46 +1871,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
       headers:{apikey:_BK,Authorization:'Bearer '+_BK,'Accept-Profile':_schema(),
         'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
-      // ⬡B:core.tool_loop:WIRE:cycle_step_is_forty_percent_of_the_orphans:20260718⬡
-      // Founder-caught 20260717. Measured live against the real bank: in a 1,000-row
-      // sample of beads carrying edges = [], agent_global PAI is 396 of them (39.6%)
-      // and stamp_type CYCLE_STEP is 393 (39.3%). ONE writer is four out of every ten
-      // orphans in a 337,987-bead graph that is 2.95% connected.
-      // This writer already HOLDS the lineage in both hands: _cycleId is in its own
-      // source and inside its content, and _requestId is in scope from line 1770. It
-      // just never made an edge out of either.
-      // CAUSED_BY points at the request that caused the cycle -- verified resolvable
-      // live: 'pai.request.DC499D0C.1784321150623.r7ggb7.request' returns a real
-      // REQUEST_CLAIM row. No RELATES_TO to the cycle here, on purpose: this bead's
-      // OWN source IS 'pai.cycle.'+_cycleId, so that edge would be a self-reference.
-      // That is why PAI_STAGE can carry RELATES_TO (its source is the cycle plus a
-      // stage suffix) and CYCLE_STEP cannot.
-      // Vocabulary is REQUIRED_EDGE_TYPES per CODA's ruling 20260717 (bead 365943):
-      // live data wins, RELATES_TO / PRODUCED_BY / CAUSED_BY, not the JD's
-      // contains/related_to/part_of which do not exist in the data.
-      // Cold code. No LLM. No new call. Guarded: if there is no requestId the bead
-      // writes exactly as it does today, and this fetch is already .catch()'d so it
-      // can never take a turn down.
       body:JSON.stringify({ham_uid:hamUid,agent_global:'PAI',stamp_type:'CYCLE_STEP',
         source:'pai.cycle.'+_cycleId,
-        // ⬡B:core.tool_loop:FIX:every_cycle_step_gets_lineage:20260718⬡
-        // First cut of this wiring only attached edges when _requestId was truthy.
-        // Measured live right after it deployed: CYCLE_STEP went 0% -> 37.5%
-        // connected, not 100%. _requestId is assigned at :1998 from
-        // _requestIdCandidate and is only kept when that candidate is a string, so
-        // on most turns it is simply absent and the guard correctly wrote nothing.
-        // That is the exact mistake brain.client.js made for months: DEMAND lineage
-        // from a caller that does not have it, and get an orphan. The door was fixed
-        // 20260718 to DERIVE what it can (⬡B:core.brain_client:WIRE:
-        // the_antiorphan_throw_made_the_orphans:20260718⬡) and this must do the same.
-        // PRODUCED_BY needs nothing from anybody and is never a guess: it names the
-        // function that wrote the bead. CAUSED_BY is added on top only when there is
-        // a real requestId to point at. No RELATES_TO to the cycle: this bead's own
-        // source IS 'pai.cycle.'+_cycleId and that would be a self-loop.
-        edges:(_requestId
-          ? [{type:'CAUSED_BY',target:'pai.request.'+_requestId},
-             {type:'PRODUCED_BY',target:'pai.tool.loop.stamp_step'}]
-          : [{type:'PRODUCED_BY',target:'pai.tool.loop.stamp_step'}]),
         acl_stamp:'\u2b21B:core.tool.loop:CYCLE_STEP:'+step+':'+Date.now()+'\u2b21',
         summary:'[CYCLE '+_cycleId.slice(-8)+'] '+step+(detail?': '+String(detail).slice(0,100):''),
         content:JSON.stringify({cycleId:_cycleId,step:step,channel:channel,
@@ -2125,13 +1905,34 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _verifiedRealNumbers = [];
   if (await _turnCancelled()) return _turnCancelledResult('before_memory');
   if (!GROQ) return {ok:false,reason:'no_groq_key',_dbg:'GROQ_API_KEY not in process.env'};
+  var _structuredReachSystemPrompt =
+    'INTERNAL CLOSED-WORLD REACH POLICY. Decide only from the server-owned policy question and the exact deliberation evidence packet in this turn. Ambient Memory Bank rows, latest activity, contributors, prior conversation, screen state, and fused world summaries are intentionally excluded and must not be inferred. Return only the required strict JSON object.';
   var _fcwT0=Date.now();
-  var fcw=await buildMemoryBank(hamUid,channel,message,identity).catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
+  // The policy finalizer already receives one normalized, digest-bound evidence
+  // wall from cycle.decision. Running the generic Memory Bank builder here would
+  // perform unrelated recent/global reads, named-agent extraction, and a MINUTES
+  // write before judgment. Keep this internal lane closed-world while preserving
+  // the complete PAI model, council, STAMP, and durable readback path.
+  var _isolatedHamTier = Number(identity &&
+    (identity.trust_level != null ? identity.trust_level : identity.tier));
+  if (!Number.isFinite(_isolatedHamTier)) _isolatedHamTier = 0;
+  var fcw = _structuredReachPolicy ? {
+    ok:true, system_prompt:_structuredReachSystemPrompt,
+    ham:{ uid:hamUid, name:String(identity&&identity.name||'Unknown').slice(0,160),
+      tier:_isolatedHamTier, world:String(identity&&identity.world||'unknown').slice(0,120) },
+    context:[], named_agent_records:[], identity_record:null,
+    identity_evidence:{ schema:'anew.identity.evidence.result.v1', ok:true,
+      available:true, ham_uid:String(hamUid||'').toUpperCase(), subjects:[],
+      records:[], count:0, ms:0 },
+    contributors:null, contributorsResolved:0, contributorsTotal:0, ms:0
+  } : await buildMemoryBank(hamUid,channel,message,identity)
+    .catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
   if (await _turnCancelled()) return _turnCancelledResult('after_memory');
   // ⬡B:core.tool.loop:GUARD:memory_wall_required_before_deliberation:20260715⬡
-  // A generic assistant prompt is not a PAI cycle. If the Memory Bank wall does
-  // not build, no deliberation, council receipt, or human answer may be produced.
+  // A generic assistant prompt is not a PAI cycle. Ordinary turns require the
+  // live Memory Bank wall. The structured finalizer above instead requires its
+  // server-normalized exact evidence wall and cannot fall back to generic text.
   if (!fcw || fcw.ok !== true || typeof fcw.system_prompt !== 'string' || !fcw.system_prompt) {
     global._paiLastError = 'memory_bank_build_failed:' + ((fcw&&fcw.reason)||'unknown');
     // \u2b21B:core.tool.loop:WIRE:needs_clair_before_founder:20260710\u2b21
@@ -2163,7 +1964,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       fcw_build_ms:_fcwBuildMs,fcw_contributors:null,
       fcw_contributors_resolved:0,fcw_contributors_total:0};
   }
-  var systemPrompt = fcw.system_prompt;
+  // A structured REACH policy is a closed-world decision over one exact
+  // candidate packet. Ambient recent rows, contributors, prior turns, screen
+  // state, and fused summaries may not steer whether this candidate reaches
+  // anyone. The exact deliberation packet below is the sole factual input.
+  var systemPrompt = _structuredReachPolicy
+    ? _structuredReachSystemPrompt
+    : fcw.system_prompt;
   var hamObj = fcw.ham;
   // ⬡B:core.tool_loop:GUARD:one_exact_question_for_provenance_and_council:20260715⬡
   // Identity metadata is canonical when present. Otherwise the first trusted
@@ -2183,7 +1990,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // provenance reader intentionally extracts nothing. Bind these turns to the
   // canonical assistant identity and the exact HAM identity row already selected
   // by Memory Bank. The same bounded packet reaches drafting and SHADOW.
-  var _firstPersonIdentityProof = /\bwho\s+are\s+you\b|\bwho\s+am\s+i\b|\bhow\s+do\s+you\s+know\b|\bprove\s+it\b/i
+  var _firstPersonIdentityProof = !_structuredReachPolicy && /\bwho\s+are\s+you\b|\bwho\s+am\s+i\b|\bhow\s+do\s+you\s+know\b|\bprove\s+it\b/i
     .test(_exactUserMessage);
   var _runtimeIdentityEvidence = null;
   if (_firstPersonIdentityProof && fcw.identity_record && hamObj &&
@@ -2209,8 +2016,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // proof-shaped current-turn asks in the transactional release invariant so the
   // model never mistakes its pre-commit vantage point for a failed cycle.
   var _proofQuestion = _exactUserMessage;
-  systemPrompt += currentTurnProofGuard.systemInstruction(_proofQuestion);
-  var _currentPreferenceQuestion = currentAssistantPreferenceRequest(_exactUserMessage);
+  if (!_structuredReachPolicy) {
+    systemPrompt += currentTurnProofGuard.systemInstruction(_proofQuestion);
+  }
+  var _currentPreferenceQuestion = !_structuredReachPolicy &&
+    currentAssistantPreferenceRequest(_exactUserMessage);
   if (_currentPreferenceQuestion) {
     // ⬡B:core.tool_loop:WIRE:fresh_preference_inside_full_pai:20260715⬡
     // A current preference is a live A'NU judgment, not a fabricated memory.
@@ -2225,11 +2035,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // priority. The extractor is shared with SHADOW, which independently checks
   // the outgoing draft; no answer or doctrine wording is invented here.
   var _namedEvidenceQuestion = _exactUserMessage;
-  var _namedContextEvidence = extractNamedContextEvidence(_namedEvidenceQuestion, message);
-  var _identityEvidenceEnvelope = fcw && fcw.identity_evidence;
-  var _identityEvidenceProof = identityProvenance.createEvidenceProof(
-    _identityEvidenceEnvelope, hamUid);
-  var _identityProvenanceLedger = identityProvenance.buildLedger({
+  var _namedContextEvidence = _structuredReachPolicy ? []
+    : extractNamedContextEvidence(_namedEvidenceQuestion, message);
+  var _identityEvidenceEnvelope = _structuredReachPolicy ? {
+    schema:'anew.identity.evidence.result.v1', ok:true, available:true,
+    ham_uid:String(hamUid || '').toUpperCase(), subjects:[], records:[], count:0, ms:0
+  } : fcw && fcw.identity_evidence;
+  var _identityEvidenceProof = _structuredReachPolicy
+    ? { ok:true, result:_identityEvidenceEnvelope, receipt:null }
+    : identityProvenance.createEvidenceProof(_identityEvidenceEnvelope, hamUid);
+  var _identityProvenanceLedger = _structuredReachPolicy ? { required:false }
+    : identityProvenance.buildLedger({
     question:_namedEvidenceQuestion,
     hamUid:hamUid,
     storedRecords:_identityEvidenceEnvelope && _identityEvidenceEnvelope.records || [],
@@ -2294,17 +2110,21 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // currently open, so the base prompt now carries it unconditionally: she commands
   // the glass through update_screen; if no screen is live the TOOL says so and she
   // says the screen is not open -- she never again claims she lacks the ability.
-  systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if it returns no events, say the day is open, do not fall back to an old find_in_brain stamp to fill the gap.';
-  try { systemPrompt += require('./stream/screen.awareness.js').promptAddendum(hamUid, uiPortal); } catch (eScr) {}
+  if (!_structuredReachPolicy) {
+    systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if it returns no events, say the day is open, do not fall back to an old find_in_brain stamp to fill the gap.';
+    try { systemPrompt += require('./stream/screen.awareness.js')
+      .promptAddendum(hamUid, uiPortal); } catch (eScr) {}
+  }
   // \u2b21B:core.tool_loop:WIRE:context_fusion_grounding_3b_20260710\u2b21 Portal and
   // asynchronous reach turns ground against the freshest fused world context.
   // A live voice call stays on its signed call/session context by default; an
   // explicit server-owned voice request may opt into the ambient fuse.
-  if (shouldIncludeWorldContext(channel, identity, hamUid, _exactUserMessage)) {
+  if (!_structuredReachPolicy &&
+      shouldIncludeWorldContext(channel, identity, hamUid, _exactUserMessage)) {
     try { systemPrompt += await require('./context.fusion.js').getLatestSummary(hamUid); } catch (eFus) {}
   }
   var msgs=[{role:'system',content:systemPrompt}];
-  if (Array.isArray(priorTurns) && priorTurns.length) {
+  if (!_structuredReachPolicy && Array.isArray(priorTurns) && priorTurns.length) {
     priorTurns.forEach(function(t){
       if (t && (t.role==='user'||t.role==='assistant') && typeof t.content==='string' && t.content.trim()) {
         msgs.push({role:t.role, content:t.content});
@@ -2314,43 +2134,36 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // ⬡B:tool.loop:NUDGE:nash_routing_20260711⬡ cold keyword router: a sports
   // question MUST reach NASH; the model was answering "no real-time access"
   // instead of deploying the wonder it already has.
-  // ⬡B:tool.loop:FIX:nash_stops_hijacking_turns_on_an_ordinary_english_word:20260717⬡
-  // The problem was never NASH, it was FORCING her hand off a keyword with no idea what
-  // the turn is about. Proven live 20260717, one-word A/B on an identical question about
-  // bead counts:
-  //   "...your judge only scores against the evidence" -> tools [consult_coda, nash_sports]
-  //   "...your judge only grades against the evidence" -> tools [consult_coda, find_in_brain]
-  // One word. The bare token 'scores' hijacked a coding turn into a sports call. Worse:
-  // the CLAIR bootstrap tells every future chat to write that exact sentence, and the
-  // Wonder Contract stamped 20260717 contains "Wonder Games to score, CANON grades",
-  // which BCW now serves as live doctrine. The founder's own doctrine pipeline was
-  // force-firing a sports tool on every armed build question.
-  // Same disease as the preference gate firing on "select one": a cold regex reading a
-  // raw string with no intent and no window, then OVERRIDING the mind that has both.
-  // Fix is his own doctrine, not a tighter regex: a keyword may NUDGE, it may never
-  // COMMAND. Require a real sports subject alongside the verb, keep the nudge that solved
-  // the original 20260711 bug (she used to claim no real-time access instead of deploying
-  // the wonder she already has), and drop the forced tool_choice so she decides.
-  var _nashSubject = /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|epl|mls|premier league|world cup|playoffs?|box ?score|final score|game ?night)\b/i.test(message);
-  var _nashVerb = /\b(score|scores|scored|win|won|lose|lost|beat|play|playing|game|games|match|standings)\b/i.test(message);
-  var _nashNeeded = _nashSubject && _nashVerb;
+  var _nashNeeded = !_structuredReachPolicy &&
+    /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|score|scores|playoffs?|game (to)?night|did .{1,40}(win|lose|beat)|final score)\b/i.test(message);
   if (_nashNeeded) {
-    msgs.push({role:'system',content:'NASH is standing by. If this question is really about a game or a team, call the nash_sports tool (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH. If the question is not actually about sports, ignore this note entirely.'});
+    msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
   }
   var _verifiedToolEvidence = [];
   var _identityVerifiedEvidence = [];
   var _namedAgentVerifiedEvidence = [];
+  // The structured REACH caller binds its policy question separately from the
+  // evidence packet so the outbound council can prove both byte-for-byte. The
+  // model still needs to see that server-owned question during deliberation.
+  // Without this bridge it saw only NOW_ISO / EVIDENCE and guessed a free-form
+  // answer, which the strict JSON gate correctly rejected before council.
+  if (_structuredReachPolicy) {
+    msgs.push({role:'system',content:
+      'INTERNAL BOUNDED REACH POLICY. The following server-owned question is the '+
+      'authority for this turn. Follow it exactly and return only its strict JSON '+
+      'object, with no markdown or commentary.\n\n'+_exactUserMessage});
+  }
   msgs.push({role:'user',content:message});
-  var _identityLookupCount = injectIdentityProvenanceEvidence(
-    msgs, _identityVerifiedEvidence, fcw, hamUid, _namedEvidenceQuestion,
-    _identityEvidenceProof);
+  var _identityLookupCount = _structuredReachPolicy ? 0
+    : injectIdentityProvenanceEvidence(msgs, _identityVerifiedEvidence, fcw,
+      hamUid, _namedEvidenceQuestion, _identityEvidenceProof);
   if (_identityLookupCount > 0) {
     msgs.push({role:'system',content:'The completed identity provenance result above is an exact-HAM bounded read. Preserve each evidence_kind: stored_definition may define; stored_role_claim reports a past self-description without making it literal identity; stored_activity proves only activity. Do not say retrieval did not occur.'});
   }
   // The user message must precede its synthetic assistant tool call. These rows
   // were already read by MEMORY_BANK; this is an attention-channel bridge, not a query.
-  var _namedLookupCount = _identityLookupCount > 0 ? 0 : injectNamedAgentEvidence(
-    msgs, _namedAgentVerifiedEvidence, fcw, hamUid);
+  var _namedLookupCount = _structuredReachPolicy || _identityLookupCount > 0 ? 0
+    : injectNamedAgentEvidence(msgs, _namedAgentVerifiedEvidence, fcw, hamUid);
   if (_namedLookupCount > 0) {
     // ⬡B:core.tool_loop:EVIDENCE:named_lookup_provenance_is_explicit:20260715⬡
     // A completed exact-HAM lookup may return an operational row that proves
@@ -2370,7 +2183,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // first draft had this backwards, caught in reliability testing), so the real record
   // arrives via the one channel demonstrated to be reliable, and the model never has
   // to decide whether to call the tool or trust the wall.
-  var _wgNeeded = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(message);
+  var _wgNeeded = !_structuredReachPolicy &&
+    /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(message);
   if (_wgNeeded) {
     try {
       var _wgSynthRes = await find([
@@ -2397,7 +2211,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // still sometimes says it has no record (surfaced live once the MEMORY_BANK schema mismatch
   // fix made aibebase genuinely read the new bank). Same fix: inject a synthetic
   // completed find_in_brain(PREFERENCE) result after the user's message.
-  var _prefNeeded = /\bfavou?rite\b|\bprefer(ence|red)?\b|what do i (like|love|enjoy)\b|\bmy taste\b/i.test(message);
+  var _prefNeeded = !_structuredReachPolicy &&
+    /\bfavou?rite\b|\bprefer(ence|red)?\b|what do i (like|love|enjoy)\b|\bmy taste\b/i.test(message);
   if (_prefNeeded) {
     try {
       var _prefSynthRes = await find([{ stamp_type: 'PREFERENCE', ham_uid: hamUid, limit: 5 }]);
@@ -2503,16 +2318,23 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // commit, STAMP, and readback remain below exactly as for a model draft.
   var _signedVoicePurposeAnswer = verifiedVoiceCallPurposeAnswer(
     channel, hamUid, _exactUserMessage, identity);
-  var iter=0,tools=_codaLeadNeeded?['consult_coda']:[],ans=_signedVoicePurposeAnswer || null;
+  var _signedVoiceHearingAnswer = verifiedVoiceHearingAnswer(
+    channel, hamUid, _exactUserMessage, identity);
+  var _signedVoiceFarewellAnswer = verifiedVoiceFarewellAnswer(
+    channel, hamUid, _exactUserMessage, identity);
+  var iter=0,tools=_codaLeadNeeded?['consult_coda']:[],
+    ans=_signedVoicePurposeAnswer || _signedVoiceHearingAnswer ||
+      _signedVoiceFarewellAnswer || null;
   if (_signedVoicePurposeAnswer) {
     _stampStep('signed_voice_call_purpose_selected', 'exact_handoff_bytes');
   }
+  if (_signedVoiceHearingAnswer) {
+    _stampStep('signed_voice_hearing_acknowledgement_selected', 'exact_turn_transcript');
+  }
+  if (_signedVoiceFarewellAnswer) {
+    _stampStep('signed_voice_farewell_acknowledgement_selected', 'exact_turn_transcript');
+  }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{} };
-  // ⬡B:core.tool_loop:WIRE:knowledge_beads_are_born_with_no_edges:20260717⬡
-  // The writer had no lineage in scope, so it had nothing true to point an edge at.
-  // Carry the cycle it is running inside. Read-only, never used for control flow.
-  _effectRuntime.cycleId = _cycleId || null;
-  _effectRuntime.requestId = _requestId || null;
   _effectRuntime.channel = String(channel || '').toLowerCase();
   _effectRuntime.exactHamReads = _effectRuntime.channel === 'voice' &&
     !!verifiedVoiceCallContext(identity, hamUid);
@@ -2572,8 +2394,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // is multiple seconds quicker. Keep the quality 70b for the ANSWER pass (where
     // tools already ran and real synthesis happens); use the fast model only for the
     // forced first-pass tool pick. Real latency cut, no quality loss on the answer.
-    var _forcedToolSelectionPass = (iter===1 && tools.length===0);
-    var model=_forcedToolSelectionPass
+    var _forcedToolSelectionPass = !_structuredReachPolicy&&
+      (iter===1 && tools.length===0);
+    var model=_structuredReachPolicy
+      ?(process.env.GROQ_MODEL_C2||'openai/gpt-oss-120b')
+      :_forcedToolSelectionPass
       ?(process.env.GROQ_MODEL_C1||'llama-3.1-8b-instant')
       :(tools.length>0||iter>1||toolsOnThisTurn)
       ?(process.env.GROQ_MODEL_C2||'llama-3.3-70b-versatile')
@@ -2587,7 +2412,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // Lowered to reduce that variance; still warm enough for natural replies.
     // This is a real improvement, not a guarantee -- instruction-following on
     // a growing system prompt stays worth watching, not a closed case.
-    var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),temperature:0.3};
+    var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),
+      temperature:_structuredReachPolicy?0:0.3};
     if (iter<=3) body.tools=_turnToolDefinitions;
     // ⬡B:core.tool_loop:FIX:tool_choice_never_set_defaults_to_skippable:20260705⬡
     // Real, live incident: Brandon asked directly "who is the founder value, now from env, show me
@@ -2606,7 +2432,18 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // answer: find_in_brain is a safe no-op on a genuinely contentless query,
     // and synthesis already runs after, so a forced-but-empty lookup costs a
     // beat, not a wrong turn.
-    if (iter===1) {
+    // A REACH policy cycle is a bounded judgment request, not a general chat
+    // turn. Its caller already supplied the verified facts and exact JSON
+    // contract. Letting the generic first-turn forcing below attach or require
+    // find_in_brain can replace that bounded decision with unrelated memory and
+    // adds a second model turn before the council. The policy still traverses
+    // the full outbound council after this draft; only generic tools are absent.
+    if (_structuredReachPolicy) {
+      delete body.tools;
+      delete body.tool_choice;
+      body.response_format=reachPolicyContract.responseFormat();
+    }
+    else if (iter===1) {
       // \u2b21B:core.tool_loop:FIX:forced_lookup_derailing_screen_commands_20260709\u2b21
       // Founder-caught live, third layer of the same night's incident: even with the
       // extraction leak and the statelessness both fixed, "change background to
@@ -2652,10 +2489,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
       if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
-      // ⬡B:tool.loop:FIX:a_keyword_may_nudge_it_may_never_command:20260717⬡
-      // The forced tool_choice is gone. NASH is offered, not ordered. The system note
-      // above already carries the nudge that fixed the original 20260711 bug, and the
-      // mind reading the actual turn is a better router than a substring ever was.
+      else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
         // call-purpose question. Keep the full PAI + council, but do not force an
@@ -2700,7 +2534,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           arguments:JSON.stringify(_roadmapActivationEnvelope.spec) }
       }] } }] };
     }
-    if (process.env.TRY_ORNITH_CONVERSATIONAL === 'true' && !body.tools) {
+    if (!_structuredReachPolicy&&process.env.TRY_ORNITH_CONVERSATIONAL === 'true' && !body.tools) {
       try {
         var ORN = process.env.ORNITH_URL, ORK = process.env.RUNPOD_API_KEY;
         if (ORN && ORK) {
@@ -2721,34 +2555,22 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
       body:JSON.stringify(body),signal:_modelRequestSignal()
     }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
-    // \u2b21B:core.tool_loop:911:truncated_primary_must_fall_through_not_be_accepted:20260718\u2b21
-    // FOUNDER 911 20260718: on a HARD question the primary deliberation model (now
-    // rerouted through the ladder since GROQ_API_KEY is gone) can burn its whole token
-    // budget reasoning and return finish_reason 'length' with ~1 char of content. That
-    // reply HAS choices, so the old chain accepted it and never tried Together/OpenRouter.
-    // The turn then died no_answer on hard questions only. She got dumber as questions got
-    // harder. Here: on a tool-free deliberation, a truncated near-empty primary answer is
-    // treated as a failure so the real open-weight fallbacks below run and finish it.
-    if (r && r.choices && r.choices[0] && !body.tools) {
-      var _pc = r.choices[0]; var _pmsg = _pc.message || {};
-      var _ptext = typeof _pmsg.content === 'string' ? _pmsg.content.trim() : '';
-      var _ptrunc = (_pc.finish_reason === 'length' || _pc.finish_reason === 'max_tokens');
-      if (!(_pmsg.tool_calls && _pmsg.tool_calls.length) && _ptrunc && _ptext.length < 40) {
-        global._paiLastError = 'primary_truncated_near_empty:falling_through';
-        r = null;
-      }
-    }
+    r=_structuredProviderResult(r);
     if(r&&r.error){global._paiLastError='groq:'+JSON.stringify(r.error).slice(0,120);}
     if(r&&!r.choices&&!r.error){global._paiLastError='groq_no_choices:'+JSON.stringify(r).slice(0,150);}
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
-      if(TK){r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
+      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'Qwen/Qwen3.5-9B',
+          messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
+          temperature:_structuredReachPolicy?0:0.3};
+        if(_structuredReachPolicy)togetherBody.response_format=
+          reachPolicyContract.responseFormat();
+        r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
         headers:{Authorization:'Bearer '+TK,'Content-Type':'application/json'},
-        body:JSON.stringify({model:process.env.TOGETHER_MODEL||'zai-org/GLM-5.2',
-          messages:openAiCompatibleHistory(msgs),
-          max_tokens:tokenCapFor(channel),temperature:0.3}),
+        body:JSON.stringify(togetherBody),
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+      r=_structuredProviderResult(r);
       if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0,150);}
@@ -2767,13 +2589,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // just falls through to the existing empty-answer path below, unchanged.
     if (!r||r.error||!r.choices){
       var ORK=process.env.OPENROUTER_API_KEY;
-      if(ORK){r=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
+      if(ORK){var openRouterBody={model:process.env.OPENROUTER_MODEL||'meta-llama/llama-3.3-70b-instruct',
+          messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
+          temperature:_structuredReachPolicy?0:0.3};
+        if(_structuredReachPolicy){
+          openRouterBody.response_format=reachPolicyContract.responseFormat();
+          openRouterBody.provider={require_parameters:true};
+        }
+        r=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
         headers:{Authorization:'Bearer '+ORK,'Content-Type':'application/json'},
-        body:JSON.stringify({model:process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b',
-          messages:openAiCompatibleHistory(msgs),
-          max_tokens:tokenCapFor(channel),temperature:0.3}),
+        body:JSON.stringify(openRouterBody),
         signal:_modelRequestSignal()
       }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+      r=_structuredProviderResult(r);
       if(r&&r.choices&&r.choices.length){global._paiLastError=null;}
       else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0,120);}
       else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0,150);}
@@ -2781,7 +2609,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     if (!r||r.error||!r.choices){
-      ans='';
+      ans=_structuredReachPolicy?'{}':'';
       break;
     }
     var ch=r.choices[0],msg=ch.message;
@@ -2792,7 +2620,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // mid-thought (finish_reason 'length'), cold code continues the generation and
     // stitches, up to three times, instead of shipping a cut sentence. A genuine runaway
     // still dies at the breaker; a genuine answer always finishes.
-    if((typeof _structuredReachPolicy==='undefined'||!_structuredReachPolicy)&&msg&&!((msg.tool_calls||[]).length)&&msg.content){
+    if(!_structuredReachPolicy&&msg&&!((msg.tool_calls||[]).length)&&msg.content){
       var _stitchTries=0;
       while(ch.finish_reason==='length'&&_stitchTries<3){
         _stitchTries++;
@@ -2810,6 +2638,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         msg.content=String(msg.content||'')+_stitchTxt;
         ch.finish_reason=_stitchCh.finish_reason;
       }
+    }
+    if(_structuredReachPolicy){
+      // Structured policy is a judgment-only lane. It exits before generic
+      // tool-call salvage or execution, so an unsolicited provider tool call
+      // can never turn a policy draft into a read, write, or external effect.
+      var _structuredDraft=reachPolicyContract.canonicalize(msg&&msg.content);
+      ans=_structuredDraft.ok?_structuredDraft.text:'{}';
+      break;
     }
     // ⬡B:core.tool_loop:FIX:safe_tool_text_salvage_20260710⬡
     // Founder 1B gate failure, exact receipt from her own trace: cycle_end contained
@@ -3139,8 +2975,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   }
   if (await _turnCancelled()) return _turnCancelledResult('after_deliberation');
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
-  var _repositoryDraftRepair = repairCodaRepositoryDraft(
-    finalAns, _codaRepositoryAnswer, !!_codaRepositoryAnswer);
+  var _repositoryDraftRepair = _structuredReachPolicy
+    ? { repaired:false, answer:finalAns, reason:null }
+    : repairCodaRepositoryDraft(
+      finalAns, _codaRepositoryAnswer, !!_codaRepositoryAnswer);
   if (_repositoryDraftRepair.repaired) {
     finalAns = _repositoryDraftRepair.answer;
     _stampStep('repository_evidence_answer_repaired', _repositoryDraftRepair.reason);
@@ -3149,7 +2987,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // CODA may deterministically select the exact bytes of one explicitly named
   // BCW section. Preserve those bytes so SHADOW can verify the same question-
   // bound digest. Nothing is released here; the complete council still follows.
-  if (_codaDirectNamedEvidenceAnswer) {
+  if (!_structuredReachPolicy && _codaDirectNamedEvidenceAnswer) {
     finalAns = _codaDirectNamedEvidenceAnswer;
     _stampStep('direct_named_evidence_selected', 'verified_coda_decision');
   }
@@ -3164,29 +3002,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     cycleId:_cycleId, question:_exactUserMessage,
     context:{ verified_evidence:_identityVerifiedEvidence
       .concat(_namedAgentVerifiedEvidence, _verifiedToolEvidence) } };
-  // ⬡B:core.tool_loop:WIRE:engineering_select_is_not_a_favourite:20260717⬡
-  // Founder-caught 20260717. currentAssistantPreferenceRequest fires on the plain
-  // engineering phrase "select one" via /(choose|pick|select)\s+(one|your favourite
-  // ...)/, then preferenceOptionTerms harvests EVERY ALL-CAPS token as a candidate
-  // "option" via /\b[A-Z][A-Z0-9_]{2,31}\b/g. This founder's entire doctrine is
-  // ALL-CAPS agent names, so CODA CLAIR SHADOW CANON FIND CANEW became a menu of
-  // favourites and the gate demanded the answer be phrased "my pick is X". A bounded
-  // build decision can never satisfy that grammar, so it held forever with
-  // current_preference_unrepaired and he got silence. Proven live: changing only
-  // "Select ONE bounded buildable piece" to "Name the smallest bounded buildable
-  // piece" cleared it, same everything else.
-  // A coding turn is not a favourite question. The law stays fully active for real
-  // preference asks on every other turn. Derived from the turn itself, same evidence
-  // the WRIT wiring uses: she actually consulted the coding department or read her
-  // own code.
-  var _preferenceChannel = String(channel || '').toLowerCase();
-  var _preferenceTurnIsEngineering = _preferenceChannel === 'coding' ||
-    _preferenceChannel === 'internal' ||
-    (Array.isArray(tools) && (tools.indexOf('consult_coda') !== -1 ||
-      tools.indexOf('read_own_code') !== -1));
-  var _preferenceDraftFlags = _preferenceTurnIsEngineering ? [] :
-    preferenceJudgmentFindings(
-      _exactUserMessage, finalAns, _preferenceEvidenceContext);
+  var _preferenceDraftFlags = _structuredReachPolicy ? [] : preferenceJudgmentFindings(
+    _exactUserMessage, finalAns, _preferenceEvidenceContext);
   if (_preferenceDraftFlags.length) {
     var _preferenceViolationCodes = _preferenceDraftFlags.map(function (flag) {
       return flag.reason;
@@ -3229,7 +3046,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // CODA may already have produced a deterministically valid two-bucket answer.
   // If the conversational draft collapses those origins, repair with CODA's
   // verified candidate; every outbound gate still runs below.
-  if (_identityProvenanceLedger.required && _codaProvenanceAnswer) {
+  if (!_structuredReachPolicy && _identityProvenanceLedger.required && _codaProvenanceAnswer) {
     var _provenanceDraftCheck = identityProvenance.validateDraft(finalAns,
       _identityProvenanceLedger);
     if (!_provenanceDraftCheck.ok) {
@@ -3243,7 +3060,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // use CODA's verified live bytes as the candidate. Those bytes do not bypass
   // anything: every preparation stage, the full outbound council, STAMP commit,
   // and readback still run below.
-  if (_codaEvidenceRelayAnswer) {
+  if (!_structuredReachPolicy && _codaEvidenceRelayAnswer) {
     var _finalNamedFlags = finalAns
       ? namedContextContradictions(finalAns, _namedContextEvidence) : [{ reason:'empty_answer' }];
     if (!finalAns || _finalNamedFlags.length) {
@@ -3256,7 +3073,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // verification, screen extraction, protocol scrub, destination formatting,
   // SHADOW preparation, PAM, and persona. Repaired bytes therefore traverse
   // the same deterministic preparation once; no retry lane can skip a gate.
-  if (finalAns && !isHumanFacingAnswer(finalAns)) {
+  if (!_structuredReachPolicy && finalAns && !isHumanFacingAnswer(finalAns)) {
     _stampStep('hollow_protocol_answer_caught', String(finalAns || '').slice(0, 80));
     var _repairCap = tokenCapFor(channel);
     var _repairedHuman = await regenerateHollowAnswer(finalAns, msgs, [
@@ -3291,7 +3108,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // gets raw data back. Cold detection: if the answer parses as JSON (starts with { or [ and
   // is valid JSON), it is never sent as-is. Composed instead, in plain words, from the shape
   // of what came back, so the tool result still reaches him, just as an actual sentence.
-  if (finalAns && /^[\[{]/.test(finalAns.trim())) {
+  if (_structuredReachPolicy&&!_validStructuredReachPolicy(finalAns)) {
+    _stampStep('cycle_end_silent','reach_policy_json_invalid_before_council');
+    return{ok:false,reason:'reach_policy_json_invalid',blocked_by:'A\'NU',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+      ms:Date.now()-t0};
+  }
+  if (!_structuredReachPolicy&&finalAns && /^[\[{]/.test(finalAns.trim())) {
     var _rawParsed = null;
     try { _rawParsed = JSON.parse(finalAns.trim()); } catch (eRawJ) {}
     if (_rawParsed && typeof _rawParsed === 'object') {
@@ -3312,7 +3135,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // exists. Claiming an action you did not take is the worst failure. Guard: if the
   // reply claims a reminder/calendar action but the matching tool did not run this
   // turn, strip the false claim and tell the truth. Cold detection, no LLM.
-  if (finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
+  if (!_structuredReachPolicy&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
     _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
     finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
   }
@@ -3367,7 +3190,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null};
   }
   // THE REAL SECOND PASS. Deterministic, not another LLM guess trusting itself.
-  if (_verifiedRealNumbers.length && /\d/.test(finalAns)) {
+  if (!_structuredReachPolicy&&_verifiedRealNumbers.length && /\d/.test(finalAns)) {
     var _answerNumbers = (finalAns.match(/\b\d+\b/g) || []);
     var _unverified = _answerNumbers.filter(function(n){ return _verifiedRealNumbers.indexOf(n) === -1; });
     if (_unverified.length) {
@@ -3408,7 +3231,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // this turn did not run/complete, replace it with the true release invariant.
   // The repaired bytes still traverse screen extraction, formatting, PAM, SHADOW,
   // the full council, STAMP, and readback below.
-  var _proofDraft = currentTurnProofGuard.repairDraft(_proofQuestion, finalAns);
+  var _proofDraft = _structuredReachPolicy?{repaired:false,answer:finalAns}:
+    currentTurnProofGuard.repairDraft(_proofQuestion, finalAns);
   if (_proofDraft.repaired) {
     finalAns = _proofDraft.answer;
     _stampStep('current_turn_proof_claim_repaired', _proofDraft.reason);
@@ -3422,7 +3246,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // Extract the screen intent before review, but do not move the live glass yet.
   // The visible side effect is committed only after the exact spoken bytes have a
   // durable council receipt and final STAMP proof.
-  try {
+  if(!_structuredReachPolicy)try {
     var _screenAware = require('./stream/screen.awareness.js');
     var _scr = _screenAware.extract(finalAns);
     finalAns = _scr.answer || finalAns;
@@ -3432,7 +3256,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // ⬡B:tool.loop:GUARD:leaked_tool_syntax_scrub:20260711⬡ on an empty NASH
   // board the model retried and leaked "<function=...>" into its last line.
   // Cold scrub; if nothing real remains, hollow-reply law: ok:false.
-  finalAns = scrubLeakedToolProtocol(finalAns);
+  if(!_structuredReachPolicy)finalAns = scrubLeakedToolProtocol(finalAns);
   // \u2b21B:core.tool_loop:WIRE:format_matrix_universal_choke_point:20260711\u2b21
   // Founder, exact words: 'this should be for every CARA and chat instance and email
   // and text! All reach should do this right??????' -- correct call. This is the ONE
@@ -3441,7 +3265,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // reads this same field). Cleaning HERE means it is universal by construction, not
   // a per-channel patch that drifts. Destination-aware: 'sms' gets the hard cap this
   // channel needs so an outbound text is never a wall of text.
-  try {
+  if(!_structuredReachPolicy)try {
     var _fmtDest = (channel === 'text' || channel === 'sms') ? 'sms' : 'command_center';
     finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
   } catch (eFmt) {}
@@ -3450,38 +3274,28 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // The older synthesize path used to do these pure output preparations after
   // runPAI returned. They now happen before the durable council so no channel can
   // change the reviewed bytes later and still call the turn successful.
-  try {
+  if(!_structuredReachPolicy)try {
     var _shadowPrepared = require('./synthesize.js').shadowAudit(finalAns);
     if (!_shadowPrepared.clean) return {ok:false,reason:'shadow_scrubbed_to_empty',ham:hamObj,
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
     finalAns = _shadowPrepared.clean;
   } catch (ePrepShadow) {}
-  try {
+  if(!_structuredReachPolicy)try {
     var _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
     if (_tierGate && _tierGate.gated) {
       finalAns = 'I have some information for you but need to verify your access. Reply with your passcode.';
     }
   } catch (ePrepPam) {}
-  try {
-    // ⬡B:core.tool_loop:FIX:persona_floor_governs_every_channel_no_matter_what:20260718⬡
-    // Founder-caught 20260718: the voice doctrine and the em-dash kill only governed
-    // output when identity.persona happened to be set. On TAP (Blooio), email (Nylas),
-    // and voice (ElevenLabs) turns whose identity carries no persona field, applyPersona
-    // was SKIPPED entirely, so an internal-voice line or an em dash could leak to a human
-    // on exactly the channels he named. applyPersona's floor -- scrub internal/dead agent
-    // names and kill em dashes to commas (WRIT Kill 1) -- is a safety requirement for
-    // EVERY human-facing output, not an opt-in. It now runs unconditionally. The persona
-    // choice, when present, still rides through for any richer shaping. This is the one
-    // place every final answer passes before it returns to any channel's synthesize/send,
-    // so enforcing the floor here governs TAP, email, voice, CARA, and portal at once.
-    var _personaChoice = (identity && identity.persona) || (hamObj && hamObj.persona) || null;
-    finalAns = require('./persona.js').applyPersona(finalAns,
-      { hamUid:hamUid, persona:_personaChoice, contributions:{} });
+  if(!_structuredReachPolicy)try {
+    var _personaChoice = identity && identity.persona || hamObj && hamObj.persona;
+    if (_personaChoice) finalAns = require('./persona.js').applyPersona(finalAns,
+      { hamUid:hamUid,persona:_personaChoice,contributions:{} });
   } catch (ePrepPersona) {}
   // ⬡B:core.tool_loop:GUARD:no_false_current_turn_failure_reaches_council:20260715⬡
   // Later preparation/persona code may reshape prose. Fail closed if it ever
   // reintroduces the same contradiction; a false status claim is never stamped.
-  if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns)) {
+  if (!_structuredReachPolicy&&
+      currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns)) {
     _stampStep('cycle_end_silent', 'false_current_turn_failure_claim_after_preparation');
     return {ok:false,reason:'false_current_turn_failure_claim',ham:hamObj,cycleId:_cycleId,
       requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
@@ -3489,7 +3303,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // ⬡B:core.tool_loop:GUARD:human_answer_before_council_commit:20260715⬡
   // The early repair has already crossed every canonical preparation above.
   // This late boundary only validates; it never regenerates or bypasses a gate.
-  if (!isHumanFacingAnswer(finalAns)) {
+  if ((_structuredReachPolicy&&!_validStructuredReachPolicy(finalAns))||
+      (!_structuredReachPolicy&&!isHumanFacingAnswer(finalAns))) {
     _stampStep('cycle_end_silent', 'hollow_protocol_after_preparation');
     return {ok:false,reason:'hollow_protocol_answer',ham:hamObj,cycleId:_cycleId,
       requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
@@ -3498,12 +3313,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // This is the only successful exit. PAM, SHADOW, META_COMMENTARY, conditional
   // QUILL, WRIT, A'NU expression, and STAMP must all finish in order. STAMP
   // writes and reads back every ACL row before the exact answer can leave.
-  var _delivery = Object.assign({}, identity && identity.delivery || {});
+  var _delivery = _structuredReachPolicy ? { external:false }
+    : Object.assign({}, identity && identity.delivery || {});
   var _humanReachChannels = ['anu','blooio','cara','ccwa','email','iman','omi',
     'portal','sms','text','vara','voice','budget'];
   if (_humanReachChannels.indexOf(String(channel || '').toLowerCase()) >= 0
       || /^email(?:_|$)/i.test(String(channel || ''))) _delivery.external = true;
-  var _worldCandidate = String((hamObj&&hamObj.world)||(identity&&identity.world)||'').toLowerCase();
+  // A policy candidate's normalized evidence owns all context. Generic PAM still
+  // runs, but no FCW- or caller-enriched world may select a world-specific rule
+  // outside the digest-bound packet.
+  var _worldCandidate = _structuredReachPolicy ? ''
+    : String((hamObj&&hamObj.world)||(identity&&identity.world)||'').toLowerCase();
   var _activeWorld = ['bdif','mediators','mh_action','gmg'].indexOf(_worldCandidate) >= 0
     ? _worldCandidate : null;
   // SHADOW receives evidence, not merely the names of tools that happened to run.
@@ -3513,7 +3333,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // consult_coda is a reserved current-turn proof. Only this loop's actual
   // executeTool result may enter SHADOW under that tool name; caller-supplied
   // council evidence can contribute other facts but cannot mint CODA authority.
-  var _externalEvidence = identity && identity.council_context
+  var _externalEvidence = !_structuredReachPolicy && identity && identity.council_context
     && Array.isArray(identity.council_context.verified_evidence)
     ? identity.council_context.verified_evidence.filter(function (item) {
       // Reserved Memory Bank/CODA proof lanes are minted only inside this turn.
@@ -3526,7 +3346,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     }) : [];
   var _priorityEvidence = prioritizeVerifiedEvidence(_identityVerifiedEvidence,
     _namedAgentVerifiedEvidence.concat(_verifiedToolEvidence, _externalEvidence));
-  var _memoryEvidence = Array.isArray(fcw&&fcw.context) ? fcw.context.slice(0, 8).map(function (bead) {
+  var _memoryEvidence = !_structuredReachPolicy && Array.isArray(fcw&&fcw.context)
+    ? fcw.context.slice(0, 8).map(function (bead) {
     var beadContent = bead&&bead.content;
     if (beadContent && typeof beadContent !== 'string') {
       try { beadContent = JSON.stringify(beadContent); } catch (eBeadJson) { beadContent = ''; }
@@ -3541,33 +3362,41 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     .concat(_priorityEvidence);
   _councilEvidence = _councilEvidence.concat(
     _memoryEvidence.slice(0, Math.max(0, 8 - _councilEvidence.length))).slice(0, 8);
-  var _councilContext = Object.assign({ tools_used:tools, iterations:iter,
-    memory_contributors:(fcw&&fcw.contributors)||null }, identity&&identity.council_context||{});
-  // ⬡B:core.tool_loop:WIRE:writ_knows_a_coding_turn_from_the_turn:20260717⬡
-  // Real incident 20260717, founder-caught. WRIT hard-fails INTERNAL_SYSTEM_TERMS
-  // ('bead', 'abacia', 'stamp_type'...) unless isInternalContext(context) is true,
-  // which reads context.mode. board/writ FIX:internal_terms_allowed_for_internal_channels
-  // :20260715 already established that coding work must be able to name its own
-  // machinery -- but nothing ever set the mode, so the escape hatch never opened.
-  // _codaLeadNeeded only sees a CALLER-declared identity.council_context.mode, so a
-  // real coding turn arriving on any ordinary channel was gagged for the founder's
-  // own vocabulary and he got silence. The turn itself is the evidence: if she
-  // actually consulted the coding department or read her own code, this IS internal
-  // work. Derived from tools already used this turn, never assumed, never widened
-  // beyond that. Every other WRIT law stays active.
-  if (!_councilContext.mode && Array.isArray(tools) &&
-      (tools.indexOf('consult_coda') !== -1 || tools.indexOf('read_own_code') !== -1)) {
-    _councilContext.mode = 'coding';
-  }
+  var _callerCouncilContext = identity&&identity.council_context||{};
+  // Only the server-owned policy mode and evidence digest cross into SHADOW.
+  // Object.assign over the caller context is intentionally forbidden here: it
+  // could reintroduce stale verified evidence, contributors, effects, or other
+  // ambient fields after the model transcript had already been isolated.
+  var _councilContext = _structuredReachPolicy ? {
+    tools_used:[], iterations:iter, mode:'reach_policy_decision',
+    outbound_finalize:true,
+    evidence_digest:/^[a-f0-9]{64}$/.test(String(_callerCouncilContext.evidence_digest||''))
+      ? String(_callerCouncilContext.evidence_digest) : null,
+    memory_contributors:null
+  } : Object.assign({ tools_used:tools, iterations:iter,
+    memory_contributors:(fcw&&fcw.contributors)||null }, _callerCouncilContext);
+  var _reachHandoffMode = String(identity&&identity.council_context&&
+    identity.council_context.mode || '');
+  var _reachHandoffEligible = !(identity && (identity.outbound_finalize ||
+    identity.delivery&&identity.delivery.external ||
+    /^(outbound|outreach)/.test(_reachHandoffMode)));
+  // This flag is committed inside the canonical CYCLE_RECEIPT/STAMP pair. If
+  // the later candidate append loses its response or fails, the queue scanner
+  // can reconstruct exactly this ordinary cycle. Finalizer/external cycles are
+  // explicitly false and can never recurse into REACH.
+  _councilContext.reach_handoff_eligible = _reachHandoffEligible;
   var _councilDeliveryTarget = _councilContext.delivery_target;
   delete _councilContext.delivery_target;
-  _councilContext.identity_provenance = _identityProvenanceLedger;
-  _councilContext.identity_evidence_receipt = _identityEvidenceProof.ok
-    ? _identityEvidenceProof.receipt : null;
-  _councilContext.pending_effects = _effectRuntime.pendingEffects.map(function (effect) {
-    return { name:effect.name, args:effect.args };
-  });
-  _councilContext.verified_evidence = _councilEvidence;
+  _councilContext.identity_provenance = _structuredReachPolicy
+    ? null : _identityProvenanceLedger;
+  _councilContext.identity_evidence_receipt = _structuredReachPolicy ? null
+    : (_identityEvidenceProof.ok ? _identityEvidenceProof.receipt : null);
+  if (_structuredReachPolicy) _councilContext.pending_effects = [];
+  else _councilContext.pending_effects = _effectRuntime.pendingEffects.map(function (effect) {
+      return { name:effect.name, args:effect.args };
+    });
+  _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
+  var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
   if (await _turnCancelled(true)) return _turnCancelledResult('before_council');
   var _council = await runOutboundCouncil({
     hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
@@ -3601,7 +3430,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       council_stages:(_council&&_council.stages)||[]};
   }
   finalAns = _council.answer;
-  if (!isHumanFacingAnswer(finalAns)) {
+  if(_structuredReachPolicy&&(finalAns!==_structuredPolicyDraftBytes||
+      !_validStructuredReachPolicy(finalAns))){
+    _stampStep('outbound_council_blocked','reach_policy_json_mutated');
+    return{ok:false,reason:'reach_policy_json_mutated',blocked_by:'A\'NU',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+      ms:Date.now()-t0};
+  }
+  if (!_structuredReachPolicy&&!isHumanFacingAnswer(finalAns)) {
     _stampStep('outbound_council_blocked', 'council_answer_hollow_protocol');
     return {ok:false,reason:'council_answer_hollow_protocol',blocked_by:'STAMP',ham:hamObj,
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
@@ -3815,14 +3651,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       { cycleId: _cycleId, requestId: _requestId, tools_used: tools, iterations: iter,
         ms: Date.now() - t0, fell: _fellTools, channel: channel,
         council_source: _councilReceipt && _councilReceipt.source },
-      { chain: ['PAI', 'MemoryBank'], deliveredBy: 'PAI cycle', why: (_fellTools.length
-        ? _fellTools.length + ' tool(s) fell: ' + _fellTools.join(', ')
-        : 'clean committed cycle, ' + tools.length + ' tool(s) ran'), audience: 'builder' }
+      { chain: _structuredReachPolicy ? ['PAI', 'REACH_EVIDENCE']
+          : ['PAI', 'MemoryBank'],
+        deliveredBy: 'PAI cycle', why: _structuredReachPolicy
+          ? 'closed-world exact candidate policy, full council committed'
+          : (_fellTools.length
+            ? _fellTools.length + ' tool(s) fell: ' + _fellTools.join(', ')
+            : 'clean committed cycle, ' + tools.length + ' tool(s) ran'),
+        audience: 'builder' }
     )));
   } catch (eRcpt) { /* diagnostic only, after the mandatory durable proof */ }
   try {
     if (await _turnCancelled()) return _turnCancelledResult('before_tracker');
-    if (!_blockedFallback) {
+    if (!_structuredReachPolicy && !_blockedFallback) {
       var _trkD = require('./tracker.js');
       if (_trkD.looksLikeActionRequest(_exactUserMessage)) {
         await _trkD.stampTrack({ hamUid: hamUid, status: 'DONE', kind: 'request',
@@ -3852,16 +3693,42 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // stamps a durable per-HAM candidate, then lets the existing governed REACH
   // engine judge timing and channel. Outbound finalizer cycles are excluded so
   // REACH can never recursively trigger itself.
-  var _reachHandoffMode = String(identity&&identity.council_context&&
-    identity.council_context.mode || '');
-  if (!(identity && (identity.outbound_finalize || identity.delivery&&identity.delivery.external ||
-      /^(outbound|outreach)/.test(_reachHandoffMode)))) {
-    setImmediate(function () {
-      require('./reach/cycle.handoff.js').afterCommittedCycle({ hamUid:hamUid,
+  if (_reachHandoffEligible) {
+    var _reachHandoff;
+    try {
+      var _reachModule=require('./reach/cycle.handoff.js');
+      _reachHandoff=await _reachModule.enqueueCommittedCycle({ hamUid:hamUid,
         cycleId:_cycleId, requestId:_requestId, channel:channel, answer:finalAns,
-        world:identity&&identity.world || hamObj&&hamObj.world || null })
-        .catch(function (eReach) { console.error('[REACH] cycle handoff failed:', eReach.message); });
-    });
+        question:_exactUserMessage, deliberationInput:String(message||''),
+        councilProof:compactCouncilProof(_council), councilResult:_council,
+        // The committed council marker is the canonical world binding. Raw
+        // identity/HAM labels may be mixed-case, conflicting, or deliberately
+        // excluded from the allowlisted active-world lane.
+        world:_council&&_council.council_receipt&&
+          _council.council_receipt.reach_handoff
+          ?_council.council_receipt.reach_handoff.world:null });
+      if(_reachHandoff&&_reachHandoff.ok===true&&_reachHandoff.candidate){
+        var _durableCandidate=_reachHandoff.candidate;
+        setImmediate(function () {
+          _reachModule.consumeEnqueued(_durableCandidate).catch(function(eReach){
+            console.error('[REACH] durable candidate consume failed:',eReach.message);});
+        });
+      }else{
+        console.error('[REACH] durable cycle candidate failed:',
+          _reachHandoff&&_reachHandoff.reason||'unknown');
+      }
+    } catch(eReachStamp) {
+      _reachHandoff={ok:false,reason:'candidate_enqueue_failed:'+eReachStamp.message};
+      console.error('[REACH] durable cycle candidate failed:',eReachStamp.message);
+    }
+    Object.defineProperty(_successResult,'_reachHandoff',{enumerable:false,
+      value:_reachHandoff});
+    _successResult.reach_handoff={candidate_committed:!!(_reachHandoff&&
+      _reachHandoff.ok===true),source:_reachHandoff&&_reachHandoff.source||null,
+      degraded:!(_reachHandoff&&_reachHandoff.ok===true),
+      reason:_reachHandoff&&_reachHandoff.ok===true?null:
+        _reachHandoff&&_reachHandoff.reason||'candidate_enqueue_unverified'};
+    if(_successResult.reach_handoff.degraded)_successResult.degraded=true;
   }
   return _successResult;
 }
@@ -3869,5 +3736,7 @@ module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamed
   prioritizeVerifiedEvidence,regenerateHollowAnswer,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
-  verifiedVoiceCallPurposeAnswer,voiceConversationalNoGenericLookup,
-  bindExactHamToolArgs}};
+  verifiedVoiceCallPurposeAnswer,voiceHearingContextSatisfiesTurn,
+  verifiedVoiceHearingAnswer,voiceFarewellContextSatisfiesTurn,
+  verifiedVoiceFarewellAnswer,voiceConversationalNoGenericLookup,
+  bindExactHamToolArgs,structuredReachPolicyMode}};

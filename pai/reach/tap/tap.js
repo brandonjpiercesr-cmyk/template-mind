@@ -1,8 +1,9 @@
 // ⬡B:reach.tap.tap:WIRE:funneled_20260712⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+function _memorySelected(){return !!(process.env.MEMORY_BANK_URL||process.env.MEMORY_BANK_KEY);}
+function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 function ymd(){return new Date().toISOString().slice(0,10).replace(/-/g,'');}
 // ⬡B:reach.tap.tap:MODULE:outbound_imessage_sms:20260618⬡
 // TAP -- outbound proactive iMessage (Blooio) + SMS fallback (Telnyx)
@@ -86,17 +87,66 @@ async function tapSend(to, message, hamUid, councilResult, options) {
     return { ok:false, sent:false, channel:null, reason:'no_text_channel_configured',
       requestId:requestId, cycleId:cycleId, councilProof:proof };
   }
+  // Only core/outreach's explicit internal provenance owns an autonomous
+  // pending -> terminal-delivery saga. A caller-controlled request ID can never
+  // opt a manual/reactive send into autonomous truth accounting.
+  var deliverySaga = require('../../core/reach/provider.delivery.saga.js');
+  var providerDelivery = deliverySaga.normalizeProvenance(options.providerDelivery);
+  var autonomousReach = !!providerDelivery;
+  if (autonomousReach && !blooioKey) {
+    return { ok:false, sent:false,
+      reason:'autonomous_text_terminal_provider_unavailable',
+      requestId:requestId, cycleId:cycleId, councilProof:proof };
+  }
   if (await cancellationRequested(options)) {
     return { ok:false, sent:false, reason:'voice_turn_cancelled',
       requestId:requestId, cycleId:cycleId, councilProof:proof };
   }
-  var effectClaim = await require('../../core/outbound.effect.js').claimProviderAttempt({
+  var effectBoundary = require('../../core/outbound.effect.js');
+  var effectInput = {
     hamUid:hamUid, channel:'tap_text', deliveryTarget:canonicalTarget,
     artifact:message, requestId:requestId, cycleId:cycleId
-  });
+  };
+  var plannedEffectKey = typeof effectBoundary.effectKey === 'function'
+    ? effectBoundary.effectKey(effectInput) : null;
+  if (!plannedEffectKey) return { ok:false, sent:false,
+    reason:'provider_effect_identity_unverified', requestId:requestId,
+    cycleId:cycleId, councilProof:proof };
+
+  var providerIntent = null;
+  if (autonomousReach) {
+    var truthReady = await deliverySaga.prepareStore();
+    if (!truthReady.ok) return { ok:false, sent:false,
+      reason:truthReady.reason || 'provider_truth_store_unavailable',
+      requestId:requestId, cycleId:cycleId, councilProof:proof,
+      effectKey:plannedEffectKey };
+    providerIntent = await deliverySaga.createProviderIntent({
+      hamUid:hamUid, provider:'blooio', channel:'text',
+      requestId:requestId, cycleId:cycleId,
+      correlationKey:'anew-' + plannedEffectKey,
+      providerBinding:canonicalTarget.value, artifact:message,
+      councilProof:proof, provenance:providerDelivery
+    });
+    if (!providerIntent.ok) return { ok:false, sent:false,
+      reason:providerIntent.reason || 'provider_intent_unverified',
+      requestId:requestId, cycleId:cycleId, councilProof:proof,
+      effectKey:plannedEffectKey };
+  }
+  if (await cancellationRequested(options)) {
+    return { ok:false, sent:false, reason:'voice_turn_cancelled',
+      requestId:requestId, cycleId:cycleId, councilProof:proof,
+      effectKey:plannedEffectKey, providerIntentSource:providerIntent && providerIntent.source || null };
+  }
+  var effectClaim = await effectBoundary.claimProviderAttempt(effectInput);
   if (!effectClaim.ok) return { ok:false, sent:false, reason:effectClaim.reason,
     requestId:requestId, cycleId:cycleId, councilProof:proof,
-    effectKey:effectClaim.effectKey || null };
+    effectKey:effectClaim.effectKey || plannedEffectKey };
+  if (effectClaim.effectKey !== plannedEffectKey ||
+      effectClaim.idempotencyKey !== 'anew-' + plannedEffectKey) {
+    return { ok:false, sent:false, reason:'provider_effect_identity_mismatch',
+      requestId:requestId, cycleId:cycleId, councilProof:proof,
+      effectKey:effectClaim.effectKey || null };
+  }
   if (await cancellationRequested(options)) {
     return { ok:false, sent:false, reason:'voice_turn_cancelled',
       requestId:requestId, cycleId:cycleId, councilProof:proof,
@@ -163,6 +213,34 @@ async function tapSend(to, message, hamUid, councilResult, options) {
   }
 
   if (!result) result = { ok: false, channel: null, reason: 'provider_unverified' };
+  if (result.ok === true && result.channel === 'imessage' && result.message_id &&
+      autonomousReach && deliverySaga) {
+    var providerAttempt = await deliverySaga.registerProviderAttempt({
+      hamUid:hamUid, provider:'blooio', channel:'text',
+      providerMessageId:result.message_id,
+      providerIntentSource:providerIntent.source
+    });
+    if (!providerAttempt.ok) {
+      var acceptanceRecovery = await deliverySaga.recordProviderAcceptanceRecovery({
+        provider:'blooio', providerMessageId:result.message_id,
+        providerIntentSource:providerIntent.source
+      });
+      result = { ok:false, sent:false, providerAccepted:true,
+        provider:'blooio', providerAcceptanceRecovery:true,
+        providerRecoveryPersisted:acceptanceRecovery.ok === true,
+        providerRecoverySource:acceptanceRecovery.source || null,
+        providerRecoveryReason:acceptanceRecovery.ok ? null : acceptanceRecovery.reason || null,
+        channel:'imessage', message_id:result.message_id,
+        reason:'provider_acceptance_binding_unverified',
+        deliveryTruthReady:false, deliveryTruthReason:providerAttempt.reason,
+        providerIntentSource:providerIntent.source };
+    } else {
+      result.provider = 'blooio';
+      result.deliveryTruthReady = true;
+      result.providerIntentSource = providerIntent.source;
+      result.providerAttemptSource = providerAttempt.source;
+    }
+  }
   result = Object.assign({}, result, {
     sent: result.ok === true,
     requestId: requestId,

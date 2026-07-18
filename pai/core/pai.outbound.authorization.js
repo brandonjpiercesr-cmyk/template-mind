@@ -9,6 +9,9 @@
 var crypto = require('crypto');
 
 var VERSION = 'anew.pai.provider-handoff.v2';
+var INTERNAL_EFFECT_VERSION = 'anew.pai.internal-effect-request.v1';
+var INTERNAL_EFFECT_MAX_LIFETIME_MS = 2 * 60 * 1000;
+var INTERNAL_EFFECT_CLAIM_MS = 24 * 60 * 60 * 1000;
 // Twilio keeps the canonical media stream open for at most 60 minutes. Give
 // the signed handoff five bounded minutes for dial/setup so authorization can
 // never expire while the provider is still carrying the same verified call.
@@ -63,6 +66,89 @@ function stableStringify(value) {
   }).join(',') + '}';
 }
 
+function internalEffectPayload(input, now) {
+  input = input || {};
+  now = Number.isFinite(now) ? now : Date.now();
+  var body = input.body;
+  var path = String(input.path || '');
+  var requestId = body && String(body.requestId || body.request_id || '').trim();
+  var hamUid = body && String(body.hamUid || body.ham_uid || '').trim().toUpperCase();
+  var nonce = String(input.nonce || '');
+  var expiresAt = Number(input.expiresAt);
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      !/^\/(?:reach\/out|vara\/call|iman\/send|lina\/send|lina\/call)$/.test(path) ||
+      !/^[A-Za-z0-9._:-]{8,160}$/.test(requestId) ||
+      !/^[A-Z0-9._:-]{2,160}$/.test(hamUid) ||
+      !/^[A-Za-z0-9._:-]{16,220}$/.test(nonce) ||
+      !Number.isSafeInteger(expiresAt) || expiresAt <= now ||
+      expiresAt - now > INTERNAL_EFFECT_MAX_LIFETIME_MS) return null;
+  return { version:INTERNAL_EFFECT_VERSION, purpose:'internal_effect_request',
+    method:'POST', path:path, request_id:requestId, ham_uid:hamUid,
+    expires_at:expiresAt, nonce:nonce,
+    body_digest:crypto.createHash('sha256')
+      .update(Buffer.from(stableStringify(body), 'utf8')).digest('hex') };
+}
+
+function signInternalEffectRequest(input, env) {
+  var secret = key(env);
+  var payloadValue = internalEffectPayload(input);
+  if (!secret || !payloadValue) return null;
+  return crypto.createHmac('sha256', secret)
+    .update(Buffer.from(stableStringify(payloadValue), 'utf8')).digest('hex');
+}
+
+function internalEffectHeaders(path, body, env, now) {
+  now = Number.isFinite(now) ? now : Date.now();
+  var expiresAt = now + 60 * 1000;
+  var nonce = crypto.randomUUID();
+  var signature = signInternalEffectRequest({ path:path, body:body,
+    expiresAt:expiresAt, nonce:nonce }, env);
+  return signature ? { 'X-ANEW-Effect-Expires':String(expiresAt),
+    'X-ANEW-Effect-Nonce':nonce, 'X-ANEW-Effect-Authorization':signature } : null;
+}
+
+function internalEffectInput(req, path) {
+  var headers = req && req.headers || {};
+  return { path:path, body:req && req.body,
+    expiresAt:Number(headers['x-anew-effect-expires']),
+    nonce:String(headers['x-anew-effect-nonce'] || '') };
+}
+
+function verifyInternalEffectRequest(req, path, env, now) {
+  if (!key(env)) return { ok:false, reason:'internal_effect_authorization_unconfigured' };
+  var input = internalEffectInput(req, path);
+  var payloadValue = internalEffectPayload(input, now);
+  var signature = String(req && req.headers &&
+    req.headers['x-anew-effect-authorization'] || '').toLowerCase();
+  var expected = payloadValue ? crypto.createHmac('sha256', key(env))
+    .update(Buffer.from(stableStringify(payloadValue), 'utf8')).digest('hex') : null;
+  if (!expected || !/^[a-f0-9]{64}$/.test(signature) ||
+      !crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(signature, 'hex'))) {
+    return { ok:false, reason:'internal_effect_authorization_invalid_or_expired' };
+  }
+  return { ok:true, payload:payloadValue };
+}
+
+async function consumeInternalEffectRequest(req, path, env, now) {
+  var verified = verifyInternalEffectRequest(req, path, env, now);
+  if (!verified.ok) return verified;
+  var stableEffect = { version:INTERNAL_EFFECT_VERSION, method:'POST',
+    path:verified.payload.path, request_id:verified.payload.request_id,
+    ham_uid:verified.payload.ham_uid, body_digest:verified.payload.body_digest };
+  var digest = crypto.createHash('sha256')
+    .update(Buffer.from(stableStringify(stableEffect), 'utf8')).digest('hex');
+  try {
+    var claimed = await require('./claim_lock.js').claimTask('internal_effect:' + digest,
+      'internal_effect.' + digest + '.' + crypto.randomUUID(), INTERNAL_EFFECT_CLAIM_MS);
+    return claimed ? { ok:true, consumed:true, digest:digest,
+      requestId:verified.payload.request_id, hamUid:verified.payload.ham_uid }
+      : { ok:false, consumed:false, reason:'internal_effect_request_replayed', digest:digest };
+  } catch (eClaim) {
+    return { ok:false, consumed:false, reason:'internal_effect_request_claim_uncertain',
+      digest:digest };
+  }
+}
+
 function payload(input, now) {
   var value = normalized(input, now);
   return value ? stableStringify(value) : null;
@@ -109,5 +195,11 @@ module.exports = {
   signInitialMessage:signInitialMessage,
   verifyInitialMessage:verifyInitialMessage,
   consumeInitialMessage:consumeInitialMessage,
-  payload:payload
+  payload:payload,
+  INTERNAL_EFFECT_VERSION:INTERNAL_EFFECT_VERSION,
+  internalEffectPayload:internalEffectPayload,
+  signInternalEffectRequest:signInternalEffectRequest,
+  internalEffectHeaders:internalEffectHeaders,
+  verifyInternalEffectRequest:verifyInternalEffectRequest,
+  consumeInternalEffectRequest:consumeInternalEffectRequest
 };

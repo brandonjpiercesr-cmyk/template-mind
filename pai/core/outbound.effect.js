@@ -32,7 +32,13 @@ function canonicalEffect(input) {
     channel: input.channel.trim().toLowerCase(),
     request_id: input.requestId.trim(),
     cycle_id: input.cycleId.trim(),
-    session_id: typeof input.sessionId === 'string' ? input.sessionId.trim() : '',
+    // The signed voice session is a transport lease minted afresh for every
+    // handoff. It must not change the identity of the logical dial, otherwise
+    // replaying one committed request with a new lease can call the person
+    // again. Request, cycle, HAM, target, channel, and exact artifact remain
+    // the durable effect identity. Non-VARA callers keep legacy behavior.
+    session_id: input.channel.trim().toLowerCase() === 'vara_call' ? '' :
+      (typeof input.sessionId === 'string' ? input.sessionId.trim() : ''),
     delivery_target: target,
     artifact_bytes: Buffer.byteLength(artifact, 'utf8'),
     artifact_digest: crypto.createHash('sha256').update(Buffer.from(artifact, 'utf8')).digest('hex')
