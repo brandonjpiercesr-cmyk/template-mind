@@ -47,10 +47,21 @@ var PIECES = {
     fetch: async function (hamUid, base, headers) {
       var r = await fetch(base + '/os/calendar/' + hamUid, { headers: headers }).then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
       if (!r || !r.ok) return null;
-      var events = (r.events || r.items || []).slice(0, 8);
+      var events = (r.events || r.items || []).slice(0, 12);
       if (!events.length) return { type: 'card', title: 'Your calendar', text: 'Your next 24 hours are wide open with nothing scheduled.' };
-      return { type: 'timeline', title: 'Your calendar', events: events.map(function (e) {
-        return { when: String(e.when || e.time || '').slice(0, 40), title: String(e.title || e.summary || 'Event').slice(0, 90) }; }).filter(function (x) { return x.title; }) };
+      // ⬡B:piece_registry:FIX:render_the_enriched_date_fields:20260718⬡ the source now
+      // stamps each event with date/time/is_today/is_past; render those, lead with today,
+      // never show a passed event as if it were current, and label the day so a future
+      // event is never mistaken for today's on the glass.
+      var todayEvents = events.filter(function (e) { return e.is_today; });
+      var upcoming = events.filter(function (e) { return !e.is_today && !e.is_past; });
+      var shown = (todayEvents.length ? todayEvents : upcoming).slice(0, 8);
+      if (!shown.length) return { type: 'card', title: 'Your calendar', text: 'Today is open. Nothing scheduled.' };
+      return { type: 'timeline', title: todayEvents.length ? 'Today' : 'Coming up',
+        events: shown.map(function (e) {
+          var when = e.is_today ? (e.allDay ? 'today' : String(e.time || '')) : String(e.date || '');
+          return { when: when.slice(0, 40), title: String(e.title || e.summary || 'Event').slice(0, 90) };
+        }).filter(function (x) { return x.title; }) };
     },
   },
   today: {
