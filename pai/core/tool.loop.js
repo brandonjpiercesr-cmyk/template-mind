@@ -495,6 +495,31 @@ function prioritizeVerifiedEvidence(primary, secondary) {
 var AUTO_SCREEN_TOOLS = ['calendar_read'];
 
 var TOOLS = [
+  {type:'function',function:{name:'consult_mace',description:'MACE, Master Architecture and Code Engine, the CODING department lead. Her real hands, live. '
+    +'Use her to READ ANY REPOSITORY, not just your own: action "read_file" returns a whole real file with its sha and size, action "list_files" returns every real entry in a directory. '
+    +'THIS IS THE DUPLICATION CATCHER. When a fix lands in one file, use her to read the same function in every other file that might hold a twin, and compare them yourself before saying a thing is fixed. '
+    +'Two live incidents on 20260717 were exactly this: a fix landed in one file and an identical twin in another kept the broken code. '
+    +'Her write, commit, deploy and env hands are latched OFF by her own service and are not offered here. Read-only.',
+    parameters:{type:'object',properties:{
+      action:{type:'string',enum:['read_file','list_files'],description:'read_file for one whole file, list_files for a directory listing'},
+      repo:{type:'string',description:'owner/name, e.g. brandonjpiercesr-cmyk/template-mind or brandonjpiercesr-cmyk/anew'},
+      path:{type:'string',description:'file path for read_file, directory path for list_files'},
+      ref:{type:'string',description:'branch, defaults to main'}},
+      required:['action','repo','path']}}},
+  {type:'function',function:{name:'assemble_bcw',description:'ARM YOURSELF BEFORE YOU BUILD. Calls the real BCW station (Building Context Window). '
+    +'Returns the live doctrine, the standards, the burn book of past mistakes, the proof checklist, and a pathway scan of what ALREADY EXISTS on this topic, '
+    +'so existing ground gets upgraded and never twinned. BCW core rule: check first, never duplicate. '
+    +'Use this BEFORE proposing or judging any build, agent, or wonder. Never ask anyone to paste context at you, go get it yourself.',
+    parameters:{type:'object',properties:{topic:{type:'string',description:'what the build is about, e.g. "AIR" or "model ladder" or "FIND agent"'}},required:['topic']}}},
+  {type:'function',function:{name:'run_cookoff',description:'RUN A REAL CODING COOK-OFF. One build task, three contestants (Ornith on RunPod, GLM 5.2, Opus 4.8). Fable 5 reads all three, grades on the rubric, writes course corrections and names a winner. Fable is the JUDGE, never a contestant. '
+    +'Rubric: correctness, completeness, doctrine adherence, cost, craft. This is a REAL contest that really runs and really stamps a receipt in your bank, not a description of one. '
+    +'Use it when a build task has more than one honest answer and you want the best one proven instead of chosen. Takes up to 150 seconds.',
+    parameters:{type:'object',properties:{task:{type:'string',description:'the exact build task the three contestants compete on'}},required:['task']}}},
+  {type:'function',function:{name:'run_wonder_games',description:'RUN THE WONDER GAMES. Scores existing candidates head to head on a real task and lets a seat be earned or lost on CANON-graded runs. '
+    +'Contestants are the authorized open-weight set: Ornith 35B, GLM 5.2, Qwen 3. '
+    +'Use it to decide whether something is actually a wonder yet instead of asserting that it is. Takes up to 150 seconds.',
+    parameters:{type:'object',properties:{task:{type:'string',description:'the task the candidates compete on'}},required:['task']}}},
+
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
@@ -737,6 +762,73 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       await runtimeCancellationRequested(runtime)) {
     return cancelledToolResult(name);
   }
+// ⬡B:tool.loop:WIRE:mace_real_routes_verified_live_20260717⬡
+  // Exact contracts, each confirmed with a real live POST before this was written:
+  //   POST /api/mace/read_file  {repo,path,ref} -> {ok,repo,path,ref,sha,size,encoding,content_text,source_url}
+  //   POST /api/mace/list_files {repo,path,ref} -> {ok,repo,path,ref,count,entries[]}
+  // Nothing guessed. Read-only: MACE latches her own write side at 403.
+  if (name === 'consult_mace') {
+    var _maceBase = process.env.MACE_URL || process.env.ABABASE_URL || 'https://ababase.onrender.com';
+    var _act = String(args.action || '').trim();
+    if (_act !== 'read_file' && _act !== 'list_files') {
+      return JSON.stringify({ok:false,note:'MACE read hands are read_file and list_files. Her write, commit, deploy and env hands are latched off at her own service.'});
+    }
+    var _repo = String(args.repo || '').trim(), _path = String(args.path || '').trim();
+    if (!_repo || !_path) return JSON.stringify({ok:false,note:'need repo and path'});
+    try {
+      var _m = await fetch(_maceBase + '/api/mace/' + _act, { method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ repo:_repo, path:_path, ref: String(args.ref || 'main') }),
+        signal: AbortSignal.timeout(60000) }).then(function (x) { return x.json(); });
+      if (!_m || _m.ok !== true) return JSON.stringify({ok:false,reason:(_m && (_m.error || _m.reason)) || 'mace_no_result',via:'MACE'});
+      if (_act === 'list_files') {
+        return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,count:_m.count,
+          entries:(_m.entries||[]).slice(0,200)});
+      }
+      return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,sha:_m.sha,size:_m.size,
+        content:String(_m.content_text||'').slice(0, Number(process.env.MACE_READ_CHARS||20000)),
+        truncated: String(_m.content_text||'').length > Number(process.env.MACE_READ_CHARS||20000),
+        note:'Read by MACE, the CODING department lead. If you are checking a fix, read the twin in the other repo before you call it done.'});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e),via:'MACE'}); }
+  }
+  // ⬡B:tool.loop:LAW:her_hands_on_the_real_stations:20260717⬡
+  // Real calls to the real live stations, same base resolver and same request shapes
+  // advisors/dispatch.js already uses. Nothing new invented.
+  if (name === 'assemble_bcw' || name === 'run_cookoff' || name === 'run_wonder_games') {
+    var _stationBase = process.env.STATIONS_URL || process.env.AIBEBASE_URL
+      || process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
+    try {
+      if (name === 'assemble_bcw') {
+        var _topic = String(args.topic || '').trim();
+        if (!_topic) return JSON.stringify({ok:false,note:'no topic given'});
+        var _b = await fetch(_stationBase + '/bcw?topic=' + encodeURIComponent(_topic),
+          { signal: AbortSignal.timeout(90000) }).then(function (x) { return x.json(); });
+        if (!_b || !_b.bcw) return JSON.stringify({ok:false,note:'BCW station returned nothing'});
+        return JSON.stringify({ok:true,topic:_topic,chars:_b.chars,armory:String(_b.bcw).slice(0,14000)});
+      }
+      if (name === 'run_cookoff') {
+        var _task = String(args.task || '').trim();
+        if (!_task) return JSON.stringify({ok:false,note:'no task given'});
+        var _c = await fetch(_stationBase + '/cookoff/run', { method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ task:_task, invoked_by:'anew_cycle' }),
+          signal: AbortSignal.timeout(150000) }).then(function (x) { return x.json(); });
+        if (!_c || !_c.ok) return JSON.stringify({ok:false,reason:(_c && _c.reason) || 'cookoff_no_result'});
+        var _j = (_c.result && _c.result.judge) || {};
+        return JSON.stringify({ok:true,winner:_c.winner,why:_j.why||'',correction:_j.correction||'',
+          note:'Real cook-off. Fable 5 judged three real contestants and the receipt is stamped in your bank.'});
+      }
+      var _wtask = String(args.task || '').trim();
+      if (!_wtask) return JSON.stringify({ok:false,note:'no task given'});
+      var _w = await fetch(_stationBase + '/wonder-games/compete', { method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ task:_wtask, hamUid: hamUid }),
+        signal: AbortSignal.timeout(150000) }).then(function (x) { return x.json(); });
+      if (!_w) return JSON.stringify({ok:false,reason:'wonder_games_no_result'});
+      return JSON.stringify({ok:true,result:_w});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
+  }
+
   if (name === 'activate_roadmap_task' && (!runtime || runtime.codaVerified !== true)) {
     return JSON.stringify({ok:false,reason:'verified_current_turn_coda_required',tool:name});
   }
@@ -2245,32 +2337,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (_prefNeeded) {
     try {
       var _prefSynthRes = await find([{ stamp_type: 'PREFERENCE', ham_uid: hamUid, limit: 5 }]);
-      // ⬡B:core.tool_loop:FIX:preference_preload_keyword_net_20260718⬡ Founder
-      // caught live and A'NU agreed via the cycle door: the preload only queried
-      // stamp_type PREFERENCE, but a plainly stored fact (the Lakers fact) lives
-      // under CHATTER / CYCLE_STEP / LOGFUL, never PREFERENCE, so the preload
-      // came back empty and she answered "I have nothing" while the fact sat
-      // right there. When PREFERENCE is empty, run a ham-scoped ilike on the
-      // question's key nouns before giving up. Cold code, no model, capped.
-      if (!(_prefSynthRes && _prefSynthRes.beads && _prefSynthRes.beads.length)) {
-        var _pfStop = {the:1,and:1,for:1,you:1,your:1,what:1,whats:1,who:1,whos:1,does:1,did:1,is:1,are:1,my:1,me:1,do:1,i:1,of:1,to:1,about:1,tell:1,show:1,have:1,love:1,like:1,enjoy:1,favorite:1,favourite:1,prefer:1};
-        var _pfKw = String(message||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
-          .filter(function(w){return w.length>=3 && !_pfStop[w];});
-        _pfKw.sort(function(a,b){return b.length-a.length;});
-        _pfKw = _pfKw.slice(0,4);
-        for (var _pfi=0; _pfi<_pfKw.length; _pfi++) {
-          try {
-            var _pfUrl = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + encodeURIComponent(String(hamUid).toUpperCase())
-              + '&summary=ilike.*' + encodeURIComponent(_pfKw[_pfi]) + '*'
-              + '&select=id,stamp_type,source,summary,content,created_at&order=created_at.desc&limit=8';
-            var _pfRows = await fetch(_pfUrl, {headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()}}).then(function(x){return x.json();}).catch(function(){return [];});
-            if (Array.isArray(_pfRows) && _pfRows.length) {
-              _prefSynthRes = { beads:_pfRows, count:_pfRows.length, ham_uid:hamUid, keyword_fallback:_pfKw[_pfi] };
-              break;
-            }
-          } catch (_pfe) {}
-        }
-      }
+      // ⬡B:core.tool_loop:DOCTRINE:cold_ilike_net_removed_organ_decides_meaning:20260718⬡
+      // WONDER CYCLE doctrine (382567): cold code must never decide meaning. The
+      // ilike noun-guess fallback is removed; PREFERENCE-by-stamp_type preload stays
+      // (it serves, it does not judge). Fails open to the organ, which has working tools.
       if (_prefSynthRes && _prefSynthRes.beads && _prefSynthRes.beads.length) {
         var _prefResult = JSON.stringify(_prefSynthRes).slice(0,4000);
         _verifiedToolEvidence.push({ tool:'find_in_brain',
