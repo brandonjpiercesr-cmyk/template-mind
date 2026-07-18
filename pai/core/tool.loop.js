@@ -1904,7 +1904,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // mechanically checked against them before it is ever returned.
   var _verifiedRealNumbers = [];
   if (await _turnCancelled()) return _turnCancelledResult('before_memory');
-  if (!GROQ) return {ok:false,reason:'no_groq_key',_dbg:'GROQ_API_KEY not in process.env'};
+  // ⬡B:core.tool_loop:FIX:absent_groq_key_must_not_kill_the_turn:20260718⬡
+  // FOUR-API LAW (20260717): Groq is perma-banned and GROQ_API_KEY was pulled from
+  // every service. This gate then killed EVERY main deliberation with no_groq_key
+  // before the provider chain below (Ornith -> Together -> OpenRouter, all approved)
+  // ever ran -- she went silent on real questions while greetings still passed on
+  // fast paths. The founder's texts died here. The chain already falls through when
+  // the Groq rung errors, so the gate is removed and the dead rung fails fast into
+  // the approved providers. NO ROGUE MODEL CALLS law (bead 377996) stands: the full
+  // rewire of these call sites through core/model.ladder.js is CODA department work;
+  // this fix stops the bleeding without adding a new path.
+  if (!GROQ) GROQ = '';
   var _structuredReachSystemPrompt =
     'INTERNAL CLOSED-WORLD REACH POLICY. Decide only from the server-owned policy question and the exact deliberation evidence packet in this turn. Ambient Memory Bank rows, latest activity, contributors, prior conversation, screen state, and fused world summaries are intentionally excluded and must not be inferred. Return only the required strict JSON object.';
   var _fcwT0=Date.now();
