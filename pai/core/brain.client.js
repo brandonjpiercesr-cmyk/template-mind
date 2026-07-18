@@ -59,7 +59,7 @@ async function writeBead({ hamUid, agentGlobal, source, type, content, summary, 
         throw new Error('writeBead requires a canonical source address in the form AGENT.hamUid.capability');
     }
 
-    // Embed edges inside content (aibe_brain has no edges column; the graph lives in content.edges)
+    // Embed edges inside content (legacy aibe_brain has no edges column; the graph lived in content.edges)
     const payloadContent = (content && typeof content === 'object') ? Object.assign({}, content, { edges: edges }) : { data: content, edges: edges };
 
     const acl_stamp = buildStamp(source, type, '');
@@ -80,6 +80,32 @@ async function writeBead({ hamUid, agentGlobal, source, type, content, summary, 
     // only when writing to a schema that expects it, so legacy writes stay unchanged.
     if (beadTable() !== 'aibe_brain' && bead.spawned_by === undefined) {
         bead.spawned_by = (source && String(source).split('.')[0]) || 'brain.client';
+    }
+    // ⬡B:core.brain_client:WIRE:the_door_was_writing_to_the_old_house:20260717⬡
+    // Founder-caught 20260717. This is THE door: the only writer that validates a
+    // canonical source address, and the one ~56 raw-fetch callers are meant to be
+    // redirected through. It has been writing the graph into content.edges since the
+    // 20260713 cutover, because of the true-then-false comment above it: legacy
+    // aibe_brain genuinely had no edges column. memory_bank.beads DOES. Verified live:
+    // columns are id, ham_uid, agent_global, stamp_type, acl_stamp, source, summary,
+    // content, importance, spawned_by, superseded_by, created_at, edges.
+    // So every bead written through the door landed with edges COLUMN [] and the real
+    // edge buried in a JSON blob no query can reach. Proof, bead 368796 by FUSION:
+    //   edges column  : []
+    //   content.edges : [{"type":"grounds","target":"DC499D0C.judgment_turns"}]
+    // Counted live: 337,987 beads, 0 null, 328,003 with edges = [], only 9,984 (2.95%)
+    // with a real edges column -- and every one of those 9,984 belongs to council
+    // internals (PAI_OUTBOUND_COUNCIL, SHADOW, PAI_REQUEST_GATE, META_COMMENTARY,
+    // WRIT, PAM) written by stageEdges() at pai.outbound.council.js:1907, which only
+    // ever describes the cycle's own plumbing. The knowledge had no graph. The door
+    // was not skipped because it was inconvenient. It was skipped because it was
+    // pointed at the old house, same as ANEW_OWN_CODE_REPOS, same as the /cycle door
+    // dropping identity, same as eanew's watermark. The 20260713 cutover left pointers
+    // behind and this is the fourth one found today.
+    // Same bank-detection pattern as spawned_by directly above. content.edges is kept
+    // exactly as-is so legacy readers and every current caller are unchanged.
+    if (beadTable() !== 'aibe_brain') {
+        bead.edges = edges;
     }
     const url = `${brainUrl()}/rest/v1/${beadTable()}`;
     const headers = {
