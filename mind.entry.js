@@ -11,6 +11,12 @@
 // and memory as one braid.
 'use strict';
 
+// ⬡B:mind.entry:WIRE:provider_boundary_installed_first:20260717⬡
+// One door for her world's 17 direct groq callers. Reroutes any banned-provider chat
+// call through the authorized open-weight ladder. Must run before any module that may
+// fetch a model. Zero per-caller edits. See pai/core/provider.boundary.js.
+require('./pai/core/provider.boundary.js').install();
+
 const express = require('express');
 const app = express();
 app.use(express.json());
