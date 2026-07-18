@@ -490,7 +490,55 @@ var AUTO_SCREEN_TOOLS = ['calendar_read'];
 // exact: gimmick, call and response.
 // Nothing invented here. These mirror advisors/dispatch.js realCookoff and
 // realWonderCompete, the same contracts the advisers already use.
+// ⬡B:tool.loop:WIRE:consult_mace_her_fifteen_hands_become_yours:20260717⬡
+// A'NU ruled this live, 20260717, armed by her own assemble_bcw call, SHADOW PASS on
+// 7 claims, CODA consulted. Her words: "Give your world a tool that calls MACE's
+// existing live routes, so her fifteen hands become your hands and nothing gets
+// rebuilt. This wins because it honors the founder's law of not rebuilding what
+// already exists and works." CLAIR agreed, so it moved.
+//
+// THE BOOTSTRAP WAS WRONG ABOUT MACE AND SO WAS CLAIR. Both said she was a scaffold
+// returning {processed:true}. Read live: MACE is 58,225 bytes with fifteen real tool
+// routes, a latch, a static deny scan, path denial and hard-breach detection. Her
+// directory says state WIRED, wonder_verdict WONDER, "confirmed by both legacy and
+// reforge audits independently". She shipped three real commits on 20260627. The
+// MACEAgent.js "stub" everyone cited says so in its own body: "MACE work executes
+// through AIR tool dispatch, not through handle()." Nobody read the comment inside
+// the thing they called empty.
+//
+// She is not a stub. She is a STRANDED WONDER. Zero files named mace exist in this
+// world's repo, or the builder's, or the watcher's. She lives in the older stack, and
+// a live POST tonight had her read this world's own coding.js in one call. She could
+// always see us. Nobody here had her number. Same disease as ORNITH_MODEL and the
+// cook-off receipts: the code moved and nothing else followed.
+//
+// WHY THIS IS THE WONDER AND NOT A CONVENIENCE. Her JD, written 20260216: she
+// identifies code duplication and extracts common patterns, and she does not just
+// patch symptoms. On 20260717 duplication cost two live incidents in one night: the
+// coding adviser kept a hardcoded banned model for two days after its twin was
+// corrected, and a banned search provider survived in a second copy of the same file
+// after the first was cleaned. Both are read-two-files-and-compare. That is exactly
+// what read_file and list_files across ANY repo make possible and what read_own_code,
+// scoped by fuzzy search to a fixed repo list, cannot do.
+//
+// SCOPE IS HER OWN LATCH, NOT CLAIR'S OPINION. Verified live tonight: write_file
+// returns 403 mace_write_disabled, "Default OFF on prod". MACE guards her own write,
+// commit, deploy, execute and env hands. Only the read hands are open, so only the
+// read hands are wired here. render_env_put_full in particular has wiped
+// ANTHROPIC_API_KEY before. Opening MACE's write side is the founder's env flip on
+// her service, not a tool CLAIR adds to a mind.
 var TOOLS = [
+  {type:'function',function:{name:'consult_mace',description:'MACE, Master Architecture and Code Engine, the CODING department lead. Her real hands, live. '
+    +'Use her to READ ANY REPOSITORY, not just your own: action "read_file" returns a whole real file with its sha and size, action "list_files" returns every real entry in a directory. '
+    +'THIS IS THE DUPLICATION CATCHER. When a fix lands in one file, use her to read the same function in every other file that might hold a twin, and compare them yourself before saying a thing is fixed. '
+    +'Two live incidents on 20260717 were exactly this: a fix landed in one file and an identical twin in another kept the broken code. '
+    +'Her write, commit, deploy and env hands are latched OFF by her own service and are not offered here. Read-only.',
+    parameters:{type:'object',properties:{
+      action:{type:'string',enum:['read_file','list_files'],description:'read_file for one whole file, list_files for a directory listing'},
+      repo:{type:'string',description:'owner/name, e.g. brandonjpiercesr-cmyk/template-mind or brandonjpiercesr-cmyk/anew'},
+      path:{type:'string',description:'file path for read_file, directory path for list_files'},
+      ref:{type:'string',description:'branch, defaults to main'}},
+      required:['action','repo','path']}}},
   {type:'function',function:{name:'assemble_bcw',description:'ARM YOURSELF BEFORE YOU BUILD. Calls the real BCW station (Building Context Window). '
     +'Returns the live doctrine, the standards, the burn book of past mistakes, the proof checklist, and a pathway scan of what ALREADY EXISTS on this topic, '
     +'so existing ground gets upgraded and never twinned. BCW core rule: check first, never duplicate. '
@@ -742,6 +790,35 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
   if (runtime && runtime.phase === 'commit' &&
       await runtimeCancellationRequested(runtime)) {
     return cancelledToolResult(name);
+  }
+  // ⬡B:tool.loop:WIRE:mace_real_routes_verified_live_20260717⬡
+  // Exact contracts, each confirmed with a real live POST before this was written:
+  //   POST /api/mace/read_file  {repo,path,ref} -> {ok,repo,path,ref,sha,size,encoding,content_text,source_url}
+  //   POST /api/mace/list_files {repo,path,ref} -> {ok,repo,path,ref,count,entries[]}
+  // Nothing guessed. Read-only: MACE latches her own write side at 403.
+  if (name === 'consult_mace') {
+    var _maceBase = process.env.MACE_URL || process.env.ABABASE_URL || 'https://ababase.onrender.com';
+    var _act = String(args.action || '').trim();
+    if (_act !== 'read_file' && _act !== 'list_files') {
+      return JSON.stringify({ok:false,note:'MACE read hands are read_file and list_files. Her write, commit, deploy and env hands are latched off at her own service.'});
+    }
+    var _repo = String(args.repo || '').trim(), _path = String(args.path || '').trim();
+    if (!_repo || !_path) return JSON.stringify({ok:false,note:'need repo and path'});
+    try {
+      var _m = await fetch(_maceBase + '/api/mace/' + _act, { method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ repo:_repo, path:_path, ref: String(args.ref || 'main') }),
+        signal: AbortSignal.timeout(60000) }).then(function (x) { return x.json(); });
+      if (!_m || _m.ok !== true) return JSON.stringify({ok:false,reason:(_m && (_m.error || _m.reason)) || 'mace_no_result',via:'MACE'});
+      if (_act === 'list_files') {
+        return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,count:_m.count,
+          entries:(_m.entries||[]).slice(0,200)});
+      }
+      return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,sha:_m.sha,size:_m.size,
+        content:String(_m.content_text||'').slice(0, Number(process.env.MACE_READ_CHARS||20000)),
+        truncated: String(_m.content_text||'').length > Number(process.env.MACE_READ_CHARS||20000),
+        note:'Read by MACE, the CODING department lead. If you are checking a fix, read the twin in the other repo before you call it done.'});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e),via:'MACE'}); }
   }
   // ⬡B:tool.loop:LAW:her_hands_on_the_real_stations:20260717⬡
   // Real calls to the real live stations, same base resolver and same request shapes
