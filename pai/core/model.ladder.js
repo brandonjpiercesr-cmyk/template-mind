@@ -176,7 +176,14 @@ async function rankedAccepted(factories, opts) {
 // floor last, only if the open-weight authorized set is unreachable.
 async function deliberate(system, user, options) {
   var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: 25000, json: false }, options || {});
-  var order = (process.env.MODEL_LADDER_ORDER || 'glm,ornith,qwen,groq').split(',').map(function (s) { return s.trim(); });
+  // ⬡B:core.model_ladder:LAW:groq_out_of_the_default_order_perma_ban:20260717⬡
+  // FOUNDER LAW 20260717: no Groq anymore. It was still the default last rung here.
+  // The three open-weight rungs stand, verified live tonight: Qwen answers in ~2s,
+  // GLM 5.2 serves SHADOW's judge from Render right now, Ornith is the coder. The
+  // floor is removed from the default order. It is NOT deleted from the runner map,
+  // so a deliberate MODEL_LADDER_ORDER that still names 'groq' keeps working during
+  // the migration of the direct call sites, but nothing reaches it by default.
+  var order = (process.env.MODEL_LADDER_ORDER || 'glm,ornith,qwen').split(',').map(function (s) { return s.trim(); });
   // \u2b21B:core.model_ladder:FIX:glm_provider_order_is_env_truth:20260717\u2b21
   // Live receipt: the RunPod pod is serving glm4:9b, a small quantized model, and
   // because it always answers first the real GLM-5.2 rung (Together) never runs.
@@ -224,6 +231,11 @@ async function deliberate(system, user, options) {
     var res = await fn();
     if (res) return res;
   }
+  // ⬡B:core.model_ladder:LAW:silence_over_hollow_never_the_banned_floor:20260717⬡
+  // Every authorized open-weight rung failed. The doctrine answer is null: the channel
+  // stays silent rather than send a hollow reply, and it NEVER quietly drops to a banned
+  // provider to avoid an empty. A null here is a real signal that the open-weight rungs
+  // need attention, not a reason to resurrect Groq.
   return null;
 }
 
