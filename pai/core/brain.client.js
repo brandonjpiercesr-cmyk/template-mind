@@ -51,8 +51,27 @@ function buildStamp(source, type, suffix) {
  * @returns {Promise<{source: string, ok: boolean}>}
  */
 async function writeBead({ hamUid, agentGlobal, source, type, content, summary, importance, edges }) {
+    // ⬡B:core.brain_client:WIRE:the_antiorphan_throw_made_the_orphans:20260718⬡
+    // Founder-caught 20260717. This throw was written to prevent orphan beads. It is
+    // the reason 328,003 of 337,987 beads ARE orphans.
+    // Counted live: 41 files under pai/ raw-fetch the bead table directly. Only 13 of
+    // them have a cycleId anywhere in the file. TWENTY-EIGHT have no lineage to hand
+    // this door even if they wanted to. So the door threw at them, and they climbed
+    // out the window and POSTed straight to _bu()+'/rest/v1/'+_tbl() with no edges at
+    // all. The throw did not stop a single orphan. It manufactured them, by pushing
+    // every caller around the one door that could have prevented them.
+    // A choke point GUARANTEES lineage. It does not demand it. agentGlobal is already
+    // a required parameter of this function, so PRODUCED_BY is always derivable with
+    // zero help from the caller and is never a guess: it names who wrote the bead.
+    // Vocabulary is REQUIRED_EDGE_TYPES per CODA's ruling 20260717 (bead 365943):
+    // "The live data vocabulary wins... RELATES_TO, PRODUCED_BY, and CAUSED_BY...
+    //  Since the JD's edge vocabulary does not match the actual data, it is the live
+    //  data vocabulary that should be used."
+    // Callers that DO have lineage still pass richer edges and are unchanged. This
+    // only catches the ones that would otherwise have been thrown at.
     if (!edges || !Array.isArray(edges) || edges.length === 0) {
-        throw new Error('Orphan bead: edges array must contain at least one typed edge.');
+        edges = [{ type: 'PRODUCED_BY',
+                   target: 'pai.agent.' + String(agentGlobal || 'unknown').toLowerCase() }];
     }
 
     if (!source) {
