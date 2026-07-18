@@ -2703,13 +2703,30 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
       body:JSON.stringify(body),signal:_modelRequestSignal()
     }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+    // \u2b21B:core.tool_loop:911:truncated_primary_must_fall_through_not_be_accepted:20260718\u2b21
+    // FOUNDER 911 20260718: on a HARD question the primary deliberation model (now
+    // rerouted through the ladder since GROQ_API_KEY is gone) can burn its whole token
+    // budget reasoning and return finish_reason 'length' with ~1 char of content. That
+    // reply HAS choices, so the old chain accepted it and never tried Together/OpenRouter.
+    // The turn then died no_answer on hard questions only. She got dumber as questions got
+    // harder. Here: on a tool-free deliberation, a truncated near-empty primary answer is
+    // treated as a failure so the real open-weight fallbacks below run and finish it.
+    if (r && r.choices && r.choices[0] && !body.tools) {
+      var _pc = r.choices[0]; var _pmsg = _pc.message || {};
+      var _ptext = typeof _pmsg.content === 'string' ? _pmsg.content.trim() : '';
+      var _ptrunc = (_pc.finish_reason === 'length' || _pc.finish_reason === 'max_tokens');
+      if (!(_pmsg.tool_calls && _pmsg.tool_calls.length) && _ptrunc && _ptext.length < 40) {
+        global._paiLastError = 'primary_truncated_near_empty:falling_through';
+        r = null;
+      }
+    }
     if(r&&r.error){global._paiLastError='groq:'+JSON.stringify(r.error).slice(0,120);}
     if(r&&!r.choices&&!r.error){global._paiLastError='groq_no_choices:'+JSON.stringify(r).slice(0,150);}
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
       if(TK){r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
         headers:{Authorization:'Bearer '+TK,'Content-Type':'application/json'},
-        body:JSON.stringify({model:process.env.TOGETHER_MODEL||'Qwen/Qwen3.5-9B',
+        body:JSON.stringify({model:process.env.TOGETHER_MODEL||'zai-org/GLM-5.2',
           messages:openAiCompatibleHistory(msgs),
           max_tokens:tokenCapFor(channel),temperature:0.3}),
         signal:_modelRequestSignal()
@@ -2734,7 +2751,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var ORK=process.env.OPENROUTER_API_KEY;
       if(ORK){r=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
         headers:{Authorization:'Bearer '+ORK,'Content-Type':'application/json'},
-        body:JSON.stringify({model:process.env.OPENROUTER_MODEL||'meta-llama/llama-3.3-70b-instruct',
+        body:JSON.stringify({model:process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b',
           messages:openAiCompatibleHistory(msgs),
           max_tokens:tokenCapFor(channel),temperature:0.3}),
         signal:_modelRequestSignal()
