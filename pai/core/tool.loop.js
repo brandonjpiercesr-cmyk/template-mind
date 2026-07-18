@@ -3445,9 +3445,20 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     }
   } catch (ePrepPam) {}
   try {
-    var _personaChoice = identity && identity.persona || hamObj && hamObj.persona;
-    if (_personaChoice) finalAns = require('./persona.js').applyPersona(finalAns,
-      { hamUid:hamUid,persona:_personaChoice,contributions:{} });
+    // ⬡B:core.tool_loop:FIX:persona_floor_governs_every_channel_no_matter_what:20260718⬡
+    // Founder-caught 20260718: the voice doctrine and the em-dash kill only governed
+    // output when identity.persona happened to be set. On TAP (Blooio), email (Nylas),
+    // and voice (ElevenLabs) turns whose identity carries no persona field, applyPersona
+    // was SKIPPED entirely, so an internal-voice line or an em dash could leak to a human
+    // on exactly the channels he named. applyPersona's floor -- scrub internal/dead agent
+    // names and kill em dashes to commas (WRIT Kill 1) -- is a safety requirement for
+    // EVERY human-facing output, not an opt-in. It now runs unconditionally. The persona
+    // choice, when present, still rides through for any richer shaping. This is the one
+    // place every final answer passes before it returns to any channel's synthesize/send,
+    // so enforcing the floor here governs TAP, email, voice, CARA, and portal at once.
+    var _personaChoice = (identity && identity.persona) || (hamObj && hamObj.persona) || null;
+    finalAns = require('./persona.js').applyPersona(finalAns,
+      { hamUid:hamUid, persona:_personaChoice, contributions:{} });
   } catch (ePrepPersona) {}
   // ⬡B:core.tool_loop:GUARD:no_false_current_turn_failure_reaches_council:20260715⬡
   // Later preparation/persona code may reshape prose. Fail closed if it ever
