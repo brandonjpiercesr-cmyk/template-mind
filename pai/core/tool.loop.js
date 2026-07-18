@@ -674,6 +674,9 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid'],
     properties:{ham_uid:{type:'string'},want:{type:'string',enum:['events','slots','both'],description:'events = what is scheduled, slots = open times, both = default'},
       days:{type:'number',description:'how many days ahead to consider, default 14'}}}}},
+  {type:'function',function:{name:'weather_check',description:'Get REAL current weather and a multi-day forecast for a place, by name (a city, or a calendar event location). Use whenever the HAM asks about weather, or when weather genuinely helps them plan or pack -- a trip on their calendar, a place they are heading. Returns live conditions from a real source; never invent a temperature or a forecast.',
+    parameters:{type:'object',required:['place'],
+    properties:{place:{type:'string',description:'the place to check, e.g. "Buffalo" or a calendar event location'}}}}},
   {type:'function',function:{name:'calendar_book',description:'Book a REAL event on the HAM\'s calendar. This creates an actual calendar entry, so only call it once the HAM has approved the specific time -- after calendar_read surfaced an open slot they said yes to, or when they explicitly ask to put something on their calendar at a stated time. IMPORTANT: if the HAM is replying to a session you (or a prior turn) proposed -- "yes", "lock it", "sounds good", a specific time they picked -- first call find_in_brain with stamp_type SESSION to find the exact pending proposal and its slot times, then book those exact times, do not invent a time. Never book a time the HAM has not confirmed.',
     parameters:{type:'object',required:['ham_uid','title','start','end'],
     properties:{ham_uid:{type:'string'},title:{type:'string',description:'what the event is, e.g. "Haircut"'},
@@ -1620,6 +1623,21 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!_brief) return JSON.stringify({ok:false,reason:'advisor_returned_empty',advisor:_station});
       return JSON.stringify({ok:true,advisor:_station,brief:String(_brief).slice(0,4000)});
     } catch(eCons){ return JSON.stringify({ok:false,error:eCons.message}); }
+  }
+  if (name === 'weather_check') {
+    // ⬡B:core.tool.loop:BUILD:weather_is_a_general_capability_not_an_orphan:20260718⬡
+    // Founder caught that weather was wired only into the arrival, orphaned. Weather is
+    // one instance of the real principle: she reaches a real capability whenever it helps,
+    // in ANY turn, not one hardcoded path. Same keyless /os/weather source the arrival uses.
+    try {
+      var _wxSelf = process.env.OS_API_BASE || 'https://aibebase.onrender.com';
+      var _place = String((args && args.place) || '').trim();
+      if (!_place) return JSON.stringify({ ok:false, error:'no place given' });
+      var _wr = await fetch(_wxSelf + '/os/weather?place=' + encodeURIComponent(_place))
+        .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+      if (!_wr) return JSON.stringify({ ok:false, error:'weather source unreachable, do not guess' });
+      return JSON.stringify(_wr);
+    } catch (eWx) { return JSON.stringify({ ok:false, error:eWx.message }); }
   }
   if (name === 'calendar_read') {
     // ⬡B:core.tool.loop:FIX:calendar_read_real_source_20260714⬡ 911: this tool was
