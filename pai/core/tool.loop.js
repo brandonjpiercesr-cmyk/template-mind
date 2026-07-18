@@ -1977,8 +1977,30 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
       headers:{apikey:_BK,Authorization:'Bearer '+_BK,'Accept-Profile':_schema(),
         'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=minimal'},
+      // ⬡B:core.tool_loop:WIRE:cycle_step_is_forty_percent_of_the_orphans:20260718⬡
+      // Founder-caught 20260717. Measured live against the real bank: in a 1,000-row
+      // sample of beads carrying edges = [], agent_global PAI is 396 of them (39.6%)
+      // and stamp_type CYCLE_STEP is 393 (39.3%). ONE writer is four out of every ten
+      // orphans in a 337,987-bead graph that is 2.95% connected.
+      // This writer already HOLDS the lineage in both hands: _cycleId is in its own
+      // source and inside its content, and _requestId is in scope from line 1770. It
+      // just never made an edge out of either.
+      // CAUSED_BY points at the request that caused the cycle -- verified resolvable
+      // live: 'pai.request.DC499D0C.1784321150623.r7ggb7.request' returns a real
+      // REQUEST_CLAIM row. No RELATES_TO to the cycle here, on purpose: this bead's
+      // OWN source IS 'pai.cycle.'+_cycleId, so that edge would be a self-reference.
+      // That is why PAI_STAGE can carry RELATES_TO (its source is the cycle plus a
+      // stage suffix) and CYCLE_STEP cannot.
+      // Vocabulary is REQUIRED_EDGE_TYPES per CODA's ruling 20260717 (bead 365943):
+      // live data wins, RELATES_TO / PRODUCED_BY / CAUSED_BY, not the JD's
+      // contains/related_to/part_of which do not exist in the data.
+      // Cold code. No LLM. No new call. Guarded: if there is no requestId the bead
+      // writes exactly as it does today, and this fetch is already .catch()'d so it
+      // can never take a turn down.
       body:JSON.stringify({ham_uid:hamUid,agent_global:'PAI',stamp_type:'CYCLE_STEP',
         source:'pai.cycle.'+_cycleId,
+        edges:(_requestId ? [{type:'CAUSED_BY',target:'pai.request.'+_requestId},
+                             {type:'PRODUCED_BY',target:'pai.tool.loop.stamp_step'}] : []),
         acl_stamp:'\u2b21B:core.tool.loop:CYCLE_STEP:'+step+':'+Date.now()+'\u2b21',
         summary:'[CYCLE '+_cycleId.slice(-8)+'] '+step+(detail?': '+String(detail).slice(0,100):''),
         content:JSON.stringify({cycleId:_cycleId,step:step,channel:channel,
