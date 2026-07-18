@@ -2743,6 +2743,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       ans=_structuredDraft.ok?_structuredDraft.text:'{}';
       break;
     }
+    try{_stampStep('corridor_a_post_stitch','content_len='+String(msg&&msg.content||'').length+' has_tc_tag='+(String(msg&&msg.content||'').indexOf('<tool_call>')!==-1)+' has_fn_tag='+(String(msg&&msg.content||'').indexOf('<function')!==-1)+' finish='+String(ch&&ch.finish_reason||'?'));}catch(_eCA){}
     // ⬡B:core.tool_loop:FIX:safe_tool_text_salvage_20260710⬡
     // Founder 1B gate failure, exact receipt from her own trace: cycle_end contained
     // <function(update_screen){"cards":[... -- Groq emitted the tool call as plain
@@ -2832,6 +2833,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         }
       }
     }
+    try{_stampStep('corridor_b_post_salvage','content_len='+String(msg&&msg.content||'').length+' tool_calls='+(((msg&&msg.tool_calls)||[]).length)+' tool_choice='+(body&&body.tool_choice?'set':'unset'));}catch(_eCB){}
     // ⬡B:core.tool_loop:FIX:forced_tool_choice_not_honored_by_groq:20260705⬡
     // Real, confirmed live: even with tool_choice forced, Groq's own response
     // came back finish_reason:'stop', tool_calls:[] -- the platform simply did
@@ -3053,6 +3055,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       continue;
     }
     ans=(msg.content||'').trim();
+    try{_stampStep('corridor_c_post_assign','ans_len='+ans.length);}catch(_eCC){}
     // ⬡B:core.tool.loop:FIX:reject_unexecuted_toolcall_text:20260704⬡
     // Live founder proof, real email sent: the model wrote a tool call as
     // plain text -- <notify_ham>{"ham_uid":...}</function> -- instead of a
