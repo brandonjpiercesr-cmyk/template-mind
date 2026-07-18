@@ -251,70 +251,28 @@ async function writCheck(text, context) {
   // Coding/internal work must be able to name its own machinery. Determine that
   // context before the leak law; every other WRIT law remains active.
 
-  // ⬡B:board.writ:FIX:verdict_is_an_organ_not_a_phrase_list:20260718⬡
-  // Founder correction 20260718, A'NU agreed via the cycle door ("fix the mold
-  // first"): cold code can HELP, never RESULT. WRIT used to DECIDE its HOLD
-  // verdict by phrase-list matching (PROCESS_NARRATION, SUPER_BANS, CTA_ENDINGS,
-  // coffee-shop, choppy) -- a semantic quality judgment made in cold code. That
-  // is exactly what silenced her on real questions: a phrase list, not a mind,
-  // ruled her words un-shippable.
-  //
-  // The split now honors the law:
-  //  - MECHANICAL HELPERS stay cold, because they detect FACTS not judgments:
-  //    an actual leaked secret (a real key literal), an actual internal-system
-  //    term leaking to an external channel. Those are deterministic truths.
-  //  - The QUALITY VERDICT (is this process narration, a weak CTA ending,
-  //    jargon, choppy, off-voice) is now an LLM organ, like SHADOW already is.
-  //    The old phrase lists survive only as HINTS handed to the organ, never as
-  //    the decider.
-  var mechanicalLeaks = [];
-  mechanicalLeaks = mechanicalLeaks.concat(findPhrases(lower, SUPER_BANS, 'super_ban'));
-  if (!isInternal) {
-    mechanicalLeaks = mechanicalLeaks.concat(findPhrases(lower, INTERNAL_SYSTEM_TERMS, 'internal_system_leak'));
-  }
-  // hints for the organ (not verdicts)
-  var _hintCTA = findPhrases(lower, CTA_ENDINGS, 'cta_ending');
-  var _hintProc = findPhrases(lower, PROCESS_NARRATION, 'process_narration');
-  var coffee = coffeeshopTest(cleaned);
-  var _hintJargon = (!coffee.ok && !isInternal) ? coffee.flags.slice(0, 6) : [];
-
-  hardFails = hardFails.concat(mechanicalLeaks);
+  hardFails = hardFails.concat(findPhrases(lower, CTA_ENDINGS, 'cta_ending'));
+  hardFails = hardFails.concat(findPhrases(lower, SUPER_BANS, 'super_ban'));
   hardFails = hardFails.concat(checkBannedHeaders(cleaned));
+  if (!isInternal) {
+    hardFails = hardFails.concat(findPhrases(lower, INTERNAL_SYSTEM_TERMS, 'internal_system_leak'));
+  }
+  hardFails = hardFails.concat(findPhrases(lower, PROCESS_NARRATION, 'process_narration'));
+
+  var greet = checkColdGreeting(cleaned);
+  if (!greet.ok) hardFails.push(greet.flag);
+
+  var coffee = coffeeshopTest(cleaned);
+  if (!coffee.ok && !isInternal) {
+    coffee.flags.forEach(function (f) { advisoryFlags.push({ type: 'jargon_leak', phrase: f }); });
+  }
+
+  advisoryFlags = advisoryFlags.concat(findPhrases(lower, BANNED_WORDS, 'banned_word'));
+  var choppy = approximateChoppyDensity(cleaned);
+  if (!choppy.ok) advisoryFlags.push({ type: 'choppy_density_approx', ratio: choppy.ratio, note: 'pattern approximation only, read it out loud to confirm' });
 
   var jargonPattern = /\b(BEAD|LOGFUL|abacia_core|acl_stamp|stamp_type)\b/g;
   var jargonFlags = Array.from(new Set(cleaned.match(jargonPattern) || []));
-
-  // THE ORGAN: an LLM decides the quality verdict. Runs only when a mechanical
-  // leak has not already hard-failed (a real secret leak is not a matter of
-  // taste). Fails OPEN on any organ error, because a broken judge must never
-  // silence her -- silence is worse than a rare soft ending slipping through.
-  var qualityVerdict = 'WRIT_PASS';
-  var organReason = null;
-  if (hardFails.length === 0 && !isInternal) {
-    try {
-      var _ladder = require('../../core/model.ladder.js');
-      var _sys = 'You are A\u2019NU checking your own words before they leave the house. WRIT is the role, not your name. '
-        + 'Judge ONLY writing quality against these laws: no meta or process narration (do not narrate steps, tools, or that you searched), '
-        + 'no weak call-to-action ending (end on the last real thought, then Thanks), warm human voice, plain coffee-shop language. '
-        + 'These are HINTS from a rough pre-scan, they may be wrong, use judgment: '
-        + 'possible process-narration=' + JSON.stringify(_hintProc.map(function(f){return f.phrase||f;}).slice(0,4)) + ', '
-        + 'possible weak-ending=' + JSON.stringify(_hintCTA.map(function(f){return f.phrase||f;}).slice(0,4)) + ', '
-        + 'possible jargon=' + JSON.stringify(_hintJargon) + '. '
-        + 'Reply EXACTLY: PASS  or  HOLD: <short reason>. HOLD only for a real, clear violation a reader would notice.';
-      var _out = await _ladder.deliberate(_sys, cleaned, { maxTokens: 60, temperature: 0 });
-      var _txt = String((_out && (_out.text || _out.answer || _out.content)) || '').trim();
-      if (/^HOLD/i.test(_txt)) {
-        qualityVerdict = 'WRIT_HOLD';
-        organReason = _txt.replace(/^HOLD:?\s*/i, '').slice(0, 160) || 'quality_hold';
-        hardFails.push({ type: 'quality_hold', reason: organReason });
-      }
-    } catch (eOrgan) {
-      // fail open: a broken organ never silences her
-      qualityVerdict = 'WRIT_PASS';
-    }
-  }
-
-  advisoryFlags = advisoryFlags.concat(_hintJargon.map(function (f) { return { type: 'jargon_leak', phrase: f }; }));
 
   var verdict = hardFails.length > 0 ? 'WRIT_HOLD' : (advisoryFlags.length > 0 ? 'WRIT_ADVISORY' : 'WRIT_PASS');
 
@@ -325,7 +283,6 @@ async function writCheck(text, context) {
     cleaned: cleaned,
     hardFails: hardFails,
     advisoryFlags: advisoryFlags,
-    organ_reason: organReason,
     emojis_removed: emoji.count,
     em_dashes_removed: dashCount,
     meta_removed: meta.removed,

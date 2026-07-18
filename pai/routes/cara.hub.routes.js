@@ -442,6 +442,13 @@ function caraHubRoutes(app) {
     if ((!conv.title || /^new chat$/i.test(conv.title)) && conv.messages.length) {
       conv.title = deriveTitle(conv.messages);
     }
+    // \u2b21B:routes.cara_hub:FIX:advisor_branch_names_itself_not_blank_new_chat:20260718\u2b21
+    // A freshly opened advisor branch has no messages yet, so it was persisting as a
+    // bare "New chat" and reading as a phantom empty row in the list. An advisor
+    // branch always knows its world; name it after that station until she titles it.
+    if ((!conv.title || /^new chat$/i.test(conv.title)) && conv.advisorWorld) {
+      conv.title = String(conv.advisorWorld).toUpperCase() + ' branch';
+    }
     const ok = project ? await writeToMembers(project, 'conversation', id, conv)
       : await writeBead(ham, 'conversation', id, conv);
     res.json({ ok: ok, conversation: conv });
