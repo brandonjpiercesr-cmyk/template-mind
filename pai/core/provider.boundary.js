@@ -59,6 +59,41 @@ function install() {
           : (Array.isArray(m.content) ? m.content.map(function (p) { return p && p.text ? p.text : ''; }).join('\n') : '');
         if (m.role === 'system') system += (system ? '\n' : '') + c; else user += (user ? '\n' : '') + c;
       }
+      // \u2b21B:pai.core.provider_boundary:911:preserve_tools_her_brain_was_decapitated:20260718\u2b21
+      // FOUNDER 911, root-caused live 20260718: her tool loop's PRIMARY model call carries
+      // body.tools -- the entire loop depends on the model returning tool_calls to fire
+      // find_in_brain, consult_coda, consult_mace, etc. When GROQ_API_KEY was pulled, this
+      // boundary rerouted that call through ladder.deliberate(), which does PLAIN TEXT ONLY
+      // and DROPS the tools. So since the key pull, every tool-bearing turn lost its tools
+      // and got prose back with no tool_calls. On easy questions the prose was a usable
+      // answer; on HARD questions the ladder's GLM rung truncated to empty, the loop hit
+      // ans='' and broke, and the turn died no_answer on iteration 1. Her tool-calling brain
+      // was decapitated. That is the real 911 behind 'she goes dumb on hard questions.'
+      // Fix: if the request carries tools, forward the WHOLE request to OpenRouter Qwen,
+      // which supports tool_calls natively (verified live: it returned a real nash_sports
+      // call). Tools preserved, the loop works exactly as it did on Groq. Only tool-FREE
+      // deliberation flattens through the ladder.
+      var _hasTools = !!(parsed && Array.isArray(parsed.tools) && parsed.tools.length);
+      if (_hasTools && process.env.OPENROUTER_API_KEY) {
+        var _fwd = {
+          model: process.env.QWEN_TOOL_MODEL || process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b',
+          messages: parsed.messages,
+          tools: parsed.tools,
+          max_tokens: parsed.max_tokens || 1500,
+          temperature: (typeof parsed.temperature === 'number') ? parsed.temperature : 0.3
+        };
+        if (parsed.tool_choice) _fwd.tool_choice = parsed.tool_choice;
+        if (parsed.response_format) _fwd.response_format = parsed.response_format;
+        var _tr = await realFetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + process.env.OPENROUTER_API_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify(_fwd),
+          signal: AbortSignal.timeout(45000)
+        });
+        var _td = await _tr.json();
+        if (_td && _td.choices) { _td._rerouted_from_banned_provider = true; return jsonResponse(_td); }
+        // Qwen tool call failed; fall through to plain-text ladder rather than die.
+      }
       var wantsJson = !!(parsed && parsed.response_format && parsed.response_format.type === 'json_object');
       var out = await ladder.deliberate(system, user, {
         max_tokens: (parsed && parsed.max_tokens) || 1000,
