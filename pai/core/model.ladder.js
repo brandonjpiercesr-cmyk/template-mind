@@ -116,17 +116,11 @@ async function tryQwen(system, user, opts) {
     return hasAcceptedContent(c, opts) ? { content: c, model: 'qwen3-235b', via: 'openrouter' } : null;
   } catch (e) { return null; }
 }
-async function tryGroqFloor(system, user, opts) {
-  var key = process.env.GROQ_API_KEY; if (!key) return null;
-  try {
-    var body = { model: process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b', reasoning_effort: 'low', max_tokens: opts.max_tokens, temperature: opts.temperature, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
-    if (opts.json) body.response_format = { type: 'json_object' };
-    var r = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' }, body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
-    if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'gpt-oss-120b-floor', via: 'groq' } : null;
-  } catch (e) { return null; }
-}
+// ⬡B:core.model_ladder:CLEANUP:groq_runner_deleted_stack_spotless:20260717⬡
+// The Groq floor is gone. GROQ_API_KEY is off every service, the fetch boundary
+// reroutes any stray banned call, and the four-API law leaves no seat for it. The
+// runner, its GROQ_MODEL env references, and the 'groq' name in the runner map are
+// all deleted. Nothing reaches for it anymore.
 
 // Hedge authorized providers without handing authority to network luck. Calls
 // start together, but a lower-ranked result cannot win until every higher rank
@@ -210,8 +204,7 @@ async function deliberate(system, user, options) {
       return null;
     },
     ornith: function (runOpts) { return tryOrnith(system, user, runOpts || opts); },
-    qwen: function (runOpts) { return tryQwen(system, user, runOpts || opts); },
-    groq: function (runOpts) { return tryGroqFloor(system, user, runOpts || opts); } };
+    qwen: function (runOpts) { return tryQwen(system, user, runOpts || opts); }, };
   // ⬡B:core.model_ladder:BUILD:realtime_voice_judgment_race:20260716⬡
   // A phone turn cannot wait behind four sequential cold starts. Hedge the
   // complete authorized order for the same strict JSON judgment while
