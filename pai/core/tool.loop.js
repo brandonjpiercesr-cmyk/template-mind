@@ -2637,6 +2637,32 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }else{global._paiLastError='openrouter_no_key';}
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
+    // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
+    // FOUNDER LAW (bead 377996): every model call routes through the ONE ladder,
+    // core/model.ladder.js, where provider, version, and fallback live. Her own cycle
+    // receipts showed the truth today: the legacy Groq/Together/OpenRouter chain here
+    // fast-failed in eight seconds and the turn died silent, while advisor turns that
+    // ride the ladder answered in the same minute, because the ladder's first rung is
+    // the healthy RunPod GLM. So before this loop is ever allowed to go silent, the
+    // one door gets the turn. Tool-free, matching the Together and OpenRouter tiers
+    // above; a ladder answer rides the exact same council, STAMP, and readback.
+    if (!r||r.error||!r.choices){
+      try{
+        var _lad=require('./model.ladder.js');
+        var _hist=openAiCompatibleHistory(msgs);
+        var _sys=(_hist[0]&&_hist[0].role==='system')?String(_hist[0].content||''):'';
+        var _usr=_hist.filter(function(m){return m.role!=='system';})
+          .map(function(m){return String(m.role||'user').toUpperCase()+': '+String(m.content||'');})
+          .join('\n\n');
+        var _lr=await _lad.deliberate(_sys,_usr,{max_tokens:tokenCapFor(channel),
+          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
+          json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
+        if(_lr&&_lr.content){
+          r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
+          global._paiLastError=null;
+        } else if(!global._paiLastError){ global._paiLastError='ladder_no_content'; }
+      }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0,120); }
+    }
     if (!r||r.error||!r.choices){
       ans=_structuredReachPolicy?'{}':'';
       break;
