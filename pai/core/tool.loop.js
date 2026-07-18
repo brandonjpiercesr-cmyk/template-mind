@@ -456,17 +456,61 @@ function scrubLeakedToolProtocol(value) {
 // Named exact-HAM rows are question-bound evidence, so later tool traffic must
 // not evict them from SHADOW's eight-item window. De-duplicate without changing
 // the actual evidence objects or manufacturing any new content.
+// ⬡B:core.tool.loop:FIX:the_cap_was_evicting_the_facts_the_draft_was_built_from:20260717⬡
+// FOUND BY SHADOW ITSELF, 20260717, on the first live use of consult_mace. Her turn
+// called consult_mace twice, once per repo, exactly as a duplication check must. SHADOW
+// then held her and said why, verbatim: "only one MACE read result is present in the
+// bound evidence and it shows sha 09a6817072a3... and size 39471 for the first file,
+// with no evidence for the second file's sha or size."
+//
+// The gate was right and the cause was here. A flat cap of 8 across ALL evidence, filled
+// identity-first, then named-agent, then the turn's own tool results LAST. Reproduced
+// cold before touching a line: 6 identity items plus 4 tool results, and BOTH
+// consult_mace reads are evicted. consult_coda and find_in_brain survive only because
+// they happen to be pushed earlier.
+//
+// This is not a MACE bug and it is not a cap-size bug. Tool results from THIS turn are
+// the facts the draft was literally built from. Evicting them makes SHADOW judge a draft
+// against evidence it was never handed, so it must hold answers that are TRUE. That is a
+// guaranteed false hold, and it gets worse the more identity boilerplate a HAM carries.
+// It also silently punishes exactly the behaviour this system wants most: calling a tool
+// more than once to compare two things. A duplication check is BY DEFINITION two reads.
+//
+// THE RULE: the current turn's tool results are never dropped. They are ground truth, not
+// a nice-to-have. Everything else fills whatever room is left, in the old priority order,
+// under a cap that is now env-tunable instead of a magic 8 nobody can see.
 function prioritizeVerifiedEvidence(primary, secondary) {
+  var cap = Number(process.env.EVIDENCE_BIND_MAX || 16);
+  if (!(cap > 0)) cap = 16;
   var seen = Object.create(null);
   var out = [];
-  [primary, secondary].forEach(function (group) {
-    (Array.isArray(group) ? group : []).forEach(function (item) {
-      if (out.length >= 8 || item == null) return;
-      var key;
-      try { key = JSON.stringify(item); } catch (e) { key = String(item); }
-      if (seen[key]) return;
-      seen[key] = true;
-      out.push(item);
+  function isCurrentTurnToolFact(item) {
+    return !!(item && typeof item === 'object' &&
+      item.provenance === 'pai.current_turn.execute_tool');
+  }
+  function take(item) {
+    if (item == null) return false;
+    var key;
+    try { key = JSON.stringify(item); } catch (e) { key = String(item); }
+    if (seen[key]) return false;
+    seen[key] = true;
+    out.push(item);
+    return true;
+  }
+  var groups = [primary, secondary].map(function (group) {
+    return Array.isArray(group) ? group : [];
+  });
+  // Pass one: every tool fact this turn actually produced, in call order, uncapped.
+  // If the model called it, the judge sees it. No exceptions.
+  groups.forEach(function (group) {
+    group.forEach(function (item) { if (isCurrentTurnToolFact(item)) take(item); });
+  });
+  // Pass two: everything else, original priority order, into whatever room is left.
+  groups.forEach(function (group) {
+    group.forEach(function (item) {
+      if (isCurrentTurnToolFact(item)) return;
+      if (out.length >= cap) return;
+      take(item);
     });
   });
   return out;
