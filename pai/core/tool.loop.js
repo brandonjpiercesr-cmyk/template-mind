@@ -2838,7 +2838,33 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // the <tool_call> block is ALWAYS stripped from visible content -- tool plumbing
     // never renders as chat text again.
     if (typeof msg.content === 'string' && msg.content.indexOf('<tool_call>') !== -1) {
-      var tcm = msg.content.match(/<tool_call>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([\s\S]*?)(\)\s*<\/tool_call>|\)\s*$|$)/);
+      // ⬡B:core.tool_loop:FIX:glm_json_tool_call_dialect:20260718⬡
+      // Cornered by rung receipts: GLM-5.2 (the live fallback under the four-API
+      // law) reads the tool instructions in the system prompt and answers in its
+      // JSON dialect: <tool_call>{"name":"find_in_brain","arguments":{...}}</tool_call>.
+      // The kwarg matcher below does not speak that dialect, so the strip-all wiped
+      // the whole answer to empty and the turn died silent with zero further
+      // receipts, while the same question in the parseable variant salvaged into
+      // three real find_in_brain calls and answered the founder. Dialect roulette.
+      // The JSON shape is normalized FIRST into the exact <function= shape the
+      // existing allowlist salvage already speaks; nothing else changes.
+      var jtc = msg.content.match(/<tool_call>\s*(\{[\s\S]*?\})\s*(<\/tool_call>|$)/);
+      if (jtc) {
+        try {
+          var jparsed = JSON.parse(jtc[1]);
+          var jname = jparsed && (jparsed.name || (jparsed.function && jparsed.function.name));
+          var jargs = jparsed && (jparsed.arguments || jparsed.parameters ||
+            (jparsed.function && jparsed.function.arguments)) || {};
+          if (typeof jargs === 'string') { try { jargs = JSON.parse(jargs); } catch (eJa) { jargs = {}; } }
+          if (jname && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(jname))) {
+            var jhuman = msg.content.replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, ' ')
+              .replace(/\s+/g, ' ').trim();
+            msg.content = (jhuman ? jhuman + ' ' : '') + '<function=' + jname + '>' + JSON.stringify(jargs);
+          }
+        } catch (eJtc) { /* not JSON; the kwarg matcher below gets its chance */ }
+      }
+      var tcm = msg.content.indexOf('<tool_call>') !== -1 &&
+        msg.content.match(/<tool_call>\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([\s\S]*?)(\)\s*<\/tool_call>|\)\s*$|$)/);
       if (tcm) {
         var kwSrc = tcm[2] || '';
         var argsObj = {};
