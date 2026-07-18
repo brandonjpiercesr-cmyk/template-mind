@@ -220,26 +220,29 @@ async function generateVerifiedLead(prompt, armory, complete, options) {
     evidenceMode:'model_retry' };
 }
 
+// \u2b21B:advisors.coding:WIRE:coda_off_llama_onto_the_authorized_ladder:20260717\u2b21
+// Founder caught this live: CODA, the head of his coding department, ran on
+// groq/llama-3.3-70b-versatile as her PRIMARY. Not a floor, first choice. Every
+// ruling she has ever handed back came from the one model he named as banned,
+// and it retires from Groq on 20260816 regardless.
+// This is a DUPLICATE, not an oversight. advisors/dispatch.js carried the exact
+// same private llm() with the exact same groq/llama-3.3-70b-versatile pair, and
+// it was corrected onto the ladder on 20260715 with a comment naming this same
+// founder complaint. That fix landed in one file and missed its twin here, so
+// the shared advisor path went open-weight and the coding lead stayed on Llama.
+// Catching duplicated logic like this is literally MACE's written job, and MACE
+// is a scaffold whose handle() returns {processed:true}.
+// Same door dispatch.js already walks through, nothing new invented:
+// core/model.ladder.js -> GLM 5.2, Ornith, Qwen, Groq only as the last floor.
 async function llm(user, founderCtx) {
-  var tries = [
-    { url: 'https://api.groq.com/openai/v1/chat/completions', key: process.env.GROQ_API_KEY, model: 'llama-3.3-70b-versatile' },
-    { url: 'https://api.together.xyz/v1/chat/completions', key: process.env.TOGETHER_API_KEY, model: 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8' }
-  ];
   var system = 'You are CODA, the Coding advisor, head of the coding department in a life-assistant system. You deliberate over '
     + 'department state: task queue, wiring debt, build pass rates, drain receipts. Report like a department head: what '
     + 'moved, what is stuck, what you recommend next, in plain tight prose. No markdown, no em dash.\nCODING RELAY CONTRACT (exact): ' + relayContractLine()
     + (founderCtx ? ('\n\n' + founderCtx) : '');
-  for (var i = 0; i < tries.length; i++) {
-    var t = tries[i]; if (!t.key) continue;
-    try {
-      var r = await fetch(t.url, { method: 'POST', headers: { Authorization: 'Bearer ' + t.key, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: t.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: 1000, temperature: 0.4 }) });
-      var d = r.ok ? await r.json() : null;
-      var out = d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content;
-      if (out) return out;
-    } catch (e) { /* next */ }
-  }
-  return null;
+  try {
+    var res = await require('../core/model.ladder.js').deliberate(system, user, { max_tokens: 1000, temperature: 0.4, timeout: 25000 });
+    return res ? res.content : null;
+  } catch (e) { return null; }
 }
 
 async function readDepartmentState() {
