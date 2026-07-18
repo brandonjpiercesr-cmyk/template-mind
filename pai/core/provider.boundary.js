@@ -82,7 +82,21 @@ function install() {
           max_tokens: parsed.max_tokens || 1500,
           temperature: (typeof parsed.temperature === 'number') ? parsed.temperature : 0.3
         };
-        if (parsed.tool_choice) _fwd.tool_choice = parsed.tool_choice;
+        // \u2b21B:pai.core.provider_boundary:911:qwen_rejects_forced_tool_choice_normalize_to_auto:20260718\u2b21
+        // Verified live 20260718: OpenRouter Qwen accepts tool_choice 'auto' (and returns
+        // real tool_calls) but returns HTTP 400 on 'required' or a forced specific tool.
+        // Her loop FORCES specific tools (find_in_brain, nash_sports, roadmap activation).
+        // Passing that forced choice straight through 400'd every forced-tool turn, the
+        // boundary fell through to the plain-text ladder, GLM truncated, and the turn died
+        // no_answer with tools_used [] -- she called no tool at all. THIS was the live
+        // decapitation, not just the tool-drop. Normalize any incompatible forced choice to
+        // 'auto': Qwen still calls the tool the prompt demands, it just is not forced. The
+        // system note her loop already injects ('you MUST call X') carries the intent.
+        if (parsed.tool_choice) {
+          var _tc = parsed.tool_choice;
+          if (_tc === 'auto' || _tc === 'none') _fwd.tool_choice = _tc;
+          else _fwd.tool_choice = 'auto'; // 'required' or a forced {function:...} -> auto
+        }
         if (parsed.response_format) _fwd.response_format = parsed.response_format;
         var _tr = await realFetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
