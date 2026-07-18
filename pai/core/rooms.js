@@ -26,10 +26,25 @@ function rh() { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accep
 function wh() { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema(), 'Content-Profile': _schema(), 'Content-Type': 'application/json', Prefer: 'return=minimal' }; }
 
 async function stamp(hamUid, agent, type, source, summary, content, importance) {
+  // ⬡B:core.rooms:WIRE:local_stamp_copy_was_an_orphan_factory:20260718⬡
+  // Founder-caught 20260718. This is one of EIGHT local stamp() copies
+  // (ham-contact, dispatch, tracker, cycle.handoff, rooms, outreach, synthesize,
+  // outbound.trace), each raw-fetching the bead table and each born edgeless. Every
+  // bead they write lands in a 337,987-row graph as an orphan. rooms.stamp() alone
+  // produces the ROOM_DIGEST / ROOM / ROOM_ORDER orphans.
+  // Same lesson as the door repair (⬡B:core.brain_client:WIRE:
+  // the_antiorphan_throw_made_the_orphans:20260718⬡): GUARANTEE lineage, do not
+  // demand it. agent and source are always in scope here, so PRODUCED_BY is always
+  // derivable and never a guess -- it names who wrote the bead. content.room, when
+  // present, is a real prior bead id, so RELATES_TO points at it. Vocabulary is
+  // REQUIRED_EDGE_TYPES per CODA's ruling 20260717 (bead 365943): RELATES_TO /
+  // PRODUCED_BY / CAUSED_BY, not the JD's contains/related_to/part_of.
+  var _edges = [{ type: 'PRODUCED_BY', target: 'pai.agent.' + String(agent || 'unknown').toLowerCase() }];
+  if (content && content.room) _edges.push({ type: 'RELATES_TO', target: content.room });
   return fetch(_bu() + '/rest/v1/' + _tbl() + '', { method: 'POST', headers: wh(), body: JSON.stringify({
     ham_uid: hamUid, agent_global: agent, stamp_type: type,
     acl_stamp: '\u2b21B:core.rooms:' + type + ':' + Date.now() + '\u2b21',
-    source: source, summary: summary.slice(0, 200),
+    source: source, summary: summary.slice(0, 200), edges: _edges,
     content: JSON.stringify(content || {}), importance: importance || 5 }) });
 }
 
