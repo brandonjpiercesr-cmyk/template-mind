@@ -2768,6 +2768,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         } else if(!global._paiLastError){ global._paiLastError='ladder_no_content'; }
       }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0,120); }
     }
+    try{
+      var _rc=(r&&r.choices&&r.choices[0])||null;
+      _stampStep('model_rung_result',
+        String((r&&r._provider)||'openai_compat')+
+        ' choices='+((r&&r.choices&&r.choices.length)||0)+
+        ' content_len='+String(((_rc&&_rc.message&&_rc.message.content)||'')).length+
+        ' tool_calls='+(((_rc&&_rc.message&&_rc.message.tool_calls)||[]).length)+
+        ' err='+String((r&&r.error)?JSON.stringify(r.error).slice(0,80):(global._paiLastError||'none')).slice(0,100));
+    }catch(_eRR){}
     if (!r||r.error||!r.choices){
       ans=_structuredReachPolicy?'{}':'';
       break;
