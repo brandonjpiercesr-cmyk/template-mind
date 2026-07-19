@@ -2780,7 +2780,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // that could be answered by his real calendar (today/schedule/meeting/free/
       // busy/calendar) now forces calendar_read specifically -- never find_in_brain
       // alone -- so a day-shaped question can only ever be answered from real events.
-      var _mSt = String(channel === 'voice' ? _exactUserMessage : message || '').trim();
+      // ⬡B:core.tool_loop:FIX:intent_detection_uses_raw_words_not_fusion_wrapped_message:20260719⬡
+      // NUCLEAR 911 (founder caught it): the air/portal door answered "which chat
+      // lanes are working on your build" with the CALENDAR. Root cause: the portal
+      // path (slowPath) enriches the message with a big world-context + live-facts
+      // prefix before runPAI, so `message` here begins with calendar/day facts. Intent
+      // detection was testing that wrapped `message`, so the day-question regex matched
+      // the injected context and the turn flipped to a calendar answer, burying the
+      // real question. The raw user words are already available as _exactUserMessage
+      // (slowPath sets identity.user_message = the original input), and every council
+      // check already trusts those bytes. So intent detection must read the RAW words
+      // on EVERY channel, not just voice. This makes the lane/coding/day nudges fire on
+      // what the person actually asked, not on the fusion prefix.
+      var _mSt = String((_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : (message || '')).trim();
       var _looksLikeInfoQ = /\?\s*$/.test(_mSt)
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
@@ -3662,11 +3674,32 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // gets raw data back. Cold detection: if the answer parses as JSON (starts with { or [ and
   // is valid JSON), it is never sent as-is. Composed instead, in plain words, from the shape
   // of what came back, so the tool result still reaches him, just as an actual sentence.
+  // \u2b21B:core.tool.loop:FIX:reach_policy_invalid_heals_not_silences:20260719\u2b21
+  // FOUNDER 911 20260719: this cold gate silenced 56+ turns TODAY alone. When the
+  // structured reach-policy lane returns JSON the contract cannot parse, the turn died
+  // BEFORE the council/healer ever ran -- a cold gate killing her voice, the exact
+  // anti-pattern the doctrine forbids. Judges heal; so does this. When the policy JSON
+  // is invalid, regenerate a PLAIN human answer (the same repair the hollow lane uses)
+  // and let THAT flow to the council/healer, instead of going silent. Only if the
+  // repair itself yields nothing real do we fall through to an honest silence.
   if (_structuredReachPolicy&&!_validStructuredReachPolicy(finalAns)) {
-    _stampStep('cycle_end_silent','reach_policy_json_invalid_before_council');
-    return{ok:false,reason:'reach_policy_json_invalid',blocked_by:'A\'NU',ham:hamObj,
-      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
-      ms:Date.now()-t0};
+    _stampStep('reach_policy_invalid_healing','regenerating_plain_answer');
+    var _rpCap = tokenCapFor(channel);
+    var _rpHuman = await regenerateHollowAnswer(finalAns, msgs, [
+      async function (repairMessages) {
+        return (await callGLMPlain(null, repairMessages, _rpCap)) || '';
+      }
+    ]);
+    if (_rpHuman && _rpHuman.answer && isHumanFacingAnswer(_rpHuman.answer)) {
+      finalAns = _rpHuman.answer;
+      _structuredReachPolicy = false; // it is now a plain answer, judge it as one
+      _stampStep('reach_policy_invalid_healed','plain_completion_lane_'+_rpHuman.lane);
+    } else {
+      _stampStep('cycle_end_silent','reach_policy_json_invalid_after_heal_attempt');
+      return{ok:false,reason:'reach_policy_json_invalid',blocked_by:'A\'NU',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+        ms:Date.now()-t0};
+    }
   }
   if (!_structuredReachPolicy&&finalAns && /^[\[{]/.test(finalAns.trim())) {
     var _rawParsed = null;
