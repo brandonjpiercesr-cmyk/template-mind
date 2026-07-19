@@ -2504,7 +2504,7 @@ async function runOutboundCouncil(input, injected) {
       // the gap, resubmit, no substitution). Every judge is a healer. This runs ONCE
       // per stage. If the stage still holds the healed answer, only THEN does the turn
       // fail -- a genuine, twice-confirmed integrity problem, not one probabilistic no.
-      var _healReason = normalized.reason || 'stage_held';
+      var _healReason = receipt.reason || 'stage_held';
       var _healableStage = (stage === 'WRIT' || stage === 'SHADOW' ||
         stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL');
       if (_healableStage && isHumanFacingAnswer(before)) {
@@ -2513,20 +2513,60 @@ async function runOutboundCouncil(input, injected) {
           if (_healed && typeof _healed === 'string' && _healed.trim() &&
               isHumanFacingAnswer(_healed) && _healed !== before) {
             var _reStarted = nowMs(deps);
-            var _reNorm = normalizeStageResult(await handler(buildStageContext(
-              input, _healed, quillRequired, stages, { stage: stage, healed: true }
-            )), _healed);
+            var _reNorm;
+            try {
+              _reNorm = normalizeStageResult(await handler(buildStageContext(
+                input, _healed, quillRequired, stages, { stage: stage, healed: true }
+              )), _healed);
+            } catch (_reJudgeErr) {
+              _reNorm = {
+                ok: false,
+                reason: 'stage_threw:' + errorReason(_reJudgeErr),
+                answer: _healed,
+                evidence: {}
+              };
+            }
             var _reEnded = nowMs(deps);
             var _reHuman = isHumanFacingAnswer(_reNorm.answer);
-            stages.push(makeStageReceipt(stage, i, true, true,
-              _reNorm.ok && _reHuman, _healed, _reNorm.answer, _reStarted, _reEnded,
-              _reHuman ? (_reNorm.reason || 'STAGE_HEALED_PASS') : 'stage_hollow_protocol_answer',
-              Object.assign({ healed_from: _healReason }, _reNorm.evidence || {})));
+            var _rePassed = _reNorm.ok && _reHuman;
+            // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
+            // The retry is a second attempt at this ordinal, not a second stage.
+            // Replace the held receipt in place and span the original stage input
+            // to the retry output so the seven-stage digest chain stays continuous.
+            stages[stages.length - 1] = makeStageReceipt(stage, i, true, true,
+              _rePassed, before, _reNorm.answer, started, _reEnded,
+              _rePassed ? 'STAGE_HEALED_PASS' :
+                (_reHuman ? (_reNorm.reason || 'stage_held') : 'stage_hollow_protocol_answer'),
+              {
+                healed_from: _healReason,
+                healed_input_digest: digestText(_healed),
+                healed_input_bytes: Buffer.byteLength(_healed, 'utf8'),
+                stage_attempts: 2,
+                initial_attempt: {
+                  ok: receipt.ok,
+                  reason: receipt.reason,
+                  input_digest: receipt.input_digest,
+                  output_digest: receipt.output_digest,
+                  started_at: receipt.started_at,
+                  ended_at: receipt.ended_at,
+                  ms: receipt.ms,
+                  evidence_digest: digestObject(receipt.evidence || {})
+                },
+                resubmission: {
+                  reason: _reNorm.reason || null,
+                  started_at: new Date(_reStarted).toISOString(),
+                  ended_at: new Date(_reEnded).toISOString(),
+                  ms: Math.max(0, _reEnded - _reStarted),
+                  evidence: _reNorm.evidence || {}
+                }
+              });
             if (_reNorm.ok && typeof _reNorm.answer === 'string' &&
                 _reNorm.answer.trim() !== '' && _reHuman) {
               currentAnswer = _reNorm.answer;
               continue; // healed and passed; move to the next stage
             }
+            return failureResult(!_reHuman ? 'stage_hollow_protocol_answer' :
+              (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
           }
         } catch (_healErr) { /* heal is best-effort; fall through to the honest failure */ }
       }
