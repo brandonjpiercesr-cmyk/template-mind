@@ -1651,12 +1651,8 @@ async function defaultShadowStage(ctx, injected) {
     judgment = await modelLadder.deliberate(system, user, {
       max_tokens: 240,
       temperature: 0,
-      // ⬡B:core.pai_outbound_council:FIX:judge_is_fast_or_it_fails_open:20260719⬡
-      // A factual-integrity verdict on already-drafted text does not need 25s. The
-      // council was costing 50s+ (judge 25 + review 25) and STILL holding, which is
-      // the slow half of the gaslight cycle. Tight bound; a judge that cannot answer
-      // in time yields no parsed verdict, and on a clean board that fails OPEN below.
       timeout: voiceRealtime ? 1800 : (parseInt(process.env.PAI_SHADOW_TIMEOUT_MS||'9000',10)),
+      tightTimeout: !voiceRealtime,
       json: true,
       realtime: voiceRealtime,
       signal:ctx.signal
@@ -1686,10 +1682,9 @@ async function defaultShadowStage(ctx, injected) {
   var _judgeHasQuotable = _verbatimClaimFound(parsed);
   if (boardPassed && deterministicFindings.length === 0 && judgment && parsed &&
       parsed.approved === false && _judgeHasQuotable) {
-    // Only spend a second model pass when the judge actually quoted a real claim
-    // from the answer. A hold with no quotable claim on a clean board already
-    // fails open (shadowFailOpenCleanBoard); paying 25s for a review that cannot
-    // change that outcome was pure latency. This is the wonder deciding fast.
+    // ⬡B:core.pai_outbound_council:FIX:skip_review_when_no_quotable_claim:20260719⬡
+    // A hold with no quotable claim on a clean board already fails open; paying a
+    // second 9s model pass that cannot change that outcome was pure latency.
     var reviewSystem = system + ' This is your own independent final review of a prior hold. ' +
       'Hold only when you can identify a concrete factual claim in the proposed answer that is unsupported or contradicted by the bound evidence, and quote it verbatim. ' +
       'Do not hold merely because the answer is brief, does not provide every possible proof detail, or carefully limits what it knows. ' +
@@ -1709,6 +1704,7 @@ async function defaultShadowStage(ctx, injected) {
       max_tokens: 240,
       temperature: 0,
       timeout: voiceRealtime ? 1800 : (parseInt(process.env.PAI_SHADOW_TIMEOUT_MS||'9000',10)),
+      tightTimeout: !voiceRealtime,
       json: true,
       realtime: voiceRealtime,
       signal:ctx.signal
