@@ -3104,23 +3104,38 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           tools.push(_requiredToolName);
           _stampStep('forced_tool_direct_executed',
             _requiredToolName+' ran in cold code; '+String(_forcedResult||'').length+' chars of real data');
-          var _groundMsgs = msgs.concat([
-            {role:'assistant',content:'',tool_calls:[{id:'forced_'+_requiredToolName,type:'function',
-              function:{name:_requiredToolName,arguments:JSON.stringify(_forcedArgs)}}]},
-            {role:'tool',tool_call_id:'forced_'+_requiredToolName,name:_requiredToolName,
-              content:String(_forcedResult||'')},
-            {role:'user',content:'Answer my question now using only the real tool result above. Do not invent anything not in it.'}
-          ]);
-          var _groundBody={model:model,messages:_groundMsgs,max_tokens:tokenCapFor(channel),temperature:0.2};
-          var _groundR=await fetch(GB,{method:'POST',
-            headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
-            body:JSON.stringify(_groundBody),signal:_modelRequestSignal()
-          }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+          var _groundInstruction='The tool result above is the REAL, current data for this person. '
+            + 'Speak the direct answer to their question in your own natural words, using only facts '
+            + 'from that result. Do NOT say you pulled it up, do NOT say ask again, do NOT hand back raw '
+            + 'data or JSON. Just answer the question plainly, like a person who already knows.';
+          function _groundDraft(extraNudge){
+            var gm = msgs.concat([
+              {role:'assistant',content:'',tool_calls:[{id:'forced_'+_requiredToolName,type:'function',
+                function:{name:_requiredToolName,arguments:JSON.stringify(_forcedArgs)}}]},
+              {role:'tool',tool_call_id:'forced_'+_requiredToolName,name:_requiredToolName,
+                content:String(_forcedResult||'')},
+              {role:'user',content:_groundInstruction + (extraNudge||'')}
+            ]);
+            var gb={model:model,messages:gm,max_tokens:tokenCapFor(channel),temperature:0.3};
+            return fetch(GB,{method:'POST',
+              headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
+              body:JSON.stringify(gb),signal:_modelRequestSignal()
+            }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+          }
+          var _groundR=await _groundDraft('');
           var _groundMsg=_groundR&&_groundR.choices&&_groundR.choices[0]&&_groundR.choices[0].message;
-          if (_groundMsg&&isNonEmpty(_groundMsg.content)) {
+          var _deflect=/pull(ed)? that up|ask me again|say it in words|raw data|instead of handing/i;
+          if (!(_groundMsg&&isNonEmpty(_groundMsg.content)) || _deflect.test(String(_groundMsg&&_groundMsg.content||''))) {
+            // one firmer retry; a deflection ("ask me again") is not an answer
+            var _g2=await _groundDraft(' Answer in one to four sentences now. This is your only chance to answer; there is no ask-again.');
+            var _g2m=_g2&&_g2.choices&&_g2.choices[0]&&_g2.choices[0].message;
+            if (_g2m&&isNonEmpty(_g2m.content)&&!_deflect.test(String(_g2m.content))) _groundMsg=_g2m;
+          }
+          if (_groundMsg&&isNonEmpty(_groundMsg.content)&&!_deflect.test(String(_groundMsg.content))) {
             msg={role:'assistant',content:_groundMsg.content};
           } else {
-            msg={role:'assistant',content:String(_forcedResult||'')};
+            // never ship raw tool JSON; keep words flowing to the council with a plain honest line
+            msg={role:'assistant',content:'Here is what I found for right now: '+String(_forcedResult||'').replace(/[{}\[\]"]/g,' ').replace(/\s+/g,' ').trim().slice(0,600)};
           }
         } catch(_eForced) {
           _stampStep('forced_tool_direct_execute_failed',
