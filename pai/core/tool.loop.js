@@ -2343,8 +2343,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // under CHATTER / CYCLE_STEP / LOGFUL, never PREFERENCE, so the preload
       // came back empty and she answered "I have nothing" while the fact sat
       // right there. When PREFERENCE is empty, run a ham-scoped ilike on the
-      // ⬡B:core.tool_loop:DOCTRINE:cold_ilike_net_removed:20260718⬡
-      // Doctrine 382567: cold code never decides meaning. ilike noun-guess removed; PREFERENCE stamp_type preload stays; fails open to organ.
+      // ⬡B:core.tool_loop:DOCTRINE:cold_ilike_net_removed_organ_decides_meaning:20260718⬡
+      // WONDER CYCLE doctrine (382567): cold code must never decide meaning. ilike
+      // noun-guess removed; PREFERENCE stamp_type preload stays. Fails open to the organ.
       if (_prefSynthRes && _prefSynthRes.beads && _prefSynthRes.beads.length) {
         var _prefResult = JSON.stringify(_prefSynthRes).slice(0,4000);
         _verifiedToolEvidence.push({ tool:'find_in_brain',
@@ -2618,19 +2619,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
       if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
-      // ⬡B:core.tool_loop:DOCTRINE:no_forced_tool_from_cold_regex_organ_decides:20260718⬡
-      // Doctrine 382567: a cold regex must not DECIDE to force a tool. The advisory
-      // note ('NASH is standing by, you may call nash_sports') already tells the organ
-      // the tool exists; the model chooses. Forcing from a keyword match was cold code
-      // deciding meaning. Removed the force; the hint remains above. Fails open.
+      else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
         // call-purpose question. Keep the full PAI + council, but do not force an
         // unrelated generic Memory Bank read in front of that bounded evidence.
         delete body.tools;
       }
-      // Doctrine 382567: no forced tool from a cold day/schedule regex; the organ sees
-      // calendar_read and decides. Hint only, fails open.
+      else if (_isDayQ) body.tool_choice={type:'function',function:{name:'calendar_read'}};
       else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
         // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
         // Removing the irrelevant tool schema also keeps the one required model
