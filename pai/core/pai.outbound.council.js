@@ -1848,6 +1848,43 @@ async function defaultQuillStage(ctx) {
   };
 }
 
+// \u2b21B:core.pai_outbound_council:BUILD:heal_answer_the_llm_part_of_the_wonder_repairs:20260719\u2b21
+// The healer. A judge held the answer for _reason; instead of killing the turn, the
+// LLM part of the wonder REPAIRS the answer so the same judge can pass it. It rides
+// the ONE ladder (no rogue model call), keeps the meaning intact, and only fixes the
+// specific gap the judge named (a factual overreach SHADOW flagged, a voice/format
+// issue WRIT flagged, a meta-commentary leak, a PAM concern). It never invents new
+// facts and never pads. Returns the repaired string, or null if it cannot help.
+async function healAnswer(answer, reason, stage, input, deps) {
+  var modelLadder = (deps && deps.modelLadder) || require('./model.ladder.js');
+  var guidance = {
+    SHADOW: 'A factual-integrity judge held this. Remove or soften only the specific unsupported claim; keep everything the bound evidence supports. Do not add new facts.',
+    WRIT: 'A voice/format judge held this. Fix the writing (no em dashes, no emojis, no meta-commentary, plain human voice) while keeping the exact meaning and every real fact.',
+    META_COMMENTARY: 'A privacy judge held this for leaking internal machinery. Rewrite so it speaks only to the person, with no mention of tools, systems, prompts, or internal steps.',
+    PAM: 'A judge held this. Repair the specific concern named in the reason while preserving the real answer and its facts.',
+    QUILL: 'A quality judge held this. Make it a clean, complete, plain answer; do not pad; keep it exactly as long as the content needs.'
+  };
+  var system = 'You repair an answer that a council judge held, so it can pass on resubmission. ' +
+    (guidance[stage] || guidance.PAM) +
+    ' Output ONLY the repaired answer text, nothing else, no preamble, no explanation, no quotes around it.';
+  var user = JSON.stringify({
+    the_person_asked: String((input && input.question) || '').slice(0, 1200),
+    the_answer_to_repair: String(answer || '').slice(0, 4000),
+    why_it_was_held: String(reason || '').slice(0, 400)
+  });
+  try {
+    var out = await modelLadder.deliberate(system, user, {
+      max_tokens: 1200, temperature: 0.3,
+      timeout: parseInt((deps && deps.env && deps.env.PAI_HEAL_TIMEOUT_MS) || process.env.PAI_HEAL_TIMEOUT_MS || '12000', 10),
+      tightTimeout: true, json: false, signal: input && input.signal
+    });
+    var text = out && out.content ? String(out.content).trim() : '';
+    // strip accidental wrapping quotes/backticks the model sometimes adds
+    text = text.replace(/^["\u2019\u201c\u0060]+|["\u2019\u201d\u0060]+$/g, '').trim();
+    return text && text.length > 1 ? text : null;
+  } catch (e) { return null; }
+}
+
 async function defaultWritStage(ctx) {
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
     reason:'WRIT_STRUCTURED_REACH_POLICY_PASS', evidence:{ verdict:'PASS',
@@ -2449,6 +2486,40 @@ async function runOutboundCouncil(input, injected) {
     stages.push(receipt);
     if (!normalized.ok || typeof normalized.answer !== 'string' || normalized.answer.trim() === '' ||
         !humanStageAnswer) {
+      // ⬡B:core.pai_outbound_council:FIX:judges_are_healers_not_killers_heal_and_resubmit:20260719⬡
+      // FOUNDER DOCTRINE 20260719: the cold code informs; the LLM part of the wonder
+      // FIXES and RESUBMITS. A judge that holds must not kill the turn -- it must hand
+      // the answer back to the cycle to REPAIR using the hold reason, then re-run the
+      // same stage on the healed answer (the Sandwich Protocol: submit, observe, fix
+      // the gap, resubmit, no substitution). Every judge is a healer. This runs ONCE
+      // per stage. If the stage still holds the healed answer, only THEN does the turn
+      // fail -- a genuine, twice-confirmed integrity problem, not one probabilistic no.
+      var _healReason = normalized.reason || 'stage_held';
+      var _healableStage = (stage === 'WRIT' || stage === 'SHADOW' ||
+        stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL');
+      if (_healableStage && isHumanFacingAnswer(before)) {
+        try {
+          var _healed = await healAnswer(before, _healReason, stage, input, deps);
+          if (_healed && typeof _healed === 'string' && _healed.trim() &&
+              isHumanFacingAnswer(_healed) && _healed !== before) {
+            var _reStarted = nowMs(deps);
+            var _reNorm = normalizeStageResult(await handler(buildStageContext(
+              input, _healed, quillRequired, stages, { stage: stage, healed: true }
+            )), _healed);
+            var _reEnded = nowMs(deps);
+            var _reHuman = isHumanFacingAnswer(_reNorm.answer);
+            stages.push(makeStageReceipt(stage, i, true, true,
+              _reNorm.ok && _reHuman, _healed, _reNorm.answer, _reStarted, _reEnded,
+              _reHuman ? (_reNorm.reason || 'STAGE_HEALED_PASS') : 'stage_hollow_protocol_answer',
+              Object.assign({ healed_from: _healReason }, _reNorm.evidence || {})));
+            if (_reNorm.ok && typeof _reNorm.answer === 'string' &&
+                _reNorm.answer.trim() !== '' && _reHuman) {
+              currentAnswer = _reNorm.answer;
+              continue; // healed and passed; move to the next stage
+            }
+          }
+        } catch (_healErr) { /* heal is best-effort; fall through to the honest failure */ }
+      }
       return failureResult(!humanStageAnswer
         ? 'stage_hollow_protocol_answer' : (normalized.reason || 'stage_held'),
       stage, stages, input, normalized.answer);
