@@ -1943,8 +1943,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _voiceModelDeadline = String(channel || '').toLowerCase() === 'voice'
     ? t0 + 6500 : null;
   function _modelRequestSignal() {
+    // ⬡B:core.tool_loop:FIX:reach_turns_get_a_model_deadline_not_infinite_wait:20260719⬡
+    // FOUNDER 911, receipts: text/email turns hung 36-53s because this returned
+    // undefined for every non-voice channel -- the model call had NO timeout and
+    // waited however long the provider took. A slow Together response just stalled
+    // the whole turn instead of failing fast to the next rung. Voice keeps its own
+    // tight per-turn deadline; every other channel now gets a bounded deadline
+    // (PAI_REACH_MODEL_DEADLINE_MS, default 22s) so a slow rung aborts and the
+    // ladder's next provider answers. The turn stays alive; it just stops hanging.
+    var _reachDeadlineMs = parseInt(process.env.PAI_REACH_MODEL_DEADLINE_MS || '22000', 10);
+    var reachDeadlineSignal = (!_voiceModelDeadline && _reachDeadlineMs > 0)
+      ? AbortSignal.timeout(_reachDeadlineMs) : null;
     var deadlineSignal = _voiceModelDeadline
-      ? AbortSignal.timeout(Math.max(1, _voiceModelDeadline - Date.now())) : null;
+      ? AbortSignal.timeout(Math.max(1, _voiceModelDeadline - Date.now())) : reachDeadlineSignal;
     var signals = [_turnAbortSignal, deadlineSignal].filter(Boolean);
     if (!signals.length) return undefined;
     if (signals.length === 1) return signals[0];
