@@ -641,15 +641,15 @@ var TOOLS = [
   // used (real background ids only, real preset names only, https-only images, no
   // fabricated values) and, critically, tells her plainly if something was rejected so
   // she can correct it in the same turn instead of failing silently.
-  {type:'function',function:{name:'save_layout',description:'Save a named dashboard the person wants to reuse, e.g. they say "call this my morning setup". Give the name they chose and the real pieces it contains (budget, advisor, calendar, today, reminders, jobs). Later they can say "pull up my morning setup" and it reassembles.',
+  {type:'function',function:{name:'save_layout',description:'Save a named dashboard the person wants to reuse, e.g. they say "call this my morning setup". Give the name they chose and the real pieces it contains (budget, advisor, calendar, today, reminders, jobs, email). Later they can say "pull up my morning setup" and it reassembles.',
     parameters:{type:'object',properties:{
       name:{type:'string',description:'The name the person gave this layout, in their own words.'},
-      pieces:{type:'array',items:{type:'string'},description:'The real piece names in this layout. Allowed: budget, advisor, calendar, today, reminders, jobs.'}},
+      pieces:{type:'array',items:{type:'string'},description:'The real piece names in this layout. Allowed: budget, advisor, calendar, today, reminders, jobs, email.'}},
       required:['name','pieces']}}},
   {type:'function',function:{name:'edit_layout',description:'Change a dashboard the person already saved: add pieces to it or remove pieces from it. Use when they say add budget to my morning setup, or take reminders off my usual. Give the layout name and what to add and/or remove.',
     parameters:{type:'object',properties:{
       name:{type:'string',description:'The saved layout name to edit.'},
-      add:{type:'array',items:{type:'string'},description:'Real pieces to add (budget, advisor, calendar, today, reminders, jobs).'},
+      add:{type:'array',items:{type:'string'},description:'Real pieces to add (budget, advisor, calendar, today, reminders, jobs, email).'},
       remove:{type:'array',items:{type:'string'},description:'Pieces to remove.'}},
       required:['name']}}},
   {type:'function',function:{name:'update_screen',description:'Change what is showing on the person\'s live glass screen right now -- background, layout, a short skywritten line, or cards. Only usable when their screen is actually open; call it and read the result to find out. Only pass fields you actually want to change; omit everything else.',
@@ -665,9 +665,9 @@ var TOOLS = [
             properties:{to:{type:'string'},subject:{type:'string'},body:{type:'string'}}},
           face:{type:'string',description:'Move or toggle your own face window on their glass. Allowed values only: top-left, top-right, bottom-left, bottom-right, center, hide, show. Use when they ask you to move your face, get it out of the way, or bring it back.'},
           app:{type:'string',description:'Open one of the person REAL apps as a live window on the glass. Allowed values only: ccwa, life, gmgu, seer, tryaba. Use when they ask to open, show, or pull up one of their apps.'},
-          piece:{type:'string',description:'Pull ONE real live piece of their life onto the glass, filled with their actual data. Allowed values only: budget, advisor, calendar, today, reminders, jobs. Use when they ask to see just their budget, just what their advisors say, etc -- this pulls the real numbers/messages, not an empty app window.'},
+          piece:{type:'string',description:'Pull ONE real live piece of their life onto the glass, filled with their actual data. Allowed values only: budget, advisor, calendar, today, reminders, jobs, email. Use when they ask to see just their budget, just what their advisors say, etc -- this pulls the real numbers/messages, not an empty app window.'},
           layout:{type:'string',description:'Reassemble a dashboard the person SAVED earlier, by its name. Use when they say pull up my morning setup, show my usual, my saved dashboard, etc. Expands the saved layout into its real pieces automatically.'},
-          pieces:{type:'array',items:{type:'string'},description:'Pull SEVERAL real pieces at once into one composed dashboard. Same allowed values as piece (budget, advisor, calendar, today, reminders, jobs). Use when they say cook a dashboard, show me everything, my morning briefing, catch me up on my whole day -- pull the 2 to 5 that fit, each fills with real data, empty ones are skipped.'},
+          pieces:{type:'array',items:{type:'string'},description:'Pull SEVERAL real pieces at once into one composed dashboard. Same allowed values as piece (budget, advisor, calendar, today, reminders, jobs, email). Use when they say cook a dashboard, show me everything, my morning briefing, catch me up on my whole day -- pull the 2 to 5 that fit, each fills with real data, empty ones are skipped.'},
           chart:{type:'object',description:'A chart of REAL numbers only (from your tools or the conversation), which grows to its values on the glass. Every series value must be a real finite number; never estimate or invent one.',
             properties:{title:{type:'string'},series:{type:'array',items:{type:'object',properties:{label:{type:'string'},value:{type:'number'}}}}}}}}}
     }}}},
