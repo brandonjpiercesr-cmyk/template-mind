@@ -92,6 +92,24 @@ var PIECES = {
       return { type: 'list', title: 'Your job search', items: items.map(function (t) { return t.slice(0, 140); }) };
     },
   },
+  email: {
+    aliases: ['email', 'emails', 'inbox', 'mail', 'unread', 'messages', 'my inbox'],
+    // ⬡B:piece_registry:BUILD:real_email_piece_for_the_glass:20260718⬡ Founder's marquee
+    // Jarvis-2046 example: she surfaces a real email on the glass, he can edit the drafted
+    // reply and send it. This piece returns the real top unread messages (founder-gated,
+    // dev-noise already scrubbed by /os/email), each carrying its grant+id so the frontend
+    // can ask the real draft endpoint to write a reply. Hollow-skips when the inbox is clear.
+    fetch: async function (hamUid, base, headers) {
+      var r = await fetch(base + '/os/email/' + hamUid, { headers: headers }).then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
+      var msgs = (r && r.emails) || [];
+      var unread = msgs.filter(function (m) { return m.unread; }).slice(0, 4);
+      if (!unread.length) return null; // honest: nothing surfaced when the inbox is clear
+      return { type: 'email', title: 'Your inbox', items: unread.map(function (m) {
+        return { from: String(m.from || 'someone').slice(0, 80), subject: String(m.subject || '(no subject)').slice(0, 120),
+          snippet: String(m.snippet || m.preview || '').slice(0, 200), grant: m.grant || null, id: m.id || null };
+      }) };
+    },
+  },
   reminders: {
     aliases: ['reminder', 'reminders', 'todo', 'to do', 'to-do', 'tasks', 'what should i do'],
     fetch: async function (hamUid, base, headers) {
