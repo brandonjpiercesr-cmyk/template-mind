@@ -81,6 +81,31 @@ app.post('/bead', async function (req, res) {
 // the world-agnostic funnel), then hands the compiled turn to face for expression.
 // Additive: the 6 original organs are untouched. The engine is byte-identical to legacy;
 // only the bank it points at differs, by env. Rollback = do not call this door.
+// ⬡B:mind.entry:REACH:per_ham_text_door:20260719⬡
+// FOUNDER LAW 20260719: reach is PER-HAM. This world owns its own text edge.
+// Blooio webhook -> THIS world's door -> full PAI cycle -> TAP send, reading and
+// writing ONLY this HAM's bank. No shared legacy service in the path. The guard
+// is the same shared-engine webhook.guard (URL token, timing-safe). 200 returns
+// immediately (Blooio timeout ~5s); the reply runs async through the one cycle.
+var _wrenGuard = require('./pai/core/webhook.guard.js');
+var _wrenReply = require('./pai/core/wren/reply.js');
+app.post('/wren/blooio', async function (req, res) {
+  try {
+    var auth = _wrenGuard.verifyBlooio(req, process.env.BLOOIO_WEBHOOK_SECRET);
+    if (!auth.ok) return res.status(auth.reason === 'blooio_webhook_secret_unconfigured' ? 503 : 401).json({ ok:false, reason:auth.reason });
+    res.json({ ok:true, status:'processing', world:'per_ham' });
+    var body = req.body || {};
+    setImmediate(function () {
+      Promise.resolve(_wrenReply.handleReply(body)).catch(function (e) {
+        console.error('[wren/blooio per-ham]', e && e.message);
+      });
+    });
+  } catch (e) {
+    console.error('[wren/blooio per-ham outer]', e && e.message);
+    try { res.status(500).json({ ok:false }); } catch (_e) {}
+  }
+});
+
 app.post('/cycle', async function (req, res) {
   try {
     if (!HAM || !BANK || !KEY) return res.status(200).json({ ok: false, reason: 'unborn: missing world env' });
