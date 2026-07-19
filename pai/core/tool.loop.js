@@ -3226,6 +3226,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           var _forcedResult = await executeTool('consult_mace', _forcedArgs, hamUid, message,
             { cycleId:_cycleId, requestId:_requestId, channel:channel });
           tools.push('consult_mace');
+          // ⬡B:core.tool_loop:FIX:forced_consult_mace_result_becomes_shadow_evidence_no_false_hold:20260719⬡
+          // Same fix as the data-reader force-execute: a cold force-execute must
+          // record its real result as verified current-turn evidence, or SHADOW judges
+          // the grounded answer with no source and can false-hold it. Same evidence
+          // shape the model tool-call path uses, same current-turn provenance.
+          _verifiedToolEvidence.push({ tool:'consult_mace',
+            provenance:'pai.current_turn.execute_tool', request_id:_requestId,
+            cycle_id:_cycleId,
+            args:JSON.stringify(_forcedArgs||{}).slice(0,4000),
+            result:String(_forcedResult||'').slice(0,4000) });
+          if (_verifiedToolEvidence.length > 8) _verifiedToolEvidence.shift();
           _stampStep('forced_tool_direct_executed',
             'consult_mace ran in cold code with parsed args; '+String(_forcedResult||'').length+' chars of real file');
           var _mcGround = msgs.concat([
@@ -3264,6 +3275,26 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           var _forcedResult = await executeTool(_requiredToolName, _forcedArgs, hamUid, message,
             { cycleId:_cycleId, requestId:_requestId, channel:channel });
           tools.push(_requiredToolName);
+          // ⬡B:core.tool_loop:FIX:forced_data_reader_result_becomes_shadow_evidence_no_false_hold:20260719⬡
+          // NUCLEAR 911 part 2 (founder caught it): after the raw-words intent fix,
+          // the lane question correctly force-executed read_lane_board (772 chars of
+          // real data), but SHADOW STILL held it (shadow_wonder_hold / receipt_unverified).
+          // Root cause: a tool the MODEL calls gets pushed into _verifiedToolEvidence
+          // (line ~3462) so SHADOW can verify the answer against it, but this COLD
+          // force-execute path set msg.content from the real result and never recorded
+          // that result as evidence. So SHADOW judged a grounded answer with no source
+          // to verify its "is/are" claims against, and held a true answer. A judge that
+          // holds a grounded answer is a killer, not a healer. Recording the forced
+          // result in the exact same evidence shape the model-call path uses lets SHADOW
+          // verify the answer against the real data it was actually built from. This is
+          // this turn's own deterministic tool execution, the same provenance a model
+          // tool call carries, never caller-supplied, so it cannot forge authority.
+          _verifiedToolEvidence.push({ tool:_requiredToolName,
+            provenance:'pai.current_turn.execute_tool', request_id:_requestId,
+            cycle_id:_cycleId,
+            args:JSON.stringify(_forcedArgs||{}).slice(0,4000),
+            result:String(_forcedResult||'').slice(0,4000) });
+          if (_verifiedToolEvidence.length > 8) _verifiedToolEvidence.shift();
           _stampStep('forced_tool_direct_executed',
             _requiredToolName+' ran in cold code; '+String(_forcedResult||'').length+' chars of real data');
           var _groundInstruction='The tool result above is the REAL, current data for this person. '
