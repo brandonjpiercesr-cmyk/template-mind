@@ -1570,9 +1570,14 @@ async function defaultShadowStage(ctx, injected) {
   var provenanceFlags = provenanceCheck.findings || [];
   var identityReceiptFlags = identityEvidenceReceiptContradictions(ctx);
   // ⬡B:core.pai_outbound_council:FIX:memory_absence_phrasing_is_evidence_not_a_veto:20260718⬡
+  // ⬡B:core.pai_outbound_council:REPAIR:contradicted_categorical_absence_is_a_real_hold_again:20260719⬡
+  // A CONTRADICTED categorical absence (answer claims an absence that stored evidence
+  // disproves, e.g. "no favorite adviser" when memory proves ELI is the favorite) is a real
+  // fabrication and must FLAG/hold every time; only non-contradicted absence phrasing stays
+  // advisory. Restored the contradicted flag to the deterministic findings.
   var deterministicFindings = ((boardResult && boardResult.flags) || [])
     .concat(namedContextFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
-      identityReceiptFlags);
+      identityReceiptFlags, memoryAbsenceFlags);
   var advisoryMemoryAbsence = memoryAbsenceFlags;
   var boardPassed = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
     ((boardResult && boardResult.flags) || []).length === 0 &&
