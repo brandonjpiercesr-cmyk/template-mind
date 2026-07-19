@@ -2705,14 +2705,20 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
       var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
       if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
-      else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
+      // ⬡B:core.tool_loop:DOCTRINE:no_force_from_cold_regex_organ_chooses_nash:20260718⬡
+      // Doctrine 382567: a cold regex must not FORCE a tool. nash_sports stays in her
+      // belt; on a sports-shaped question the organ calls it itself (proven live). The
+      // synthetic-evidence note above already tells her NASH is standing by. No force.
+      else if (_nashNeeded) { _nashNeeded=false; }
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
         // call-purpose question. Keep the full PAI + council, but do not force an
         // unrelated generic Memory Bank read in front of that bounded evidence.
         delete body.tools;
       }
-      else if (_isDayQ) body.tool_choice={type:'function',function:{name:'calendar_read'}};
+      // Doctrine 382567: no force from a cold day/schedule regex; calendar_read stays
+      // in the belt and the organ calls it on a day-shaped question. Hint, not gate.
+      else if (_isDayQ) { /* calendar_read available; organ chooses */ }
       else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
         // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
         // Removing the irrelevant tool schema also keeps the one required model
@@ -2732,7 +2738,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         delete body.tools;
         delete body.tool_choice;
       }
-      else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
+      // Doctrine 382567: no force from a cold info-question regex; find_in_brain stays
+      // in the belt and the organ calls it when it needs the brain. Fails open: a
+      // keyword miss no longer forces a lookup, it lets her decide.
+      else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) { /* find_in_brain available; organ chooses */ }
     }
     // \u2b21B:core.tool_loop:WIRE:ornith_opt_in_no_tools_only:20260703\u2b21
     // Founder request: try Ornith for A'NU's real conversational turns too, not
