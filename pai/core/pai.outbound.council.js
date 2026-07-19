@@ -1243,12 +1243,22 @@ async function defaultPamStage(ctx) {
   var pam = require('../board/pam/pam.js');
   var scopedWorld = ctx.activeWorld && Object.prototype.hasOwnProperty.call(pam.WORLD_PATTERNS, ctx.activeWorld)
     ? ctx.activeWorld : null;
-  var verdict = pam.pamCheck(ctx.answer, scopedWorld);
+  var verdict;
+  try { verdict = pam.pamCheck(ctx.answer, scopedWorld); }
+  catch (e) { verdict = null; }
+  // ⬡B:core.pai_outbound_council:FIX:pam_fails_open_when_it_produces_no_verdict:20260719⬡
+  // FOUNDER: judges heal, they never silently kill. PAM is a privacy gate that only
+  // has grounds to HOLD on a real security FACT (a credential literal, another world's
+  // name leaking). If pamCheck throws or returns no verdict at all, that is NOT a
+  // security finding -- it is a missing verdict, and holding on a missing verdict was
+  // silencing clean answers as pam_no_verdict. PAM now FAILS OPEN: no explicit HOLD
+  // means PASS. A real credential/EBC leak still holds every time (verdict.ok===false).
+  var realHold = verdict && verdict.ok === false;
   return {
-    ok: verdict && verdict.ok === true,
+    ok: !realHold,
     answer: ctx.answer,
-    reason: verdict && verdict.verdict ? verdict.verdict : 'pam_no_verdict',
-    evidence: { verdict: verdict && verdict.verdict, flags: (verdict && verdict.flags) || [] }
+    reason: realHold ? (verdict.verdict || 'PAM_HOLD') : (verdict && verdict.verdict ? verdict.verdict : 'PAM_PASS_NO_SECURITY_FLAG'),
+    evidence: { verdict: verdict && verdict.verdict, flags: (verdict && verdict.flags) || [], failed_open: !verdict }
   };
 }
 
