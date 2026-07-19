@@ -547,6 +547,8 @@ var TOOLS = [
 
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
+  {type:'function',function:{name:'read_lane_board',description:'READ THE LANE BOARD. Returns every active build chat/lane working on your system right now, each with its ACL chat name and the roadmap it is currently on (for example CLAIR-CURE, CLAIR-WONDERS, and any ChatGPT lane). Use this whenever the founder asks what chats or lanes are working on your build, who is doing what, or whether two lanes might collide. The lanes cannot talk to each other, they coordinate by stamping this board, so this is how you know the whole picture. Takes no arguments.',
+    parameters:{type:'object',properties:{}}}},
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
     +'Use for ANY question about a game, score, or whether a team won (Lakers, NBA, NFL, MLB, NHL, WNBA). '
     +'Pass league as one of: nba, nfl, mlb, nhl, wnba. Returns the latest scoreboard lines.',
@@ -1177,6 +1179,36 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       }
       return JSON.stringify({ok:false,reason:'nothing_applied'});
     } catch (eUpd) { return JSON.stringify({ok:false,reason:eUpd.message}); }
+  }
+  if (name === 'read_lane_board') {
+    // ⬡B:tool.loop:WIRE:read_lane_board_cross_chat_alignment:20260719⬡ Founder law:
+    // every Claude coding chat gets a matching ACL name and declares its current
+    // roadmap on a shared board, because the lanes cannot talk to each other, they
+    // coordinate by stamping the brain. This tool lets A'NU SEE that whole board so
+    // when the founder asks what chats are working on her build she actually knows.
+    // Cold code only fetches the rows the organ asked for; the organ decides when to
+    // call and how to speak it.
+    try {
+      var _bu = process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL;
+      var _bk = process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY;
+      var _sch = process.env.BRAIN_SCHEMA || 'memory_bank';
+      var _boundLaneHam = String(hamUid || '').toUpperCase();
+      if (!_boundLaneHam) return JSON.stringify({ ok:false, reason:'ham_uid_required' });
+      var _lbUrl = _bu.replace(/\/+$/, '') + '/rest/v1/beads'
+        + '?ham_uid=eq.' + encodeURIComponent(_boundLaneHam)
+        + '&stamp_type=eq.LANE_CLAIM&source=ilike.lane.registry.*'
+        + '&select=source,summary,created_at&order=created_at.desc&limit=30';
+      var _lbRes = await fetch(_lbUrl, { headers: {
+        apikey: _bk, Authorization: 'Bearer ' + _bk, 'Accept-Profile': _sch
+      }, signal: AbortSignal.timeout(8000) }).then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; });
+      var _seen = {}, _lanes = [];
+      (_lbRes || []).forEach(function (row) {
+        if (_seen[row.source]) return;
+        _seen[row.source] = true;
+        _lanes.push({ acl_name: String(row.source || '').replace('lane.registry.', ''), doing: row.summary || '' });
+      });
+      return JSON.stringify({ ok:true, active_lanes: _lanes.length, lanes: _lanes });
+    } catch (e) { return JSON.stringify({ ok:false, reason:'lane_board_error', detail:e.message }); }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
