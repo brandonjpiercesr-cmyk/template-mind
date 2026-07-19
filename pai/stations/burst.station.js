@@ -20,6 +20,7 @@
 
 var ladder = require('../core/model.ladder.js');
 var nowStation = require('./now.station.js');
+var persona = require('../core/persona.js');
 
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
@@ -57,7 +58,7 @@ async function judgeUrgent(hamUid, moment, candidates, alerted) {
       '"command_center"), confidence (0-1)}. The bar is very HIGH -- most things are NOT BURST, '+
       'they are HUNCH or DAWN. If nothing is truly urgent, return []. Already alerted (do not '+
       'repeat): '+JSON.stringify((alerted||[]).slice(0,20));
-    var out=await ladder.deliberate(sys, candidates.join('\n'), { json:true, max_tokens:600, timeout:25000 });
+    var out=await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'), { json:true, max_tokens:600, timeout:25000 });
     var text=out&&out.content!=null?out.content:'';
     var arr=JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (!Array.isArray(arr)) return [];
