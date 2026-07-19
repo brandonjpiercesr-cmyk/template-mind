@@ -2738,6 +2738,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
+      // ⬡B:core.tool_loop:WIRE:lane_board_intent_hint_not_a_rail:20260719⬡ Founder
+      // caught her leading with the calendar when asked what chats/lanes are working
+      // on her build: she never reached read_lane_board. This is a HINT in the same
+      // shape as _isDayQ (she keeps ALL tools and still chooses), it only strengthens
+      // the nudge so the right tool is on top of mind for a lane/chat/who-is-building
+      // question. A lane question is about the BUILD lanes/chats, not the day.
+      var _isLaneBoardQ = /\b(lane|lanes|which chat|what chat|chats|other chat|acl name|working on (your|the) build|who is building|who's building|building your|lane board|coordinat)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
@@ -2762,6 +2769,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // a genuine refusal, so a real day/lookup question can never answer from nothing.
       var _toolNudge = null;
       if (_roadmapActivationNeeded) _toolNudge='activate_roadmap_task';
+      else if (_isLaneBoardQ) _toolNudge='read_lane_board';
       else if (_nashNeeded) { _toolNudge='nash_sports'; _nashNeeded=false; }
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
