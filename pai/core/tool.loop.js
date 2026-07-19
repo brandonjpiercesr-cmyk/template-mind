@@ -2771,6 +2771,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // _isDayQ (she keeps ALL tools and still chooses), just puts read_lane_board top of
       // mind so she does not fall through to the calendar.
       var _isLaneBoardQ = /\b(lane|lanes|which chat|what chat|chats|other chat|acl name|working on (your|the) build|who is building|who's building|building your|lane board|coordinat)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd;
+      // ⬡B:core.tool_loop:WIRE:coding_build_nudge_she_uses_her_coding_team:20260719⬡
+      // Founder caught her NOT using her coding tools: asked to consult MACE/CODA and run
+      // the coding process, she fell through to find_in_brain and answered with the
+      // calendar. She holds consult_mace (CODA lead), run_cookoff, run_wonder_games,
+      // assemble_bcw but never picked them. A build/code/consult request nudges the
+      // coding lead. HINT not a rail, she keeps all tools. Named machinery (MACE, CODA,
+      // cook-off, wonder games, BCW) or a plain build/code/ship ask routes here.
+      var _isCodingBuildQ = /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
@@ -2796,6 +2804,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _toolNudge = null;
       if (_roadmapActivationNeeded) _toolNudge='activate_roadmap_task';
       else if (_isLaneBoardQ) _toolNudge='read_lane_board';
+      else if (_isCodingBuildQ) _toolNudge='consult_mace';
       else if (_nashNeeded) { _toolNudge='nash_sports'; _nashNeeded=false; }
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
