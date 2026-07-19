@@ -2369,6 +2369,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (_nashNeeded) {
     msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
   }
+  // ⬡B:tool.loop:NUDGE:budget_routing_20260719⬡ cold keyword router: a money/budget/expense
+  // question MUST reach LEDGER (get_budget_summary) which reads his REAL ledger. The model
+  // was deflecting ("use your own financial apps") instead of deploying the wonder it has.
+  var _budgetNeeded = !_structuredReachPolicy &&
+    /\b(budget|expense|expenses|spending|spend|spent|income|afford|bills?|financ|transactions?|how much (did|have) i)\b/i.test(message);
+  if (_budgetNeeded) {
+    msgs.push({role:'system',content:'LEDGER is standing by. For this money question you MUST call the get_budget_summary tool and answer from his REAL budget numbers. Never deflect to external apps, banks, Plaid, YNAB, or accounting software, and never say you cannot pull his records; you have his real ledger through get_budget_summary.'});
+  }
   var _verifiedToolEvidence = [];
   var _identityVerifiedEvidence = [];
   var _namedAgentVerifiedEvidence = [];
@@ -2727,6 +2735,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
+      var _isBudgetQ = /\b(budget|expense|expenses|spending|spend|spent|income|afford|bills?|financ|transactions?|how much (did|have) i)\b/i.test(_mSt) && !_isScreenCmd;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
