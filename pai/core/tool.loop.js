@@ -2780,7 +2780,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // that could be answered by his real calendar (today/schedule/meeting/free/
       // busy/calendar) now forces calendar_read specifically -- never find_in_brain
       // alone -- so a day-shaped question can only ever be answered from real events.
-      var _mSt = String(channel === 'voice' ? _exactUserMessage : message || '').trim();
+      // ⬡B:core.tool_loop:FIX:intent_detection_uses_raw_words_not_fusion_wrapped_message:20260719⬡
+      // NUCLEAR 911 (founder caught it): the air/portal door answered "which chat
+      // lanes are working on your build" with the CALENDAR. Root cause: the portal
+      // path (slowPath) enriches the message with a big world-context + live-facts
+      // prefix before runPAI, so `message` here begins with calendar/day facts. Intent
+      // detection was testing that wrapped `message`, so the day-question regex matched
+      // the injected context and the turn flipped to a calendar answer, burying the
+      // real question. The raw user words are already available as _exactUserMessage
+      // (slowPath sets identity.user_message = the original input), and every council
+      // check already trusts those bytes. So intent detection must read the RAW words
+      // on EVERY channel, not just voice. This makes the lane/coding/day nudges fire on
+      // what the person actually asked, not on the fusion prefix.
+      var _mSt = String((_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : (message || '')).trim();
       var _looksLikeInfoQ = /\?\s*$/.test(_mSt)
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
