@@ -172,9 +172,6 @@ async function handleReply(req) {
     council_context: Object.assign({ mode: 'default',
       delivery_target: { kind:'phone', value:sender } }, resolved.council_context || {}) });
   var paiResult = await runPAI(hamUid, text, 'blooio', replyIdentity);
-  if (!paiResult.ok) {
-    return { ok: false, reason: 'pai_failed', detail: paiResult.reason };
-  }
   var committed = requireVerifiedCouncilResult(paiResult, { hamUid: hamUid,
     requestId: paiResult.requestId || paiResult.request_id, cycleId: paiResult.cycleId,
     question: text, deliberationInput: text, answer: paiResult.answer });
@@ -204,13 +201,26 @@ async function handleReply(req) {
   var _cleanBoardHold = ['shadow_model_hold','shadow_wonder_hold','writ_hold','content_too_short']
     .indexOf(String(committed.reason || paiResult.reason || '')) !== -1;
   if (!committed.ok && _cleanBoardHold) {
-    var retryPai = await runPAI(hamUid, text, 'blooio', replyIdentity);
-    if (retryPai.ok) {
-      var retryCommitted = requireVerifiedCouncilResult(retryPai, { hamUid: hamUid,
-        requestId: retryPai.requestId || retryPai.request_id, cycleId: retryPai.cycleId,
-        question: text, deliberationInput: text, answer: retryPai.answer });
-      if (retryCommitted.ok) { paiResult = retryPai; committed = retryCommitted; }
+    var retryPai;
+    try {
+      retryPai = await runPAI(hamUid, text, 'blooio', replyIdentity);
+    } catch (retryError) {
+      retryPai = { ok:false, reason:'pai_retry_threw' };
     }
+    if (!retryPai || typeof retryPai !== 'object') {
+      retryPai = { ok:false, reason:'pai_retry_invalid' };
+    }
+    var retryCommitted = requireVerifiedCouncilResult(retryPai, { hamUid: hamUid,
+      requestId: retryPai.requestId || retryPai.request_id, cycleId: retryPai.cycleId,
+      question: text, deliberationInput: text, answer: retryPai.answer });
+    // The retry is the replacement attempt, never a second candidate riding
+    // beside the first. Its success or failure is therefore authoritative for
+    // the one remaining delivery decision below.
+    paiResult = retryPai;
+    committed = retryCommitted;
+  }
+  if (!paiResult.ok) {
+    return { ok: false, reason: 'pai_failed', detail: paiResult.reason, ham_uid: hamUid };
   }
   if (!committed.ok) return { ok: false, reason: 'pai_council_uncommitted', ham_uid: hamUid };
 
@@ -241,7 +251,7 @@ async function handleReply(req) {
   // Send the real response back via Blooio
   var sendResult = await tapSend(sender, outText, hamUid, paiResult);
   require('../outbound.trace.js').stampOutbound({ hamUid: hamUid, channel: 'blooio', sent: !!(sendResult && (sendResult.message_id || sendResult.ok)), textPreview: outText, sigil: synth.sigil ? synth.sigil.stamp : null, tools_used: synth.tools_used }).catch(function(){});
-    require('../logful/index.js').logfulStore({ hamUid: hamUid, agent: 'ANU', type: 'channel_turn',
+    require('../../logful/index.js').logfulStore({ hamUid: hamUid, agent: 'ANU', type: 'channel_turn',
       data: { channel: 'text', inputData: text, answer: outText },
       summary: '[TEXT turn] ' + String(text).slice(0, 80), importance: 5 }).catch(function(){}); // \u2b21B:memory.unification:BUILD:every_channel_saves_full_turns_20260710\u2b21
 
