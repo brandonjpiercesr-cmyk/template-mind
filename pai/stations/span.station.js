@@ -26,6 +26,32 @@ function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY
 function _tbl(){ return process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain'); }
 function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'); }
 
+// Read the latest assembled FCW wall for this HAM straight from the bank. An
+// Independent Thinking Station reads the wall itself; it does not depend on the cook
+// handing it over. The autonomous tick writes a fcw.build MINUTES bead each cycle whose
+// content carries the entrance (question/channel) and exit (contributors resolved).
+async function readLatestWall(hamUid) {
+  try {
+    var url = _bu() + '/rest/v1/' + _tbl() +
+      '?select=content,summary,created_at&source=ilike.ham_' + String(hamUid).toLowerCase() + '.fcw.build*' +
+      '&order=id.desc&limit=1';
+    var r = await fetch(url, { headers: {
+      apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema()
+    }, signal: AbortSignal.timeout(8000) });
+    var d = await r.json();
+    if (!Array.isArray(d) || !d[0]) return null;
+    var body = {}; try { body = JSON.parse(d[0].content); } catch (e) { body = {}; }
+    var ex = body.exit || {}; var en = body.entrance || {};
+    return {
+      hamUid: hamUid,
+      contributors: ex.contributors || {},
+      contributorsResolved: ex.contributorsResolved != null ? ex.contributorsResolved : null,
+      question: en.question || '',
+      channel: en.channel || ''
+    };
+  } catch (e) { return null; }
+}
+
 // Read SPAN's own most recent version off the wall (its last independent read).
 async function readOwnVersion(hamUid) {
   try {
@@ -83,6 +109,13 @@ function summarizeWall(wall) {
 async function run(wall, hamUid) {
   hamUid = hamUid || (wall && wall.hamUid) || process.env.HAM_UID;
   if (!hamUid) return { updated: false, version: null, reason: 'no_ham_uid' };
+  // If the wall handed in is missing or has no resolved contributors, SPAN reads the
+  // latest assembled wall from the bank itself -- it is an independent station.
+  var _handedEmpty = !wall || !wall.contributors || Object.keys(wall.contributors || {}).length === 0;
+  if (_handedEmpty) {
+    var _self = await readLatestWall(hamUid);
+    if (_self) wall = _self;
+  }
 
   var prior = await readOwnVersion(hamUid);
   var priorText = prior && prior.content
