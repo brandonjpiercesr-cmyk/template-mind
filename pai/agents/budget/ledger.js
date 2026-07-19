@@ -3,8 +3,14 @@
 // Budget OS anchor agent. Reads/writes BEADs for transactions, BNPL, income, config, insights.
 // HAM-isolated. Every read/write scoped to requesting HAM. No cross-HAM data ever.
 
-var TABLE = 'aibe_brain';
-var SCHEMA = 'abacia_core';
+// ⬡B:agents.budget.ledger:FIX:read_the_bank_where_the_data_actually_lives:20260719⬡
+// Founder caught a real gaslight: get_budget_summary returned all zeros and I repeated
+// "no budget data" as truth, when his real budget (BUDGET_TX/BUDGET_CONFIG beads) lives in
+// the NEW bank. Root cause: TABLE/SCHEMA/URL were HARDCODED to the legacy archive
+// (aibe_brain/abacia_core), so LEDGER read an almost-empty old table. Now env-driven like
+// the rest of the system: new bank first (memory_bank/beads), legacy only as fallback.
+var TABLE = process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain');
+var SCHEMA = process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core');
 
 function bh(key, write) {
   var h = { 'apikey': key, 'Authorization': 'Bearer ' + key, 'Accept-Profile': SCHEMA };
@@ -22,7 +28,7 @@ function mkSource(hamUid, ns, desc) {
 }
 
 async function brainWrite(hamUid, stampType, ns, desc, content, summary, importance) {
-  var BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
+  var BU = process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL, BK = process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY;
   if (!BU || !BK) return { ok: false, reason: 'no_brain_config' };
   // ⬡B:agents.budget.ledger:FIX:source_returned:20260707⬡
   // B3.1. Every write's source is computed once, here, and handed back to the
@@ -50,7 +56,7 @@ async function brainWrite(hamUid, stampType, ns, desc, content, summary, importa
 }
 
 async function brainRead(hamUid, stampTypes, extraFilter, limit) {
-  var BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
+  var BU = process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL, BK = process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY;
   if (!BU || !BK) return [];
   try {
     var types = Array.isArray(stampTypes) ? stampTypes.join(',') : stampTypes;
