@@ -2650,10 +2650,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
       else if (_looksPublicKnowledgeQ) {
         // Public-world question with no personal anchor: answer from the model's own
-        // knowledge. Keep find_in_brain available but UNFORCED so a genuinely
-        // personal follow-up can still reach for it; do not force a personal read
-        // that can only miss and turn into "I don't have that in my records".
-        // tool_choice stays unset (auto).
+        // knowledge. Receipts showed that merely UNFORCING find_in_brain was not
+        // enough -- with the personal-tool schema still in front of her she reached
+        // for read_own_code / find_in_brain anyway and deflected ("I don't have
+        // access to product databases"). So the personal tool schema is REMOVED for
+        // this turn: nothing to reach for, she answers from her own knowledge. The
+        // full council still guards fabrication. Personal and day questions above
+        // keep their tools untouched.
+        delete body.tools;
+        delete body.tool_choice;
       }
       else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
     }
