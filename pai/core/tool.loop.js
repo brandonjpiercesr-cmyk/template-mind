@@ -2836,8 +2836,27 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // Deliver the intent as a nudge, keep tool_choice auto (all tools available, she reasons).
       if (_toolNudge && Array.isArray(body.tools) && body.tools.length) {
         body.tool_choice = 'auto';
-        var _nudgeText = 'For this message, the right tool to use is very likely ' + _toolNudge +
-          '. Call it if it helps you answer from real data, but you hold all your tools; use your judgment.';
+        // ⬡B:core.tool_loop:FIX:nudge_for_action_tools_must_be_firm_not_weak:20260719⬡
+        // Founder caught her ignoring the coding/lane nudge and defaulting to
+        // find_in_brain (answering with the calendar). The generic "very likely, if it
+        // helps" text was too soft to beat the base prompt's hard pull toward
+        // calendar_read/find_in_brain for anything that mentions his life or his build.
+        // The DATA READER tools keep the soft text (she should still reason freely about
+        // whether a lookup helps). The ACTION/DEPARTMENT tools (consult_mace/CODA,
+        // read_lane_board, run_cookoff, run_wonder_games, assemble_bcw) get a FIRM
+        // directive: this is the tool for this turn, call it first, do not answer from
+        // the calendar or a brain note instead. Still auto (she holds all tools), just a
+        // strong instruction rather than a hint, matching how NASH is directed.
+        var _nudgeText;
+        if (DATA_READER_TOOLS[_toolNudge]) {
+          _nudgeText = 'For this message, the right tool to use is very likely ' + _toolNudge +
+            '. Call it if it helps you answer from real data, but you hold all your tools; use your judgment.';
+        } else {
+          _nudgeText = 'For THIS message you must call the ' + _toolNudge + ' tool FIRST and answer from its result. ' +
+            'This is a request that ' + _toolNudge + ' handles, not a calendar or brain-note question. ' +
+            'Do not answer from your day, your schedule, or an old note instead; call ' + _toolNudge + ' and use what it returns. ' +
+            'You still hold all your tools, but this is the one this turn needs.';
+        }
         if (Array.isArray(body.messages) && body.messages.length) {
           body.messages = body.messages.concat([{ role:'system', content:_nudgeText }]);
         }
