@@ -56,7 +56,14 @@ async function tryRunPodGLM(system, user, opts) {
   try {
     var base = url.replace(/\/+$/, '');
     var full = /\/(chat\/)?completions$/.test(base) ? base : (/\/openai\/v1$/.test(base) ? base + '/chat/completions' : base + '/openai/v1/chat/completions');
-    var body = { model: process.env.GLM_RUNPOD_MODEL || 'glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    // ⬡B:core.model_ladder:FIX:runpod_glm_must_answer_in_english:20260719⬡
+    // The RunPod GLM pod runs glm4:9b, which defaults to CHINESE when the system
+    // prompt does not pin a language, so it returned Chinese gibberish that either
+    // reached the person or failed the JSON parse and cascaded to a PAID provider.
+    // Pin English hard on this rung so its output is always usable and never bleeds
+    // the turn to OpenRouter. English-only prepend, caller's system content preserved.
+    var _rpSystem = 'Respond only in English. ' + String(system || '');
+    var body = { model: process.env.GLM_RUNPOD_MODEL || 'glm-5.2', messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
     // ⬡B:core.model_ladder:FIX:runpod_honors_an_explicit_tight_caller_timeout:20260719⬡
     // The 45s floor here was the council's 42-48s latency and the slow half of the
