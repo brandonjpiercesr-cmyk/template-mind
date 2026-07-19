@@ -15,6 +15,7 @@
 // The provider boundary installs first here too, exactly as in mind.entry, so every
 // model call this cook makes still routes through the one ladder and never a banned host.
 require('./pai/core/provider.boundary.js').install();
+const span = require('./pai/stations/span.station.js');
 
 const HAM  = process.env.HAM_UID;
 const BANK = process.env.MEMORY_BANK_URL;
@@ -52,6 +53,20 @@ async function tick() {
     console.log('[cycle.runner] tick ' + ticks + ' ' + (Date.now() - started) + 'ms ok=' +
       ok + ' reason=' + (out && out.reason || '-') + ' tools=' +
       JSON.stringify(out && out.tools_used || []));
+    // \u2b21B:cycle.runner:BUILD:span_reads_the_wall_and_updates_its_version_B2:20260718\u2b21
+    // WONDER DOCTRINE B2: after the cook, SPAN -- the Independent Thinking Station --
+    // gets its chance to READ the master FCW wall this tick assembled and DECIDE if it
+    // has anything worth UPDATING as its version on that wall. This is the general law
+    // SPAN demonstrates: every station reads the wall, then updates its own version.
+    // SPAN is an organ (it thinks through the ladder); a quiet no-update is valid.
+    try {
+      var _wall = (out && out.wall) || (out && out._fcw) || { hamUid: HAM, contributors: {}, question: WAKE };
+      var _sv = await span.run(_wall, HAM);
+      console.log('[cycle.runner] SPAN ' + (_sv.updated ? 'updated version -> ' + (_sv.versionId || '?') : 'kept version') +
+        (_sv.reason ? ' (' + _sv.reason + ')' : ''));
+    } catch (e) {
+      console.log('[cycle.runner] SPAN error: ' + e.message);
+    }
     // Silence over hollow: if the cook decided nothing was worth acting on, that is a
     // valid quiet tick, not a failure. Nothing is sent; the Overseer routes anything
     // important from inside the cook itself, exactly as on any other channel.
