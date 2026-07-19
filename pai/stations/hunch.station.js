@@ -1,118 +1,167 @@
-// ⬡B:pai.stations.hunch:BUILD:hunch_wonder_the_cupcakes_catcher_helpful_unsolicited_hints:20260719⬡
-// PROACTIVE department. HUNCH = Helpful Unsolicited Notifications and Contextual Hints:
-// the proactive tips engine that pushes advice throughout the day WITHOUT being asked.
-// The founder's defining example (doctrine.logful.proactive_hunch_law): the HAM is at a
-// store asking for 2 cupcakes; a nearby sign reads "Buy 4, get 50% off"; the HAM did not
-// see it; A'NU (via the eyes device) sees the sign; HUNCH fires: "boss, look up -- buy 4."
+// ⬡B:pai.stations.hunch:REBUILD:hunch_is_the_proactive_tips_engine_streamed_to_command_center_not_a_cupcake_catcher:20260719⬡
+// FOUNDER CORRECTION 20260719 (Lesson 4 of how to build a real wonder, bead 402593). The
+// first build of this file was WRONG: it treated the founder's cupcake example -- one 10%
+// illustration -- as the whole spec and built a "cupcake catcher." That inverts what HUNCH
+// is. This rebuild is against the FULL spec, reconstructed from a year of the founder's own
+// history (his claude.ai chats / internal memory), not one bead.
 //
-// THE LAW: A'NU catches what the HAM misses. She is always processing ambient context. When
-// her data CONTRADICTS the HAM's action -- or reveals an opportunity/pattern/reminder he
-// would want -- HUNCH fires BEFORE he commits. Examples: "You have a meeting with Eric in 30
-// minutes; last time you discussed the Q2 proposal -- want it pulled up?"; the cupcake sign.
+// HUNCH = Helpful Unsolicited Notifications and Contextual Hints. It is the PROACTIVE TIPS
+// ENGINE: the epitome of the PAI being streamed DOWN into the COMMAND CENTER (and, carefully,
+// sometimes text messages -- as long as it never becomes overbearing). HUNCH pushes advice
+// throughout the day WITHOUT being asked. It takes everything in (all context flowing through
+// AIR) and reaches back down to touch the HAM with proactive assistance. The cupcake sign
+// (Morgan St Pool Hall, Raleigh: he said "get 2 now, 2 later", the sign said buy 4 for the
+// discount, a real HUNCH via glasses+voice says "boss, get 4 now, you save") is ONE 10%
+// instance of that -- not the definition.
 //
-// HUNCH is an ORGAN: whether a piece of ambient context is worth interrupting the HAM for is
-// a judgment of meaning and timing, so an LLM decides through the ONE ladder (never a rogue
-// call). It CONSUMES NOW for timing (a 30-minutes-before nudge needs the real moment) and
-// never resolves time itself. It routes to an approval queue, not straight to the HAM, and
-// honors silence-over-noise hard: an unsolicited interruption that is not clearly worth it
-// must NOT fire. Better to stay quiet than to nag.
+// THE REAL SPEC (from the founder's history):
+//  - MONITORS: all context through AIR -- pending items, upcoming calendar events, stale job
+//    applications, unread memos, contextual signals (and, when eyes/ears are on, ambient
+//    sight/sound via GAZE).
+//  - CADENCE: the proactive sweep -- 3x daily 8AM/1PM/6PM EST (HeartbeatService heritage),
+//    and the reach loop through waking hours (~7AM-10PM). The autonomous cycle service is the
+//    new-world driver; HUNCH is called by that sweep, it does not spin its own timer.
+//  - OUTPUT SURFACE: routes each tip to the COMMAND CENTER via the real outreach path
+//    (the Overseer's resting place -- outreachPassForHam funnels to command_center), which
+//    streams to the phone. NEVER writes straight to the HAM. Text is allowed only sparingly
+//    through that same outreach decision, never as a firehose.
+//  - COORDINATION: coordinates with BURST to avoid duplicate notifications (if BURST already
+//    alerted him about something urgent, HUNCH skips it); feeds DAWN's briefing pending-items.
+//  - LIMITS: max 3 tips per sweep; a cheap model composes the tip in a warm, brief tone;
+//    NEVER repeats a tip the HAM already saw and dismissed.
 //
-// Entrance: called on the proactive sweep / when ambient context arrives through AIR. Exit:
-//   zero or more hints {hint, why_now, confidence, contradicts_action?}, or nothing. Notes:
-//   a bead per fired hint with lineage for dedup so the same tip never nags twice.
+// HUNCH is an ORGAN for the judgment (which signals are worth a proactive tip is meaning), so
+// the composition/selection routes through the ONE ladder (no rogue call). Cold code only
+// gathers the signals, enforces the cap/dedupe, and hands the chosen tips to outreach.
 
 var ladder = require('../core/model.ladder.js');
 var nowStation = require('./now.station.js');
+var outreach = (function(){ try { return require('../core/outreach.js'); } catch(e){ return null; } })();
 
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
 function _tbl(){ return process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain'); }
 function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'); }
 
-// The confidence cascade: an unsolicited interruption has a HIGH bar. A hint only fires
-// when the organ's confidence that it is worth interrupting clears the threshold. Env-
-// tunable; defaults deliberately high so HUNCH stays quiet unless it is clearly helpful.
-function fireThreshold() {
-  var v = parseFloat(process.env.HUNCH_FIRE_THRESHOLD);
-  return isFinite(v) ? v : 0.72;
+function maxTips(){ var v=parseInt(process.env.HUNCH_MAX_TIPS,10); return isFinite(v)?v:3; }
+
+// ---- (1) GATHER the real signals HUNCH monitors. Cold, each fails open. ----
+async function gatherSignals(hamUid) {
+  var out = { pending: [], calendar_next: null, stale_jobs: [], unread_memos: [], ambient: [] };
+  // pending items + unread memos: read from the bank (facts other agents stamped)
+  try {
+    var url = _bu()+'/rest/v1/'+_tbl()+
+      '?select=summary,stamp_type,created_at&or=(summary.ilike.*pending*,summary.ilike.*unread*,summary.ilike.*follow%20up*,summary.ilike.*stale*,stamp_type.eq.SURFACE)&order=id.desc&limit=25';
+    var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
+      signal: AbortSignal.timeout(9000) }).then(function(x){return x.json();});
+    (Array.isArray(r)?r:[]).forEach(function(b){
+      var s=(b.summary||'');
+      if (/stale|no response|no reply/i.test(s)) out.stale_jobs.push(s);
+      else if (/unread|memo/i.test(s)) out.unread_memos.push(s);
+      else out.pending.push(s);
+    });
+  } catch(e){}
+  // upcoming calendar via NOW's moment (already resolved, no twin)
+  try { var m = await nowStation.assembleNow(hamUid); out.calendar_next = m.calendar_next; out._moment = m; } catch(e){}
+  // ambient sight/sound if GAZE has a current focus (the eyes the cupcake sign comes through)
+  try {
+    var gaze = require('./gaze.station.js');
+    if (gaze && gaze.currentFocus) { var f = await gaze.currentFocus(hamUid); if (f) out.ambient.push(JSON.stringify(f)); }
+  } catch(e){}
+  return out;
 }
 
-// The organ. Given the current moment, the ambient context (what A'NU is seeing/hearing
-// or what just flowed through AIR), the HAM's pending action if any, and what HUNCH already
-// said, decide what -- if anything -- is worth surfacing. Returns [] when nothing clears the
-// bar (silence over noise). Judgment routes through the ladder.
-async function judgeHints(hamUid, moment, ambient, pendingAction, alreadyFired) {
-  if (!ambient || (Array.isArray(ambient) && !ambient.length)) return [];
+// ---- (2) BURST dedupe: skip anything BURST already alerted on, plus HUNCH's own recent tips ----
+async function alreadyCovered(hamUid) {
+  try {
+    var url = _bu()+'/rest/v1/'+_tbl()+
+      '?select=summary&or=(agent_global.eq.BURST,agent_global.eq.HUNCH)&order=id.desc&limit=30';
+    var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
+      signal: AbortSignal.timeout(8000) }).then(function(x){return x.json();});
+    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+  } catch(e){ return []; }
+}
+
+// ---- (3) The organ: choose up to N tips worth pushing, compose them warm and brief ----
+async function composeTips(hamUid, moment, signals, covered) {
+  var hasAny = signals.pending.length || signals.stale_jobs.length || signals.unread_memos.length ||
+               signals.calendar_next || signals.ambient.length;
+  if (!hasAny) return [];
   try {
     var sys =
-      'You are HUNCH, the helpful-unsolicited-hints organ for one person. It is ' +
-      moment.day_name + ' ' + moment.part_of_day + ' ' + moment.local_time + '. From the ' +
-      'ambient context, surface ONLY notifications that clearly help this person right now: ' +
-      'an opportunity he is about to miss (a sign/offer his action contradicts), a timely ' +
-      'reminder (a meeting soon and what it was about), or a pattern worth flagging. Return a ' +
-      'JSON array of {hint, why_now, confidence (0-1), contradicts_action (bool)}. The bar is ' +
-      'HIGH: an unsolicited interruption must be clearly worth it or you return []. Never nag, ' +
-      'never invent. His pending action: ' + JSON.stringify(pendingAction || null) +
-      '. Already surfaced (do not repeat): ' + JSON.stringify((alreadyFired || []).slice(0, 20));
-    var out = await ladder.deliberate(sys,
-      (Array.isArray(ambient) ? ambient.join('\n') : String(ambient)),
-      { json: true, max_tokens: 600, timeout: 25000 });
-    var text = out && out.content != null ? out.content : '';
-    var arr = JSON.parse(String(text).replace(/```json|```/g, '').trim());
-    if (!Array.isArray(arr)) return [];
-    // confidence cascade: only keep hints that clear the fire threshold
-    var t = fireThreshold();
-    return arr.filter(function (h) {
-      var c = typeof h.confidence === 'number' ? h.confidence : 0;
-      // a hint that CONTRADICTS an action the HAM is about to take (the cupcake case) is
-      // more valuable -- give it a small edge, but never below a floor.
-      if (h.contradicts_action) c += 0.1;
-      return c >= t;
-    }).slice(0, 3);
-  } catch (e) { return []; }
+      'You are HUNCH, the proactive tips engine for one person. It is '+moment.day_name+' '+
+      moment.part_of_day+' '+moment.local_time+'. From the signals, choose AT MOST '+maxTips()+
+      ' genuinely helpful proactive tips -- an opportunity he is about to miss, a timely nudge '+
+      '(a meeting soon and what it was last about), a stale job application worth a follow-up, '+
+      'an unread memo that matters. Compose each in a warm, brief, butler tone. Return a JSON '+
+      'array of {tip, why_now, urgency ("low"|"normal"|"high"), contradicts_action (bool)}. The '+
+      'bar is HIGH: only push what clearly helps; if little matters, return fewer or []. Never '+
+      'nag, never invent. Already covered by BURST/HUNCH (do not repeat): '+
+      JSON.stringify((covered||[]).slice(0,20));
+    var payload = { pending: signals.pending.slice(0,10), stale_jobs: signals.stale_jobs.slice(0,8),
+      unread_memos: signals.unread_memos.slice(0,8), calendar_next: signals.calendar_next,
+      ambient: signals.ambient.slice(0,5) };
+    var out = await ladder.deliberate(sys, JSON.stringify(payload), { json:true, max_tokens:700, timeout:30000 });
+    var text = out && out.content!=null ? out.content : '';
+    var arr = JSON.parse(String(text).replace(/```json|```/g,'').trim());
+    return Array.isArray(arr) ? arr.slice(0, maxTips()) : [];
+  } catch(e){ return []; }
 }
 
-// Entrance. Watch the ambient context and fire the hints worth firing. Consumes NOW.
-async function watch(hamUid, ambient, pendingAction) {
-  var moment = await nowStation.assembleNow(hamUid);      // consume NOW, no twin
-  var fired = await recentlyFired(hamUid);
-  var hints = await judgeHints(hamUid, moment, ambient, pendingAction, fired);
-  for (var i = 0; i < hints.length; i++) { queueHint(hamUid, hints[i], moment).catch(function () {}); }
-  // routes to the approval queue via the stamped bead; the Overseer/CeeCee lane delivers.
-  return { moment: moment, hints: hints };  // hints may be [] -- silence over noise
+// ---- (4) DELIVER each tip to the COMMAND CENTER via the real outreach path (streams to phone) ----
+async function deliverToCommandCenter(hamUid, tip, moment) {
+  // stamp the tip so DAWN's briefing can pick it up and so dedupe works
+  await stampTip(hamUid, tip, moment).catch(function(){});
+  // hand to the real outreach decision: it funnels to command_center (the resting place),
+  // and may choose text ONLY when the tip is genuinely worth it -- never a firehose. HUNCH
+  // does NOT write its own queue or send directly; the Overseer/outreach owns the surface.
+  if (outreach && outreach.outreachPassForHam) {
+    try {
+      await outreach.outreachPassForHam(hamUid, {
+        origin: 'hunch',
+        message: tip.tip,
+        why: tip.why_now,
+        suggested_channel: 'command_center',          // default resting place; outreach may escalate
+        allow_text: tip.urgency === 'high',            // text only for a genuinely high-urgency tip
+        contradicts_action: !!tip.contradicts_action
+      });
+    } catch(e){}
+  }
 }
 
-async function recentlyFired(hamUid) {
+// ---- ENTRANCE: the proactive sweep calls this (3x daily + waking-hour loop, driven by the
+// autonomous cycle service, not a timer HUNCH owns). ----
+async function sweep(hamUid) {
+  var signals = await gatherSignals(hamUid);
+  var moment = signals._moment || await nowStation.assembleNow(hamUid);
+  var covered = await alreadyCovered(hamUid);
+  var tips = await composeTips(hamUid, moment, signals, covered);
+  for (var i=0;i<tips.length;i++){ await deliverToCommandCenter(hamUid, tips[i], moment); }
+  return { moment: moment, tips: tips, delivered_to: 'command_center' }; // tips may be [] (silence)
+}
+
+async function stampTip(hamUid, tip, moment) {
+  var bead = { ham_uid:hamUid, agent_global:'HUNCH', stamp_type:'TIP',
+    acl_stamp:'\u2b21B:hunch.tip:TIP:proactive_tip_to_command_center:'+moment.now_iso.slice(0,10).replace(/-/g,'')+'\u2b21',
+    source:'hunch.station.tip.'+hamUid,
+    summary:'[HUNCH] '+String(tip.tip||'').slice(0,120),
+    importance: tip.urgency==='high'?7:(tip.contradicts_action?6:5),
+    spawned_by:'hunch.station.'+hamUid, content:JSON.stringify(tip) };
+  await fetch(_bu()+'/rest/v1/'+_tbl(), { method:'POST', headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(),
+    'Content-Type':'application/json','Content-Profile':_schema(),'Accept-Profile':_schema(),Prefer:'return=minimal' },
+    body:JSON.stringify(bead), signal:AbortSignal.timeout(8000) });
+}
+
+// DAWN reads HUNCH's recent tips for the briefing pending-items section.
+async function pendingForBriefing(hamUid) {
   try {
-    var url = _bu() + '/rest/v1/' + _tbl() +
-      '?select=summary&source=ilike.hunch.station.hint.' + String(hamUid).toLowerCase() + '*' +
-      '&order=id.desc&limit=20';
-    var r = await fetch(url, { headers: {
-      apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema()
-    }, signal: AbortSignal.timeout(8000) }).then(function (x) { return x.json(); });
-    return (Array.isArray(r) ? r : []).map(function (b) { return b.summary; });
-  } catch (e) { return []; }
+    var url = _bu()+'/rest/v1/'+_tbl()+
+      '?select=content,created_at&source=eq.hunch.station.tip.'+String(hamUid).toLowerCase()+'&order=id.desc&limit=5';
+    var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
+      signal: AbortSignal.timeout(8000) }).then(function(x){return x.json();});
+    return (Array.isArray(r)?r:[]).map(function(b){ try{return JSON.parse(b.content);}catch(e){return null;} }).filter(Boolean);
+  } catch(e){ return []; }
 }
 
-async function queueHint(hamUid, hint, moment) {
-  try {
-    var bead = {
-      ham_uid: hamUid, agent_global: 'HUNCH', stamp_type: 'HINT',
-      acl_stamp: '\u2b21B:hunch.hint:HINT:proactive_tip_queued_for_approval:' +
-        moment.now_iso.slice(0, 10).replace(/-/g, '') + '\u2b21',
-      source: 'hunch.station.hint.' + hamUid,
-      summary: '[HUNCH] ' + String(hint.hint || '').slice(0, 120),
-      importance: hint.contradicts_action ? 6 : 5,
-      spawned_by: 'hunch.station.' + hamUid,
-      content: JSON.stringify(hint)
-    };
-    await fetch(_bu() + '/rest/v1/' + _tbl(), {
-      method: 'POST',
-      headers: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Content-Type': 'application/json',
-        'Content-Profile': _schema(), 'Accept-Profile': _schema(), Prefer: 'return=minimal' },
-      body: JSON.stringify(bead), signal: AbortSignal.timeout(8000)
-    });
-  } catch (e) { /* best-effort */ }
-}
-
-module.exports = { watch: watch, judgeHints: judgeHints, fireThreshold: fireThreshold };
+module.exports = { sweep:sweep, composeTips:composeTips, gatherSignals:gatherSignals,
+  pendingForBriefing:pendingForBriefing, maxTips:maxTips };
