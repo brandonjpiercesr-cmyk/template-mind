@@ -34,6 +34,7 @@
 
 var ladder = require('../core/model.ladder.js');
 var persona = require('../core/persona.js');
+var ccSurface = require('./cc.surface.js');
 var nowStation = require('./now.station.js');
 
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
@@ -161,11 +162,10 @@ async function deliver(hamUid, briefing, prefs, moment) {
   var outreach=tryMod('../core/outreach.js');
   if (outreach && outreach.outreachPassForHam) {
     try {
-      await outreach.outreachPassForHam(hamUid, {
-        origin:'dawn', message:briefing, is_briefing:true,
-        suggested_channel: method==='call' ? 'voice' : (method==='both'?'voice+email':'email'),
-        briefing_method: method
-      });
+      // Real IMAN/VARA delivery goes through the outreach council on facts; but the briefing
+      // must also land on the Command Center desk as a CC_NOTE the feed serves, so the founder
+      // sees it regardless of channel. (The old payload-into-outreachPassForHam did nothing.)
+      await ccSurface.surfaceToCommandCenter(hamUid, 'DAWN', 'Your daily briefing', briefing, 'briefing', 6).catch(function(){});
       return true;
     } catch(e){ return false; }
   }
