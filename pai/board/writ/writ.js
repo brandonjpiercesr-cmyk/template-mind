@@ -251,28 +251,96 @@ async function writCheck(text, context) {
   // Coding/internal work must be able to name its own machinery. Determine that
   // context before the leak law; every other WRIT law remains active.
 
-  hardFails = hardFails.concat(findPhrases(lower, CTA_ENDINGS, 'cta_ending'));
-  hardFails = hardFails.concat(findPhrases(lower, SUPER_BANS, 'super_ban'));
-  hardFails = hardFails.concat(checkBannedHeaders(cleaned));
+  // ⬡B:board.writ:FIX:verdict_is_an_organ_not_a_phrase_list:20260718⬡
+  // Founder correction 20260718, A'NU agreed via the cycle door ("fix the mold
+  // first"): cold code can HELP, never RESULT. WRIT used to DECIDE its HOLD
+  // verdict by phrase-list matching (PROCESS_NARRATION, SUPER_BANS, CTA_ENDINGS,
+  // coffee-shop, choppy) -- a semantic quality judgment made in cold code. That
+  // is exactly what silenced her on real questions: a phrase list, not a mind,
+  // ruled her words un-shippable.
+  //
+  // The split now honors the law:
+  //  - MECHANICAL HELPERS stay cold, because they detect FACTS not judgments:
+  //    an actual leaked secret (a real key literal), an actual internal-system
+  //    term leaking to an external channel. Those are deterministic truths.
+  //  - The QUALITY VERDICT (is this process narration, a weak CTA ending,
+  //    jargon, choppy, off-voice) is now an LLM organ, like SHADOW already is.
+  //    The old phrase lists survive only as HINTS handed to the organ, never as
+  //    the decider.
+  var mechanicalLeaks = [];
+  // ⬡B:board.writ:FIX:filler_bans_are_render_hints_not_kills_20260718⬡ Founder
+  // doctrine, A'NU agreed via cycle: banned AI-filler phrases (SUPER_BANS,
+  // CTA_ENDINGS, banned headers) are FIXABLE STYLE, not leaks. They were
+  // mechanical hard-fails that killed the whole answer -- so a build recap
+  // containing "build together" got silenced. Now they are HINTS the render
+  // organ strips, and the answer ships cleaned. Only a genuine secret leak (a
+  // real key literal, another world's private data) stays a mechanical
+  // hard-fail, because that is an unfixable fact, not taste.
   if (!isInternal) {
-    hardFails = hardFails.concat(findPhrases(lower, INTERNAL_SYSTEM_TERMS, 'internal_system_leak'));
+    mechanicalLeaks = mechanicalLeaks.concat(findPhrases(lower, INTERNAL_SYSTEM_TERMS, 'internal_system_leak'));
   }
-  hardFails = hardFails.concat(findPhrases(lower, PROCESS_NARRATION, 'process_narration'));
-
-  var greet = checkColdGreeting(cleaned);
-  if (!greet.ok) hardFails.push(greet.flag);
-
+  // hints for the organ (not verdicts)
+  var _hintCTA = findPhrases(lower, CTA_ENDINGS, 'cta_ending');
+  var _hintProc = findPhrases(lower, PROCESS_NARRATION, 'process_narration');
+  var _hintBans = findPhrases(lower, SUPER_BANS, 'ai_filler');
+  var _hintHeaders = checkBannedHeaders(cleaned);
   var coffee = coffeeshopTest(cleaned);
-  if (!coffee.ok && !isInternal) {
-    coffee.flags.forEach(function (f) { advisoryFlags.push({ type: 'jargon_leak', phrase: f }); });
-  }
+  var _hintJargon = (!coffee.ok && !isInternal) ? coffee.flags.slice(0, 6) : [];
 
-  advisoryFlags = advisoryFlags.concat(findPhrases(lower, BANNED_WORDS, 'banned_word'));
-  var choppy = approximateChoppyDensity(cleaned);
-  if (!choppy.ok) advisoryFlags.push({ type: 'choppy_density_approx', ratio: choppy.ratio, note: 'pattern approximation only, read it out loud to confirm' });
+  hardFails = hardFails.concat(mechanicalLeaks);
 
   var jargonPattern = /\b(BEAD|LOGFUL|abacia_core|acl_stamp|stamp_type)\b/g;
   var jargonFlags = Array.from(new Set(cleaned.match(jargonPattern) || []));
+
+  // THE ORGAN: an LLM decides the quality verdict. Runs only when a mechanical
+  // leak has not already hard-failed (a real secret leak is not a matter of
+  // taste). Fails OPEN on any organ error, because a broken judge must never
+  // silence her -- silence is worse than a rare soft ending slipping through.
+  //
+  // ⬡B:board.writ:FIX:render_not_kill_fixable_style_20260718⬡ Founder doctrine
+  // "decides-vs-renders is the line": WRIT must RENDER, not KILL. Live receipts
+  // proved the cycle generated a real 154-char answer, then WRIT held the WHOLE
+  // thing because it opened with a "let me check" narration preamble -- silencing
+  // her over fixable style. Now the organ REPAIRS fixable style (returns the
+  // cleaned answer with the preamble/narration removed) and only truly HOLDs for
+  // an unfixable violation. A held answer that can be fixed is fixed and shipped,
+  // never killed.
+  var qualityVerdict = 'WRIT_PASS';
+  var organReason = null;
+  if (hardFails.length === 0 && !isInternal) {
+    try {
+      var _ladder = require('../../core/model.ladder.js');
+      var _sys = 'You are A\u2019NU editing your own words before they leave the house. WRIT is the role, not your name. '
+        + 'Your job is to RENDER, not to kill. Fix the writing to obey these laws and return the FIXED text: '
+        + 'strip any meta or process narration (do not narrate steps, tools, or that you searched -- delete a "let me check" style preamble and lead with the real answer), '
+        + 'remove a weak call-to-action ending (end on the last real thought, then Thanks), keep a warm human voice and plain coffee-shop language. '
+        + 'These are HINTS from a rough pre-scan, they may be wrong, use judgment: '
+        + 'possible process-narration=' + JSON.stringify(_hintProc.map(function(f){return f.phrase||f;}).slice(0,4)) + ', '
+        + 'possible weak-ending=' + JSON.stringify(_hintCTA.map(function(f){return f.phrase||f;}).slice(0,4)) + ', '
+        + 'possible AI-filler to remove=' + JSON.stringify(_hintBans.map(function(f){return f.phrase||f;}).slice(0,6)) + ', '
+        + 'possible banned headers to remove=' + JSON.stringify((_hintHeaders||[]).map(function(f){return f.phrase||f;}).slice(0,4)) + '. '
+        + 'Reply with ONLY the corrected answer text, nothing else. If the text already obeys every law, return it unchanged. '
+        + 'Return the single word HOLD only if the text cannot be fixed because it leaks a real secret or another world\'s private data.';
+      var _out = await _ladder.deliberate(_sys, cleaned, { maxTokens: 800, temperature: 0 });
+      var _txt = String((_out && (_out.text || _out.answer || _out.content)) || '').trim();
+      if (/^HOLD\s*$/i.test(_txt)) {
+        // genuinely unfixable (real leak) -> hold
+        qualityVerdict = 'WRIT_HOLD';
+        organReason = 'unfixable_leak';
+        hardFails.push({ type: 'quality_hold', reason: organReason });
+      } else if (_txt && _txt.length >= 10) {
+        // the organ returned a rendered/cleaned answer -> ship the fix, do not kill
+        cleaned = _txt;
+        qualityVerdict = 'WRIT_PASS';
+      }
+      // if the organ returned nothing usable, fall through as PASS (fail open)
+    } catch (eOrgan) {
+      // fail open: a broken organ never silences her
+      qualityVerdict = 'WRIT_PASS';
+    }
+  }
+
+  advisoryFlags = advisoryFlags.concat(_hintJargon.map(function (f) { return { type: 'jargon_leak', phrase: f }; }));
 
   var verdict = hardFails.length > 0 ? 'WRIT_HOLD' : (advisoryFlags.length > 0 ? 'WRIT_ADVISORY' : 'WRIT_PASS');
 
@@ -283,6 +351,7 @@ async function writCheck(text, context) {
     cleaned: cleaned,
     hardFails: hardFails,
     advisoryFlags: advisoryFlags,
+    organ_reason: organReason,
     emojis_removed: emoji.count,
     em_dashes_removed: dashCount,
     meta_removed: meta.removed,
