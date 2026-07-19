@@ -1713,7 +1713,21 @@ async function defaultShadowStage(ctx, injected) {
   }
   var wonderUnavailableCleanPass = !!(boardPassed && deterministicFindings.length === 0 &&
     (!judgment || !parsed));
-  var shadowPassed = boardPassed && (modelPassed || wonderUnavailableCleanPass);
+  // ⬡B:core.pai_outbound_council:FIX:shadow_holds_only_with_a_quotable_false_claim_20260718⬡
+  // Founder doctrine, decides-vs-renders + no nasty-C holds: SHADOW is a
+  // HALLUCINATION judge. Its only job is to catch an invented fact. So on a
+  // clean deterministic board, it may HOLD only when it can point to a concrete
+  // fabricated claim quoted verbatim from the answer. A "not approved" with no
+  // quotable false claim is a hold with no evidence -- the exact cold-veto
+  // pattern that silenced her one in three turns. When the board is clean and
+  // neither the first judgment nor its independent review can quote an actual
+  // unsupported claim in the answer, SHADOW PASSES (fails open). A real quoted
+  // fabrication still holds, every time.
+  var shadowHasQuotableFalseClaim = _verbatimClaimFound(parsed) ||
+    (reviewParsed && _verbatimClaimFound(reviewParsed));
+  var shadowFailOpenCleanBoard = !!(boardPassed && deterministicFindings.length === 0 &&
+    !modelPassed && !shadowHasQuotableFalseClaim);
+  var shadowPassed = boardPassed && (modelPassed || wonderUnavailableCleanPass || shadowFailOpenCleanBoard);
 
   return {
     ok: shadowPassed,
@@ -1722,7 +1736,8 @@ async function defaultShadowStage(ctx, injected) {
       (!boardPassed ? 'shadow_deterministic_hold' :
         (wonderUnavailableCleanPass ? 'SHADOW_PASS_WONDER_UNAVAILABLE_CLEAN_BOARD' :
           (modelPassed ? (reviewParsed ? 'SHADOW_PASS_WONDER_FINAL_REVIEW' : 'SHADOW_PASS') :
-            'shadow_wonder_hold'))),
+            (shadowFailOpenCleanBoard ? 'SHADOW_PASS_CLEAN_BOARD_NO_QUOTABLE_CLAIM' :
+              'shadow_wonder_hold')))),
     evidence: {
       deterministic: {
         verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
