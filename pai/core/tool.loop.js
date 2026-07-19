@@ -269,7 +269,15 @@ var _GB_MODEL = process.env.TOGETHER_MODEL || 'zai-org/GLM-5.2';
 var DATA_READER_TOOLS = {
   calendar_read: function(m){ return {}; },
   find_in_brain: function(m){ return { query: String(m||'').slice(0,200) }; },
-  find_identity_evidence: function(m){ return { query: String(m||'').slice(0,200) }; }
+  find_identity_evidence: function(m){ return { query: String(m||'').slice(0,200) }; },
+  // ⬡B:core.tool_loop:FIX:lane_board_is_a_data_reader_force_execute_when_model_wont_call:20260719⬡
+  // read_lane_board is a pure deterministic reader (no args, just fetches the lane
+  // registry). The founder caught her NOT calling it even with a firm nudge, then
+  // answering with the calendar. Adding it here gives it the same force-execute
+  // safety net the other readers have: when the model will not emit the call, cold
+  // code runs it and feeds the real board back so she answers from the actual lanes,
+  // never from nothing and never from the calendar.
+  read_lane_board: function(m){ return {}; }
 };
 var MAX = 20;
 
