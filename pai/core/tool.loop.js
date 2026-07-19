@@ -2618,6 +2618,20 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
+      // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
+      // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
+      // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
+      // PERSONAL brain, finding nothing (his brain holds no iPad specs), and reporting
+      // the miss ("I don't have access to product databases"). A public-world question
+      // must never be forced through a personal-brain lookup. Cold intent split, no LLM,
+      // same shape as the screen-command and day-question splits already here: a
+      // question that references HIM, his orgs, his data, his people, his money, his
+      // history, or his calendar stays a personal lookup and still forces find_in_brain;
+      // a question with none of those personal anchors is public knowledge and is
+      // answered from the model's own knowledge, with the full council still guarding
+      // fabrication. This does not touch action requests or day questions above.
+      var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
+      var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
       if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
       else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
@@ -2633,6 +2647,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         // draft inside a phone-conversation budget. This is not an action lane;
         // mixed requests such as "why, and email me" do not match this predicate.
         delete body.tools;
+      }
+      else if (_looksPublicKnowledgeQ) {
+        // Public-world question with no personal anchor: answer from the model's own
+        // knowledge. Keep find_in_brain available but UNFORCED so a genuinely
+        // personal follow-up can still reach for it; do not force a personal read
+        // that can only miss and turn into "I don't have that in my records".
+        // tool_choice stays unset (auto).
       }
       else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
     }
