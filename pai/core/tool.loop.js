@@ -594,6 +594,8 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','advisor','question'],
     properties:{ham_uid:{type:'string'},advisor:{type:'string',description:'the advisor/station slug, e.g. bdif, gmg, business, mediators, mh_action'},
       question:{type:'string',description:'what to ask the advisor, in plain words'}}}}},
+  {type:'function',function:{name:'read_reminders',description:'Read the HAM real reminders: things they told you to remind them about, and things you flagged for them. Use whenever they ask what reminders or to-dos they have, or what they need to remember. Returns real reminder items only, never invented. If there are none it says so.',
+    parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'}}}}},
   {type:'function',function:{name:'inbox_read',description:'Read the HAM real email inbox: their actual unread and recent messages, with sender and subject. Use whenever the HAM asks about their email, inbox, unread mail, or to show their inbox on the glass. Returns real messages only, never invented; each carries the id needed to draft a reply. If the inbox is clear it says so.',
     parameters:{type:'object',required:['ham_uid'],
     properties:{ham_uid:{type:'string'},unread_only:{type:'boolean',description:'true = only unread (default), false = recent inbox'}}}}},
@@ -1355,6 +1357,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
   if (name === 'get_budget_summary') {
     var bsHam = args.ham_uid || hamUid;
     var sum = await ledger.getCycleSummary(bsHam, args.cycle_start, args.cycle_end);
+    // ⬡B:core.tool.loop:FIX:budget_empty_is_honest_not_a_hold:20260719⬡ Founder audit: budget
+    // held every time because there is NO real budget data for him (all zeros), so she had
+    // nothing true to say and either fabricated (SHADOW caught it) or held. Signal empty
+    // clearly so she plainly says no budget is set up, instead of holding on nothing.
+    if (sum && (sum.transactionCount||0)===0 && (sum.totalIncome||0)===0 && (sum.totalExpenses||0)===0
+        && !(sum.projectedBills||[]).length && !(sum.projectedIncome||[]).length) {
+      return JSON.stringify({ ok:true, empty:true, note:'No budget is set up yet for this person -- no income, expenses, or transactions on record. Say plainly that their budget is not set up yet; do not invent any numbers.' });
+    }
     return JSON.stringify(sum);
   }
   if (name === 'get_pending_drafts') {
@@ -1551,6 +1561,31 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!_wr) return JSON.stringify({ ok:false, error:'weather source unreachable, do not guess' });
       return JSON.stringify(_wr);
     } catch (eWx) { return JSON.stringify({ ok:false, error:eWx.message }); }
+  }
+  if (name === 'read_reminders') {
+    // ⬡B:core.tool.loop:BUILD:she_can_read_reminders_not_just_create:20260719⬡ Founder audit
+    // caught it: she had create_reminder but NO read tool, so "what reminders do I have"
+    // fell through to a slow brain search that timed out. Same class as the missing inbox
+    // tool. Fast bounded read of his real REMINDER beads, capped and time-limited so it
+    // never hangs. Reads the new bank first, then legacy. Never invents a reminder.
+    try {
+      var _rUid = String((args && args.ham_uid) || hamUid || '');
+      var _rNb = (process.env.MEMORY_BANK_URL || '').replace(/\/$/, '');
+      var _rNk = process.env.MEMORY_BANK_KEY || '';
+      var _rRows = null;
+      if (_rNb && _rNk) {
+        var _rq = _rNb + '/rest/v1/' + (process.env.BEAD_TABLE || 'beads')
+          + '?select=summary,created_at&ham_uid=eq.' + encodeURIComponent(_rUid)
+          + '&stamp_type=eq.REMINDER&order=created_at.desc&limit=8';
+        var _rc = new AbortController(); var _rt = setTimeout(function(){ _rc.abort(); }, 6000);
+        _rRows = await fetch(_rq, { signal:_rc.signal, headers:{ apikey:_rNk, Authorization:'Bearer '+_rNk, 'Accept-Profile':(process.env.BRAIN_SCHEMA||'memory_bank') } })
+          .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+        clearTimeout(_rt);
+      }
+      var _items = (_rRows || []).map(function(b){ return String(b.summary||'').replace(/^\[?REMINDER[^\]]*\]?\s*[:\-]?\s*/i,'').slice(0,180); }).filter(Boolean);
+      return JSON.stringify({ ok:true, count:_items.length, reminders:_items,
+        note: _items.length ? 'Real reminders from his brain.' : 'No reminders set right now.' });
+    } catch (eRm) { return JSON.stringify({ ok:false, error:eRm.message }); }
   }
   if (name === 'inbox_read') {
     // ⬡B:core.tool.loop:BUILD:she_can_actually_read_email:20260719⬡ Founder caught it live: she
@@ -2471,7 +2506,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // An autonomous reach finalizer may read evidence but may not send, write,
   // deploy, book, or move a screen before its answer clears the council.
   var _readOnlyToolNames = ['nash_sports','find_identity_evidence','find_in_brain','read_render_logs',
-    'get_budget_upcoming','get_budget_summary','consult_advisor','calendar_read','inbox_read',
+    'get_budget_upcoming','get_budget_summary','consult_advisor','calendar_read','inbox_read','read_reminders',
     'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda'];
   var _turnToolDefinitions = identity && identity.outbound_finalize === true
     ? TOOLS.filter(function (tool) {
