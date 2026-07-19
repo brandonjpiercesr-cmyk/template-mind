@@ -58,7 +58,15 @@ async function tryRunPodGLM(system, user, opts) {
     var full = /\/(chat\/)?completions$/.test(base) ? base : (/\/openai\/v1$/.test(base) ? base + '/chat/completions' : base + '/openai/v1/chat/completions');
     var body = { model: process.env.GLM_RUNPOD_MODEL || 'glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
-    var timeout = opts.realtime === true ? opts.timeout : Math.max(opts.timeout, 45000);
+    // ⬡B:core.model_ladder:FIX:runpod_honors_an_explicit_tight_caller_timeout:20260719⬡
+    // The 45s floor here was the council's 42-48s latency and the slow half of the
+    // gaslight cycle: the outbound judge asks for 9s, but this rung silently forced
+    // 45s, so when Together/OpenRouter missed and the turn fell to a cold RunPod pod
+    // it waited out the full cold boot before failing. A caller that sets a tight
+    // timeout (opts.tightTimeout, the council) is honored exactly; everything else
+    // keeps the generous floor so a normal deliberation still tolerates a cold boot.
+    var timeout = opts.realtime === true ? opts.timeout
+      : (opts.tightTimeout ? opts.timeout : Math.max(opts.timeout, 45000));
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.GLM_RUNPOD_KEY || process.env.RUNPOD_API_KEY || '') }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
