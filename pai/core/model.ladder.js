@@ -58,15 +58,7 @@ async function tryRunPodGLM(system, user, opts) {
     var full = /\/(chat\/)?completions$/.test(base) ? base : (/\/openai\/v1$/.test(base) ? base + '/chat/completions' : base + '/openai/v1/chat/completions');
     var body = { model: process.env.GLM_RUNPOD_MODEL || 'glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
-    // ⬡B:core.model_ladder:FIX:runpod_honors_an_explicit_tight_caller_timeout:20260719⬡
-    // The 45s floor here was the council's 42-48s latency and the slow half of the
-    // gaslight cycle: the outbound judge asks for 9s, but this rung silently forced
-    // 45s, so when Together/OpenRouter missed and the turn fell to a cold RunPod pod
-    // it waited out the full cold boot before failing. A caller that sets a tight
-    // timeout (opts.tightTimeout, the council) is honored exactly; everything else
-    // keeps the generous floor so a normal deliberation still tolerates a cold boot.
-    var timeout = opts.realtime === true ? opts.timeout
-      : (opts.tightTimeout ? opts.timeout : Math.max(opts.timeout, 45000));
+    var timeout = opts.realtime === true ? opts.timeout : Math.max(opts.timeout, 45000);
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.GLM_RUNPOD_KEY || process.env.RUNPOD_API_KEY || '') }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
@@ -235,4 +227,32 @@ async function deliberate(system, user, options) {
   return null;
 }
 
-module.exports = { deliberate: deliberate };
+// ⬡B:core.model_ladder:WIRE:transcription_lives_behind_the_one_door_too:20260718⬡
+// Decided with A'NEW under the founder's unite rule: the SEATED voicenote
+// transcribed through Groq Whisper, which the four API law bans, so
+// transcription rides this same single door on Together, an approved API that
+// hosts Whisper. One ladder, one place providers live, including for audio.
+// (Re-applied after a graft rebuild dropped it; the graft kept the groq rung
+// removed, which is aligned, but did not carry this door.)
+async function transcribe(audio, opts) {
+  opts = opts || {};
+  var key = process.env.TOGETHER_API_KEY; if (!key || !audio) return null;
+  try {
+    var b64 = String(audio); var comma = b64.indexOf(',');
+    if (comma >= 0) b64 = b64.slice(comma + 1);
+    var buf = Buffer.from(b64, 'base64');
+    if (!buf.length) return null;
+    var form = new FormData();
+    form.append('file', new Blob([buf], { type: opts.mime || 'audio/webm' }), opts.filename || 'note.webm');
+    form.append('model', process.env.TOGETHER_WHISPER_MODEL || 'openai/whisper-large-v3');
+    var r = await fetch('https://api.together.xyz/v1/audio/transcriptions', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form,
+      signal: requestSignal(opts, opts.timeout || 20000) });
+    if (!r.ok) return null;
+    var d = await r.json();
+    var text = String(d.text || '').trim();
+    return text ? { text: text, via: 'together' } : null;
+  } catch (e) { return null; }
+}
+
+module.exports = { deliberate: deliberate, transcribe: transcribe };
