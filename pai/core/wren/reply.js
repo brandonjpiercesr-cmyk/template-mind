@@ -192,7 +192,18 @@ async function handleReply(req) {
   // is NOT retried and still goes silent, exactly as the hollow-reply rule requires.
   // This does not weaken factual integrity; it only gives the flaky model judge a
   // second look before her voice is silenced on a channel where silence looks broken.
-  if (!committed.ok && String(committed.reason || paiResult.reason || '') === 'shadow_model_hold') {
+  // ⬡B:core.wren.reply:FIX:retry_every_clean_board_wonder_hold_before_silence:20260719⬡
+  // FOUNDER 911 20260719, THE COUNT: 1154 turns were silenced by council holds, and
+  // his reach answers among them read as "she stopped answering me". The existing
+  // retry only covered shadow_MODEL_hold, but the live killers are shadow_WONDER_hold
+  // and writ_hold on CLEAN answers -- a probabilistic wonder saying no once. On a
+  // reach channel silence looks broken, so ANY bare wonder hold (not a real
+  // deterministic integrity flag) gets ONE real re-run of the cycle before going
+  // silent. This is not a hollow string; it re-asks the real question. A genuine
+  // deterministic hold still goes silent per the hollow-reply rule.
+  var _cleanBoardHold = ['shadow_model_hold','shadow_wonder_hold','writ_hold','content_too_short']
+    .indexOf(String(committed.reason || paiResult.reason || '')) !== -1;
+  if (!committed.ok && _cleanBoardHold) {
     var retryPai = await runPAI(hamUid, text, 'blooio', replyIdentity);
     if (retryPai.ok) {
       var retryCommitted = requireVerifiedCouncilResult(retryPai, { hamUid: hamUid,
