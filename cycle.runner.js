@@ -93,6 +93,20 @@ async function tick() {
     } catch (eDrain) {
       console.log('[cycle.runner] build drain error: ' + eDrain.message);
     }
+    // ⬡B:cycle.runner:BUILD:proactive_sweep_fires_the_department_each_tick:20260719⬡
+    // THE MISSING WIRE. The proactive agents (DAWN/HUNCH/BURST/GHOST/PRESS/SAGE) were built
+    // but nothing called them -- shelf-ware. Now, after the cook + SPAN + build drain, the
+    // proactive sweep runs the department per each agent's real cadence (each agent self-gates
+    // and closes its own loop). Guarded + fails open so it never breaks a tick.
+    try {
+      var _sweep = require('./pai/stations/proactive.sweep.js');
+      var _pr = await _sweep.sweep(HAM);
+      if (_pr && _pr.ran && _pr.ran.length) {
+        console.log('[cycle.runner] proactive sweep ran: ' + _pr.ran.join(', '));
+      }
+    } catch (eSweep) {
+      console.log('[cycle.runner] proactive sweep error: ' + eSweep.message);
+    }
     // Silence over hollow: if the cook decided nothing was worth acting on, that is a
     // valid quiet tick, not a failure. Nothing is sent; the Overseer routes anything
     // important from inside the cook itself, exactly as on any other channel.
