@@ -547,8 +547,6 @@ var TOOLS = [
 
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
-  {type:'function',function:{name:'read_lane_board',description:'READ THE LANE BOARD. Returns every active build chat/lane working on your system right now, each with its ACL chat name and the roadmap it is currently on (for example CLAIR-CURE, CLAIR-WONDERS, and any ChatGPT lane). Use this whenever the founder asks what chats or lanes are working on your build, who is doing what, or whether two lanes might collide. The lanes cannot talk to each other, they coordinate by stamping this board, so this is how you know the whole picture. Takes no arguments.',
-    parameters:{type:'object',properties:{}}}},
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
     +'Use for ANY question about a game, score, or whether a team won (Lakers, NBA, NFL, MLB, NHL, WNBA). '
     +'Pass league as one of: nba, nfl, mlb, nhl, wnba. Returns the latest scoreboard lines.',
@@ -1179,36 +1177,6 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       }
       return JSON.stringify({ok:false,reason:'nothing_applied'});
     } catch (eUpd) { return JSON.stringify({ok:false,reason:eUpd.message}); }
-  }
-  if (name === 'read_lane_board') {
-    // ⬡B:tool.loop:WIRE:read_lane_board_cross_chat_alignment:20260719⬡ Founder law:
-    // every Claude coding chat gets a matching ACL name and declares its current
-    // roadmap on a shared board, because the lanes cannot talk to each other, they
-    // coordinate by stamping the brain. This tool lets A'NU SEE that whole board so
-    // when the founder asks what chats are working on her build she actually knows.
-    // Cold code only fetches the rows the organ asked for; the organ decides when to
-    // call and how to speak it.
-    try {
-      var _bu = process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL;
-      var _bk = process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY;
-      var _sch = process.env.BRAIN_SCHEMA || 'memory_bank';
-      var _boundLaneHam = String(hamUid || '').toUpperCase();
-      if (!_boundLaneHam) return JSON.stringify({ ok:false, reason:'ham_uid_required' });
-      var _lbUrl = _bu.replace(/\/+$/, '') + '/rest/v1/beads'
-        + '?ham_uid=eq.' + encodeURIComponent(_boundLaneHam)
-        + '&stamp_type=eq.LANE_CLAIM&source=ilike.lane.registry.*'
-        + '&select=source,summary,created_at&order=created_at.desc&limit=30';
-      var _lbRes = await fetch(_lbUrl, { headers: {
-        apikey: _bk, Authorization: 'Bearer ' + _bk, 'Accept-Profile': _sch
-      }, signal: AbortSignal.timeout(8000) }).then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; });
-      var _seen = {}, _lanes = [];
-      (_lbRes || []).forEach(function (row) {
-        if (_seen[row.source]) return;
-        _seen[row.source] = true;
-        _lanes.push({ acl_name: String(row.source || '').replace('lane.registry.', ''), doing: row.summary || '' });
-      });
-      return JSON.stringify({ ok:true, active_lanes: _lanes.length, lanes: _lanes });
-    } catch (e) { return JSON.stringify({ ok:false, reason:'lane_board_error', detail:e.message }); }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
@@ -2784,15 +2752,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // fabrication. This does not touch action requests or day questions above.
       var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
       var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
-      if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
-      else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
+      // ⬡B:core.tool_loop:FIX:load_all_tools_let_her_reason_do_not_railroad_one_tool:20260719⬡
+      // FOUNDER DOCTRINE 20260719: forcing tool_choice onto ONE tool strips her
+      // reasoning -- she answered a calendar question to a planning prompt because a
+      // lookup was strapped on. Like the "all tools always available" setting, she
+      // should hold ALL her tools and CHOOSE. So tool_choice stays 'auto' (all tools
+      // on the table) and the intent is delivered as a STRONG PROMPT NUDGE instead of
+      // a hard rail. The data-reader direct-execute safety net downstream still catches
+      // a genuine refusal, so a real day/lookup question can never answer from nothing.
+      var _toolNudge = null;
+      if (_roadmapActivationNeeded) _toolNudge='activate_roadmap_task';
+      else if (_nashNeeded) { _toolNudge='nash_sports'; _nashNeeded=false; }
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
         // call-purpose question. Keep the full PAI + council, but do not force an
         // unrelated generic Memory Bank read in front of that bounded evidence.
         delete body.tools;
       }
-      else if (_isDayQ) body.tool_choice={type:'function',function:{name:'calendar_read'}};
+      else if (_isDayQ) _toolNudge='calendar_read';
       else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
         // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
         // Removing the irrelevant tool schema also keeps the one required model
@@ -2812,7 +2789,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         delete body.tools;
         delete body.tool_choice;
       }
-      else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
+      else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) _toolNudge='find_in_brain';
+      // Deliver the intent as a nudge, keep tool_choice auto (all tools available, she reasons).
+      if (_toolNudge && Array.isArray(body.tools) && body.tools.length) {
+        body.tool_choice = 'auto';
+        var _nudgeText = 'For this message, the right tool to use is very likely ' + _toolNudge +
+          '. Call it if it helps you answer from real data, but you hold all your tools; use your judgment.';
+        if (Array.isArray(body.messages) && body.messages.length) {
+          body.messages = body.messages.concat([{ role:'system', content:_nudgeText }]);
+        }
+        // Preserve the required-tool signal ONLY for the downstream direct-execute
+        // safety net (data readers), without hard-forcing the model.
+        if (DATA_READER_TOOLS[_toolNudge]) { body._dataReaderNudge = _toolNudge; }
+      }
     }
     // \u2b21B:core.tool_loop:WIRE:ornith_opt_in_no_tools_only:20260703\u2b21
     // Founder request: try Ornith for A'NU's real conversational turns too, not
@@ -3102,9 +3091,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // real as the founder's own identity. This is the same silence-over-
     // hollow rule already enforced a few lines below for malformed tool-call
     // text; this is the same failure class arriving a different way.
-    if (iter===1 && body.tool_choice && !(msg.tool_calls&&msg.tool_calls.length)) {
-      var _requiredToolName = body.tool_choice && body.tool_choice.function
-        && body.tool_choice.function.name || 'the required tool';
+    if (iter===1 && (body.tool_choice==='auto'||body.tool_choice) && !(msg.tool_calls&&msg.tool_calls.length) && (body._dataReaderNudge || (body.tool_choice && body.tool_choice.function))) {
+      var _requiredToolName = (body.tool_choice && body.tool_choice.function
+        && body.tool_choice.function.name) || body._dataReaderNudge || 'the required tool';
       var retryMsgs=msgs.concat([{role:'assistant',content:msg.content||''},
         {role:'user',content:'You were required to call ' + _requiredToolName
           + ' and did not. Call that exact tool now before saying anything else.'}]);
