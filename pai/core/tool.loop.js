@@ -2633,7 +2633,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       :_forcedToolSelectionPass
       ?(process.env.GROQ_MODEL_C1||'llama-3.1-8b-instant')
       :(tools.length>0||iter>1||toolsOnThisTurn)
-      ?(process.env.GROQ_MODEL_C2||'llama-3.3-70b-versatile')
+      ?(process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b')
       :(process.env.GROQ_MODEL_C1||'llama-3.1-8b-instant');
     // ⬡B:core.tool.loop:FIX:lower_temp_for_tool_reliability:20260702⬡
     // Live incident: asked the same biography question twice under identical
@@ -2863,7 +2863,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // just falls through to the existing empty-answer path below, unchanged.
     if (!r||r.error||!r.choices){
       var ORK=process.env.OPENROUTER_API_KEY;
-      if(ORK){var openRouterBody={model:process.env.OPENROUTER_MODEL||'meta-llama/llama-3.3-70b-instruct',
+      if(ORK){var openRouterBody={model:process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b',
           messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
           temperature:_structuredReachPolicy?0:0.3};
         if(_structuredReachPolicy){
@@ -3355,7 +3355,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       try {
         var _preferenceRetryResponse = await fetch(GB, { method:'POST',
           headers:{ Authorization:'Bearer ' + GROQ, 'Content-Type':'application/json' },
-          body:JSON.stringify({ model:(process.env.GROQ_MODEL_C2||'llama-3.3-70b-versatile'),
+          body:JSON.stringify({ model:(process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b'),
             messages:_preferenceRetryMessages, max_tokens:tokenCapFor(channel), temperature:0.1 }),
           signal:_modelRequestSignal()
         }).then(function (response) { return response.json(); });
@@ -3418,7 +3418,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       async function (repairMessages) {
         var repairResponse = await fetch(GB, { method:'POST',
           headers:{ Authorization:'Bearer ' + GROQ, 'Content-Type':'application/json' },
-          body:JSON.stringify({ model:(process.env.GROQ_MODEL_C2||'llama-3.3-70b-versatile'),
+          body:JSON.stringify({ model:(process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b'),
             messages:repairMessages, max_tokens:_repairCap, temperature:0.1 }),
           signal:_modelRequestSignal()
         }).then(function (response) { return response.json(); })
