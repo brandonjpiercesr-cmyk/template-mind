@@ -90,16 +90,28 @@ function pamCheck(content, activeWorld) {
   var credCheck = checkCredentials(content);
   if (!credCheck.ok) flags.push(credCheck);
 
+  // ⬡B:board.pam:DOCTRINE:meta_commentary_is_a_hint_not_a_cold_hold:20260718⬡
+  // WONDER CYCLE doctrine (382567): cold code is a helper, never a result. Credential
+  // and EBC-firewall checks stay HARD -- they detect deterministic security FACTS (a real
+  // key literal, another world's name string leaking), which the doctrine explicitly
+  // allows cold code to rule on. But meta-commentary is a matter of TONE/MEANING (is this
+  // phrasing 'as an AI' style chatter), and a cold phrase-list deciding that was the exact
+  // WRIT sin that silenced her. So meta-commentary becomes an advisory HINT: it is
+  // surfaced to the organ, never forces PAM_HOLD by itself. Only true security leaks
+  // (credential/EBC) hold. Fails open on tone.
   var metaCheck = checkMetaCommentary(content);
-  if (!metaCheck.ok) flags.push(metaCheck);
+  var metaHint = metaCheck.ok ? null : { hint: 'meta_commentary', phrase: metaCheck.phrase };
 
   var ebcCheck = checkEbcFirewall(content, activeWorld);
   if (!ebcCheck.ok) flags.push(ebcCheck);
 
+  // Only credential + EBC (security facts) are blocking flags. Meta-commentary rides
+  // along as an advisory hint the organ may weigh, never a cold gate on its own.
   return {
     ok: flags.length === 0,
     verdict: flags.length === 0 ? 'PAM_PASS' : 'PAM_HOLD',
-    flags: flags
+    flags: flags,
+    hints: metaHint ? [metaHint] : []
   };
 }
 
