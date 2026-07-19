@@ -594,6 +594,13 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','advisor','question'],
     properties:{ham_uid:{type:'string'},advisor:{type:'string',description:'the advisor/station slug, e.g. bdif, gmg, business, mediators, mh_action'},
       question:{type:'string',description:'what to ask the advisor, in plain words'}}}}},
+  {type:'function',function:{name:'email_send',description:'Send an email reply the HAM has approved. Use ONLY after the HAM explicitly said to send it in their own words this turn (e.g. "send it", "yes send that"). Set authorized=true only then. If they have not clearly said send, set authorized=false and it stays a draft. Reaches anyone by email address, not just saved contacts. Threads onto the original when you pass the message id.',
+    parameters:{type:'object',required:['ham_uid','grant','body','authorized'],
+    properties:{ham_uid:{type:'string'},grant:{type:'string',description:'the Nylas grant of the account (from inbox_read)'},
+      reply_to_message_id:{type:'string',description:'the id of the email being replied to, from inbox_read, so it threads'},
+      to:{type:'string',description:'recipient email address, for a brand new email not a reply'},
+      subject:{type:'string'},body:{type:'string',description:'the full real email body to send'},
+      authorized:{type:'boolean',description:'true ONLY if the HAM explicitly said to send this turn; false keeps it a draft'}}}}},
   {type:'function',function:{name:'read_reminders',description:'Read the HAM real reminders: things they told you to remind them about, and things you flagged for them. Use whenever they ask what reminders or to-dos they have, or what they need to remember. Returns real reminder items only, never invented. If there are none it says so.',
     parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'}}}}},
   {type:'function',function:{name:'inbox_read',description:'Read the HAM real email inbox: their actual unread and recent messages, with sender and subject. Use whenever the HAM asks about their email, inbox, unread mail, or to show their inbox on the glass. Returns real messages only, never invented; each carries the id needed to draft a reply. If the inbox is clear it says so.',
@@ -727,6 +734,7 @@ var POST_COUNCIL_TOOLS = Object.freeze({
   calendar_book:true,
   propose_working_session:true,
   contact_send:true,
+  email_send:true,
   stop_mentioning:true,
   request_new_capability:true,
   save_layout:true,
@@ -1561,6 +1569,28 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!_wr) return JSON.stringify({ ok:false, error:'weather source unreachable, do not guess' });
       return JSON.stringify(_wr);
     } catch (eWx) { return JSON.stringify({ ok:false, error:eWx.message }); }
+  }
+  if (name === 'email_send') {
+    // ⬡B:core.tool.loop:BUILD:she_can_actually_send_email:20260719⬡ Founder audit: she could
+    // read and draft but never SEND, and could not reach a new person. This anchors to A'NU:
+    // she calls it through the one cycle, it hits the founder-gated /os/email/send, and it
+    // only sends when authorized is true (she sets that only when he explicitly said send).
+    // Never an auto-send to a real human. reply_to_message_id threads the reply.
+    try {
+      var _esSelf = process.env.OS_API_BASE || process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
+      var _esUid = String((args && args.ham_uid) || hamUid || '');
+      var _esBody = {
+        grant: (args && args.grant) || '', body: (args && args.body) || '',
+        subject: (args && args.subject) || '', to: (args && args.to) || undefined,
+        reply_to_message_id: (args && args.reply_to_message_id) || '',
+        authorized: (args && args.authorized) === true
+      };
+      var _esr = await fetch(_esSelf + '/os/email/send/' + encodeURIComponent(_esUid), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(_esBody)
+      }).then(function(r){ return r.json(); }).catch(function(){ return null; });
+      if (!_esr) return JSON.stringify({ ok:false, error:'send endpoint unreachable' });
+      return JSON.stringify(_esr);
+    } catch (eEs) { return JSON.stringify({ ok:false, error:eEs.message }); }
   }
   if (name === 'read_reminders') {
     // ⬡B:core.tool.loop:BUILD:she_can_read_reminders_not_just_create:20260719⬡ Founder audit
