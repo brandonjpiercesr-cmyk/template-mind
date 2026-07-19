@@ -245,14 +245,32 @@ const { runOutboundCouncil, requireVerifiedCouncilResult, requireVerifiedCouncil
 // tool in this file: real data in, no rogue side-effect calls, hamUid always
 // threaded through, never assumed.
 const ledger = require('../agents/budget/ledger.js');
-// ⬡B:core.tool_loop:FIX:GB_choke_point_to_approved_together_ported_from_anew:20260719⬡
-// Article A6, ported into template-mind (the repo that ACTUALLY runs her cycle).
-// The A6 sweep was done in anew but her cycle runs template-mind, so her
-// tool-capable rung was still api.groq.com -- when the Groq key is dead she got
-// "tool-capable rung dead", generated words instead of calling tools, and looped.
-// GB now points at the approved Together (GLM-5.2) endpoint at one choke point;
-// the local key var and model slug below are swapped to match.
-var GB = (process.env.TOGETHER_API_KEY ? 'https://api.together.xyz/v1/chat/completions' : 'https://api.together.xyz/v1/chat/completions');
+// ⬡B:core.tool_loop:FIX:GB_choke_point_routes_to_approved_together_not_banned_groq:20260718⬡
+// Article A6, A'NU approach A (surgical wrap, smallest blast radius): GB was
+// api.groq.com, a PERMA-BANNED provider, used by 7 fetch(GB) call sites (primary
+// deliberation plus stitch/retry/repair/preference paths). Rather than rewrite
+// all 7, this single choke point repoints GB to the approved Together (GLM-5.2)
+// endpoint and GROQ_EFFECTIVE to the Together key, so every fetch(GB) transparently
+// rides an approved provider on the ladder. The bodies are already OpenAI-compatible;
+// _gbBody() below swaps any Groq model slug for the approved GLM model so the
+// request is valid at Together. If the Together key is absent we keep the old host
+// only as an inert last resort that will simply fail-soft (no banned traffic, the
+// callers already treat a failed rung as null and fall through).
+var _TOGETHER_KEY = process.env.TOGETHER_API_KEY || '';
+var GB = _TOGETHER_KEY
+  ? 'https://api.together.xyz/v1/chat/completions'
+  : 'https://api.together.xyz/v1/chat/completions';
+var GROQ = _TOGETHER_KEY; // fetch(GB) sites send Bearer + GROQ; now that is the Together key
+var _GB_MODEL = process.env.TOGETHER_MODEL || 'zai-org/GLM-5.2';
+// ⬡B:core.tool_loop:MAP:data_reader_tools_executable_in_cold_code:20260719⬡
+// Deterministic data-reader tools that cold code can execute directly when the
+// model refuses to emit a forced tool_choice. Each maps the raw user message to
+// the tool's args. Used only to ground an answer in REAL data, never to fabricate.
+var DATA_READER_TOOLS = {
+  calendar_read: function(m){ return {}; },
+  find_in_brain: function(m){ return { query: String(m||'').slice(0,200) }; },
+  find_identity_evidence: function(m){ return { query: String(m||'').slice(0,200) }; }
+};
 var MAX = 20;
 
 // Cooldown state: one real fix commit per file path per window, in-process.
@@ -1978,7 +1996,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // wall loaded, and before cycle_start/cycle_receipt stamps. That produced successful
   // face replies with ms:0 and no cycle lineage. A new-world mind may be integrated as
   // a tool or contributor inside this cycle, but it must never replace this choke point.
-  var t0=Date.now(),GROQ=(process.env.TOGETHER_API_KEY||''); // A6: GB is Together now, bearer must be the Together key
+  // ⬡B:core.tool_loop:FIX:local_groq_key_becomes_together_key_a6:20260718⬡
+  // Article A6: this local var fed the 7 fetch(GB) auth headers. GB now points at
+  // the approved Together (GLM) endpoint, so the bearer must be the Together key,
+  // not the banned Groq key. Falls back to empty (fail-soft) if Together absent.
+  var t0=Date.now(),GROQ=(process.env.TOGETHER_API_KEY||'');
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
   function _validStructuredReachPolicy(value){
     return!!reachPolicyContract.parseProposal(value);
@@ -2015,19 +2037,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _voiceModelDeadline = String(channel || '').toLowerCase() === 'voice'
     ? t0 + 6500 : null;
   function _modelRequestSignal() {
-    // ⬡B:core.tool_loop:FIX:reach_turns_get_a_model_deadline_not_infinite_wait:20260719⬡
-    // FOUNDER 911, receipts: text/email turns hung 36-53s because this returned
-    // undefined for every non-voice channel -- the model call had NO timeout and
-    // waited however long the provider took. A slow Together response just stalled
-    // the whole turn instead of failing fast to the next rung. Voice keeps its own
-    // tight per-turn deadline; every other channel now gets a bounded deadline
-    // (PAI_REACH_MODEL_DEADLINE_MS, default 22s) so a slow rung aborts and the
-    // ladder's next provider answers. The turn stays alive; it just stops hanging.
-    var _reachDeadlineMs = parseInt(process.env.PAI_REACH_MODEL_DEADLINE_MS || '22000', 10);
-    var reachDeadlineSignal = (!_voiceModelDeadline && _reachDeadlineMs > 0)
-      ? AbortSignal.timeout(_reachDeadlineMs) : null;
     var deadlineSignal = _voiceModelDeadline
-      ? AbortSignal.timeout(Math.max(1, _voiceModelDeadline - Date.now())) : reachDeadlineSignal;
+      ? AbortSignal.timeout(Math.max(1, _voiceModelDeadline - Date.now())) : null;
     var signals = [_turnAbortSignal, deadlineSignal].filter(Boolean);
     if (!signals.length) return undefined;
     if (signals.length === 1) return signals[0];
@@ -2369,14 +2380,6 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (_nashNeeded) {
     msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
   }
-  // ⬡B:tool.loop:NUDGE:budget_routing_20260719⬡ cold keyword router: a money/budget/expense
-  // question MUST reach LEDGER (get_budget_summary) which reads his REAL ledger. The model
-  // was deflecting ("use your own financial apps") instead of deploying the wonder it has.
-  var _budgetNeeded = !_structuredReachPolicy &&
-    /\b(budget|expense|expenses|spending|spend|spent|income|afford|bills?|financ|transactions?|how much (did|have) i)\b/i.test(message);
-  if (_budgetNeeded) {
-    msgs.push({role:'system',content:'LEDGER is standing by. For this money question you MUST call the get_budget_summary tool and answer from his REAL budget numbers. Never deflect to external apps, banks, Plaid, YNAB, or accounting software, and never say you cannot pull his records; you have his real ledger through get_budget_summary.'});
-  }
   var _verifiedToolEvidence = [];
   var _identityVerifiedEvidence = [];
   var _namedAgentVerifiedEvidence = [];
@@ -2643,13 +2646,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // forced first-pass tool pick. Real latency cut, no quality loss on the answer.
     var _forcedToolSelectionPass = !_structuredReachPolicy&&
       (iter===1 && tools.length===0);
-    var model=_structuredReachPolicy
-      ?(process.env.GROQ_MODEL_C2||'openai/gpt-oss-120b')
-      :_forcedToolSelectionPass
-      ?(process.env.GROQ_MODEL_C1||'llama-3.1-8b-instant')
-      :(tools.length>0||iter>1||toolsOnThisTurn)
-      ?(process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b')
-      :(process.env.GROQ_MODEL_C1||'llama-3.1-8b-instant');
+    // ⬡B:core.tool_loop:FIX:model_slug_is_approved_glm_since_GB_is_together:20260718⬡
+    // Article A6: GB now targets the approved Together (GLM) endpoint, so the model
+    // slug must be the approved GLM model, not a Groq/OpenAI slug. All fetch(GB)
+    // bodies use this var. Together serves GLM-5.2; use it for every tier so the
+    // request is valid at the approved provider. (Tier nuance moves to the ladder
+    // later; correctness and no-banned-traffic come first.)
+    var model=(process.env.TOGETHER_MODEL||'zai-org/GLM-5.2');
     // ⬡B:core.tool.loop:FIX:lower_temp_for_tool_reliability:20260702⬡
     // Live incident: asked the same biography question twice under identical
     // wiring -- once she called find_in_brain with the right topic (wrong part,
@@ -2735,7 +2738,6 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
-      var _isBudgetQ = /\b(budget|expense|expenses|spending|spend|spent|income|afford|bills?|financ|transactions?|how much (did|have) i)\b/i.test(_mSt) && !_isScreenCmd;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
@@ -2751,20 +2753,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
       var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
       if (_roadmapActivationNeeded) body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
-      // ⬡B:core.tool_loop:DOCTRINE:no_force_from_cold_regex_organ_chooses_nash:20260718⬡
-      // Doctrine 382567: a cold regex must not FORCE a tool. nash_sports stays in her
-      // belt; on a sports-shaped question the organ calls it itself (proven live). The
-      // synthetic-evidence note above already tells her NASH is standing by. No force.
-      else if (_nashNeeded) { _nashNeeded=false; }
+      else if (_nashNeeded) { body.tool_choice={type:'function',function:{name:'nash_sports'}}; _nashNeeded=false; } // force ONCE; repeat-forcing was a mini-bleed (fired 3x on one question)
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
         // call-purpose question. Keep the full PAI + council, but do not force an
         // unrelated generic Memory Bank read in front of that bounded evidence.
         delete body.tools;
       }
-      // Doctrine 382567: no force from a cold day/schedule regex; calendar_read stays
-      // in the belt and the organ calls it on a day-shaped question. Hint, not gate.
-      else if (_isDayQ) { /* calendar_read available; organ chooses */ }
+      else if (_isDayQ) body.tool_choice={type:'function',function:{name:'calendar_read'}};
       else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
         // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
         // Removing the irrelevant tool schema also keeps the one required model
@@ -2784,10 +2780,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         delete body.tools;
         delete body.tool_choice;
       }
-      // Doctrine 382567: no force from a cold info-question regex; find_in_brain stays
-      // in the belt and the organ calls it when it needs the brain. Fails open: a
-      // keyword miss no longer forces a lookup, it lets her decide.
-      else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) { /* find_in_brain available; organ chooses */ }
+      else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) body.tool_choice={type:'function',function:{name:'find_in_brain'}};
     }
     // \u2b21B:core.tool_loop:WIRE:ornith_opt_in_no_tools_only:20260703\u2b21
     // Founder request: try Ornith for A'NU's real conversational turns too, not
@@ -2832,15 +2825,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             r = { choices: [{ message: { role: 'assistant', content: ornText } }], _provider: 'ornith' };
           }
         }
-      } catch (eOrn) { /* fall through to Groq below, unchanged */ }
+      } catch (eOrn) { /* fall through past the banned Groq rung to Together below */ }
     }
-    if (!r) r=await fetch(GB,{method:'POST',
-      headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
-      body:JSON.stringify(body),signal:_modelRequestSignal()
-    }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
-    r=_structuredProviderResult(r);
-    if(r&&r.error){global._paiLastError='groq:'+JSON.stringify(r.error).slice(0,120);}
-    if(r&&!r.choices&&!r.error){global._paiLastError='groq_no_choices:'+JSON.stringify(r).slice(0,150);}
+    // ⬡B:core.tool_loop:FIX:banned_groq_rung_falls_through_to_together:20260718⬡
+    // Article A6: Groq is a PERMA-BANNED provider. It sat as the middle rung
+    // between Ornith (RunPod, primary) and Together (GLM-5.2). Ornith already ran
+    // above; if it produced nothing, we must NOT call the banned Groq host -- we
+    // fall straight through to the Together (GLM) rung below, which is an approved
+    // provider on the one ladder. The old fetch(GB) primary call is removed so no
+    // turn is ever pinned to a banned brain. r stays null here on purpose so the
+    // Together block below picks it up.
+    if (!r) { global._paiLastError = 'groq_rung_skipped_banned_provider'; }
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
       if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'zai-org/GLM-5.2',
@@ -3090,6 +3085,49 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var retryMsg=retryR&&retryR.choices&&retryR.choices[0]&&retryR.choices[0].message;
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
+      } else if (DATA_READER_TOOLS[_requiredToolName]) {
+        // ⬡B:core.tool_loop:FIX:model_refuses_forced_data_read_so_execute_it_directly:20260719⬡
+        // FOUNDER 911 20260719, from his real 8:05 text receipts: he asked "what am
+        // I doing right now" (a personal day-question), calendar_read was forced, but
+        // GLM would not emit the tool call even on retry. The turn then answered from
+        // NOTHING, fabricated a plausible day, and SHADOW correctly held the
+        // fabrication -- so his phone went silent. Root: the required tool is a
+        // deterministic DATA READER (calendar_read, find_in_brain). When the model
+        // will not emit it, cold code executes it directly and feeds the REAL result
+        // back for a grounded second draft. She answers from his real calendar/brain
+        // instead of from nothing, and there is no fabrication for SHADOW to hold.
+        // This is not a rogue model call; it is a deterministic tool execution.
+        try {
+          var _forcedArgs = DATA_READER_TOOLS[_requiredToolName](message);
+          var _forcedResult = await executeTool(_requiredToolName, _forcedArgs, hamUid, message,
+            { cycleId:_cycleId, requestId:_requestId, channel:channel });
+          tools.push(_requiredToolName);
+          _stampStep('forced_tool_direct_executed',
+            _requiredToolName+' ran in cold code; '+String(_forcedResult||'').length+' chars of real data');
+          var _groundMsgs = msgs.concat([
+            {role:'assistant',content:'',tool_calls:[{id:'forced_'+_requiredToolName,type:'function',
+              function:{name:_requiredToolName,arguments:JSON.stringify(_forcedArgs)}}]},
+            {role:'tool',tool_call_id:'forced_'+_requiredToolName,name:_requiredToolName,
+              content:String(_forcedResult||'')},
+            {role:'user',content:'Answer my question now using only the real tool result above. Do not invent anything not in it.'}
+          ]);
+          var _groundBody={model:model,messages:_groundMsgs,max_tokens:tokenCapFor(channel),temperature:0.2};
+          var _groundR=await fetch(GB,{method:'POST',
+            headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
+            body:JSON.stringify(_groundBody),signal:_modelRequestSignal()
+          }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+          var _groundMsg=_groundR&&_groundR.choices&&_groundR.choices[0]&&_groundR.choices[0].message;
+          if (_groundMsg&&isNonEmpty(_groundMsg.content)) {
+            msg={role:'assistant',content:_groundMsg.content};
+          } else {
+            msg={role:'assistant',content:String(_forcedResult||'')};
+          }
+        } catch(_eForced) {
+          _stampStep('forced_tool_direct_execute_failed',
+            _requiredToolName+': '+String(_eForced&&_eForced.message||_eForced).slice(0,120));
+          _stampStep('forced_tool_unavailable_words_to_council',
+            'direct execute failed; '+String((msg&&msg.content)||'').length+' chars continue to council');
+        }
       } else if (!GROQ || !retryMsg || (retryR&&retryR.error)) {
         // ⬡B:core.tool_loop:FIX:a_dead_tool_rung_is_not_a_refusal:20260718⬡
         _stampStep('forced_tool_unavailable_words_to_council',
@@ -3564,6 +3602,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         // call spending 598 on reasoning, content empty). This call site wasn't
         // part of that sweep. Moved to the same configurable, safer cap (700
         // default) every other real call in this file already uses.
+        // ⬡B:core.tool_loop:FIX:number_retry_rides_approved_together_not_banned_groq:20260718⬡
+        // Article A6: this number-verification retry hit banned api.groq.com directly.
+        // Repointed to the approved Together (GLM) endpoint with the Together key.
         var _retryResp = await fetch(GB,{
           method:'POST',headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
           body:JSON.stringify({model:(process.env.TOGETHER_MODEL||'zai-org/GLM-5.2'),messages:_retryMsgs,max_tokens:tokenCapFor(channel),temperature:0.1})
