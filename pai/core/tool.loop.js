@@ -2882,6 +2882,22 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         // Preserve the required-tool signal ONLY for the downstream direct-execute
         // safety net (data readers), without hard-forcing the model.
         if (DATA_READER_TOOLS[_toolNudge]) { body._dataReaderNudge = _toolNudge; }
+        // ⬡B:core.tool_loop:FIX:consult_mace_force_execute_when_file_and_repo_named:20260719⬡
+        // Founder caught her refusing to call consult_mace even with the firm nudge:
+        // she generated words with tools=0. consult_mace is not a no-arg reader (it
+        // needs repo+path), so it cannot join DATA_READER_TOOLS blindly. But when the
+        // message NAMES a concrete file and repo, those args are deterministic, so we
+        // can force-execute it exactly like a data reader: parse repo+path, and if the
+        // model still will not emit the call, cold code runs MACE read_file and feeds
+        // the real file back. This only arms when a file+repo are actually present, so
+        // a vague "consult MACE to plan" (no file) still goes to the model to reason.
+        if (_toolNudge === 'consult_mace') {
+          var _mcPath = String(_mSt || '').match(/([a-z0-9_.\-]+\/[a-z0-9_.\/\-]+\.[a-z]+)/i);
+          var _mcRepo = String(_mSt || '').match(/\b(template-mind|anew|canew|eanew|ababase|aba-shared)\b/i);
+          if (_mcPath && _mcRepo) {
+            body._codingReadNudge = { repo: _mcRepo[1], path: _mcPath[1], action: 'read_file' };
+          }
+        }
       }
     }
     // \u2b21B:core.tool_loop:WIRE:ornith_opt_in_no_tools_only:20260703\u2b21
@@ -3172,9 +3188,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // real as the founder's own identity. This is the same silence-over-
     // hollow rule already enforced a few lines below for malformed tool-call
     // text; this is the same failure class arriving a different way.
-    if (iter===1 && (body.tool_choice==='auto'||body.tool_choice) && !(msg.tool_calls&&msg.tool_calls.length) && (body._dataReaderNudge || (body.tool_choice && body.tool_choice.function))) {
+    if (iter===1 && (body.tool_choice==='auto'||body.tool_choice) && !(msg.tool_calls&&msg.tool_calls.length) && (body._dataReaderNudge || body._codingReadNudge || (body.tool_choice && body.tool_choice.function))) {
       var _requiredToolName = (body.tool_choice && body.tool_choice.function
-        && body.tool_choice.function.name) || body._dataReaderNudge || 'the required tool';
+        && body.tool_choice.function.name) || body._dataReaderNudge || (body._codingReadNudge ? 'consult_mace' : null) || 'the required tool';
       var retryMsgs=msgs.concat([{role:'assistant',content:msg.content||''},
         {role:'user',content:'You were required to call ' + _requiredToolName
           + ' and did not. Call that exact tool now before saying anything else.'}]);
@@ -3187,6 +3203,38 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var retryMsg=retryR&&retryR.choices&&retryR.choices[0]&&retryR.choices[0].message;
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
+      } else if (_requiredToolName === 'consult_mace' && body._codingReadNudge) {
+        // ⬡B:core.tool_loop:FIX:consult_mace_forced_with_parsed_args:20260719⬡
+        // consult_mace is not a no-arg reader, but when the message named a concrete
+        // file and repo those args are deterministic. The model refused to emit the
+        // call, so cold code runs MACE read_file with the parsed args and feeds the
+        // real file back for a grounded answer, the same shape as the data readers.
+        try {
+          var _forcedArgs = body._codingReadNudge;
+          var _forcedResult = await executeTool('consult_mace', _forcedArgs, hamUid, message,
+            { cycleId:_cycleId, requestId:_requestId, channel:channel });
+          tools.push('consult_mace');
+          _stampStep('forced_tool_direct_executed',
+            'consult_mace ran in cold code with parsed args; '+String(_forcedResult||'').length+' chars of real file');
+          var _mcGround = msgs.concat([
+            {role:'assistant',content:'',tool_calls:[{id:'forced_consult_mace',type:'function',
+              function:{name:'consult_mace',arguments:JSON.stringify(_forcedArgs)}}]},
+            {role:'tool',tool_call_id:'forced_consult_mace',name:'consult_mace',
+              content:String(_forcedResult||'')},
+            {role:'user',content:'The tool result above is the REAL file MACE read for this person. '
+              + 'Answer their question in your own natural words using only what the file actually contains. '
+              + 'Do NOT say you pulled it up, do NOT hand back raw JSON. Just explain the file plainly.'}
+          ]);
+          var _mcGb={model:model,messages:_mcGround,max_tokens:tokenCapFor(channel),temperature:0.3};
+          var _mcR=await fetch(GB,{method:'POST',
+            headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
+            body:JSON.stringify(_mcGb),signal:_modelRequestSignal()
+          }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+          var _mcMsg=_mcR&&_mcR.choices&&_mcR.choices[0]&&_mcR.choices[0].message;
+          if (_mcMsg&&isNonEmpty(_mcMsg.content)) { msg=_mcMsg; }
+        } catch (_mcErr) {
+          _stampStep('forced_consult_mace_failed', String(_mcErr&&_mcErr.message||_mcErr));
+        }
       } else if (DATA_READER_TOOLS[_requiredToolName]) {
         // ⬡B:core.tool_loop:FIX:model_refuses_forced_data_read_so_execute_it_directly:20260719⬡
         // FOUNDER 911 20260719, from his real 8:05 text receipts: he asked "what am
