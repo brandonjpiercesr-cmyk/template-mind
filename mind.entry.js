@@ -89,6 +89,15 @@ app.post('/bead', async function (req, res) {
 // immediately (Blooio timeout ~5s); the reply runs async through the one cycle.
 var _wrenGuard = require('./pai/core/webhook.guard.js');
 var _wrenReply = require('./pai/core/wren/reply.js');
+// ⬡B:mind.entry:REACH:per_ham_email_door:20260719⬡ Per-HAM law: this world owns
+// its own EMAIL edge. Nylas webhook -> THIS world's /iman/inbound -> full inbound
+// pipeline (guard, claim, PAI, council, reply via his own grants and bank).
+require('./pai/routes/iman.routes.js')(app);
+// ⬡B:mind.entry:REACH:per_ham_voice_door:20260719⬡ Per-HAM law: this world owns its
+// own VOICE edge. ElevenLabs agent -> THIS world's /vara/llm (runPAI local, his bank).
+require('./pai/routes/vara.llm.routes.js')(app);
+require('./pai/routes/vara.call.routes.js')(app);
+
 app.post('/wren/blooio', async function (req, res) {
   try {
     var auth = _wrenGuard.verifyBlooio(req, process.env.BLOOIO_WEBHOOK_SECRET);
