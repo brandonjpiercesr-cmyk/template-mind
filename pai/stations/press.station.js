@@ -17,6 +17,7 @@
 
 var ladder = require('../core/model.ladder.js');
 var nowStation = require('./now.station.js');
+var persona = require('../core/persona.js');
 
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
@@ -37,7 +38,15 @@ async function scanExternal(interests) {
       plugins: [{ id: 'web' }],
       max_tokens: 500
     };
-    var r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    // \u2b21B:press.scan:FIX:web_scan_hop_guarded_through_provider_boundary:20260719\u2b21
+    // The scan is the ONE sanctioned external hop (OpenRouter web plugin, an approved host).
+    // Guard it: if the boundary considers the host banned, refuse rather than call. The global
+    // provider.boundary install already reroutes banned chat hosts; this is defense in depth so
+    // PRESS never becomes the rogue door.
+    var endpoint = 'https://openrouter.ai/api/v1/chat/completions';
+    try { var pb = require('../core/provider.boundary.js');
+      if (pb && pb.isBannedChatCall && pb.isBannedChatCall(endpoint)) return []; } catch (e) {}
+    var r = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + process.env.OPENROUTER_API_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
@@ -60,7 +69,7 @@ async function judgeRelevance(hamUid, moment, candidates, alreadySeen) {
       ' ' + moment.part_of_day + '. Prefer fresh, timely items. If NONE genuinely matter, ' +
       'return []. Never invent. Already surfaced (do not repeat): ' +
       JSON.stringify((alreadySeen || []).slice(0, 20));
-    var out = await ladder.deliberate(sys, candidates.join('\n'),
+    var out = await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'),
       { json: true, max_tokens: 700, timeout: 30000 });
     var text = out && out.content != null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g, '').trim());

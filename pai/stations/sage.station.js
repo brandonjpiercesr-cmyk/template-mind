@@ -15,6 +15,7 @@
 
 var ladder = require('../core/model.ladder.js');
 var nowStation = require('./now.station.js');
+var persona = require('../core/persona.js');
 
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
@@ -35,12 +36,58 @@ async function gatherWindow(hamUid, days) {
   } catch(e){ return []; }
 }
 
+
+// ---- EXIT / RALLY (Lesson 5): SAGE reviews its own prior observations ----
+// A long-horizon observation that has since been acted on or resolved should be closed so
+// SAGE does not keep re-surfacing the same slow pattern every run. Whether it resolved is
+// meaning, judged by the organ through the one voice; cold code fetches the open observations.
+async function openObservations(hamUid) {
+  try {
+    var url = _bu()+'/rest/v1/'+_tbl()+'?select=id,summary,content&source=eq.sage.station.observation.'+String(hamUid).toLowerCase()+'&order=id.desc&limit=15';
+    var r = await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(9000)}).then(function(x){return x.json();});
+    var open=[];
+    for (var i=0;i<(Array.isArray(r)?r:[]).length;i++){
+      var c={}; try{c=JSON.parse(r[i].content||'{}');}catch(e){}
+      if (c && c._status==='closed') continue;
+      open.push({ id:r[i].id, pattern:c.pattern||r[i].summary, content:c });
+    }
+    return open;
+  } catch(e){ return []; }
+}
+async function reconcileObservations(hamUid, moment, recentWindow) {
+  var open=await openObservations(hamUid);
+  if (!open.length) return { reviewed:0, closed:0 };
+  try {
+    var sys='You are SAGE reviewing the long-horizon observations you already surfaced. For each, '+
+      'using the recent activity, decide if the pattern has RESOLVED or been acted on ("closed") '+
+      'or is STILL ongoing ("open"). Return a JSON array aligned in order: [{index, status}]. Do '+
+      'not keep a pattern alive just to have something to say.';
+    var payload={ observations:open.map(function(o,ix){return {index:ix, pattern:o.pattern};}), recent:(recentWindow||[]).slice(0,25) };
+    var out=await ladder.deliberate(persona.voicePrompt(sys), JSON.stringify(payload), { json:true, max_tokens:500, timeout:25000 });
+    var decisions=JSON.parse(String(out&&out.content||'[]').replace(/```json|```/g,'').trim());
+    if (!Array.isArray(decisions)) decisions=[];
+    var closed=0;
+    for (var i=0;i<decisions.length;i++){
+      var d=decisions[i]; var o=open[d.index]; if(!o) continue;
+      if (d.status==='closed'){
+        var content=Object.assign({}, o.content||{}, { _status:'closed', _resolved_at:moment.now_iso });
+        await fetch(_bu()+'/rest/v1/'+_tbl()+'?id=eq.'+o.id,{method:'PATCH',headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),
+          'Content-Type':'application/json','Content-Profile':_schema(),'Accept-Profile':_schema(),Prefer:'return=minimal'},
+          body:JSON.stringify({content:JSON.stringify(content)}),signal:AbortSignal.timeout(8000)}).catch(function(){});
+        closed++;
+      }
+    }
+    return { reviewed:open.length, closed:closed };
+  } catch(e){ return { reviewed:open.length, closed:0 }; }
+}
+
 // The organ: reason over the long window for real slow patterns. Returns [] when nothing
 // stands out (silence over noise).
 async function assess(hamUid) {
   var moment = await nowStation.assembleNow(hamUid);   // consume NOW, no twin
   var window = await gatherWindow(hamUid, windowDays());
-  if (window.length < 8) return { moment: moment, observations: [] }; // too little history
+  var reconciled = await reconcileObservations(hamUid, moment, window); // EXIT/RALLY prior cycle
+  if (window.length < 8) return { moment: moment, observations: [], reconciled: reconciled }; // too little history
   try {
     var sys =
       'You are SAGE, a strategic assessment organ that only speaks when a genuine LONG-HORIZON '+
@@ -49,12 +96,12 @@ async function assess(hamUid) {
       'of activity summaries, return a JSON array of {pattern, horizon, evidence, suggested_move} '+
       'ONLY for patterns that truly stand out. If nothing clear stands out, return []. Never '+
       'manufacture an insight from thin evidence.';
-    var out = await ladder.deliberate(sys, window.join('\n'), { json:true, max_tokens:800, timeout:35000 });
+    var out = await ladder.deliberate(persona.voicePrompt(sys), window.join('\n'), { json:true, max_tokens:800, timeout:35000 });
     var text = out && out.content!=null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (!Array.isArray(arr)) arr=[];
     for (var i=0;i<arr.length;i++){ stampObservation(hamUid, arr[i], moment).catch(function(){}); }
-    return { moment: moment, observations: arr.slice(0,3) };
+    return { moment: moment, observations: arr.slice(0,3), reconciled: reconciled };
   } catch(e){ return { moment: moment, observations: [] }; }
 }
 
@@ -69,4 +116,4 @@ async function stampObservation(hamUid, obs, moment) {
     body:JSON.stringify(bead), signal:AbortSignal.timeout(8000) });
 }
 
-module.exports = { assess:assess, gatherWindow:gatherWindow };
+module.exports = { assess:assess, gatherWindow:gatherWindow, reconcileObservations:reconcileObservations };
