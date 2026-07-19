@@ -158,18 +158,13 @@ async function assemble(hamUid, moment, sec, prefs, discoveryQuestion) {
 
 // ---- DELIVER via the HAM's preferred method through the real outreach path ----
 async function deliver(hamUid, briefing, prefs, moment) {
-  var method=(prefs && prefs.briefing_method) || 'email';
-  var outreach=tryMod('../core/outreach.js');
-  if (outreach && outreach.outreachPassForHam) {
-    try {
-      // Real IMAN/VARA delivery goes through the outreach council on facts; but the briefing
-      // must also land on the Command Center desk as a CC_NOTE the feed serves, so the founder
-      // sees it regardless of channel. (The old payload-into-outreachPassForHam did nothing.)
-      await ccSurface.surfaceToCommandCenter(hamUid, 'DAWN', 'Your daily briefing', briefing, 'briefing', 6).catch(function(){});
-      return true;
-    } catch(e){ return false; }
-  }
-  return false;
+  // The briefing lands on the Command Center desk as a CC_NOTE the feed serves, so the founder
+  // sees it regardless of channel. This does NOT depend on the outreach module (the old
+  // payload-into-outreachPassForHam did nothing anyway). Genuine IMAN email / VARA voice
+  // delivery per briefing_method flows through the Overseer's real reach path on the stamped
+  // facts; the desk record is guaranteed here.
+  var ok = await ccSurface.surfaceToCommandCenter(hamUid, 'DAWN', 'Your daily briefing', briefing, 'briefing', 6).catch(function(){ return false; });
+  return !!ok;
 }
 
 // ---- EXIT / RALLY (Lesson 5): reconcile yesterday before today's briefing ----
