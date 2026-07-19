@@ -594,6 +594,9 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','advisor','question'],
     properties:{ham_uid:{type:'string'},advisor:{type:'string',description:'the advisor/station slug, e.g. bdif, gmg, business, mediators, mh_action'},
       question:{type:'string',description:'what to ask the advisor, in plain words'}}}}},
+  {type:'function',function:{name:'inbox_read',description:'Read the HAM real email inbox: their actual unread and recent messages, with sender and subject. Use whenever the HAM asks about their email, inbox, unread mail, or to show their inbox on the glass. Returns real messages only, never invented; each carries the id needed to draft a reply. If the inbox is clear it says so.',
+    parameters:{type:'object',required:['ham_uid'],
+    properties:{ham_uid:{type:'string'},unread_only:{type:'boolean',description:'true = only unread (default), false = recent inbox'}}}}},
   {type:'function',function:{name:'calendar_read',description:'Read the HAM\'s real calendar: upcoming events and open time slots. Use whenever the HAM asks what is on their calendar, whether they are free, or to find a time or slot for something (a haircut, a meeting). Returns real events and computed free slots -- never invent availability.',
     parameters:{type:'object',required:['ham_uid'],
     properties:{ham_uid:{type:'string'},want:{type:'string',enum:['events','slots','both'],description:'events = what is scheduled, slots = open times, both = default'},
@@ -1549,6 +1552,29 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       return JSON.stringify(_wr);
     } catch (eWx) { return JSON.stringify({ ok:false, error:eWx.message }); }
   }
+  if (name === 'inbox_read') {
+    // ⬡B:core.tool.loop:BUILD:she_can_actually_read_email:20260719⬡ Founder caught it live: she
+    // said "I don't have an inbox tool that reads your email" because she genuinely had none.
+    // She could read calendar, budget, brain, sports, but never her inbox. This is the real
+    // fix: a tool that reads his real gated inbox (/os/email, founder-only, dev-noise scrubbed),
+    // so she can access, reason about, and surface his email. Never invents a message.
+    try {
+      var _ibSelf = process.env.OS_API_BASE || process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
+      var _ibUid = String((args && args.ham_uid) || hamUid || '');
+      var _ir = await fetch(_ibSelf + '/os/email/' + encodeURIComponent(_ibUid))
+        .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+      if (!_ir) return JSON.stringify({ ok:false, error:'inbox unreachable, do not guess' });
+      var _msgs = (_ir.emails || []);
+      var _unreadOnly = !(args && args.unread_only === false);
+      if (_unreadOnly) _msgs = _msgs.filter(function(m){ return m.unread; });
+      _msgs = _msgs.slice(0, 8).map(function(m){
+        return { from: String(m.from||'someone').slice(0,80), subject: String(m.subject||'(no subject)').slice(0,140),
+          snippet: String(m.snippet||m.preview||'').slice(0,200), unread: !!m.unread, id: m.id||null, grant: m.grant||null };
+      });
+      return JSON.stringify({ ok:true, count:_msgs.length, messages:_msgs,
+        note: _msgs.length ? 'Real inbox. To show on the glass call update_screen with piece email. To draft a reply use the id.' : 'Inbox is clear, nothing unread.' });
+    } catch (eIb) { return JSON.stringify({ ok:false, error:eIb.message }); }
+  }
   if (name === 'calendar_read') {
     // ⬡B:core.tool.loop:FIX:calendar_read_real_source_20260714⬡ 911: this tool was
     // wired to getRadarEvents, an internal RADAR bead system that is essentially
@@ -2434,7 +2460,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // An autonomous reach finalizer may read evidence but may not send, write,
   // deploy, book, or move a screen before its answer clears the council.
   var _readOnlyToolNames = ['nash_sports','find_identity_evidence','find_in_brain','read_render_logs',
-    'get_budget_upcoming','get_budget_summary','consult_advisor','calendar_read',
+    'get_budget_upcoming','get_budget_summary','consult_advisor','calendar_read','inbox_read',
     'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda'];
   var _turnToolDefinitions = identity && identity.outbound_finalize === true
     ? TOOLS.filter(function (tool) {
