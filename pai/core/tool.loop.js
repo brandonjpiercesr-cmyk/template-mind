@@ -245,7 +245,14 @@ const { runOutboundCouncil, requireVerifiedCouncilResult, requireVerifiedCouncil
 // tool in this file: real data in, no rogue side-effect calls, hamUid always
 // threaded through, never assumed.
 const ledger = require('../agents/budget/ledger.js');
-var GB = 'https://api.groq.com/openai/v1/chat/completions';
+// ⬡B:core.tool_loop:FIX:GB_choke_point_to_approved_together_ported_from_anew:20260719⬡
+// Article A6, ported into template-mind (the repo that ACTUALLY runs her cycle).
+// The A6 sweep was done in anew but her cycle runs template-mind, so her
+// tool-capable rung was still api.groq.com -- when the Groq key is dead she got
+// "tool-capable rung dead", generated words instead of calling tools, and looped.
+// GB now points at the approved Together (GLM-5.2) endpoint at one choke point;
+// the local key var and model slug below are swapped to match.
+var GB = (process.env.TOGETHER_API_KEY ? 'https://api.together.xyz/v1/chat/completions' : 'https://api.together.xyz/v1/chat/completions');
 var MAX = 20;
 
 // Cooldown state: one real fix commit per file path per window, in-process.
@@ -1971,7 +1978,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // wall loaded, and before cycle_start/cycle_receipt stamps. That produced successful
   // face replies with ms:0 and no cycle lineage. A new-world mind may be integrated as
   // a tool or contributor inside this cycle, but it must never replace this choke point.
-  var t0=Date.now(),GROQ=process.env.GROQ_API_KEY;
+  var t0=Date.now(),GROQ=(process.env.TOGETHER_API_KEY||''); // A6: GB is Together now, bearer must be the Together key
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
   function _validStructuredReachPolicy(value){
     return!!reachPolicyContract.parseProposal(value);
@@ -3548,9 +3555,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         // call spending 598 on reasoning, content empty). This call site wasn't
         // part of that sweep. Moved to the same configurable, safer cap (700
         // default) every other real call in this file already uses.
-        var _retryResp = await fetch('https://api.groq.com/openai/v1/chat/completions',{
+        var _retryResp = await fetch(GB,{
           method:'POST',headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
-          body:JSON.stringify({model:(process.env.GROQ_MODEL_C2||'openai/gpt-oss-120b'),messages:_retryMsgs,max_tokens:tokenCapFor(channel),temperature:0.1})
+          body:JSON.stringify({model:(process.env.TOGETHER_MODEL||'zai-org/GLM-5.2'),messages:_retryMsgs,max_tokens:tokenCapFor(channel),temperature:0.1})
         }).then(function(x){return x.json();});
         var _retryText = _retryResp && _retryResp.choices && _retryResp.choices[0] && _retryResp.choices[0].message && _retryResp.choices[0].message.content;
         if (_retryText && _retryText.trim()) {
