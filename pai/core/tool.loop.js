@@ -547,6 +547,8 @@ var TOOLS = [
 
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
+  {type:'function',function:{name:'read_lane_board',description:'READ THE LANE BOARD. Returns every active build chat/lane working on your system right now, each with its ACL name and the roadmap it is currently on. Use this whenever the founder asks what chats or lanes are working on your build, who is building what, or whether two lanes might collide. The lanes cannot talk to each other, they coordinate by stamping this board, so this is how you know the whole picture. Takes no arguments.',
+    parameters:{type:'object',properties:{}}}},
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
     +'Use for ANY question about a game, score, or whether a team won (Lakers, NBA, NFL, MLB, NHL, WNBA). '
     +'Pass league as one of: nba, nfl, mlb, nhl, wnba. Returns the latest scoreboard lines.',
@@ -1177,6 +1179,32 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       }
       return JSON.stringify({ok:false,reason:'nothing_applied'});
     } catch (eUpd) { return JSON.stringify({ok:false,reason:eUpd.message}); }
+  }
+  if (name === 'read_lane_board') {
+    // ⬡B:core.tool_loop:WIRE:read_lane_board_cross_chat_alignment:20260719⬡ Founder
+    // law: every Claude coding chat gets an ACL name and declares its current roadmap on
+    // a shared board, because the lanes cannot talk, they coordinate by stamping the
+    // brain. This lets A'NU SEE the whole board so when the founder asks what chats are
+    // working on her build she actually knows. Cold code only fetches the rows the organ
+    // asked for; the organ decides when to call and how to speak it.
+    try {
+      var _boundLaneHam = String(hamUid || '').toUpperCase();
+      if (!_boundLaneHam) return JSON.stringify({ ok:false, reason:'ham_uid_required' });
+      var _lbUrl = _bu().replace(/\/+$/, '') + '/rest/v1/' + _tbl()
+        + '?ham_uid=eq.' + encodeURIComponent(_boundLaneHam)
+        + '&stamp_type=eq.LANE_CLAIM&source=ilike.lane.registry.*'
+        + '&select=source,summary,created_at&order=created_at.desc&limit=30';
+      var _lbRes = await fetch(_lbUrl, { headers: {
+        apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema()
+      }, signal: (runtime && runtime.abortSignal) }).then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; });
+      var _seenLane = {}, _lanes = [];
+      (Array.isArray(_lbRes) ? _lbRes : []).forEach(function (row) {
+        if (_seenLane[row.source]) return;
+        _seenLane[row.source] = true;
+        _lanes.push({ acl_name: String(row.source || '').replace('lane.registry.', ''), doing: row.summary || '' });
+      });
+      return JSON.stringify({ ok:true, active_lanes: _lanes.length, lanes: _lanes });
+    } catch (e) { return JSON.stringify({ ok:false, reason:'lane_board_error', detail:e.message }); }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
@@ -2738,12 +2766,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
       var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
-      // ⬡B:core.tool_loop:WIRE:lane_board_intent_hint_not_a_rail:20260719⬡ Founder
-      // caught her leading with the calendar when asked what chats/lanes are working
-      // on her build: she never reached read_lane_board. This is a HINT in the same
-      // shape as _isDayQ (she keeps ALL tools and still chooses), it only strengthens
-      // the nudge so the right tool is on top of mind for a lane/chat/who-is-building
-      // question. A lane question is about the BUILD lanes/chats, not the day.
+      // ⬡B:core.tool_loop:WIRE:lane_board_intent_hint_not_a_rail:20260719⬡ A lane
+      // question is about the BUILD chats/lanes, not the day. HINT in the same shape as
+      // _isDayQ (she keeps ALL tools and still chooses), just puts read_lane_board top of
+      // mind so she does not fall through to the calendar.
       var _isLaneBoardQ = /\b(lane|lanes|which chat|what chat|chats|other chat|acl name|working on (your|the) build|who is building|who's building|building your|lane board|coordinat)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
