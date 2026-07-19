@@ -1205,13 +1205,24 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _lbRes = await fetch(_lbUrl, { headers: {
         apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema()
       }, signal: (runtime && runtime.abortSignal) }).then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; });
-      var _seenLane = {}, _lanes = [];
+      // ⬡B:core.tool_loop:FIX:lane_board_returns_readable_prose_not_raw_json:20260719⬡
+      // Founder caught her dumping the raw JSON blob at him. The tool now returns a
+      // clean human-readable summary so even a light grounding pass speaks it as prose,
+      // one line per lane: its ACL name and a short of what it is doing. No JSON shape
+      // for the model to parrot.
+      var _seenLane = {}, _lines = [];
       (Array.isArray(_lbRes) ? _lbRes : []).forEach(function (row) {
         if (_seenLane[row.source]) return;
         _seenLane[row.source] = true;
-        _lanes.push({ acl_name: String(row.source || '').replace('lane.registry.', ''), doing: row.summary || '' });
+        var _nm = String(row.source || '').replace('lane.registry.', '');
+        var _doing = String(row.summary || '').replace(/\s+/g, ' ').trim();
+        // pull the roadmap/lane phrase if present, else a short summary
+        var _cut = _doing.split(/CURRENT ROADMAP\/LANE:|CURRENT TRACK:|LANE:|doing:|-- /i);
+        var _short = (_cut.length > 1 ? _cut[1] : _doing).trim().slice(0, 140);
+        _lines.push(_nm + ': ' + _short);
       });
-      return JSON.stringify({ ok:true, active_lanes: _lanes.length, lanes: _lanes });
+      if (!_lines.length) return 'The lane board has no registered lanes right now.';
+      return 'There are ' + _lines.length + ' active build lanes on the board right now:\n- ' + _lines.join('\n- ');
     } catch (e) { return JSON.stringify({ ok:false, reason:'lane_board_error', detail:e.message }); }
   }
   if (name === 'nash_sports') {
