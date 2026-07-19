@@ -179,7 +179,7 @@ async function synthesize(paiResult, question, channel) {
   // their words. Never blocks the reply; fails silent.
   (async function keepGiftedMemory() {
     try {
-      var GK = process.env.GROQ_API_KEY, BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
+      var GK = process.env.TOGETHER_API_KEY, BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
       if (!GK || !BU || !BK || !question) return;
       // ⬡B:core.synthesize:WIRE:ornith_primary_groq_fallback:20260705⬡
       // Board-settled ladder. Fire-and-forget, never blocks the reply, so
@@ -190,9 +190,9 @@ async function synthesize(paiResult, question, channel) {
       var ornithMem = require('./ornith.client');
       var out = await ornithMem.callOrnith(sysMem, question.slice(0, 1200), 120);
       if (!out) {
-        var r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        var r = await fetch('https://api.together.xyz/v1/chat/completions', {
           method: 'POST', headers: { Authorization: 'Bearer ' + GK, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: (process.env.GROQ_MODEL_C1 || 'openai/gpt-oss-20b'), max_tokens: 120, temperature: 0,
+          body: JSON.stringify({ model: (process.env.TOGETHER_MODEL || 'zai-org/GLM-5.2'), max_tokens: 120, temperature: 0,
             messages: [{ role: 'system', content: sysMem },
                        { role: 'user', content: question.slice(0, 1200) }] })
         });
