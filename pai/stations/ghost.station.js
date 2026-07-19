@@ -66,4 +66,31 @@ async function stampWatch(hamUid, watch, moment) {
     body:JSON.stringify(bead), signal:AbortSignal.timeout(8000) });
 }
 
-module.exports = { monitorOvernight:monitorOvernight, isGraveyardHour:isGraveyardHour };
+
+// ⬡B:ghost.wake_handoff:FIX:ghost_does_cleanup_and_hands_to_WAKE_at_5am_feeding_DAWN:20260719⬡
+// FOUNDER CORRECTION (Lesson 4): GHOST is not just a passive monitor. It manages the
+// go-to-sleep protocol AND does SYSTEMATIC overnight tasks (cleanup), then HANDS OFF to WAKE
+// at the wake hour, and its overnight summary feeds DAWN's alertSummary section. This adds
+// the handoff: at the wake hour GHOST packages its overnight watch as the summary WAKE/DAWN
+// consume. Cold: it is a fact of the clock and a read of what it already recorded.
+async function wakeHandoff(hamUid) {
+  var moment = await nowStation.assembleNow(hamUid);
+  if (moment.hour_24 !== wakeHour()) return { moment: moment, handed_off: false };
+  var pending = await pendingThreads(hamUid);
+  var summary = { overnight_pending: pending.slice(0, 15), at: moment.now_iso };
+  // stamp the overnight summary DAWN's alertSummary + WAKE read
+  try {
+    var bead = { ham_uid: hamUid, agent_global: 'GHOST', stamp_type: 'OVERNIGHT_SUMMARY',
+      acl_stamp: '\u2b21B:ghost.overnight_summary:OVERNIGHT_SUMMARY:handoff_to_wake_and_dawn:' + moment.now_iso.slice(0,10).replace(/-/g,'') + '\u2b21',
+      source: 'ghost.station.overnight_summary.' + hamUid,
+      summary: '[GHOST] overnight summary, ' + pending.length + ' pending -> WAKE/DAWN',
+      importance: 5, spawned_by: 'ghost.station.' + hamUid, content: JSON.stringify(summary) };
+    await fetch(_bu() + '/rest/v1/' + _tbl(), { method: 'POST', headers: { apikey: _bk(),
+      Authorization: 'Bearer ' + _bk(), 'Content-Type': 'application/json',
+      'Content-Profile': _schema(), 'Accept-Profile': _schema(), Prefer: 'return=minimal' },
+      body: JSON.stringify(bead), signal: AbortSignal.timeout(8000) });
+  } catch (e) {}
+  return { moment: moment, handed_off: true, summary: summary };
+}
+
+module.exports = { monitorOvernight:monitorOvernight, isGraveyardHour:isGraveyardHour, wakeHandoff:wakeHandoff };
