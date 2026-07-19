@@ -347,7 +347,7 @@ async function finalizeApprovedEmail(input) {
   // it never cleans, trims, prefixes, or otherwise changes them.
   try {
     var pam = require('../board/pam/pam.js');
-    var finalVerdict = pam.pamCheck(approved.subject + '\n\n' + approved.body, input.world || null);
+    var finalVerdict = await pam.pamCheck(approved.subject + '\n\n' + approved.body, input.world || null);
     if (!finalVerdict || finalVerdict.ok !== true) return fail('approved_email_pam_hold', {
       blocked: true, requestId: rid, cycleId: pai.cycleId, councilProof: proof
     });
@@ -615,7 +615,7 @@ async function sendCommittedToHam(hamUid, exactEmail, artifact, world, authoriza
   } catch (eCouncil) { return fail('email_delivery_target_unverified'); }
   try {
     var pam = require('../board/pam/pam.js');
-    var verdict = pam.pamCheck(approved.subject + '\n\n' + approved.body, world);
+    var verdict = await pam.pamCheck(approved.subject + '\n\n' + approved.body, world);
     if (!verdict || verdict.ok !== true ||
         /\bebc\b|firewall/i.test(approved.subject + '\n\n' + approved.body)) {
       return fail('approved_email_pam_hold', { blocked:true,

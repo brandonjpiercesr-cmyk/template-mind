@@ -1244,7 +1244,7 @@ async function defaultPamStage(ctx) {
   var scopedWorld = ctx.activeWorld && Object.prototype.hasOwnProperty.call(pam.WORLD_PATTERNS, ctx.activeWorld)
     ? ctx.activeWorld : null;
   var verdict;
-  try { verdict = pam.pamCheck(ctx.answer, scopedWorld); }
+  try { verdict = await pam.pamCheck(ctx.answer, scopedWorld); }
   catch (e) { verdict = null; }
   // ⬡B:core.pai_outbound_council:FIX:pam_fails_open_when_it_produces_no_verdict:20260719⬡
   // FOUNDER: judges heal, they never silently kill. PAM is a privacy gate that only
