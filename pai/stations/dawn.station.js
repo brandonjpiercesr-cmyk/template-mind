@@ -1,19 +1,34 @@
-// ⬡B:pai.stations.dawn:BUILD:dawn_daily_automated_wisdom_notifier_briefing_orchestrator:20260719⬡
-// PROACTIVE department. DAWN = Daily Automated Wisdom Notifier: generates the personalized
-// morning briefing for a HAM. It is the ORCHESTRATOR that ties the proactive agents
-// together (legacy spec: three-stage pipeline calling IMAN, RADAR, PRESS, NASH, SOUL, NOW).
+// ⬡B:pai.stations.dawn:REBUILD:dawn_department_lead_six_section_briefing_per_ham_dedup_real_delivery:20260719⬡
+// FOUNDER CORRECTION 20260719 (Lesson 4). The first build was a vague 3-stage skeleton that
+// missed the real spec. Rebuilt from the founder's own history (a year of chats), not one bead.
 //
-//   (1) GENERATE  -- call the available context agents in parallel, each fails open so one
-//                    quiet agent never sinks the briefing.
-//   (2) ASSEMBLE  -- an ORGAN turns the gathered context into a short, spoken-style briefing
-//                    through the ONE ladder (no rogue call). Meaning/tone is the organ's job.
-//   (3) DELIVER   -- stamp the briefing as a bead the Overseer/reach lane delivers on the
-//                    HAM's preferred channel. DAWN does not send outbound itself.
+// DAWN = Daily Automated Wisdom Notifier. It is the DEPARTMENT LEAD of PROACTIVE (reports to
+// AIR). It generates ONE personalized daily briefing per HAM and delivers it at their
+// preferred time via their preferred channel. It is NOT a generic "gather and summarize."
 //
-// DAWN CONSUMES NOW for the moment and calls the other stations rather than reimplement
-// them (no twins). Every agent call is guarded so a missing/erroring agent is simply absent
-// from the briefing, never a crash. Silence over hollow: if nothing was gathered, DAWN
-// produces no briefing rather than an empty "good morning, nothing to report" shell.
+// THE SIX FIXED SECTIONS (real spec):
+//   summary       -- one-paragraph overview of the day
+//   upcoming      -- calendar events in the next 24h (RADAR / schedule.logic)
+//   emails        -- important unread messages (IMAN)
+//   news          -- articles matching the HAM's interests (PRESS overnight scan)
+//   pending       -- items needing HAM attention (HUNCH pending tips + surfaced items)
+//   alertSummary  -- anything urgent from overnight (BURST + GHOST overnight memo)
+//
+// SOURCE ROSTER (coordinates with, real hooks in the new world):
+//   RADAR calendar  -> pai/core/schedule/schedule.logic.js (getRadarEvents/listCalendarEvents)
+//   PRESS news      -> pai/stations/press.station.js (overnight news scan)
+//   NASH sports     -> pai/core/wonders/nash.wonder.js (scores for HAM interests)
+//   GHOST overnight -> pai/stations/ghost.station.js (overnight summary)
+//   HUNCH pending   -> pai/stations/hunch.station.js (pendingForBriefing)
+//   IMAN emails     -> pai/reach/iman.js (unread summaries)
+//   SOUL            -> pai/stations/soul.station.js (daily spiritual offering, if enabled)
+//
+// DELIVERY: via the HAM's preferred method -- IMAN (email) or VARA (voice) -- through the real
+// outreach path, NEVER a delivery path DAWN invents. PER-HAM-PER-DAY DEDUP: a briefing is
+// generated/delivered at most once per HAM per day (key dawn.delivered.{ham}.{YYYY-MM-DD});
+// the dedup is written AFTER successful delivery so a failed delivery can retry. It CONSUMES
+// NOW for the moment and the date. Composition is an ORGAN through the ONE ladder. Silence
+// over hollow: if nothing real was gathered, no empty "good morning, nothing to report" shell.
 
 var ladder = require('../core/model.ladder.js');
 var nowStation = require('./now.station.js');
@@ -23,85 +38,125 @@ function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY
 function _tbl(){ return process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain'); }
 function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'); }
 
-// Try to load a sister station; return null if it is not present yet (agents land over
-// time). DAWN degrades gracefully as more proactive agents come online.
-function tryStation(name) {
-  try { return require('./' + name + '.station.js'); } catch (e) { return null; }
+function tryMod(p){ try { return require(p); } catch(e){ return null; } }
+
+// ---- per-HAM-per-day dedup ----
+async function alreadyDeliveredToday(hamUid, moment) {
+  try {
+    var key = 'dawn.delivered.' + String(hamUid).toLowerCase() + '.' + moment.now_iso.slice(0,10);
+    var url = _bu()+'/rest/v1/'+_tbl()+'?select=id&source=eq.'+key+'&limit=1';
+    var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
+      signal: AbortSignal.timeout(8000) }).then(function(x){return x.json();});
+    return Array.isArray(r) && r.length > 0;
+  } catch(e){ return false; } // fail open: better a possible dup than a missed briefing
 }
 
-// (1) GENERATE: gather context from whatever proactive agents exist, in parallel, each
-// wrapped so a failure yields an absent section, never a thrown briefing.
-async function generate(hamUid, moment) {
-  var jobs = [];
-  var press = tryStation('press');
-  if (press && press.surfaceNews) {
-    jobs.push(safe('news', press.surfaceNews(hamUid).then(function (r) { return r.items; })));
-  }
-  // NASH (sports) and other agents are called if their station exists; skipped cleanly if not.
-  var nash = tryStation('nash');
-  if (nash && nash.surfaceScores) jobs.push(safe('sports', nash.surfaceScores(hamUid)));
-  var soul = tryStation('soul');
-  if (soul && soul.surface) jobs.push(safe('reflection', soul.surface(hamUid)));
-  // Calendar/day comes from NOW's moment (already have it) -- no separate call.
-  var results = await Promise.all(jobs);
-  var ctx = { moment: moment };
-  results.forEach(function (r) { if (r && r.key && r.value != null) ctx[r.key] = r.value; });
-  return ctx;
+async function markDelivered(hamUid, moment) {
+  var key = 'dawn.delivered.' + String(hamUid).toLowerCase() + '.' + moment.now_iso.slice(0,10);
+  var bead = { ham_uid:hamUid, agent_global:'DAWN', stamp_type:'DELIVERED',
+    acl_stamp:'\u2b21B:dawn.delivered:DELIVERED:briefing_sent_dedup:'+moment.now_iso.slice(0,10).replace(/-/g,'')+'\u2b21',
+    source:key, summary:'[DAWN] briefing delivered '+moment.date, importance:4,
+    spawned_by:'dawn.station.'+hamUid, content:JSON.stringify({ at: moment.now_iso }) };
+  await fetch(_bu()+'/rest/v1/'+_tbl(), { method:'POST', headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(),
+    'Content-Type':'application/json','Content-Profile':_schema(),'Accept-Profile':_schema(),Prefer:'return=minimal' },
+    body:JSON.stringify(bead), signal:AbortSignal.timeout(8000) });
 }
 
-function safe(key, p) {
-  return Promise.resolve(p).then(function (v) { return { key: key, value: v }; })
-    .catch(function () { return { key: key, value: null }; });
+// ---- GENERATE: fill the six sections from the real roster, each guarded/fails open ----
+async function generateSections(hamUid, moment) {
+  var upcoming=[], emails=[], news=[], pending=[], alertSummary=[];
+
+  // upcoming: RADAR calendar
+  try { var sched=tryMod('../core/schedule/schedule.logic.js');
+    if (sched && sched.getRadarEvents) { var ev=await sched.getRadarEvents(hamUid); if (Array.isArray(ev)) upcoming=ev.slice(0,8); } } catch(e){}
+  // emails: IMAN unread
+  try { var iman=tryMod('../reach/iman.js');
+    if (iman && iman.listEmails) { var em=await iman.listEmails({HAM_UID:hamUid},{unreadOnly:true,limit:6}); if (Array.isArray(em)) emails=em.slice(0,6); } } catch(e){}
+  // news: PRESS overnight scan
+  try { var press=tryMod('./press.station.js');
+    if (press && press.surfaceNews) { var pr=await press.surfaceNews(hamUid); news=(pr&&pr.items)||[]; } } catch(e){}
+  // pending: HUNCH pending tips
+  try { var hunch=tryMod('./hunch.station.js');
+    if (hunch && hunch.pendingForBriefing) { pending=await hunch.pendingForBriefing(hamUid) || []; } } catch(e){}
+  // alertSummary: BURST urgent + GHOST overnight
+  try {
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&or=(agent_global.eq.BURST,agent_global.eq.GHOST)&order=id.desc&limit=8';
+    var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(8000)}).then(function(x){return x.json();});
+    alertSummary=(Array.isArray(r)?r:[]).map(function(b){return b.summary;}).slice(0,6);
+  } catch(e){}
+  // sports (NASH) folds into news/summary context if the HAM follows a team
+  var sports=null;
+  try { var nash=tryMod('../core/wonders/nash.wonder.js');
+    if (nash && nash.latestForHam) sports=await nash.latestForHam(hamUid); } catch(e){}
+  // spiritual (SOUL) offering if enabled
+  var spiritual=null;
+  try { var soul=tryMod('./soul.station.js');
+    if (soul && soul.surfaceDaily) { var so=await soul.surfaceDaily(hamUid); spiritual=so&&so.offering; } } catch(e){}
+
+  return { moment:moment, upcoming:upcoming, emails:emails, news:news, pending:pending,
+           alertSummary:alertSummary, sports:sports, spiritual:spiritual };
 }
 
-// (2) ASSEMBLE: the organ writes the briefing. Meaning and tone are its job, through the
-// one ladder. Returns null when there was nothing worth briefing (silence over hollow).
-async function assemble(hamUid, ctx) {
-  var sections = Object.keys(ctx).filter(function (k) { return k !== 'moment' && ctx[k] != null; });
-  var hasContent = sections.some(function (k) {
-    var v = ctx[k]; return Array.isArray(v) ? v.length > 0 : !!v;
-  });
-  if (!hasContent) return null; // nothing gathered -> no hollow shell
+// ---- ASSEMBLE: the organ writes the six-section briefing. null when nothing real gathered ----
+async function assemble(hamUid, sections) {
+  var hasContent = (sections.upcoming.length||sections.emails.length||sections.news.length||
+                    sections.pending.length||sections.alertSummary.length||sections.sports||sections.spiritual);
+  if (!hasContent) return null; // silence over hollow
   try {
     var sys =
-      'You are DAWN, writing a short spoken morning briefing for one person. It is ' +
-      ctx.moment.day_name + ' ' + ctx.moment.part_of_day + ', ' + ctx.moment.date + '. ' +
-      'Use only the gathered context; do not invent. Keep it brief and natural, the way a ' +
-      'sharp chief of staff would greet them and hit the two or three things that matter ' +
-      'this morning. If a section is empty, skip it silently.';
-    var out = await ladder.deliberate(sys, JSON.stringify(ctx),
-      { max_tokens: 500, timeout: 30000 });
-    var text = out && out.content != null ? String(out.content).trim() : '';
+      'You are DAWN, writing a personalized daily briefing for one person. It is '+
+      sections.moment.day_name+', '+sections.moment.date+'. Produce a warm, brief briefing '+
+      'with these sections IN ORDER, skipping any that are empty: summary (one short '+
+      'paragraph overview), upcoming (next-24h calendar), emails (important unread), news '+
+      '(matching his interests), pending (needs his attention), alertSummary (anything urgent '+
+      'from overnight). Never invent; use only what is given. Never show agent names or '+
+      'technical jargon.';
+    var out = await ladder.deliberate(sys, JSON.stringify(sections), { max_tokens:800, timeout:35000 });
+    var text = out && out.content!=null ? String(out.content).trim() : '';
     return text || null;
-  } catch (e) { return null; }
+  } catch(e){ return null; }
 }
 
-// Entrance. Build (and stamp for delivery) the morning briefing. Consumes NOW.
+// ---- DELIVER: via the HAM's preferred method through the real outreach path ----
+async function deliver(hamUid, briefing, moment) {
+  var outreach = tryMod('../core/outreach.js');
+  if (outreach && outreach.outreachPassForHam) {
+    try {
+      await outreach.outreachPassForHam(hamUid, {
+        origin: 'dawn',
+        message: briefing,
+        suggested_channel: process.env.DAWN_DEFAULT_CHANNEL || 'command_center', // per-HAM pref overrides in outreach
+        is_briefing: true
+      });
+      return true;
+    } catch(e){ return false; }
+  }
+  return false;
+}
+
+// ---- ENTRANCE: the morning sweep (waking hours, driven by the autonomous cycle) calls this ----
 async function buildBriefing(hamUid) {
-  var moment = await nowStation.assembleNow(hamUid);   // consume NOW, no twin
-  var ctx = await generate(hamUid, moment);
-  var briefing = await assemble(hamUid, ctx);
-  if (!briefing) return { moment: moment, briefing: null };  // silence over hollow
-  await stampBriefing(hamUid, briefing, moment).catch(function () {});
-  return { moment: moment, briefing: briefing };
+  var moment = await nowStation.assembleNow(hamUid);          // consume NOW, no twin
+  if (await alreadyDeliveredToday(hamUid, moment)) return { moment:moment, briefing:null, reason:'already_delivered_today' };
+  var sections = await generateSections(hamUid, moment);
+  var briefing = await assemble(hamUid, sections);
+  if (!briefing) return { moment:moment, briefing:null, reason:'nothing_to_brief' }; // silence over hollow
+  await stampBriefing(hamUid, briefing, moment).catch(function(){});
+  var ok = await deliver(hamUid, briefing, moment);
+  if (ok) { await markDelivered(hamUid, moment).catch(function(){}); } // dedup AFTER delivery so failure can retry
+  return { moment:moment, briefing:briefing, delivered:ok };
 }
 
 async function stampBriefing(hamUid, briefing, moment) {
-  var bead = {
-    ham_uid: hamUid, agent_global: 'DAWN', stamp_type: 'BRIEFING',
-    acl_stamp: '\u2b21B:dawn.briefing:BRIEFING:morning_briefing_ready_for_delivery:' +
-      moment.now_iso.slice(0, 10).replace(/-/g, '') + '\u2b21',
-    source: 'dawn.station.briefing.' + hamUid,
-    summary: '[DAWN] ' + moment.day_name + ' briefing: ' + briefing.slice(0, 100),
-    importance: 6, spawned_by: 'dawn.station.' + hamUid,
-    content: JSON.stringify({ briefing: briefing, moment: moment })
-  };
-  await fetch(_bu() + '/rest/v1/' + _tbl(), {
-    method: 'POST',
-    headers: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Content-Type': 'application/json',
-      'Content-Profile': _schema(), 'Accept-Profile': _schema(), Prefer: 'return=minimal' },
-    body: JSON.stringify(bead), signal: AbortSignal.timeout(8000)
-  });
+  var bead = { ham_uid:hamUid, agent_global:'DAWN', stamp_type:'BRIEFING',
+    acl_stamp:'\u2b21B:dawn.briefing:BRIEFING:six_section_morning_briefing:'+moment.now_iso.slice(0,10).replace(/-/g,'')+'\u2b21',
+    source:'dawn.station.briefing.'+hamUid,
+    summary:'[DAWN] '+moment.day_name+' briefing: '+briefing.slice(0,100),
+    importance:6, spawned_by:'dawn.station.'+hamUid,
+    content:JSON.stringify({ briefing:briefing, moment:moment }) };
+  await fetch(_bu()+'/rest/v1/'+_tbl(), { method:'POST', headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(),
+    'Content-Type':'application/json','Content-Profile':_schema(),'Accept-Profile':_schema(),Prefer:'return=minimal' },
+    body:JSON.stringify(bead), signal:AbortSignal.timeout(8000) });
 }
 
-module.exports = { buildBriefing: buildBriefing, generate: generate, assemble: assemble };
+module.exports = { buildBriefing:buildBriefing, generateSections:generateSections, assemble:assemble };
