@@ -38,6 +38,7 @@ var ladder = require('../core/model.ladder.js');
 var persona = require('../core/persona.js');
 var nowStation = require('./now.station.js');
 var outreach = (function(){ try { return require('../core/outreach.js'); } catch(e){ return null; } })();
+var ccSurface = require('./cc.surface.js');
 
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
@@ -116,18 +117,10 @@ async function deliverToCommandCenter(hamUid, tip, moment) {
   // hand to the real outreach decision: it funnels to command_center (the resting place),
   // and may choose text ONLY when the tip is genuinely worth it -- never a firehose. HUNCH
   // does NOT write its own queue or send directly; the Overseer/outreach owns the surface.
-  if (outreach && outreach.outreachPassForHam) {
-    try {
-      await outreach.outreachPassForHam(hamUid, {
-        origin: 'hunch',
-        message: tip.tip,
-        why: tip.why_now,
-        suggested_channel: 'command_center',          // default resting place; outreach may escalate
-        allow_text: tip.urgency === 'high',            // text only for a genuinely high-urgency tip
-        contradicts_action: !!tip.contradicts_action
-      });
-    } catch(e){}
-  }
+  // Write the REAL Command Center bead the feed serves (CC_NOTE). The old
+  // outreachPassForHam(payload) call did nothing -- its 2nd arg is `force`, not a message.
+  await ccSurface.surfaceToCommandCenter(hamUid, 'HUNCH', tip.tip, tip.why_now, 'tip',
+    tip.urgency === 'high' ? 7 : (tip.contradicts_action ? 6 : 5)).catch(function(){});
 }
 
 
@@ -204,9 +197,7 @@ async function renudge(hamUid, o, note, moment) {
   await fetch(_bu()+'/rest/v1/'+_tbl()+'?id=eq.'+o.id,{method:'PATCH',headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),
     'Content-Type':'application/json','Content-Profile':_schema(),'Accept-Profile':_schema(),Prefer:'return=minimal'},
     body:JSON.stringify({content:JSON.stringify(content)}),signal:AbortSignal.timeout(8000)});
-  if (outreach && outreach.outreachPassForHam) {
-    try { await outreach.outreachPassForHam(hamUid,{ origin:'hunch', message:o.tip, why:'a gentle follow-up: '+(note||'still worth a look'), suggested_channel:'command_center', allow_text:false, renudge:true }); } catch(e){}
-  }
+  await ccSurface.surfaceToCommandCenter(hamUid, 'HUNCH', o.tip, 'a gentle follow-up: '+(note||'still worth a look'), 'tip', 4).catch(function(){});
 }
 
 async function writeReconcile(hamUid, moment, reviewed, closed, nudged, dropped) {

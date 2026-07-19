@@ -21,6 +21,7 @@
 var ladder = require('../core/model.ladder.js');
 var nowStation = require('./now.station.js');
 var persona = require('../core/persona.js');
+var ccSurface = require('./cc.surface.js');
 
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
@@ -69,16 +70,10 @@ async function judgeUrgent(hamUid, moment, candidates, alerted) {
 
 async function fire(hamUid, alert, moment) {
   await stampAlert(hamUid, alert, moment).catch(function(){});
-  var outreach = (function(){ try{return require('../core/outreach.js');}catch(e){return null;} })();
-  if (outreach && outreach.outreachPassForHam) {
-    try {
-      await outreach.outreachPassForHam(hamUid, {
-        origin:'burst', message:alert.alert, why:alert.why_urgent,
-        suggested_channel: alert.channel || 'command_center',
-        allow_text:true, allow_voice: alert.channel==='voice', urgent:true
-      });
-    } catch(e){}
-  }
+  // Real Command Center bead (CC_NOTE, alert kind) the feed serves. Genuine voice/text
+  // escalation for a true emergency still flows through the Overseer's real reach path;
+  // this guarantees the desk record exists. (Old outreachPassForHam(payload) did nothing.)
+  await ccSurface.surfaceToCommandCenter(hamUid, 'BURST', alert.alert, alert.why_urgent, 'alert', 8).catch(function(){});
 }
 
 // ENTRANCE: monitoring sources call sweep whenever new context arrives (any time, not a fixed cron)
