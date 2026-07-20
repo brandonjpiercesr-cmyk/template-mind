@@ -585,18 +585,40 @@ async function registerLane(HAM) {
   });
 }
 
+// Stamp the PARKED notice into the brain so the CLAIR Command Center, A'NU, and CODA all
+// read it: the real send-into-the-real-thread connector is OPEN, NOT built, and waits for
+// the founder's explicit go. Runs once at mount, server-side (with the brain keys), fails safe.
+async function stampParkedRoadmap(HAM) {
+  var ham = String(HAM || process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID || '').toUpperCase();
+  if (!ham) return { ok: false, reason: 'no_ham' };
+  return writeBead({
+    ham_uid: ham, agent_global: 'INBOX_ZERO', stamp_type: 'ROADMAP',
+    acl_stamp: brainClient.buildStamp('roadmap.inbox_zero.send_connector', 'ROADMAP', 'parked_awaits_founder_go'),
+    source: 'roadmap.inbox_zero.send_connector_parked',
+    importance: 9,
+    summary: '[PARKED] Inbox Zero send-into-real-thread connector is OPEN, NOT built, awaiting the founder explicit go. Drafts rest; founder-test previews only; no station builds the real send until Brandon says it is time.',
+    content: JSON.stringify({ parked: true, agent: 'INBOX_ZERO',
+      built: ['drafts_rest_command_center', 'founder_test_preview_send_off_by_default'],
+      not_built: ['approved_draft_to_real_external_person'],
+      rule: 'CLAIR, CLAIR Command Center, A NU, CODA, cook-off, Wonder Games: do not build the real-send connector until the founder officially says it is time. Surface this bead first if asked.',
+      founder: 'Brandon J. Pierce Sr.', date: ymd() }),
+  });
+}
+
 // ── MOUNT ─────────────────────────────────────────────────────────────────────────────
 // registerInboxZero(app): the on-request door. The daily scheduled fire calls runInboxZero
 // directly per world.
 function registerInboxZero(app) {
-  // Claim the lane once at mount (fire-and-forget, fails safe).
+  // Claim the lane and stamp the parked-roadmap notice once at mount (fire-and-forget).
   try { registerLane(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
+  try { stampParkedRoadmap(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
 
-  // POST /inbox-zero/:world/run { hamUid, intent, limit }, run a real turn for one world.
+  // POST /inbox-zero/:world/run { hamUid, intent, limit, previewSend }, run a real turn.
+  // previewSend:true additionally emails the drafts to the founder-test address only.
   app.post('/inbox-zero/:world/run', async function (req, res) {
     try {
       var body = req.body || {};
-      var out = await runInboxZero({ world: req.params.world, hamUid: body.hamUid || body.ham_uid, intent: body.intent, limit: body.limit });
+      var out = await runInboxZero({ world: req.params.world, hamUid: body.hamUid || body.ham_uid, intent: body.intent, limit: body.limit, previewSend: body.previewSend === true });
       res.json(out);
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
