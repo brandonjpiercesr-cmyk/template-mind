@@ -13,8 +13,8 @@
 // ⬡B:advisors.advisor-router:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
 
 var fs = require('fs');
@@ -230,13 +230,41 @@ module.exports = function(app) {
       var stationEvidence;
       try { stationEvidence = JSON.stringify(result); }
       catch (eEvidence) { stationEvidence = '{"ok":false,"reason":"station_evidence_unserializable"}'; }
+      // ⬡B:advisors.advisor_router:FIX:real_findings_lost_in_resynthesis_20260719⬡
+      // Founder-caught live, traced end to end before this fix: the station itself
+      // (e.g. advisors/gmg.js) was doing real work -- a real Nylas fetch, a real
+      // RunPod low-balance alert genuinely present in the inbox -- and composing a
+      // real, specific, WRIT-checked answer in result.output. But that real answer
+      // was only ever included as one buried field inside a raw JSON.stringify(result)
+      // blob, under a generic 'give a grounded answer' instruction. This synthesis
+      // pass was dropping the real, specific finding and returning a generic
+      // '8 emails, nothing found' summary instead, every time, for every station.
+      // Verified live: the station's own output contained the RunPod alert; the
+      // public-facing answer did not. Not a data problem, a synthesis problem.
+      // Fix, deliberately not the more invasive option (skipping this pass and
+      // relaying the station's raw output directly): that would undo the real,
+      // separate safety reason this pass exists, keeping raw email bodies and
+      // internal object fields out of the human-facing answer, per the GUARD
+      // note above. Instead: pull the station's own composed answer out of the
+      // evidence blob and put it first, explicit, unmissable, with an instruction
+      // that cannot be read as optional.
+      var stationOwnAnswer = (result && typeof result.output === 'string' && result.output.trim())
+        ? result.output.trim()
+        : (result && typeof result.answer === 'string' && result.answer.trim() ? result.answer.trim() : '');
       var deliberationInput = 'A\'NU advisor-station completion turn for "' + station + '". '
+        + (stationOwnAnswer
+          ? ('THE STATION ALREADY COMPOSED ITS REAL ANSWER BELOW. Use it as your primary source. '
+            + 'If it names a specific fact, an alert, a dollar amount, a sender, or a deadline, '
+            + 'your answer MUST include that specific fact. Do not replace a specific finding with '
+            + 'a generic summary like "nothing found" when the station\'s own answer names something real.\n\n'
+            + 'THE STATION\'S OWN COMPOSED ANSWER:\n' + stationOwnAnswer.slice(0, 4000) + '\n\n')
+          : '')
         + 'Use the station output only as internal deliberation evidence. Do not expose '
         + 'private model traces, email bodies, or internal object fields. Give the human '
         + 'a direct, grounded answer to their request. If this was a scheduled cycle with '
         + 'no question, report what completed and what remains.\n\n'
         + 'ORIGINAL REQUEST:\n' + publicQuestion.slice(0, 2000) + '\n\n'
-        + 'INTERNAL STATION EVIDENCE:\n' + String(stationEvidence).slice(0, 12000);
+        + 'INTERNAL STATION EVIDENCE (full, for anything not already covered above):\n' + String(stationEvidence).slice(0, 12000);
       var finalized = await publicPAI.finalizePublicTurn({
         hamUid:hamUid, envelope:identity.envelope,
         requestId:publicPAI.requestIdFor(req, body), question:publicQuestion,
