@@ -8,7 +8,15 @@ function containsCjk(value) {
 }
 
 function englishSystem(value) {
-  return 'Respond only in English. ' + String(value || '');
+  return 'Respond in English by default. If the user explicitly requests a translation or output in another named language, honor that target language exactly. Never switch languages unless requested. ' + String(value || '');
+}
+
+function explicitNonEnglishRequest(value) {
+  var text = String(value || '').toLowerCase();
+  var language = /\b(spanish|french|german|italian|portuguese|chinese|mandarin|cantonese|japanese|korean|arabic|hindi|urdu|russian|polish|dutch|greek|hebrew|turkish|swahili|vietnamese|thai)\b/;
+  return language.test(text) &&
+    (/\b(translate|translation|respond|answer|write|say)\b/.test(text) ||
+      /\b(in|into|to)\s+(spanish|french|german|italian|portuguese|chinese|mandarin|cantonese|japanese|korean|arabic|hindi|urdu|russian|polish|dutch|greek|hebrew|turkish|swahili|vietnamese|thai)\b/.test(text));
 }
 
 function ornithSampling(maxTokens, ollamaShape) {
@@ -60,6 +68,7 @@ function recoverQwen3XmlToolCalls(content, finishReason, tools) {
 module.exports = {
   containsCjk: containsCjk,
   englishSystem: englishSystem,
+  explicitNonEnglishRequest: explicitNonEnglishRequest,
   ornithSampling: ornithSampling,
   recoverQwen3XmlToolCalls: recoverQwen3XmlToolCalls
 };
