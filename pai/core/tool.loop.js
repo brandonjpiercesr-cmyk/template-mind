@@ -3261,6 +3261,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         // Preserve the required-tool signal ONLY for the downstream direct-execute
         // safety net (data readers), without hard-forcing the model.
         if (DATA_READER_TOOLS[_toolNudge]) { body._dataReaderNudge = _toolNudge; }
+        // ⬡B:core.tool_loop:FIX:roadmap_activation_nudge_rejoins_fail_closed_net:20260720⬡
+        // The 20260719 nudge refactor gave data readers and consult_mace a retry +
+        // fail-closed safety net, but activate_roadmap_task is neither -- it is a real
+        // mutation, not a lookup, so it cannot join DATA_READER_TOOLS. Left unmarked,
+        // the retry trigger below never fires for it, and a model that ignores the
+        // roadmap-activation nudge silently degrades into an unreceipted promise
+        // instead of failing closed with roadmap_activation_tool_call_missing. This
+        // flag rejoins it to that existing net without hard-forcing tool_choice.
+        if (_toolNudge === 'activate_roadmap_task') { body._roadmapActivationNudge = true; }
         // ⬡B:core.tool_loop:FIX:consult_mace_force_execute_when_file_and_repo_named:20260719⬡
         // Founder caught her refusing to call consult_mace even with the firm nudge:
         // she generated words with tools=0. consult_mace is not a no-arg reader (it
@@ -3610,9 +3619,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // real as the founder's own identity. This is the same silence-over-
     // hollow rule already enforced a few lines below for malformed tool-call
     // text; this is the same failure class arriving a different way.
-    if (iter===1 && (body.tool_choice==='auto'||body.tool_choice) && !(msg.tool_calls&&msg.tool_calls.length) && (body._dataReaderNudge || body._codingReadNudge || (body.tool_choice && body.tool_choice.function))) {
+    if (iter===1 && (body.tool_choice==='auto'||body.tool_choice) && !(msg.tool_calls&&msg.tool_calls.length) && (body._dataReaderNudge || body._codingReadNudge || body._roadmapActivationNudge || (body.tool_choice && body.tool_choice.function))) {
       var _requiredToolName = (body.tool_choice && body.tool_choice.function
-        && body.tool_choice.function.name) || body._dataReaderNudge || (body._codingReadNudge ? 'consult_mace' : null) || 'the required tool';
+        && body.tool_choice.function.name) || body._dataReaderNudge || (body._codingReadNudge ? 'consult_mace' : null) || (body._roadmapActivationNudge ? 'activate_roadmap_task' : null) || 'the required tool';
       var retryMsgs=msgs.concat([{role:'assistant',content:msg.content||''},
         {role:'user',content:'You were required to call ' + _requiredToolName
           + ' and did not. Call that exact tool now before saying anything else.'}]);
