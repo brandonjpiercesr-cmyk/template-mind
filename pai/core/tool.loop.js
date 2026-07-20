@@ -2090,6 +2090,22 @@ function structuredReachPolicyMode(channel,identity){
     identity.delivery.external===false);
 }
 
+function reachIncidentIntakeMode(channel,identity){
+  return String(channel||'').toLowerCase()==='reach_intake'&&!!(identity&&
+    identity._reachIncidentIntake===true&&identity.outbound_finalize!==true&&
+    typeof identity._reachIncidentFence==='function'&&
+    identity.council_context&&
+    identity.council_context.mode==='reach_incident_intake'&&identity.delivery&&
+    identity.delivery.external===false);
+}
+
+async function reachIncidentFence(identity,stage){
+  if(!identity||identity._reachIncidentIntake!==true||
+      typeof identity._reachIncidentFence!=='function')return false;
+  try{return await identity._reachIncidentFence(stage)===true;}
+  catch(error){return false;}
+}
+
 async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
@@ -2103,6 +2119,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // not the banned Groq key. Falls back to empty (fail-soft) if Together absent.
   var t0=Date.now(),GROQ=(process.env.TOGETHER_API_KEY||'');
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
+  // Server-owned machine intake is candidate-eligible, but it is not a general
+  // face turn. The route constructs this non-JSON identity marker after HMAC and
+  // exact-HAM validation; no caller field is copied into the marker.
+  var _reachIncidentIntake=reachIncidentIntakeMode(channel,identity);
   function _canonicalStructuredReachPolicy(value){
     try{return reachPolicyContract.canonicalize(value,t0);}
     catch(ePolicyContract){return{ok:false,reason:'reach_policy_json_invalid'};}
@@ -2265,6 +2285,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (!GROQ) GROQ = '';
   var _structuredReachSystemPrompt =
     'INTERNAL CLOSED-WORLD REACH POLICY. Decide only from the server-owned policy question and the exact deliberation evidence packet in this turn. Ambient Memory Bank rows, latest activity, contributors, prior conversation, screen state, and fused world summaries are intentionally excluded and must not be inferred. Return only the required strict JSON object.';
+  var _reachIncidentSystemPrompt =
+    'INTERNAL CLOSED-WORLD REACH INCIDENT INTAKE. Describe only the exact server-owned incident fact packet in this turn as one concise human-facing sentence. Do not choose timing, channel, recipient, or delivery. Do not call tools, write, deploy, book, send, notify, move a screen, or infer ambient Memory Bank facts. Canonical REACH will separately decide whether, when, and how this candidate surfaces.';
   var _fcwT0=Date.now();
   // The policy finalizer already receives one normalized, digest-bound evidence
   // wall from cycle.decision. Running the generic Memory Bank builder here would
@@ -2274,8 +2296,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _isolatedHamTier = Number(identity &&
     (identity.trust_level != null ? identity.trust_level : identity.tier));
   if (!Number.isFinite(_isolatedHamTier)) _isolatedHamTier = 0;
-  var fcw = _structuredReachPolicy ? {
-    ok:true, system_prompt:_structuredReachSystemPrompt,
+  var fcw = (_structuredReachPolicy || _reachIncidentIntake) ? {
+    ok:true, system_prompt:_reachIncidentIntake
+      ? _reachIncidentSystemPrompt : _structuredReachSystemPrompt,
     ham:{ uid:hamUid, name:String(identity&&identity.name||'Unknown').slice(0,160),
       tier:_isolatedHamTier, world:String(identity&&identity.world||'unknown').slice(0,120) },
     context:[], named_agent_records:[], identity_record:null,
@@ -2326,9 +2349,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // candidate packet. Ambient recent rows, contributors, prior turns, screen
   // state, and fused summaries may not steer whether this candidate reaches
   // anyone. The exact deliberation packet below is the sole factual input.
-  var systemPrompt = _structuredReachPolicy
-    ? _structuredReachSystemPrompt
-    : fcw.system_prompt;
+  var systemPrompt = _structuredReachPolicy ? _structuredReachSystemPrompt
+    : _reachIncidentIntake ? _reachIncidentSystemPrompt : fcw.system_prompt;
   var hamObj = fcw.ham;
   // ⬡B:core.tool_loop:GUARD:one_exact_question_for_provenance_and_council:20260715⬡
   // Identity metadata is canonical when present. Otherwise the first trusted
@@ -2348,7 +2370,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // provenance reader intentionally extracts nothing. Bind these turns to the
   // canonical assistant identity and the exact HAM identity row already selected
   // by Memory Bank. The same bounded packet reaches drafting and SHADOW.
-  var _firstPersonIdentityProof = !_structuredReachPolicy && /\bwho\s+are\s+you\b|\bwho\s+am\s+i\b|\bhow\s+do\s+you\s+know\b|\bprove\s+it\b/i
+  var _firstPersonIdentityProof = !_structuredReachPolicy && !_reachIncidentIntake && /\bwho\s+are\s+you\b|\bwho\s+am\s+i\b|\bhow\s+do\s+you\s+know\b|\bprove\s+it\b/i
     .test(_exactUserMessage);
   var _runtimeIdentityEvidence = null;
   if (_firstPersonIdentityProof && fcw.identity_record && hamObj &&
@@ -2374,10 +2396,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // proof-shaped current-turn asks in the transactional release invariant so the
   // model never mistakes its pre-commit vantage point for a failed cycle.
   var _proofQuestion = _exactUserMessage;
-  if (!_structuredReachPolicy) {
+  if (!_structuredReachPolicy && !_reachIncidentIntake) {
     systemPrompt += currentTurnProofGuard.systemInstruction(_proofQuestion);
   }
-  var _currentPreferenceQuestion = !_structuredReachPolicy &&
+  var _currentPreferenceQuestion = !_structuredReachPolicy && !_reachIncidentIntake &&
     currentAssistantPreferenceRequest(_exactUserMessage);
   if (_currentPreferenceQuestion) {
     // ⬡B:core.tool_loop:WIRE:fresh_preference_inside_full_pai:20260715⬡
@@ -2393,16 +2415,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // priority. The extractor is shared with SHADOW, which independently checks
   // the outgoing draft; no answer or doctrine wording is invented here.
   var _namedEvidenceQuestion = _exactUserMessage;
-  var _namedContextEvidence = _structuredReachPolicy ? []
+  var _namedContextEvidence = _structuredReachPolicy || _reachIncidentIntake ? []
     : extractNamedContextEvidence(_namedEvidenceQuestion, message);
-  var _identityEvidenceEnvelope = _structuredReachPolicy ? {
+  var _identityEvidenceEnvelope = _structuredReachPolicy || _reachIncidentIntake ? {
     schema:'anew.identity.evidence.result.v1', ok:true, available:true,
     ham_uid:String(hamUid || '').toUpperCase(), subjects:[], records:[], count:0, ms:0
   } : fcw && fcw.identity_evidence;
-  var _identityEvidenceProof = _structuredReachPolicy
+  var _identityEvidenceProof = _structuredReachPolicy || _reachIncidentIntake
     ? { ok:true, result:_identityEvidenceEnvelope, receipt:null }
     : identityProvenance.createEvidenceProof(_identityEvidenceEnvelope, hamUid);
-  var _identityProvenanceLedger = _structuredReachPolicy ? { required:false }
+  var _identityProvenanceLedger = _structuredReachPolicy || _reachIncidentIntake
+    ? { required:false }
     : identityProvenance.buildLedger({
     question:_namedEvidenceQuestion,
     hamUid:hamUid,
@@ -2468,7 +2491,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // currently open, so the base prompt now carries it unconditionally: she commands
   // the glass through update_screen; if no screen is live the TOOL says so and she
   // says the screen is not open -- she never again claims she lacks the ability.
-  if (!_structuredReachPolicy) {
+  if (!_structuredReachPolicy && !_reachIncidentIntake) {
     systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if it returns no events, say the day is open, do not fall back to an old find_in_brain stamp to fill the gap.';
     try { systemPrompt += require('./stream/screen.awareness.js')
       .promptAddendum(hamUid, uiPortal); } catch (eScr) {}
@@ -2492,7 +2515,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // ⬡B:tool.loop:NUDGE:nash_routing_20260711⬡ cold keyword router: a sports
   // question MUST reach NASH; the model was answering "no real-time access"
   // instead of deploying the wonder it already has.
-  var _nashNeeded = !_structuredReachPolicy &&
+  var _nashNeeded = !_structuredReachPolicy && !_reachIncidentIntake &&
     /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|score|scores|playoffs?|game (to)?night|did .{1,40}(win|lose|beat)|final score)\b/i.test(message);
   if (_nashNeeded) {
     msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
@@ -2512,7 +2535,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       'object, with no markdown or commentary.\n\n'+_exactUserMessage});
   }
   msgs.push({role:'user',content:message});
-  var _identityLookupCount = _structuredReachPolicy ? 0
+  var _identityLookupCount = _structuredReachPolicy || _reachIncidentIntake ? 0
     : injectIdentityProvenanceEvidence(msgs, _identityVerifiedEvidence, fcw,
       hamUid, _namedEvidenceQuestion, _identityEvidenceProof);
   if (_identityLookupCount > 0) {
@@ -2520,7 +2543,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   }
   // The user message must precede its synthetic assistant tool call. These rows
   // were already read by MEMORY_BANK; this is an attention-channel bridge, not a query.
-  var _namedLookupCount = _structuredReachPolicy || _identityLookupCount > 0 ? 0
+  var _namedLookupCount = _structuredReachPolicy || _reachIncidentIntake ||
+    _identityLookupCount > 0 ? 0
     : injectNamedAgentEvidence(msgs, _namedAgentVerifiedEvidence, fcw, hamUid);
   if (_namedLookupCount > 0) {
     // ⬡B:core.tool_loop:EVIDENCE:named_lookup_provenance_is_explicit:20260715⬡
@@ -2541,7 +2565,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // first draft had this backwards, caught in reliability testing), so the real record
   // arrives via the one channel demonstrated to be reliable, and the model never has
   // to decide whether to call the tool or trust the wall.
-  var _wgNeeded = !_structuredReachPolicy &&
+  var _wgNeeded = !_structuredReachPolicy && !_reachIncidentIntake &&
     /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(message);
   if (_wgNeeded) {
     try {
@@ -2569,7 +2593,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // still sometimes says it has no record (surfaced live once the MEMORY_BANK schema mismatch
   // fix made aibebase genuinely read the new bank). Same fix: inject a synthetic
   // completed find_in_brain(PREFERENCE) result after the user's message.
-  var _prefNeeded = !_structuredReachPolicy &&
+  var _prefNeeded = !_structuredReachPolicy && !_reachIncidentIntake &&
     /\bfavou?rite\b|\bprefer(ence|red)?\b|what do i (like|love|enjoy)\b|\bmy taste\b/i.test(message);
   if (_prefNeeded) {
     try {
@@ -2673,7 +2697,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _readOnlyToolNames = ['nash_sports','find_identity_evidence','find_in_brain','read_render_logs',
     'get_budget_upcoming','get_budget_summary','consult_advisor','calendar_read','inbox_read','read_reminders',
     'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda'];
-  var _turnToolDefinitions = identity && identity.outbound_finalize === true
+  var _turnToolDefinitions = _reachIncidentIntake ? [] :
+    identity && identity.outbound_finalize === true
     ? TOOLS.filter(function (tool) {
       return tool && tool.function && _readOnlyToolNames.indexOf(tool.function.name) >= 0;
     }) : TOOLS;
@@ -2761,7 +2786,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // is multiple seconds quicker. Keep the quality 70b for the ANSWER pass (where
     // tools already ran and real synthesis happens); use the fast model only for the
     // forced first-pass tool pick. Real latency cut, no quality loss on the answer.
-    var _forcedToolSelectionPass = !_structuredReachPolicy&&
+    var _forcedToolSelectionPass = !_structuredReachPolicy&&!_reachIncidentIntake&&
       (iter===1 && tools.length===0);
     // ⬡B:core.tool_loop:FIX:model_slug_is_approved_glm_since_GB_is_together:20260718⬡
     // Article A6: GB now targets the approved Together (GLM) endpoint, so the model
@@ -2780,7 +2805,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // This is a real improvement, not a guarantee -- instruction-following on
     // a growing system prompt stays worth watching, not a closed case.
     var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),
-      temperature:_structuredReachPolicy?0:0.3};
+      temperature:_structuredReachPolicy?0:_reachIncidentIntake?0.1:0.3};
     if (iter<=3) body.tools=_turnToolDefinitions;
     // ⬡B:core.tool_loop:FIX:tool_choice_never_set_defaults_to_skippable:20260705⬡
     // Real, live incident: Brandon asked directly "who is the founder value, now from env, show me
@@ -2805,11 +2830,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // find_in_brain can replace that bounded decision with unrelated memory and
     // adds a second model turn before the council. The policy still traverses
     // the full outbound council after this draft; only generic tools are absent.
-    if (_structuredReachPolicy) {
+    if (_structuredReachPolicy || _reachIncidentIntake) {
       delete body.tools;
       delete body.tool_choice;
-      var _primaryPolicyFormat=_structuredReachResponseFormat();
-      if(_primaryPolicyFormat)body.response_format=_primaryPolicyFormat;
+      if (_structuredReachPolicy) {
+        var _primaryPolicyFormat=_structuredReachResponseFormat();
+        if(_primaryPolicyFormat)body.response_format=_primaryPolicyFormat;
+      }
     }
     else if (iter===1) {
       // \u2b21B:core.tool_loop:FIX:forced_lookup_derailing_screen_commands_20260709\u2b21
@@ -3511,6 +3538,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     }
     if (msg.tool_calls&&msg.tool_calls.length) {
+      if (_reachIncidentIntake) {
+        _stampStep('cycle_end_silent','reach_incident_tool_call_rejected');
+        return {ok:false,reason:'reach_incident_tool_call_rejected',
+          blocked_by:'REACH_INCIDENT_INTAKE',ham:hamObj,cycleId:_cycleId,
+          requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      }
       msgs.push({role:'assistant',content:msg.content||null,tool_calls:msg.tool_calls});
       for (var i=0;i<msg.tool_calls.length;i++){
         if (await _turnCancelled()) return _turnCancelledResult('before_tool');
@@ -3973,7 +4006,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _screenAware = require('./stream/screen.awareness.js');
       var _scr = _screenAware.extract(finalAns);
       if (_scr && typeof _scr.answer === 'string') finalAns = _scr.answer.trim();
-      preparedScreenBlock = identity && identity.outbound_finalize === true
+      preparedScreenBlock = identity && (identity.outbound_finalize === true ||
+        _reachIncidentIntake)
         ? null : (_scr && _scr.block || null);
     } catch (eScrA) {}
     if (!finalAns) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
@@ -4132,13 +4166,18 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     ? null : _identityProvenanceLedger;
   _councilContext.identity_evidence_receipt = _structuredReachPolicy ? null
     : (_identityEvidenceProof.ok ? _identityEvidenceProof.receipt : null);
-  if (_structuredReachPolicy) _councilContext.pending_effects = [];
+  if (_structuredReachPolicy || _reachIncidentIntake) _councilContext.pending_effects = [];
   else _councilContext.pending_effects = _effectRuntime.pendingEffects.map(function (effect) {
       return { name:effect.name, args:effect.args };
     });
   _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
   if (await _turnCancelled(true)) return _turnCancelledResult('before_council');
+  if (_reachIncidentIntake&&
+      !await reachIncidentFence(identity,'before_council'))return{ok:false,
+    reason:'reach_incident_claim_lost',blocked_by:'REACH_INCIDENT_FENCE',ham:hamObj,
+    cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+    ms:Date.now()-t0};
   var _council = await runOutboundCouncil({
     hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
     deliberationInput:String(message||''),
@@ -4424,7 +4463,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   } catch (eRcpt) { /* diagnostic only, after the mandatory durable proof */ }
   try {
     if (await _turnCancelled()) return _turnCancelledResult('before_tracker');
-    if (!_structuredReachPolicy && !_blockedFallback) {
+    if (!_structuredReachPolicy && !_reachIncidentIntake && !_blockedFallback) {
       var _trkD = require('./tracker.js');
       if (_trkD.looksLikeActionRequest(_exactUserMessage)) {
         await _trkD.stampTrack({ hamUid: hamUid, status: 'DONE', kind: 'request',
@@ -4458,22 +4497,37 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _reachHandoff;
     try {
       var _reachModule=require('./reach/cycle.handoff.js');
-      _reachHandoff=await _reachModule.enqueueCommittedCycle({ hamUid:hamUid,
-        cycleId:_cycleId, requestId:_requestId, channel:channel, answer:finalAns,
-        question:_exactUserMessage, deliberationInput:String(message||''),
-        councilProof:compactCouncilProof(_council), councilResult:_council,
-        // The committed council marker is the canonical world binding. Raw
-        // identity/HAM labels may be mixed-case, conflicting, or deliberately
-        // excluded from the allowlisted active-world lane.
-        world:_council&&_council.council_receipt&&
-          _council.council_receipt.reach_handoff
-          ?_council.council_receipt.reach_handoff.world:null });
+      var _incidentMayEnqueue=!_reachIncidentIntake||
+        await reachIncidentFence(identity,'before_candidate_enqueue');
+      if(!_incidentMayEnqueue){
+        _reachHandoff={ok:false,reason:'reach_incident_claim_lost_before_candidate_enqueue'};
+      }else{
+        _reachHandoff=await _reachModule.enqueueCommittedCycle({ hamUid:hamUid,
+          cycleId:_cycleId, requestId:_requestId, channel:channel, answer:finalAns,
+          question:_exactUserMessage, deliberationInput:String(message||''),
+          councilProof:compactCouncilProof(_council), councilResult:_council,
+          // The committed council marker is the canonical world binding. Raw
+          // identity/HAM labels may be mixed-case, conflicting, or deliberately
+          // excluded from the allowlisted active-world lane.
+          world:_council&&_council.council_receipt&&
+            _council.council_receipt.reach_handoff
+            ?_council.council_receipt.reach_handoff.world:null });
+      }
       if(_reachHandoff&&_reachHandoff.ok===true&&_reachHandoff.candidate){
         var _durableCandidate=_reachHandoff.candidate;
-        setImmediate(function () {
-          _reachModule.consumeEnqueued(_durableCandidate).catch(function(eReach){
-            console.error('[REACH] durable candidate consume failed:',eReach.message);});
-        });
+        if(_reachIncidentIntake){
+          if(await reachIncidentFence(identity,'before_candidate_consume')){
+            await _reachModule.consumeEnqueued(_durableCandidate).catch(function(eReach){
+              console.error('[REACH] durable incident candidate consume failed:',eReach.message);});
+          }else{
+            console.error('[REACH] durable incident candidate consume held: incident lease lost');
+          }
+        }else{
+          setImmediate(function () {
+            _reachModule.consumeEnqueued(_durableCandidate).catch(function(eReach){
+              console.error('[REACH] durable candidate consume failed:',eReach.message);});
+          });
+        }
       }else{
         console.error('[REACH] durable cycle candidate failed:',
           _reachHandoff&&_reachHandoff.reason||'unknown');
@@ -4500,4 +4554,5 @@ module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamed
   verifiedVoiceCallPurposeAnswer,voiceHearingContextSatisfiesTurn,
   verifiedVoiceHearingAnswer,voiceFarewellContextSatisfiesTurn,
   verifiedVoiceFarewellAnswer,voiceConversationalNoGenericLookup,
-  bindExactHamToolArgs,structuredReachPolicyMode}};
+  bindExactHamToolArgs,structuredReachPolicyMode,reachIncidentIntakeMode,
+  reachIncidentFence}};
