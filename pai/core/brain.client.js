@@ -50,7 +50,7 @@ function buildStamp(source, type, suffix) {
  * @param {Array} params.edges - array of edge objects {type, target} (MUST have at least one)
  * @returns {Promise<{source: string, ok: boolean}>}
  */
-async function writeBead({ hamUid, agentGlobal, source, type, content, summary, importance, edges }) {
+async function writeBead({ hamUid, agentGlobal, source, type, content, summary, importance, edges, abcdTag }) {
     if (!edges || !Array.isArray(edges) || edges.length === 0) {
         throw new Error('Orphan bead: edges array must contain at least one typed edge.');
     }
@@ -75,6 +75,10 @@ async function writeBead({ hamUid, agentGlobal, source, type, content, summary, 
         summary: summary || '',
         importance: importance || 0
     };
+    // STAMP's ABCD tag half: only set when the caller supplies one (or derives one from
+    // agentGlobal+type as a sane default), never overwrites a caller's explicit choice.
+    if (abcdTag) { bead.abcd_tag = abcdTag; }
+    else if (agentGlobal && type) { bead.abcd_tag = buildAbcdTag(agentGlobal, type); }
 
     // new bank ('beads' table) requires a spawned_by column legacy never had; set it
     // only when writing to a schema that expects it, so legacy writes stay unchanged.
@@ -153,8 +157,68 @@ function parseEdges(bead) {
     return [];
 }
 
+
+// ⬡B:core.brain_client:BUILD:stamp_abcd_tag_validate_audit_the_missing_half_of_stamp:20260719⬡
+// STAMP (Systematic Tagging and Archival Management Protocol), per the founder's own
+// documented spec across multiple sessions: every brain entry gets BOTH an ACL stamp
+// (namespace/type/date, already covered by buildStamp above) AND an ABCD tag
+// (AGENT_TYPE, e.g. DAWN_BRIEFING, HUNCH_TIP, SHADOW_AUDIT) so FIND can filter by exact
+// agent+category instead of a full-text scan across the whole brain. The ABCD tag half
+// was never built anywhere in this world -- not one station this session set one. This
+// closes that gap. STAMP is intentionally COLD (documented "zero LLM cost, pure string
+// ops" across the founder's own history): tagging is mechanical once the calling agent
+// has already decided the content, so no organ belongs here; forcing an LLM in would be
+// theater, the same call already made for the REST boundary above.
+//
+// Format: AGENT_CATEGORY, uppercase, underscore-joined. Examples: DAWN_BRIEFING,
+// HUNCH_TIP, SHADOW_AUDIT, GHOST_WATCH.
+function buildAbcdTag(agent, category) {
+  var a = String(agent || 'unknown').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  var c = String(category || 'note').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return a + '_' + c;
+}
+
+// validate_stamp: does this bead's acl_stamp match the real hexagon-wrapped four-colon
+// shape? Cold, mechanical, no judgment about content, only shape.
+function validateStamp(aclStamp) {
+  var s = String(aclStamp || '');
+  var ok = /^⬡B:[^:]+:[^:]+:[^:]+:.+⬡$/.test(s);
+  return { ok: ok, acl_stamp: s };
+}
+
+// audit_unstamped: find recent beads missing an abcd_tag, so STAMP can self-review its
+// own coverage (the exit/rally shape for a cold utility: it looks back at its own prior
+// work and reports the gap, rather than firing once and never checking itself again).
+async function auditUnstamped(limitCount) {
+  try {
+    var lim = isFinite(parseInt(limitCount, 10)) ? parseInt(limitCount, 10) : 50;
+    var rows = await readBead({ select: 'id,source,stamp_type,abcd_tag', order: 'id.desc', limit: String(lim) });
+    var unstamped = (Array.isArray(rows) ? rows : []).filter(function (b) { return !b.abcd_tag; });
+    return { checked: (Array.isArray(rows) ? rows.length : 0), unstamped_count: unstamped.length, unstamped: unstamped.slice(0, 20) };
+  } catch (e) { return { checked: 0, unstamped_count: 0, unstamped: [], error: e.message }; }
+}
+
+// stamp_stats: cold counts by stamp_type over the most recent window, for a quick health
+// read of what is actually being written, no LLM needed.
+async function stampStats(limitCount) {
+  try {
+    var lim = isFinite(parseInt(limitCount, 10)) ? parseInt(limitCount, 10) : 200;
+    var rows = await readBead({ select: 'stamp_type', order: 'id.desc', limit: String(lim) });
+    var counts = {};
+    (Array.isArray(rows) ? rows : []).forEach(function (b) {
+      var t = b.stamp_type || 'UNKNOWN';
+      counts[t] = (counts[t] || 0) + 1;
+    });
+    return { sample_size: (Array.isArray(rows) ? rows.length : 0), counts: counts };
+  } catch (e) { return { sample_size: 0, counts: {}, error: e.message }; }
+}
+
 module.exports = {
     buildStamp,
+    buildAbcdTag,
+    validateStamp,
+    auditUnstamped,
+    stampStats,
     writeBead,
     readBead,
     findBySource,
