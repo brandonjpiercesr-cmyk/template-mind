@@ -30,16 +30,20 @@ function purposesText() {
   return Object.keys(CHANNEL_PURPOSES).map(function (k) { return k.toUpperCase() + ': ' + CHANNEL_PURPOSES[k]; }).join('\n');
 }
 
+// \u2b21B:reach.department:FIX:no_rogue_call_route_through_one_ladder:20260720\u2b21
+// FOUNDER 911 20260720: this was a bare fetch straight to a hardcoded URL, authenticated
+// with a Groq key (Groq is perma-banned) against an OpenRouter endpoint (a real key/URL
+// mismatch that has been silently no-op'ing every reach-importance judgment on this world,
+// since GROQ_API_KEY is correctly unset here). A rogue call outside the one ladder is
+// exactly what the founder's own law forbids: every model call rides model.ladder.js,
+// never a hand-rolled fetch. This now calls the real ladder's cheap/fast tier, so it is
+// both correct and automatically inherits the spend guard, the ban list, and every future
+// ladder fix for free.
 async function llm(system, user, maxTokens) {
-  var key = process.env.GROQ_API_KEY;
-  if (!key) return '';
   try {
-    var r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST', headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: process.env.GROQ_MODEL_C1 || 'openai/gpt-oss-20b', max_tokens: maxTokens || 120, temperature: 0.1,
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }] })
-    }).then(function (x) { return x.json(); });
-    return (r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) || '';
+    var out = await require('../core/model.ladder.js').deliberate(system, user,
+      { max_tokens: maxTokens || 120, temperature: 0.1, timeout: 9000, tightTimeout: true });
+    return (out && out.content) || '';
   } catch (e) { return ''; }
 }
 
