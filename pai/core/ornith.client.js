@@ -52,6 +52,19 @@ async function callOrnith(system, userContent, maxTokens) {
       }
       if (statusResp && statusResp.status === 'FAILED') return null;
     }
+    // \u2b21B:core.ornith.client:FIX:cancel_abandoned_job_on_poll_timeout:20260720\u2b21
+    // FOUNDER 911 20260720: 506 and 502 jobs found sitting live in queue on the Ornith
+    // and GLM RunPod endpoints, real money, real hammering, not a guess -- confirmed via
+    // the RunPod health endpoint and purged. Root cause found here: this loop polls for
+    // 64 seconds, and if the job still has not finished, it gives up and returns null
+    // WITHOUT ever telling RunPod to stop working on it. The job keeps running or sitting
+    // queued, fully billed, completely abandoned, while the very next cycle submits a
+    // brand new one on top. That is exactly how a queue grows to 500+ zombie jobs no
+    // matter how many times it gets purged. A give-up must be a real give-up: cancel the
+    // job on RunPod's side the moment this caller stops waiting for it.
+    fetch(ORNITH_URL.replace(/\/$/, '') + '/cancel/' + jobId, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + RUNPOD_KEY }
+    }).catch(function () {});
     return null;
   } catch (e) { return null; }
 }
