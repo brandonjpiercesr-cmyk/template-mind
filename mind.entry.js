@@ -110,6 +110,10 @@ require('./pai/routes/iman.routes.js')(app);
 // own VOICE edge. ElevenLabs agent -> THIS world's /vara/llm (runPAI local, his bank).
 require('./pai/routes/vara.llm.routes.js')(app);
 require('./pai/routes/vara.call.routes.js')(app);
+// ⬡B:mind.entry:WIRE:inbox_zero_universal_mount:20260720⬡ the universal per-advisor
+// inbox-zero wonder agent, one shared source in pai/core (mirrored from anew/core),
+// world resolved as a parameter. POST /inbox-zero/:world/run.
+try { require('./pai/core/inbox.zero.js').registerInboxZero(app); } catch (e) { console.error('[mind] inbox.zero mount failed:', e.message); }
 
 app.post('/cycle', async function (req, res) {
   try {
