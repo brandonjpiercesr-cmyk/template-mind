@@ -100,6 +100,25 @@ function isInternalContext(context) {
     mode === 'coding' || mode === 'internal' || context.internal === true;
 }
 
+// WRIT may polish a draft, but it may never replace what the draft says. This
+// witness is deliberately mechanical: it does not judge quality, only whether
+// a proposed rewrite retained enough of the original answer's concrete anchors.
+function preservesSemanticAnchors(original, rewritten) {
+  original = String(original || '').trim();
+  rewritten = String(rewritten || '').trim();
+  if (!original || !rewritten) return false;
+  if (original === rewritten) return true;
+  var stop = new Set(['that','this','with','from','have','your','they','their','there','then','than','what','when','where','which','would','could','should','about','into','only','also','does','were','been','being','because','while','after','before','just','very']);
+  function anchors(text) {
+    return Array.from(new Set((text.toLowerCase().match(/[a-z0-9']+/g) || [])
+      .filter(function (word) { return word.length >= 4 && !stop.has(word); })));
+  }
+  var source = anchors(original), target = new Set(anchors(rewritten));
+  if (source.length < 4) return rewritten.length >= Math.max(10, original.length * 0.4);
+  var retained = source.filter(function (word) { return target.has(word); }).length;
+  return retained / source.length >= 0.28 && rewritten.length >= original.length * 0.25;
+}
+
 // Preserve every byte between a Markdown fence and its matching close. The
 // transform receives only contiguous prose segments, never fence or code lines.
 function transformOutsideFences(content, transform) {
@@ -321,16 +340,22 @@ async function writCheck(text, context) {
         + 'possible banned headers to remove=' + JSON.stringify((_hintHeaders||[]).map(function(f){return f.phrase||f;}).slice(0,4)) + '. '
         + 'Reply with ONLY the corrected answer text, nothing else. If the text already obeys every law, return it unchanged. '
         + 'Return the single word HOLD only if the text cannot be fixed because it leaks a real secret or another world\'s private data.';
-      var _out = await _ladder.deliberate(_sys, cleaned, { maxTokens: 800, temperature: 0 });
+      var _deliberate = typeof context.deliberate === 'function' ? context.deliberate : _ladder.deliberate;
+      var _out = await _deliberate(_sys, cleaned, { maxTokens: 800, temperature: 0 });
       var _txt = String((_out && (_out.text || _out.answer || _out.content)) || '').trim();
       if (/^HOLD\s*$/i.test(_txt)) {
         // genuinely unfixable (real leak) -> hold
         qualityVerdict = 'WRIT_HOLD';
         organReason = 'unfixable_leak';
         hardFails.push({ type: 'quality_hold', reason: organReason });
-      } else if (_txt && _txt.length >= 10) {
+      } else if (_txt && _txt.length >= 10 && preservesSemanticAnchors(cleaned, _txt)) {
         // the organ returned a rendered/cleaned answer -> ship the fix, do not kill
         cleaned = _txt;
+        qualityVerdict = 'WRIT_PASS';
+      } else if (_txt && _txt.length >= 10) {
+        // A style renderer returned a different answer. Keep the exact pre-WRIT
+        // content and fail open instead of allowing the judge to clobber meaning.
+        organReason = 'rewrite_rejected_semantic_drift';
         qualityVerdict = 'WRIT_PASS';
       }
       // if the organ returned nothing usable, fall through as PASS (fail open)
@@ -361,4 +386,5 @@ async function writCheck(text, context) {
 
 module.exports = { writCheck: writCheck, removeEmDash: removeEmDash, coffeeshopTest: coffeeshopTest,
   applyVoiceLaw: applyVoiceLaw, stripEmoji: stripEmoji, BANNED_WORDS: BANNED_WORDS,
-  SUPER_BANS: SUPER_BANS, CTA_ENDINGS: CTA_ENDINGS, BANNED_HEADERS: BANNED_HEADERS };
+  SUPER_BANS: SUPER_BANS, CTA_ENDINGS: CTA_ENDINGS, BANNED_HEADERS: BANNED_HEADERS,
+  preservesSemanticAnchors: preservesSemanticAnchors };
