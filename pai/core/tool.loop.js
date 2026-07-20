@@ -3387,7 +3387,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       ans=_structuredDraft.ok?_structuredDraft.text:'{}';
       break;
     }
-    if (msg && !((msg.tool_calls || []).length) && outputGuard.containsCjk(msg.content)) {
+    if (msg && !((msg.tool_calls || []).length) && outputGuard.containsCjk(msg.content) &&
+        !outputGuard.explicitNonEnglishRequest(_exactUserMessage || message)) {
       try {
         var _englishRewrite = await require('./model.ladder.js').deliberate(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
