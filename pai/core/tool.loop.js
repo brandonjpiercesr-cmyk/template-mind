@@ -948,6 +948,13 @@ function toolsForIntent(tools, intent) {
     return tool && tool.function && allowed.indexOf(tool.function.name) !== -1;
   });
 }
+
+function intentRequiresLiveTool(intent) {
+  // These two routes are unambiguously current external facts and contain only
+  // one read-only tool each. Requiring a call cannot release a mutation and
+  // prevents the model from denying a capability that is visibly attached.
+  return intent === 'weather' || intent === 'sports';
+}
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
 // Read tools contribute during deliberation. Every mutation is queued as
 // evidence, reviewed by the outbound council, and executed only after the
@@ -2947,12 +2954,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       temperature:_structuredReachPolicy?0:_reachIncidentIntake?0.1:0.3};
     if (iter<=3) body.tools=_turnToolDefinitions;
     var _routedToolIntent = null;
+    var _routedRequiresLiveTool = false;
     if (iter === 1 && Array.isArray(body.tools) && body.tools.length &&
         !_structuredReachPolicy && !_reachIncidentIntake &&
         String(channel || '').toLowerCase() !== 'voice' &&
         !(identity && identity.outbound_finalize === true)) {
       _routedToolIntent = routeToolIntent(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
+      _routedRequiresLiveTool = intentRequiresLiveTool(_routedToolIntent);
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
       _stampStep('tool_intent_route', _routedToolIntent + ':visible=' + body.tools.length);
       if (!body.tools.length) delete body.tools;
@@ -2965,6 +2974,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // lanes already carry bounded contracts and never enter general selection.
     if (iter === 1 && Array.isArray(body.tools) && body.tools.length &&
         !_structuredReachPolicy && !_reachIncidentIntake &&
+        !_routedRequiresLiveTool &&
         String(channel || '').toLowerCase() !== 'voice' &&
         !(identity && identity.outbound_finalize === true)) {
       var _toolPlan = await planToolUse(
@@ -3126,7 +3136,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         // mixed requests such as "why, and email me" do not match this predicate.
         delete body.tools;
       }
-      else if (_looksPublicKnowledgeQ) {
+      else if (_looksPublicKnowledgeQ &&
+          (!_routedToolIntent || _routedToolIntent === 'general')) {
         // Public-world question with no personal anchor: answer from the model's own
         // knowledge. Receipts showed that merely UNFORCING find_in_brain was not
         // enough -- with the personal-tool schema still in front of her she reached
@@ -3138,7 +3149,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         delete body.tools;
         delete body.tool_choice;
       }
-      else if (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd)) _toolNudge='find_in_brain';
+      else if ((!_routedToolIntent || _routedToolIntent === 'general') &&
+          (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd))) _toolNudge='find_in_brain';
       // Deliver the intent as a nudge, keep tool_choice auto (all tools available, she reasons).
       if (_toolNudge && Array.isArray(body.tools) && body.tools.length) {
         body.tool_choice = 'auto';
@@ -3186,6 +3198,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           }
         }
       }
+    }
+    if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
+      body.tool_choice = 'required';
+      body.messages = body.messages.concat([{ role:'system',
+        content:'This exact request asks for current external data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
+      _stampStep('tool_intent_live_read_required', _routedToolIntent);
     }
     // \u2b21B:core.tool_loop:WIRE:ornith_opt_in_no_tools_only:20260703\u2b21
     // Founder request: try Ornith for A'NU's real conversational turns too, not
@@ -4752,7 +4770,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,planToolUse,
-  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,
+  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
