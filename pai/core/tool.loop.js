@@ -959,6 +959,7 @@ function routeToolIntent(message) {
   if (/\b(score|scores|won|lost|standings|results?|game result|latest game)\b/.test(text) && /\b(nba|nfl|mlb|nhl|wnba|lakers|bills|yankees|team|game)\b/.test(text)) return 'sports';
   if (/\b(my|our)\b.*\b(calendar|schedule|availability|free time|open slot|events?)\b/.test(text) ||
       /\b(am i|are we) free\b/.test(text) || /\b(calendar|schedule)\b.*\b(today|tomorrow|this week|next week)\b/.test(text) ||
+      /\b(meetings?|events?)\b.*\b(scheduled|today|tomorrow|this week|next week)\b/.test(text) ||
       /\b(find|show)\b.*\b(open )?(time|slot)\b/.test(text)) return 'schedule';
   if (/\b(my|our|unread|recent|pending)\b.*\b(inbox|emails?|reply drafts?)\b/.test(text) ||
       /\b(show|read|check)\b.*\b(inbox|emails?)\b/.test(text)) return 'email';
@@ -991,7 +992,10 @@ function requiredReadToolForMessage(message, intent) {
   var text = String(message || '').trim().toLowerCase();
   if (intent === 'weather') return weatherArgsFromMessage(text).place ? 'weather_check' : null;
   if (intent === 'sports') return sportsArgsFromMessage(text).league ? 'nash_sports' : null;
-  if (intent === 'schedule' && /\b(calendar|schedule|availability|free|open (?:time|slot)|events?)\b/.test(text)) return 'calendar_read';
+  if (intent === 'schedule' && /^(?:please\s+)?(?:schedule|book|create|add|move|reschedule|cancel|delete)\b/.test(text)) return null;
+  if (intent === 'schedule' && /\b(calendar|schedule|scheduled|meetings?|availability|free|open (?:time|slot)|events?)\b/.test(text)) return 'calendar_read';
+  if (intent === 'email' && /\b(read|show|list|check|get|what)\b.*\b(?:pending\s+)?(?:email\s+|reply\s+)?drafts?\b/.test(text) &&
+      !/\b(send|write|create|delete|approve)\b/.test(text)) return 'get_pending_drafts';
   if (intent === 'email' && /\b(inbox|unread emails?|recent emails?)\b/.test(text) && !/\b(send|reply|draft)\b/.test(text)) return 'inbox_read';
   if (intent === 'reminders' && /\b(what|read|show|list|check|current|active|pending)\b/.test(text) && !/\b(create|add|set|stop|remove|delete)\b/.test(text)) return 'read_reminders';
   if (intent === 'budget' && /\b(payments? (?:are )?(?:due|coming)|due soon|upcoming|bnpl)\b/.test(text)) return 'get_budget_upcoming';
