@@ -106,6 +106,27 @@ async function readChannelActivity(hamUid) {
   } catch (e) { return _noChannels; }
 }
 
+// The fusion object is the ALIVE perception contract.  Keep the individual fact
+// timestamps alongside the aggregate timestamp so a consumer can decay a single
+// stale source without pretending that the whole world model is current.
+function buildPerceptionSnapshot(hamUid, calendar, channels, screen, now) {
+  var observedAt = (now instanceof Date ? now : new Date(now || Date.now())).toISOString();
+  return {
+    schema: 'anew.alive.perception.v1',
+    ham_uid: String(hamUid),
+    as_of: observedAt,
+    facts: {
+      calendar: { observed_at: observedAt, value: calendar },
+      channels: { observed_at: observedAt, window: 'PT24H', value: channels },
+      screen: { observed_at: observedAt, value: screen }
+    },
+    // Keep the established shape while callers transition to facts.*.
+    calendar: calendar,
+    channels: channels,
+    screen: screen
+  };
+}
+
 async function runFuse(hamUid) {
   if (!hamUid) return { ok: false, reason: 'hamUid required' };
   const cal = await readCalendarNext24h(hamUid);
@@ -115,7 +136,7 @@ async function runFuse(hamUid) {
     const sa = require('./stream/screen.awareness.js');
     screen = { live: sa.hasLiveScreen(hamUid) };
   } catch (e) {}
-  const fusion = { as_of: new Date().toISOString(), calendar: cal, channels: channels, screen: screen };
+  const fusion = buildPerceptionSnapshot(hamUid, cal, channels, screen);
   try {
     const brain = require('./brain.client');
     await brain.writeBead({ hamUid: hamUid, agentGlobal: 'FUSION', type: 'CONTEXT_FUSION',
@@ -167,4 +188,4 @@ async function getLatestSummary(hamUid) {
   } catch (e) { return ''; }
 }
 
-module.exports = { runFuse, getLatestSummary };
+module.exports = { runFuse, getLatestSummary, buildPerceptionSnapshot };
