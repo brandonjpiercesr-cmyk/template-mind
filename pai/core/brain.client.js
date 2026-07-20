@@ -19,8 +19,8 @@
 // (env-driven, deterministic) -- forcing an LLM in here would be theater.
 function brainUrl() { return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function brainKey() { return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
-function beadTable() { return process.env.BEAD_TABLE || 'aibe_brain'; }
-function brainSchema() { return process.env.BRAIN_SCHEMA || 'abacia_core'; }
+function beadTable() { return process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain'); }
+function brainSchema() { return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'); }
 
 /**
  * Build a four‑colon ACL stamp wrapped in hex B markers.
