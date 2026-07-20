@@ -399,6 +399,51 @@ async function proposeEscalations(HAM, config, decisions, packet) {
   return escal.length;
 }
 
+// ── FOUNDER-TEST PREVIEW SEND ─────────────────────────────────────────────────────────
+// The founder asked to actually RECEIVE the drafts for a few days of testing: each reply
+// sent to HIM, looking like it is for the real person, so he can watch the real output land
+// in his own inbox before a single word goes to an actual funder or staffer. This rides
+// IMAN's existing founderTest redirect (opts.founderTest -> FOUNDER_TEST_EMAIL), so the
+// recipient is architecturally forced to the founder's own address and can NEVER reach the
+// real person in this mode. It is OFF by default: a normal cycle only rests drafts. It fires
+// only when opts.previewSend is true or INBOX_ZERO_PREVIEW_SEND is set, and only when the
+// founder-test address is configured. The real send-into-the-real-thread connector stays
+// unbuilt and parked until the founder's explicit go.
+async function previewSendToFounder(HAM, config, decisions, packet, opts) {
+  var on = (opts && opts.previewSend === true) || process.env.INBOX_ZERO_PREVIEW_SEND === '1';
+  if (!on) return { sent: 0, results: [], enabled: false };
+  var personal = decisions.filter(function (d) { return d.bucket === 'personal' && d.needsReply && d.draftBody; });
+  if (!personal.length) return { sent: 0, results: [], enabled: true };
+  var results = [], sent = 0;
+  for (var i = 0; i < personal.length; i++) {
+    var d = personal[i], m = byId(packet, d.id);
+    var whoFor = m ? ((m.from_name || m.from) + ' <' + m.from + '>') : d.id;
+    var subject = (m && m.subject) ? ('Re: ' + m.subject) : ('Inbox Zero draft for ' + config.world_name);
+    var body = 'This is the reply your ' + config.world_name + ' advisor drafted for ' + whoFor + '.\n'
+      + 'You are seeing it because founder-test mode routes it to you, not to them. Nothing went to the real person.\n\n'
+      + '----- drafted reply below -----\n\n' + String(d.draftBody || '');
+    var out = { to_intended: m ? m.from : null, subject: subject, ok: false, reason: null, messageId: null };
+    try {
+      // founderTest:true forces IMAN to redirect the recipient to FOUNDER_TEST_EMAIL.
+      var r = await IMAN.send(m ? m.from : (process.env.FOUNDER_TEST_EMAIL || 'founder'), subject, body, config.world_name,
+        { founderTest: true, hamUid: HAM, requestId: 'inboxzero.' + config.world_name + '.' + d.id + '.' + Date.now() });
+      out.ok = !!(r && r.ok); out.reason = r && r.reason || null; out.messageId = r && r.messageId || null;
+      if (out.ok) sent++;
+    } catch (e) { out.reason = e.message; }
+    results.push(out);
+  }
+  // Stamp what actually went out (to the founder) so the loop is auditable.
+  await writeBead({
+    ham_uid: HAM, agent_global: config.advisor_id, stamp_type: 'PREVIEW_SENT',
+    acl_stamp: brainClient.buildStamp('inbox_zero.' + config.world_name + '.preview_sent', 'PREVIEW_SENT', ''),
+    source: 'ham_' + String(HAM).toLowerCase() + '.inbox_zero.' + config.world_name + '.preview.' + Date.now(),
+    importance: 7,
+    summary: '[INBOX ZERO PREVIEW] ' + sent + '/' + personal.length + ' draft(s) sent to founder-test for ' + config.world_name,
+    content: JSON.stringify({ mode: 'founder_test', world: config.world_name, sent: sent, results: results, note: 'Redirected to the founder only. No real recipient was contacted.', createdAt: new Date().toISOString() }),
+  });
+  return { sent: sent, results: results, enabled: true, of: personal.length };
+}
+
 // ── THE MAIN CYCLE ────────────────────────────────────────────────────────────────────
 // entry the cycle calls; exits to LOGFUL and returns a structured result back into the cycle.
 async function runInboxZero(opts) {
@@ -481,11 +526,16 @@ async function runInboxZero(opts) {
   }
   try { await advisorExit.surfaceToDesk(HAM, 'INBOX_ZERO', 'Inbox Zero, ' + world, report, personal.length ? 8 : 6); } catch (e) {}
 
+  // 8b) Founder-test preview send (OFF by default). When enabled, the drafts also go to the
+  // founder's own inbox via IMAN's founderTest redirect, never to the real person.
+  var preview = await previewSendToFounder(HAM, config, decisions, packet, opts);
+
   // 9) The brain, write, stamped. A RESULT bead records every action for honest audit.
   var resultContent = lineage.attachLineage({
     world: world, agent: 'INBOX_ZERO', unread_reviewed: packet.messages.length,
     drafted: personal.length, skipped: skippedMsgs.length, escalations_proposed: escalations,
     prior_drafts_closed: priorLoop.closed, prior_drafts_dropped: priorLoop.dropped,
+    preview_sent_to_founder: preview.enabled ? preview.sent : 0, preview_mode: preview.enabled,
     organ_ok: judged.ok, organ_via: judged.via || null,
     actions: decisions.map(function (d) { var m = byId(packet, d.id); return { subject: m ? m.subject : d.id, bucket: d.bucket, action: (d.bucket === 'personal' && d.needsReply) ? 'drafted' : 'skipped', why: d.reasoning || '' }; }),
     report: report,
@@ -511,8 +561,11 @@ async function runInboxZero(opts) {
     unread_reviewed: packet.messages.length, drafted: personal.length, skipped: skippedMsgs.length,
     escalations_proposed: escalations, prior_drafts_closed: priorLoop.closed, prior_drafts_dropped: priorLoop.dropped,
     imb_empty: !!(packet.imb && packet.imb.empty), organ_ok: judged.ok,
+    preview_mode: preview.enabled, preview_sent_to_founder: preview.enabled ? preview.sent : 0,
     report: report, ms: Date.now() - t0,
-    note: 'universal inbox-zero, world resolved as a parameter, nothing sent, drafts rest in the Command Center.',
+    note: preview.enabled
+      ? 'universal inbox-zero, preview mode: drafts also sent to the founder-test address only, never the real person.'
+      : 'universal inbox-zero, world resolved as a parameter, nothing sent, drafts rest in the Command Center.',
   };
 }
 
