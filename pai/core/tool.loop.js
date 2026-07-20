@@ -841,6 +841,35 @@ var TOOLS = [
       importance:{type:'number'},max_iterations:{type:'number'},max_llm_calls:{type:'number'}
     }}}}
 ];
+
+// CLAIR_reach R4B: tool descriptions are routing policy, not marketing copy.
+// Every tool gets the same explicit positive/negative grammar, with narrower
+// boundaries for the families that caused real wrong-tool incidents.
+var NO_TOOL_BLESSING = 'Calling no tool is a correct choice when the message can be answered from the conversation or general reasoning. Do not call a tool merely because one is available.';
+function toolSelectionBoundary(name) {
+  var exact = {
+    calendar_read: 'USE WHEN: the person explicitly asks about calendar events, schedule, availability, free time, or a real time slot. DO NOT USE WHEN: the message asks for general knowledge, opinion, planning advice, chit-chat, a favorite team, build status, or any topic merely mentioned near day or calendar context.',
+    calendar_book: 'USE WHEN: the person explicitly approved one exact event time and asks to book it. DO NOT USE WHEN: they are brainstorming, asking for availability, discussing a plan, or have not confirmed exact start and end times.',
+    find_in_brain: 'USE WHEN: the answer requires this HAM\'s stored memory, history, preference, decision, result, or exact bead evidence. DO NOT USE WHEN: the question is general knowledge, opinion, chit-chat, live calendar, live inbox, or a request another exact tool owns.',
+    nash_sports: 'USE WHEN: the person asks for a live or recent sports score, result, or whether a team won. DO NOT USE WHEN: they ask which team they personally like, for a sports opinion, or for non-sports current information.',
+    consult_mace: 'USE WHEN: a coding request requires reading an exact repository file or directory before deciding or building. DO NOT USE WHEN: the person asks general knowledge, calendar, personal-memory, or non-code questions, or when no repository read is needed.',
+    read_lane_board: 'USE WHEN: the person asks which coding lanes or chats are active, who owns work, or whether lanes may collide. DO NOT USE WHEN: they ask about their calendar, general project advice, repository contents, or ordinary conversation.',
+    update_screen: 'USE WHEN: the person explicitly asks to change or show something on the live glass. DO NOT USE WHEN: they ask for a spoken answer, general advice, stored memory, or a real-world action outside the screen.',
+    email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
+    contact_send: 'USE WHEN: the person explicitly authorizes this exact text to this exact resolved third party. DO NOT USE WHEN: they mention a person, ask for contact details, brainstorm wording, or have not authorized the exact send.',
+    notify_ham: 'USE WHEN: an authorized system workflow must send a real status text to the HAM. DO NOT USE WHEN: answering the HAM in the current conversation is sufficient, or for third-party messaging.',
+    write_to_brain: 'USE WHEN: the current workflow explicitly requires a durable exact-HAM bead. DO NOT USE WHEN: reading memory, answering conversationally, or saving unsupported inferences as facts.',
+    trigger_deploy: 'USE WHEN: a verified code fix is committed and the person or owned workflow requires that exact Render service deployed. DO NOT USE WHEN: diagnosing, planning, reading logs, or before a commit is verified.',
+    fix_file_in_github: 'USE WHEN: the exact repository file, complete replacement content, and authorized repair are known. DO NOT USE WHEN: only diagnosis, planning, partial content, or a read-only review was requested.'
+  };
+  return exact[name] || ('USE WHEN: the person\'s request explicitly needs the ' + name +
+    ' capability described above and its required inputs are known. DO NOT USE WHEN: the message can be answered from conversation or general reasoning, belongs to another tool, is only chit-chat or opinion, or required inputs are missing.');
+}
+TOOLS.forEach(function (tool) {
+  if (!tool || !tool.function) return;
+  tool.function.description = String(tool.function.description || '').trim() +
+    '\n\n' + toolSelectionBoundary(tool.function.name);
+});
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
 // Read tools contribute during deliberation. Every mutation is queued as
 // evidence, reviewed by the outbound council, and executed only after the
@@ -2839,6 +2868,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),
       temperature:_structuredReachPolicy?0:_reachIncidentIntake?0.1:0.3};
     if (iter<=3) body.tools=_turnToolDefinitions;
+    if (Array.isArray(body.tools) && body.tools.length) {
+      body.messages = body.messages.concat([{ role:'system', content:NO_TOOL_BLESSING }]);
+    }
     // ⬡B:core.tool_loop:FIX:tool_choice_never_set_defaults_to_skippable:20260705⬡
     // Real, live incident: Brandon asked directly "who is the founder value, now from env, show me
     // the original message" over text -- the single clearest possible
@@ -4605,7 +4637,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   return _successResult;
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
-  primaryProviderBody,dayQuestionIntent,
+  primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
