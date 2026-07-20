@@ -1752,8 +1752,16 @@ async function defaultShadowStage(ctx, injected) {
       modelPassed = true;
     }
   }
+  // ⬡B:core.pai_outbound_council:REPAIR:attempted_relay_evidence_must_not_silently_clean_pass_when_judge_unavailable:20260719⬡
+  // An attempted named-evidence relay (a consult_coda entry in verified_evidence) is a
+  // security-sensitive claim: the answer says it came from a verified relay. If the model
+  // judge never ran to actually verify that relay (judgment unavailable), the clean-board
+  // auto-pass must NOT apply here -- that would let an unverified relay claim through
+  // silently. Only a genuinely relay-free clean board may auto-pass on an unavailable judge.
+  var attemptedRelayEvidence = !!(ctx.context && Array.isArray(ctx.context.verified_evidence) &&
+    ctx.context.verified_evidence.some(function (item) { return item && item.tool === 'consult_coda'; }));
   var wonderUnavailableCleanPass = !!(boardPassed && deterministicFindings.length === 0 &&
-    (!judgment || !parsed));
+    (!judgment || !parsed) && !attemptedRelayEvidence);
   // ⬡B:core.pai_outbound_council:FIX:shadow_holds_only_with_a_quotable_false_claim_20260718⬡
   // Founder doctrine, decides-vs-renders + no nasty-C holds: SHADOW is a
   // HALLUCINATION judge. Its only job is to catch an invented fact. So on a
@@ -1766,19 +1774,43 @@ async function defaultShadowStage(ctx, injected) {
   // fabrication still holds, every time.
   var shadowHasQuotableFalseClaim = _verbatimClaimFound(parsed) ||
     (reviewParsed && _verbatimClaimFound(reviewParsed));
+  // An attempted relay with an unavailable judge must HOLD, not fail-open through this branch
+  // either -- see attemptedRelayEvidence above. Excluded here the same way.
   var shadowFailOpenCleanBoard = !!(boardPassed && deterministicFindings.length === 0 &&
-    !modelPassed && !shadowHasQuotableFalseClaim);
-  var shadowPassed = boardPassed && (modelPassed || wonderUnavailableCleanPass || shadowFailOpenCleanBoard);
+    !modelPassed && !shadowHasQuotableFalseClaim && !(attemptedRelayEvidence && (!judgment || !parsed)));
+  var relayUnavailableHold = !!(attemptedRelayEvidence && (!judgment || !parsed));
+  // ⬡B:core.pai_outbound_council:REPAIR:verified_exact_relay_overrides_a_flaky_model_rejection:20260719⬡
+  // verifiedExactNamedEvidenceRelay (exactRelay) is a strict, code-verified match: exact text
+  // digest, exact BCW section, exact HAM/question/request/cycle, exact relay contract, decision
+  // stamped. When that full chain verifies AND the board is otherwise clean, a real (even
+  // rejecting) model judgment is the known-flaky part (documented: the same clean answer holds
+  // once and passes once, 33 seconds apart) -- not the code-verified relay. So an exact,
+  // verified relay overrides a flaky model rejection on an otherwise clean board. This does NOT
+  // apply when the judge never ran at all (relayUnavailableHold owns that case) or when the
+  // board itself is not clean (boardPassed required).
+  var exactRelayOverridesJudgment = !!(boardPassed && exactRelay && judgment && parsed);
+  var shadowPassed = !relayUnavailableHold && boardPassed &&
+    (exactRelayOverridesJudgment || modelPassed || wonderUnavailableCleanPass || shadowFailOpenCleanBoard);
 
   return {
     ok: shadowPassed,
     answer: ctx.answer,
     reason: deterministicVoicePassReason ||
+      (relayUnavailableHold ? 'shadow_model_unavailable' :
+      (exactRelayOverridesJudgment ? 'SHADOW_PASS_VERIFIED_EVIDENCE_RELAY' :
       (!boardPassed ? 'shadow_deterministic_hold' :
         (wonderUnavailableCleanPass ? 'SHADOW_PASS_WONDER_UNAVAILABLE_CLEAN_BOARD' :
           (modelPassed ? (reviewParsed ? 'SHADOW_PASS_WONDER_FINAL_REVIEW' : 'SHADOW_PASS') :
             (shadowFailOpenCleanBoard ? 'SHADOW_PASS_CLEAN_BOARD_NO_QUOTABLE_CLAIM' :
-              'shadow_wonder_hold')))),
+              // \u2b21B:core.pai_outbound_council:REPAIR:evidenced_hold_labeled_shadow_model_hold_not_generic_wonder_hold:20260719\u2b21
+              // This branch is only reachable when boardPassed is true (so deterministicFindings
+              // is already empty), modelPassed is false, and shadowHasQuotableFalseClaim is true --
+              // a REAL evidenced hold: SHADOW's model judge quoted an actual fabricated claim.
+              // That is a model hold, not a generic 'wonder is confused' hold; label it precisely
+              // so downstream code and the founder can tell a real evidenced hold from an
+              // ambiguous one. wren/reply.js already retries on both labels identically, so this
+              // does not change retry behavior, only the accuracy of the reason string.
+              'shadow_model_hold')))))),
     evidence: {
       deterministic: {
         verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
@@ -1803,7 +1835,8 @@ async function defaultShadowStage(ctx, injected) {
         model: judgment.model,
         via: judgment.via,
         response_digest: digestText(judgment.content || ''),
-        deterministic_proofs_given_to_wonder: { exact_relay: !!exactRelay, runtime_identity: !!runtimeIdentity }
+        deterministic_proofs_given_to_wonder: { exact_relay: !!exactRelay, runtime_identity: !!runtimeIdentity },
+        overridden_by_exact_named_evidence_relay: exactRelayOverridesJudgment
       } : { approved: false, reason: 'no_real_judgment' },
       review_judgment: reviewJudgment ? {
         approved: reviewParsed && reviewParsed.approved === true,
