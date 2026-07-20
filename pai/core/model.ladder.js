@@ -258,6 +258,22 @@ async function deliberate(system, user, options) {
     openrouter: function (o) { return tryOpenRouterGLM(system, user, o); } };
   var glmChain = glmSeq.filter(function (n) { return typeof glmRunners[n] === 'function'; });
   if (!glmChain.length) glmChain = ['runpod', 'together', 'openrouter'];
+  // \u2b21B:core.model_ladder:FIX:tight_timeout_skips_runpod_glm:20260720\u2b21
+  // FOUNDER 911 20260720: the RunPod GLM endpoint showed 2708 failed jobs against
+  // 1402 completed, a real live number pulled from RunPod's own health API. Root
+  // cause found: council/judge callers set tightTimeout with a real budget as low
+  // as 7 seconds, but this rung is a scale-to-zero serverless GPU that can genuinely
+  // take longer than that on any cold start, and RunPod bills for GPU time already
+  // spent even when the caller gives up and aborts. A tight caller hitting a cold
+  // RunPod pod is close to a guaranteed wasted, billed failure. RunPod cannot
+  // reliably promise a sub-10-second answer the way a hosted per-token API can, so
+  // a tight-timeout caller now skips the RunPod rung entirely and goes straight to
+  // Together, a fast hosted API immune to cold starts. Realtime voice already hedges
+  // all providers in parallel above and is unaffected by this.
+  if (opts.tightTimeout) {
+    glmChain = glmChain.filter(function (n) { return n !== 'runpod'; });
+    if (!glmChain.length) glmChain = ['together', 'openrouter'];
+  }
   var runners = { glm: async function (runOpts) {
       runOpts = runOpts || opts;
       if (runOpts.realtime === true) return rankedAccepted(glmChain.map(function (n) {
