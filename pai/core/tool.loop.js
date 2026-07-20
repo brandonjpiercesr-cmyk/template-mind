@@ -278,16 +278,29 @@ function sportsArgsFromMessage(message) {
   if (/\b(nba|lakers|warriors|celtics|knicks|nets|heat|bulls|cavaliers|nuggets|spurs|mavericks|suns)\b/.test(text)) return { league:'nba' };
   return { league:'' };
 }
+
+function memoryArgsFromMessage(message) {
+  var text = String(message || '').toLowerCase();
+  if (/\b(decision|decided|ruling)\b/.test(text)) return { stamp_type:'DECISION', limit:10 };
+  if (/\b(built|build|fixed|repair|result|most recent|recently)\b/.test(text)) return { stamp_type:'RESULT', limit:10 };
+  if (/\b(favou?rite|preference|prefer)\b/.test(text)) return { stamp_type:'PREFERENCE', limit:10 };
+  if (/\b(failure|failed|broken|alert|stuck)\b/.test(text)) return { stamp_type:'ALERT', limit:10 };
+  return { limit:10 };
+}
 // ⬡B:core.tool_loop:MAP:data_reader_tools_executable_in_cold_code:20260719⬡
 // Deterministic data-reader tools that cold code can execute directly when the
 // model refuses to emit a forced tool_choice. Each maps the raw user message to
 // the tool's args. Used only to ground an answer in REAL data, never to fabricate.
 var DATA_READER_TOOLS = {
   calendar_read: function(m){ return {}; },
-  find_in_brain: function(m){ return { query: String(m||'').slice(0,200) }; },
+  find_in_brain: memoryArgsFromMessage,
   find_identity_evidence: function(m){ return { query: String(m||'').slice(0,200) }; },
   weather_check: weatherArgsFromMessage,
   nash_sports: sportsArgsFromMessage,
+  inbox_read: function(m){ return { unread_only:!/\brecent\b/i.test(String(m||'')) }; },
+  read_reminders: function(m){ return {}; },
+  get_budget_summary: function(m){ return {}; },
+  get_budget_upcoming: function(m){ return {}; },
   // ⬡B:core.tool_loop:FIX:lane_board_is_a_data_reader_force_execute_when_model_wont_call:20260719⬡
   // read_lane_board is a pure deterministic reader (no args, just fetches the lane
   // registry). The founder caught her NOT calling it even with a firm nudge, then
@@ -943,19 +956,20 @@ function routeToolIntent(message) {
   // answer from current context or say it does not know rather than guessing.
   if (/\b(favou?rite|preferred) (team|sport)\b/.test(text)) return 'general';
   if (/\b(weather|forecast|temperature|rain|snow)\b/.test(text) && /\b(today|tomorrow|current|now|in |at |for )/.test(text)) return 'weather';
-  if (/\b(score|scores|won|lost|standings|game result|latest game)\b/.test(text) && /\b(nba|nfl|mlb|nhl|wnba|lakers|bills|yankees|team|game)\b/.test(text)) return 'sports';
+  if (/\b(score|scores|won|lost|standings|results?|game result|latest game)\b/.test(text) && /\b(nba|nfl|mlb|nhl|wnba|lakers|bills|yankees|team|game)\b/.test(text)) return 'sports';
   if (/\b(my|our)\b.*\b(calendar|schedule|availability|free time|open slot|events?)\b/.test(text) ||
       /\b(am i|are we) free\b/.test(text) || /\b(calendar|schedule)\b.*\b(today|tomorrow|this week|next week)\b/.test(text) ||
       /\b(find|show)\b.*\b(open )?(time|slot)\b/.test(text)) return 'schedule';
   if (/\b(my|our|unread|recent|pending)\b.*\b(inbox|emails?|reply drafts?)\b/.test(text) ||
       /\b(show|read|check)\b.*\b(inbox|emails?)\b/.test(text)) return 'email';
-  if (/\b(remind me|my reminders|what reminders|read reminders|stop mentioning)\b/.test(text)) return 'reminders';
+  if (/\b(remind me|my reminders|what reminders|read reminders|stop mentioning)\b/.test(text) ||
+      /\b(read|show|list|check)\b.*\b(my |current |active |pending )?reminders?\b/.test(text)) return 'reminders';
   if (/\b(budget|bnpl|buy.now.pay.later|payments? (are )?(due|coming)|income vs expenses|spending by category)\b/.test(text)) return 'budget';
   if (/\b(text|message|contact details|phone number|email address)\b.*\b(my |the )?(brother|sister|mom|mother|dad|father|contact|person)\b/.test(text)) return 'messaging';
   if (/\b(screen|glass|background|wallpaper|layout|dashboard)\b/.test(text) && /\b(show|open|change|move|save|edit|put|display)\b/.test(text)) return 'screen';
+  if (/\b(my|our|stored|brain|memory|bead|previous|recent|most recent|most recently|recently|last)\b/.test(text) &&
+      /\b(decision|preference|history|result|failure|flagged|built|build|did we|identity|who is)\b/.test(text)) return 'memory';
   if (/\b(code|repo|repository|deploy|builds?|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
-  if (/\b(my|our|stored|brain|memory|bead|previous|recent|most recent|last)\b/.test(text) &&
-      /\b(decision|preference|history|result|failure|flagged|built|did we|identity|who is)\b/.test(text)) return 'memory';
   return 'general';
 }
 
@@ -971,6 +985,20 @@ function intentRequiresLiveTool(intent) {
   // one read-only tool each. Requiring a call cannot release a mutation and
   // prevents the model from denying a capability that is visibly attached.
   return intent === 'weather' || intent === 'sports';
+}
+
+function requiredReadToolForMessage(message, intent) {
+  var text = String(message || '').trim().toLowerCase();
+  if (intent === 'weather') return weatherArgsFromMessage(text).place ? 'weather_check' : null;
+  if (intent === 'sports') return sportsArgsFromMessage(text).league ? 'nash_sports' : null;
+  if (intent === 'schedule' && /\b(calendar|schedule|availability|free|open (?:time|slot)|events?)\b/.test(text)) return 'calendar_read';
+  if (intent === 'email' && /\b(inbox|unread emails?|recent emails?)\b/.test(text) && !/\b(send|reply|draft)\b/.test(text)) return 'inbox_read';
+  if (intent === 'reminders' && /\b(what|read|show|list|check|current|active|pending)\b/.test(text) && !/\b(create|add|set|stop|remove|delete)\b/.test(text)) return 'read_reminders';
+  if (intent === 'budget' && /\b(payments? (?:are )?(?:due|coming)|due soon|upcoming|bnpl)\b/.test(text)) return 'get_budget_upcoming';
+  if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track)\b/.test(text)) return 'get_budget_summary';
+  if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
+  if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat)\b/.test(text)) return 'read_lane_board';
+  return null;
 }
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
 // Read tools contribute during deliberation. Every mutation is queued as
@@ -1855,6 +1883,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!_place) return JSON.stringify({ ok:false, error:'no place given' });
       var _wr = await fetch(_wxSelf + '/os/weather?place=' + encodeURIComponent(_place))
         .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+      if (_wr && _wr.ok === false && _wr.reason === 'place_not_found' &&
+          _place.indexOf(',') !== -1) {
+        var _shortPlace = _place.split(',')[0].trim();
+        _wr = await fetch(_wxSelf + '/os/weather?place=' + encodeURIComponent(_shortPlace))
+          .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+      }
       if (!_wr) return JSON.stringify({ ok:false, error:'weather source unreachable, do not guess' });
       return JSON.stringify(_wr);
     } catch (eWx) { return JSON.stringify({ ok:false, error:eWx.message }); }
@@ -2972,14 +3006,23 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if (iter<=3) body.tools=_turnToolDefinitions;
     var _routedToolIntent = null;
     var _routedRequiresLiveTool = false;
+    var _routedRequiredReadTool = null;
     if (iter === 1 && Array.isArray(body.tools) && body.tools.length &&
         !_structuredReachPolicy && !_reachIncidentIntake &&
         String(channel || '').toLowerCase() !== 'voice' &&
         !(identity && identity.outbound_finalize === true)) {
       _routedToolIntent = routeToolIntent(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      _routedRequiresLiveTool = intentRequiresLiveTool(_routedToolIntent);
+      _routedRequiredReadTool = requiredReadToolForMessage(
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
+        _routedToolIntent);
+      _routedRequiresLiveTool = !!_routedRequiredReadTool;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
+      if (_routedRequiredReadTool) {
+        body.tools = body.tools.filter(function (tool) {
+          return tool && tool.function && tool.function.name === _routedRequiredReadTool;
+        });
+      }
       _stampStep('tool_intent_route', _routedToolIntent + ':visible=' + body.tools.length);
       if (!body.tools.length) delete body.tools;
     }
@@ -3217,16 +3260,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     }
     if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
-      var _liveReaderName = _routedToolIntent === 'weather' ? 'weather_check' : 'nash_sports';
+      var _liveReaderName = _routedRequiredReadTool;
       var _liveReaderArgs = DATA_READER_TOOLS[_liveReaderName](
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      if ((_liveReaderName === 'weather_check' && _liveReaderArgs.place) ||
-          (_liveReaderName === 'nash_sports' && _liveReaderArgs.league)) {
+      if (_liveReaderArgs && Object.keys(_liveReaderArgs).every(function (key) {
+        return _liveReaderArgs[key] !== '' && _liveReaderArgs[key] !== null;
+      })) {
         body._dataReaderNudge = _liveReaderName;
       }
       body.tool_choice = 'required';
       body.messages = body.messages.concat([{ role:'system',
-        content:'This exact request asks for current external data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
+        content:'This exact request asks for owned or current data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
       _stampStep('tool_intent_live_read_required', _routedToolIntent);
     }
     // \u2b21B:core.tool_loop:WIRE:ornith_opt_in_no_tools_only:20260703\u2b21
@@ -4795,7 +4839,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,planToolUse,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
-  weatherArgsFromMessage,sportsArgsFromMessage,
+  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,requiredReadToolForMessage,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
