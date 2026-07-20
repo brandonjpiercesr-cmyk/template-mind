@@ -263,6 +263,21 @@ var GB = _TOGETHER_KEY
   : 'https://api.together.xyz/v1/chat/completions';
 var GROQ = _TOGETHER_KEY; // fetch(GB) sites send Bearer + GROQ; now that is the Together key
 var _GB_MODEL = process.env.TOGETHER_MODEL || 'zai-org/GLM-5.2';
+function weatherArgsFromMessage(message) {
+  var text = String(message || '').trim();
+  var match = text.match(/\b(?:in|for|at)\s+([A-Za-z][A-Za-z .,'-]{1,80}?)(?=\s+(?:today|tomorrow|right now|now|this (?:morning|afternoon|evening|week))\b|[?!.]*$)/i);
+  return { place: match ? match[1].trim().replace(/[,.]+$/, '') : '' };
+}
+
+function sportsArgsFromMessage(message) {
+  var text = String(message || '').toLowerCase();
+  if (/\b(wnba|liberty|aces|sky|fever|mystics|mercury|lynx|storm|wings|sparks|sun|dream)\b/.test(text)) return { league:'wnba' };
+  if (/\b(nfl|bills|chiefs|eagles|cowboys|giants|jets|ravens|bengals|steelers|patriots|dolphins|packers|49ers)\b/.test(text)) return { league:'nfl' };
+  if (/\b(mlb|yankees|mets|dodgers|red sox|braves|cubs|phillies|astros|orioles)\b/.test(text)) return { league:'mlb' };
+  if (/\b(nhl|sabres|rangers|islanders|devils|bruins|maple leafs|oilers|panthers|lightning)\b/.test(text)) return { league:'nhl' };
+  if (/\b(nba|lakers|warriors|celtics|knicks|nets|heat|bulls|cavaliers|nuggets|spurs|mavericks|suns)\b/.test(text)) return { league:'nba' };
+  return { league:'' };
+}
 // ⬡B:core.tool_loop:MAP:data_reader_tools_executable_in_cold_code:20260719⬡
 // Deterministic data-reader tools that cold code can execute directly when the
 // model refuses to emit a forced tool_choice. Each maps the raw user message to
@@ -271,6 +286,8 @@ var DATA_READER_TOOLS = {
   calendar_read: function(m){ return {}; },
   find_in_brain: function(m){ return { query: String(m||'').slice(0,200) }; },
   find_identity_evidence: function(m){ return { query: String(m||'').slice(0,200) }; },
+  weather_check: weatherArgsFromMessage,
+  nash_sports: sportsArgsFromMessage,
   // ⬡B:core.tool_loop:FIX:lane_board_is_a_data_reader_force_execute_when_model_wont_call:20260719⬡
   // read_lane_board is a pure deterministic reader (no args, just fetches the lane
   // registry). The founder caught her NOT calling it even with a firm nudge, then
@@ -3200,6 +3217,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     }
     if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
+      var _liveReaderName = _routedToolIntent === 'weather' ? 'weather_check' : 'nash_sports';
+      var _liveReaderArgs = DATA_READER_TOOLS[_liveReaderName](
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
+      if ((_liveReaderName === 'weather_check' && _liveReaderArgs.place) ||
+          (_liveReaderName === 'nash_sports' && _liveReaderArgs.league)) {
+        body._dataReaderNudge = _liveReaderName;
+      }
       body.tool_choice = 'required';
       body.messages = body.messages.concat([{ role:'system',
         content:'This exact request asks for current external data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
@@ -4771,6 +4795,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,planToolUse,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
+  weatherArgsFromMessage,sportsArgsFromMessage,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
