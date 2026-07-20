@@ -18,13 +18,36 @@
 function hasAcceptedContent(content, opts) {
   if (typeof content !== 'string' || !content.trim()) return false;
   if (!opts || opts.json !== true) return true;
-  var text = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
+  // GLM-5.2 and other reasoning models can wrap the real JSON in a thinking
+  // trace or leading blank lines. Strip think blocks and grab the outermost
+  // JSON object before judging, so a good answer with residue is accepted
+  // instead of silently falling the whole turn to a cold RunPod pod.
+  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (text[0] !== '{') {
+    var s = text.indexOf('{'); var e = text.lastIndexOf('}');
+    if (s !== -1 && e > s) text = text.slice(s, e + 1);
+  }
   try {
     var parsed = JSON.parse(text);
     return !!(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
   } catch (e) {
     return false;
   }
+}
+
+
+function cleanModelContent(content, opts) {
+  if (typeof content !== 'string') return content;
+  if (!opts || opts.json !== true) return content;
+  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (text[0] !== '{') {
+    var s = text.indexOf('{'); var e = text.lastIndexOf('}');
+    if (s !== -1 && e > s) text = text.slice(s, e + 1);
+  }
+  return text;
 }
 
 function combinedSignal(signals) {
@@ -77,7 +100,7 @@ async function tryRunPodGLM(system, user, opts) {
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.GLM_RUNPOD_KEY || process.env.RUNPOD_API_KEY || '') }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'runpod' } : null;
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: 'runpod' } : null;
   } catch (e) { return null; }
 }
 async function tryTogetherGLM(system, user, opts) {
@@ -85,11 +108,20 @@ async function tryTogetherGLM(system, user, opts) {
   try {
     var body = { model: process.env.GLM_MODEL || 'zai-org/GLM-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
+    // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_together_so_it_returns_fast_clean_json:20260719⬡
+    // GLM-5.2 is a 744B reasoning model that THINKS by default, emitting a long
+    // reasoning trace before (or instead of) the answer. On a json call the
+    // content then fails to parse as pure JSON, hasAcceptedContent rejects it,
+    // and the whole GLM rung falls through to a COLD RunPod pod, which is the
+    // real reason every scene paid a 90-second cold start. Turning thinking OFF
+    // makes GLM-5.2 answer directly and fast, clean JSON on json calls, so the
+    // warm Together rung actually wins instead of silently losing to cold RunPod.
+    body.chat_template_kwargs = { enable_thinking: false };
     var r = await fetch('https://api.together.xyz/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'together' } : null;
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: 'together' } : null;
   } catch (e) { return null; }
 }
 async function tryOpenRouterGLM(system, user, opts) {
@@ -104,11 +136,20 @@ async function tryOpenRouterGLM(system, user, opts) {
     // 5.2's reasoning-burn so an empty never wins.
     var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
+    // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_openrouter_too:20260719⬡
+    // Same disease as the Together rung: GLM-5.2 thinks by default, the content
+    // arrives with reasoning residue, hasAcceptedContent rejects it on json
+    // calls, and the turn falls to a COLD RunPod pod. With Together out of
+    // credits (live 402 receipt today) OpenRouter is the working warm rung, so
+    // it must answer clean. Both passthrough shapes are sent because OpenRouter
+    // providers differ in which one they honor.
+    body.chat_template_kwargs = { enable_thinking: false };
+    body.reasoning = { enabled: false };
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'glm-5.2', via: 'openrouter' } : null;
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: 'openrouter' } : null;
   } catch (e) { return null; }
 }
 async function tryOrnith(system, user, opts) {
@@ -192,6 +233,13 @@ async function rankedAccepted(factories, opts) {
 // floor last, only if the open-weight authorized set is unreachable.
 async function deliberate(system, user, options) {
   var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: 25000, json: false }, options || {});
+  // ⬡B:core.model_ladder:LAW:spend_guard_at_the_one_door:20260719⬡ the daily
+  // ceiling lives at the single door every paid text call flows through, so a
+  // runaway loop or retry storm trips a brake instead of draining a balance to
+  // zero. Health probes and free rungs pass opts.noGuard to bypass.
+  if (!opts.noGuard) {
+    try { if (!require('./spend.guard.js').allow('text')) return null; } catch (eSG) {}
+  }
   var order = (process.env.MODEL_LADDER_ORDER || 'glm,ornith,qwen').split(',').map(function (s) { return s.trim(); });
   // \u2b21B:core.model_ladder:FIX:glm_provider_order_is_env_truth:20260717\u2b21
   // Live receipt: the RunPod pod is serving glm4:9b, a small quantized model, and
@@ -251,23 +299,50 @@ async function deliberate(system, user, options) {
 // removed, which is aligned, but did not carry this door.)
 async function transcribe(audio, opts) {
   opts = opts || {};
-  var key = process.env.TOGETHER_API_KEY; if (!key || !audio) return null;
-  try {
-    var b64 = String(audio); var comma = b64.indexOf(',');
-    if (comma >= 0) b64 = b64.slice(comma + 1);
-    var buf = Buffer.from(b64, 'base64');
-    if (!buf.length) return null;
-    var form = new FormData();
-    form.append('file', new Blob([buf], { type: opts.mime || 'audio/webm' }), opts.filename || 'note.webm');
-    form.append('model', process.env.TOGETHER_WHISPER_MODEL || 'openai/whisper-large-v3');
-    var r = await fetch('https://api.together.xyz/v1/audio/transcriptions', {
-      method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form,
-      signal: requestSignal(opts, opts.timeout || 20000) });
-    if (!r.ok) return null;
-    var d = await r.json();
-    var text = String(d.text || '').trim();
-    return text ? { text: text, via: 'together' } : null;
-  } catch (e) { return null; }
+  if (!audio) return null;
+  var b64 = String(audio); var comma = b64.indexOf(',');
+  if (comma >= 0) b64 = b64.slice(comma + 1);
+  var buf;
+  try { buf = Buffer.from(b64, 'base64'); } catch (eB) { return null; }
+  if (!buf || !buf.length) return null;
+  // rung one: Together Whisper (approved), when it has credits
+  var key = process.env.TOGETHER_API_KEY;
+  if (key) {
+    try {
+      var form = new FormData();
+      form.append('file', new Blob([buf], { type: opts.mime || 'audio/webm' }), opts.filename || 'note.webm');
+      form.append('model', process.env.TOGETHER_WHISPER_MODEL || 'openai/whisper-large-v3');
+      var r = await fetch('https://api.together.xyz/v1/audio/transcriptions', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form,
+        signal: requestSignal(opts, opts.timeout || 20000) });
+      if (r.ok) {
+        var d = await r.json();
+        var text = String(d.text || '').trim();
+        if (text) return { text: text, via: 'together' };
+      }
+    } catch (e) { /* fall through to the next rung */ }
+  }
+  // ⬡B:core.model_ladder:REPAIR:elevenlabs_stt_carries_voice_notes_when_together_is_dry:20260719⬡
+  // Together ran out of credits (live 402 receipt) and voice notes died with it.
+  // ElevenLabs is already the approved voice vendor with a live key, and its
+  // scribe model transcribes. Second rung on the same one door, no new vendor.
+  var elKey = process.env.ELEVENLABS_API_KEY;
+  if (elKey) {
+    try {
+      var form2 = new FormData();
+      form2.append('file', new Blob([buf], { type: opts.mime || 'audio/webm' }), opts.filename || 'note.webm');
+      form2.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
+      var r2 = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+        method: 'POST', headers: { 'xi-api-key': elKey }, body: form2,
+        signal: requestSignal(opts, opts.timeout || 25000) });
+      if (r2.ok) {
+        var d2 = await r2.json();
+        var text2 = String(d2.text || '').trim();
+        if (text2) return { text: text2, via: 'elevenlabs' };
+      }
+    } catch (e2) { /* both rungs failed, honest null */ }
+  }
+  return null;
 }
 
 module.exports = { deliberate: deliberate, transcribe: transcribe };
