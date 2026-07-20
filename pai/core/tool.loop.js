@@ -442,6 +442,37 @@ function openAiCompatibleHistory(msgs) {
   });
 }
 
+// Keep the canonical PAI tool decision intact when the approved primary
+// provider changes. The caller owns whether tools exist and whether a nudge
+// selected provider-auto; this adapter only translates the resulting body.
+function primaryProviderBody(body, msgs, model) {
+  var providerBody = {
+    model:model,
+    messages:openAiCompatibleHistory(body.messages || msgs),
+    max_tokens:body.max_tokens,
+    temperature:body.temperature
+  };
+  if (Array.isArray(body.tools) && body.tools.length) providerBody.tools = body.tools;
+  if (body.tool_choice !== undefined) providerBody.tool_choice = body.tool_choice;
+  return providerBody;
+}
+
+function dayQuestionIntent(message, isScreenCommand) {
+  if (isScreenCommand) return false;
+  var text = String(message || '');
+  // Engineering receipts can describe a per-provider/day dimension without
+  // asking for the human's calendar. Keep that compound out of the day lane.
+  if (/\bper[-_ ]?provider\s*\/\s*day\s+(receipt|metric|limit|budget|count)s?\b/i.test(text)) {
+    return false;
+  }
+  // An explicit exclusion is not a calendar request merely because it names
+  // the rejected categories.
+  if (/\b(?:not|no|without)\s+(?:a\s+)?(?:day|calendar|schedule|meeting|agenda)\b/i.test(text)) {
+    return false;
+  }
+  return /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(text);
+}
+
 // ⬡B:core.tool_loop:REPAIR:grounded_prose_after_tool_protocol_sentinel:20260715⬡
 // The live face produced `<tool_call>` from the watched-surface honesty fallback.
 // That branch intentionally exits the main tool loop, so its text never reached
@@ -2894,7 +2925,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _looksLikeInfoQ = /\?\s*$/.test(_mSt)
         || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
       var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
-      var _isDayQ = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|day looks?|going on today|day today|tomorrow)\b/i.test(_mSt) && !_isScreenCmd;
+      var _isDayQ = dayQuestionIntent(_mSt, _isScreenCmd);
       // ⬡B:core.tool_loop:WIRE:lane_board_intent_hint_not_a_rail:20260719⬡ A lane
       // question is about the BUILD chats/lanes, not the day. HINT in the same shape as
       // _isDayQ (she keeps ALL tools and still chooses), just puts read_lane_board top of
@@ -3066,11 +3097,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if (!r) { global._paiLastError = 'groq_rung_skipped_banned_provider'; }
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
-      if(TK){var togetherBody={model:process.env.TOGETHER_MODEL||'zai-org/GLM-5.2',
-          messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
-          temperature:_structuredReachPolicy?0:0.3,
-          // ⬡B:core.tool_loop:FIX:glm_reasoning_burn_returns_empty_content:20260718⬡
-          chat_template_kwargs:{enable_thinking:false}};
+      if(TK){var togetherBody=primaryProviderBody(body,msgs,
+          process.env.TOGETHER_MODEL||'zai-org/GLM-5.2');
+        // ⬡B:core.tool_loop:FIX:glm_reasoning_burn_returns_empty_content:20260718⬡
+        togetherBody.chat_template_kwargs={enable_thinking:false};
         if(_structuredReachPolicy){
           var _togetherPolicyFormat=_structuredReachResponseFormat();
           if(_togetherPolicyFormat)togetherBody.response_format=_togetherPolicyFormat;
@@ -3104,9 +3134,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // just falls through to the existing empty-answer path below, unchanged.
     if (!r||r.error||!r.choices){
       var ORK=process.env.OPENROUTER_API_KEY;
-      if(ORK){var openRouterBody={model:process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b',
-          messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
-          temperature:_structuredReachPolicy?0:0.3};
+      if(ORK){var openRouterBody=primaryProviderBody(body,msgs,
+          process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b');
         if(_structuredReachPolicy){
           var _routerPolicyFormat=_structuredReachResponseFormat();
           if(_routerPolicyFormat)openRouterBody.response_format=_routerPolicyFormat;
@@ -4548,6 +4577,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   return _successResult;
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
+  primaryProviderBody,dayQuestionIntent,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
