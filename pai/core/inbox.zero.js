@@ -1,7 +1,7 @@
 // ⬡B:core.inbox_zero:BUILD:universal_wonder_agent_one_source_per_advisor:20260720⬡
 // entered through the ABAHAM door, serving channel MESSAGES (per-world inbox review)
 //
-// THE INBOX ZERO WONDER AGENT — universal, one source, runs identically for EVERY
+// THE INBOX ZERO WONDER AGENT, universal, one source, runs identically for EVERY
 // advisor. This file does NOT belong to MH Action, or BDIF, or anyone. The world is a
 // parameter, never a hardcoded value (the 847392 test). No grant id and no email address
 // is written into this file's logic; every world-specific value is resolved at run time
@@ -69,7 +69,7 @@ function advisorGlobalFor(world) {
 // Not automatic just because a world name was passed in. A real lookup: confirm a live
 // advisor exists for this world for this HAM (the lane board / advisor registry), then
 // resolve her own grant + sender identity. Config is read from her registration, never
-// hardcoded here. If no live advisor, we do NOT draft blind — we mark the wall and stop.
+// hardcoded here. If no live advisor, we do NOT draft blind, we mark the wall and stop.
 async function resolveAdvisorConfig(world, HAM) {
   var w = normalizeWorld(world);
   var live = true, roster = [];
@@ -134,7 +134,7 @@ async function closeLoopOnPriorDrafts(HAM, config) {
   var advisorGlobal = config.advisor_id;
   try { var rec = await advisorExit.reconcileDrafts(HAM, advisorGlobal); closed = (rec && rec.closed) || 0; } catch (e) {}
   // DROP resolved: read still-open DRAFT_PENDING notes; if the thread they answer now has a
-  // real reply in Sent, the draft is moot — drop it with a stamped reason, do not send.
+  // real reply in Sent, the draft is moot, drop it with a stamped reason, do not send.
   try {
     if (!_bu() || !_bk()) return { closed: closed, dropped: dropped };
     var url = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + String(HAM).toUpperCase()
@@ -169,8 +169,8 @@ async function closeLoopOnPriorDrafts(HAM, config) {
 // ── THE BRAIN, READ FIRST ─────────────────────────────────────────────────────────────
 // Find in the brain first before assuming nothing is known, scoped to THIS advisor's own
 // IMB (her agent_global + this HAM), never a blind search across every advisor at once.
-// If her IMB has nothing on a person or thread, that itself is useful — a new or
-// never-captured relationship — and we say so rather than guessing.
+// If her IMB has nothing on a person or thread, that itself is useful, a new or
+// never-captured relationship, and we say so rather than guessing.
 async function readAdvisorIMB(config, HAM) {
   try {
     var res = await find.find([
@@ -197,7 +197,7 @@ async function gatherEvidence(config, HAM, limit) {
   // Own IMB first.
   out.imb = await readAdvisorIMB(config, HAM);
 
-  // Unread inbox — this world's grant only. EBC firewall.
+  // Unread inbox, this world's grant only. EBC firewall.
   var inbox;
   try { inbox = await IMAN.listEmails(world, { limit: limit || 12, unread: true }); }
   catch (e) { inbox = { ok: false, reason: e.message, messages: [] }; }
@@ -223,10 +223,10 @@ async function gatherEvidence(config, HAM, limit) {
     rec.distinct_recipient_domains = Object.keys(domains).length;
     if (rec.recipient_count >= 12 || rec.distinct_recipient_domains >= 6) out.blast_hints.push(rec.id);
 
-    // Sent check — never assume no one answered.
+    // Sent check, never assume no one answered.
     if (m.thread_id) {
       try { var chk = await IMAN.alreadyRepliedOnThread(world, m.thread_id, m.date); rec.already_replied = !!(chk && chk.replied); } catch (e) {}
-      // Full thread, chronological, every message — not just the newest.
+      // Full thread, chronological, every message, not just the newest.
       try { var th = await IMAN.getThread(world, m.thread_id); if (th.ok) rec.thread = (th.messages || []).map(function (tm) {
         return { from: tm.from, date: tm.date, snippet: tm.snippet, body: String(tm.body || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 1200), attachments: tm.attachments };
       }); } catch (e) {}
@@ -243,14 +243,14 @@ async function gatherEvidence(config, HAM, limit) {
         try {
           var dl = await IMAN.downloadAttachment(world, m.id, a.id, a.content_type);
           if (dl && dl.ok && dl.readable && dl.text) rec.attachment_text.push({ filename: a.filename, text: dl.text.slice(0, 2000) });
-          else rec.attachment_text.push({ filename: a.filename, text: null, note: 'binary/unreadable — not fabricating its contents' });
+          else rec.attachment_text.push({ filename: a.filename, text: null, note: 'binary/unreadable, not fabricating its contents' });
         } catch (e) {}
       }
     }
     out.messages.push(rec);
   }
 
-  // Calendar — every writable calendar for this world (grounding resolves the world's own).
+  // Calendar, every writable calendar for this world (grounding resolves the world's own).
   try { out.calendar = await grounding.groundedCalendar(world) || ''; } catch (e) { out.calendar = ''; }
   return out;
 }
@@ -266,7 +266,7 @@ function buildJudgmentPrompt(packet, config) {
     lines.push('--- EMAIL ' + (i + 1) + ' (id ' + m.id + ') ---');
     lines.push('From: ' + (m.from_name ? (m.from_name + ' <' + m.from + '>') : m.from));
     lines.push('Subject: ' + m.subject);
-    lines.push('Recipients: ' + m.recipient_count + ' (distinct domains: ' + m.distinct_recipient_domains + ')' + (packet.blast_hints.indexOf(m.id) !== -1 ? '  [COLD HINT: possible blast — verify To/CC yourself]' : ''));
+    lines.push('Recipients: ' + m.recipient_count + ' (distinct domains: ' + m.distinct_recipient_domains + ')' + (packet.blast_hints.indexOf(m.id) !== -1 ? '  [COLD HINT: possible blast, verify To/CC yourself]' : ''));
     lines.push('Already replied by the principal on this thread: ' + (m.already_replied ? 'YES' : 'no'));
     var ageDays = m.date ? Math.floor((Date.now() / 1000 - m.date) / 86400) : null;
     if (ageDays != null) lines.push('Age: ' + ageDays + ' day(s)' + (ageDays > 2 ? '  [STALE: flag before drafting]' : ''));
@@ -279,11 +279,11 @@ function buildJudgmentPrompt(packet, config) {
   });
   var imbLine = packet.imb && !packet.imb.empty
     ? 'Advisor IMB history (' + packet.imb.count + ' notes): ' + packet.imb.notes.join(' | ')
-    : 'Advisor IMB history: NOTHING on file — treat unknown people as new/uncaptured relationships, do not invent history.';
+    : 'Advisor IMB history: NOTHING on file, treat unknown people as new/uncaptured relationships, do not invent history.';
 
   var system = 'You are the judgment organ of the Inbox Zero cycle for the "' + config.world_name
     + '" world. You serve ' + (process.env.FOUNDER_DISPLAY_NAME || 'the principal') + '. EBC FIREWALL: you have zero access to any other world; never name another client or organization.\n'
-    + 'Decide, for EACH email, exactly one bucket: personal (owed a real reply), blast (looks personal but went wide — do not answer warmly), not_mine (a named staffer already owns it, principal only CC\'d), automated (no human to write back to), calendar (resolves on accept/decline), or resolved (already answered).\n'
+    + 'Decide, for EACH email, exactly one bucket: personal (owed a real reply), blast (looks personal but went wide, do not answer warmly), not_mine (a named staffer already owns it, principal only CC\'d), automated (no human to write back to), calendar (resolves on accept/decline), or resolved (already answered).\n'
     + 'RULES: Check the full To/CC before calling anything personal. If a named person is already corresponding, it is not the principal\'s to answer. Open attachments before referencing them; if something was referenced but never attached, say so plainly. Flag anything older than two days before drafting. NEVER fabricate a person, update, meeting, or trip not present in the evidence. Use IMB history only when it is real, sourced as what it is.\n'
     + 'Only for bucket=personal do you write draftBody, and it must be in the PRINCIPAL\'S OWN VOICE: no em dashes, no dropped subjects, no robotic parallel structure, no call-to-action ending, a correct capitalized greeting, ending on the last real thought. Everything is DRAFT ONLY; nothing sends without his explicit word.\n'
     + 'If a draft is genuinely time-critical (a real deadline within hours that a resting draft would blow past), set escalate.propose=true with a tier (text|email|call) and one sentence of reasoning. You never send; you only propose, and the Overseer clears it.\n'
@@ -317,7 +317,7 @@ async function judgeAndDraft(packet, config) {
 // ── THE VOICE LAYER: HER REPORT ───────────────────────────────────────────────────────
 // The report the advisor gives the principal in the Command Center is written in HER voice,
 // not his: A'NU, JARVIS from Iron Man but a Black woman, a serving butler with spunk and
-// funk, full natural sentences, matters-first — never a system readout, never a grading
+// funk, full natural sentences, matters-first, never a system readout, never a grading
 // sheet listing twelve items in identical tone. She tells him what actually matters first.
 async function composeHerReport(decisions, packet, config, HAM, priorLoop) {
   var personal = decisions.filter(function (d) { return d.bucket === 'personal' && d.needsReply; });
@@ -335,7 +335,7 @@ async function composeHerReport(decisions, packet, config, HAM, priorLoop) {
   if (packet.imb && packet.imb.empty) facts.push('Note: her memory bank had nothing on file for this world yet, so new faces were treated as new relationships, not guessed.');
 
   var system = 'You are A\'NU speaking to ' + (process.env.FOUNDER_DISPLAY_NAME || 'the principal')
-    + ' in his Command Center after reviewing the ' + config.world_name + ' inbox. Speak in your one voice: warm, sharp, a serving butler with spunk and funk, JARVIS by way of a Black woman, full natural sentences. Lead with what actually matters, not a list in identical tone. Tell him plainly what is drafted and waiting on his word, what you handled and why, and anything you want to reach him about sooner. Never a system readout, never bullet-graded, no em dashes, no "as an AI". Give him as much useful signal as he can use, no filler.';
+    + ' in his Command Center after reviewing the ' + config.world_name + ' inbox. Speak in your one voice: warm, sharp, a serving butler with spunk and funk, JARVIS by way of a Black woman, full natural sentences. Lead with what actually matters, not a list in identical tone. Tell him plainly what is drafted and waiting on his word, what you handled and why, and anything you want to reach him about sooner. Never a system readout, never bullet-graded, no em dashes, never robotic. Give him as much useful signal as he can use, no filler.';
   var user = 'Compose your Command Center report from these facts. Do not invent anything not here:\n\n' + facts.join('\n');
 
   var report = '';
@@ -413,7 +413,7 @@ async function runInboxZero(opts) {
   if (packet.imb && packet.imb.empty) {
     // Empty IMB is useful information, and a gap worth marking so it gets captured over time.
     await markWallGap(HAM, world, 'empty_imb',
-      'This advisor\'s memory bank had nothing on file for "' + world + '" — relationships here have not been captured yet.',
+      'This advisor\'s memory bank had nothing on file for "' + world + '", relationships here have not been captured yet.',
       'Have A\'NU\'s cycle capture relationship history for "' + world + '" so future runs are not blind (RELATIONSHIP beads under ' + config.advisor_id + ').');
   }
 
@@ -421,7 +421,7 @@ async function runInboxZero(opts) {
   var judged = await judgeAndDraft(packet, config);
   var decisions = judged.decisions || [];
 
-  // 5) Mark read/handled ONLY after a real decision — drafted or a deliberate skip — never
+  // 5) Mark read/handled ONLY after a real decision, drafted or a deliberate skip, never
   //    just because something was looked at.
   var draftedMsgs = [], skippedMsgs = [];
   decisions.forEach(function (d) {
@@ -445,7 +445,7 @@ async function runInboxZero(opts) {
       acl_stamp: brainClient.buildStamp('inbox_zero.' + world + '.draft', 'DRAFT_PENDING', ''),
       source: 'ham_' + String(HAM).toLowerCase() + '.inbox_zero.' + world + '.draft.' + Date.now(),
       importance: 8,
-      summary: '[INBOX ZERO DRAFT] ' + personal.length + ' reply draft(s) ready for ' + world + ' — ' + report.slice(0, 60),
+      summary: '[INBOX ZERO DRAFT] ' + personal.length + ' reply draft(s) ready for ' + world + ', ' + report.slice(0, 60),
       content: JSON.stringify({
         status: 'pending_approval', world: world, agent: 'INBOX_ZERO', report: report,
         drafts: personal.map(function (d) {
@@ -460,7 +460,7 @@ async function runInboxZero(opts) {
       }),
     });
   }
-  try { await advisorExit.surfaceToDesk(HAM, 'INBOX_ZERO', 'Inbox Zero — ' + world, report, personal.length ? 8 : 6); } catch (e) {}
+  try { await advisorExit.surfaceToDesk(HAM, 'INBOX_ZERO', 'Inbox Zero, ' + world, report, personal.length ? 8 : 6); } catch (e) {}
 
   // 9) The brain, write, stamped. A RESULT bead records every action for honest audit.
   var resultContent = lineage.attachLineage({
@@ -493,7 +493,7 @@ async function runInboxZero(opts) {
     escalations_proposed: escalations, prior_drafts_closed: priorLoop.closed, prior_drafts_dropped: priorLoop.dropped,
     imb_empty: !!(packet.imb && packet.imb.empty), organ_ok: judged.ok,
     report: report, ms: Date.now() - t0,
-    note: 'universal inbox-zero, world resolved as a parameter, nothing sent — drafts rest in the Command Center.',
+    note: 'universal inbox-zero, world resolved as a parameter, nothing sent, drafts rest in the Command Center.',
   };
 }
 
@@ -508,7 +508,7 @@ async function registerLane(HAM) {
     acl_stamp: brainClient.buildStamp('lane.registry.INBOX_ZERO', 'LANE_CLAIM', ''),
     source: 'lane.registry.INBOX_ZERO',
     importance: 7,
-    summary: '[LANE] INBOX_ZERO — universal per-advisor inbox review, one source in core, runs per world by parameter.',
+    summary: '[LANE] INBOX_ZERO, universal per-advisor inbox review, one source in core, runs per world by parameter.',
     content: JSON.stringify({ lane: 'INBOX_ZERO', track: 'wonder_agent_universal', one_source: 'core/inbox.zero.js', createdAt: new Date().toISOString() }),
   });
 }
@@ -520,7 +520,7 @@ function registerInboxZero(app) {
   // Claim the lane once at mount (fire-and-forget, fails safe).
   try { registerLane(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
 
-  // POST /inbox-zero/:world/run { hamUid, intent, limit } — run a real turn for one world.
+  // POST /inbox-zero/:world/run { hamUid, intent, limit }, run a real turn for one world.
   app.post('/inbox-zero/:world/run', async function (req, res) {
     try {
       var body = req.body || {};
@@ -529,7 +529,7 @@ function registerInboxZero(app) {
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
 
-  // GET /inbox-zero/:world/pending?hamUid= — what is resting on the desk for this world.
+  // GET /inbox-zero/:world/pending?hamUid=, what is resting on the desk for this world.
   app.get('/inbox-zero/:world/pending', async function (req, res) {
     try {
       var HAM = String(req.query.hamUid || process.env.FOUNDER_HAM_UID || '').toUpperCase();

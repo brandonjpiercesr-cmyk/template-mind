@@ -8,7 +8,7 @@ function _memorySelected(){return !!(process.env.MEMORY_BANK_URL||process.env.ME
 function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_brain');}
 function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 
-// IMAN — Nylas email. Outbound send + inbox read. No hardcode.
+// IMAN, Nylas email. Outbound send + inbox read. No hardcode.
 // Grant resolution: world -> env var. Key resolution: sandbox vs production app.
 // ANYHAM test: route works for any valid world. EBC firewall: reads only the world passed in.
 
