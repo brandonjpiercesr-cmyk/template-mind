@@ -287,6 +287,15 @@ function memoryArgsFromMessage(message) {
   if (/\b(failure|failed|broken|alert|stuck)\b/.test(text)) return { stamp_type:'ALERT', limit:10 };
   return { limit:10 };
 }
+
+function draftArgsFromMessage(message) {
+  var text = String(message || '').toLowerCase();
+  if (/\bmediators?\b/.test(text)) return { org:'mediators' };
+  if (/\bbdif\b/.test(text)) return { org:'bdif' };
+  if (/\bgmg\b/.test(text)) return { org:'gmg' };
+  if (/\bmh[\s_-]*action\b/.test(text)) return { org:'mh_action' };
+  return { org:'' };
+}
 // ⬡B:core.tool_loop:MAP:data_reader_tools_executable_in_cold_code:20260719⬡
 // Deterministic data-reader tools that cold code can execute directly when the
 // model refuses to emit a forced tool_choice. Each maps the raw user message to
@@ -298,6 +307,7 @@ var DATA_READER_TOOLS = {
   weather_check: weatherArgsFromMessage,
   nash_sports: sportsArgsFromMessage,
   inbox_read: function(m){ return { unread_only:!/\brecent\b/i.test(String(m||'')) }; },
+  get_pending_drafts: draftArgsFromMessage,
   read_reminders: function(m){ return {}; },
   get_budget_summary: function(m){ return {}; },
   get_budget_upcoming: function(m){ return {}; },
@@ -962,7 +972,8 @@ function routeToolIntent(message) {
       /\b(meetings?|events?)\b.*\b(scheduled|today|tomorrow|this week|next week)\b/.test(text) ||
       /\b(find|show)\b.*\b(open )?(time|slot)\b/.test(text)) return 'schedule';
   if (/\b(my|our|unread|recent|pending)\b.*\b(inbox|emails?|reply drafts?)\b/.test(text) ||
-      /\b(show|read|check)\b.*\b(inbox|emails?)\b/.test(text)) return 'email';
+      /\b(show|read|check)\b.*\b(inbox|emails?)\b/.test(text) ||
+      /\b(show|read|list|check|get)\b.*\b(bdif|mediators?|gmg|mh[\s_-]*action)\b.*\bdrafts?\b/.test(text)) return 'email';
   if (/\b(remind me|my reminders|what reminders|read reminders|stop mentioning)\b/.test(text) ||
       /\b(read|show|list|check)\b.*\b(my |current |active |pending )?reminders?\b/.test(text)) return 'reminders';
   if (/\b(budget|bnpl|buy.now.pay.later|payments? (are )?(due|coming)|income vs expenses|spending by category)\b/.test(text)) return 'budget';
@@ -994,8 +1005,8 @@ function requiredReadToolForMessage(message, intent) {
   if (intent === 'sports') return sportsArgsFromMessage(text).league ? 'nash_sports' : null;
   if (intent === 'schedule' && /^(?:please\s+)?(?:schedule|book|create|add|move|reschedule|cancel|delete)\b/.test(text)) return null;
   if (intent === 'schedule' && /\b(calendar|schedule|scheduled|meetings?|availability|free|open (?:time|slot)|events?)\b/.test(text)) return 'calendar_read';
-  if (intent === 'email' && /\b(read|show|list|check|get|what)\b.*\b(?:pending\s+)?(?:email\s+|reply\s+)?drafts?\b/.test(text) &&
-      !/\b(send|write|create|delete|approve)\b/.test(text)) return 'get_pending_drafts';
+  if (intent === 'email' && /\b(read|show|list|check|get|what)\b.*\bdrafts?\b/.test(text) &&
+      !/\b(send|write|create|delete|approve)\b/.test(text) && draftArgsFromMessage(text).org) return 'get_pending_drafts';
   if (intent === 'email' && /\b(inbox|unread emails?|recent emails?)\b/.test(text) && !/\b(send|reply|draft)\b/.test(text)) return 'inbox_read';
   if (intent === 'reminders' && /\b(what|read|show|list|check|current|active|pending)\b/.test(text) && !/\b(create|add|set|stop|remove|delete)\b/.test(text)) return 'read_reminders';
   if (intent === 'budget' && /\b(payments? (?:are )?(?:due|coming)|due soon|upcoming|bnpl)\b/.test(text)) return 'get_budget_upcoming';
@@ -4843,7 +4854,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,planToolUse,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
-  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,requiredReadToolForMessage,
+  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
