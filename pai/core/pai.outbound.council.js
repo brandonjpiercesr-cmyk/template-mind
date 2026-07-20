@@ -918,10 +918,28 @@ function storedMemoryEvidenceItems(value, binding) {
 // may form a present judgment from verified option evidence, but the released
 // answer must identify a real choice and distinguish a fresh judgment from a
 // stored preference. No adviser, option, or preferred answer lives in code.
+function operationalChoiceRequest(question) {
+  var text = String(question || '').replace(/[\u2018\u2019]/g, "'");
+  var explicitlyPersonal = /\b(?:your\s+(?:favou?rite|preference)|do\s+you\s+prefer|would\s+you\s+(?:pick|choose)|which\s+do\s+you\s+prefer|you\s+prefer|you\s+like\s+(?:best|most))\b/i
+    .test(text);
+  if (explicitlyPersonal) return false;
+  var asksForSelection = /\b(?:choose|pick|select)\s+one\b/i.test(text) ||
+    /\bwhich\b[^?\n]{0,120}\b(?:next|first|implement|build|run|ship|activate)\b/i.test(text);
+  var operationalScope = /\b(?:roadmap|phase|task|dependency|build|implementation|implement|scope|sequence|deploy|activation|workstream)\b/i
+    .test(text);
+  // The exemption is intentionally narrow: an operational roadmap prompt must
+  // offer at least two uppercase, digit-bearing phase/task IDs (R1D, R1E-A,
+  // TASK_2). Ordinary words or named advisers remain a governed preference.
+  var operationalIds = text.match(/\b(?=[A-Z0-9_-]*\d)[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*\b/g) || [];
+  return asksForSelection && operationalScope && operationalIds.length >= 2;
+}
+
 function currentAssistantPreferenceRequest(question) {
   var text = String(question || '').replace(/[\u2018\u2019]/g, "'");
+  if (operationalChoiceRequest(text)) return false;
   var asksForChoice = /\b(?:which|what|who)\b[^?\n]{0,320}\b(?:is\s+your\s+(?:favou?rite|preference|pick|choice)|do\s+you\s+prefer|would\s+you\s+(?:pick|choose)|your\s+preferred?)\b/i.test(text) ||
     /\b(?:do|would|will)\s+you\s+(?:prefer|pick|choose)\b/i.test(text) ||
+    /\byou\s+(?:prefer|like\s+(?:best|most))\b/i.test(text) ||
     /\bwhat(?:'s|\s+is)\s+your\s+(?:favou?rite|preference|pick|choice)\b/i.test(text) ||
     /\b(?:can|could|would|will)\s+you\s+tell\s+me\s+which\s+one\s+you\s+prefer\b/i.test(text) ||
     /\btell\s+me\s+your\s+(?:favou?rite|preference|pick|choice)\b/i.test(text) ||
@@ -1241,18 +1259,18 @@ async function categoricalMemoryContradiction(ctx, injected) {
 
 async function defaultPamStage(ctx) {
   var pam = require('../board/pam/pam.js');
-  var scopedWorld = ctx.activeWorld && Object.prototype.hasOwnProperty.call(pam.WORLD_PATTERNS, ctx.activeWorld)
-    ? ctx.activeWorld : null;
+  var normalizedWorld = typeof ctx.activeWorld === 'string'
+    ? ctx.activeWorld.trim().toLowerCase() : '';
+  var scopedWorld = normalizedWorld && Object.prototype.hasOwnProperty.call(
+    pam.WORLD_PATTERNS, normalizedWorld) ? normalizedWorld : null;
   var verdict;
   try { verdict = await pam.pamCheck(ctx.answer, scopedWorld); }
   catch (e) { verdict = null; }
   // ⬡B:core.pai_outbound_council:FIX:pam_fails_open_when_it_produces_no_verdict:20260719⬡
-  // FOUNDER: judges heal, they never silently kill. PAM is a privacy gate that only
-  // has grounds to HOLD on a real security FACT (a credential literal, another world's
-  // name leaking). If pamCheck throws or returns no verdict at all, that is NOT a
-  // security finding -- it is a missing verdict, and holding on a missing verdict was
-  // silencing clean answers as pam_no_verdict. PAM now FAILS OPEN: no explicit HOLD
-  // means PASS. A real credential/EBC leak still holds every time (verdict.ok===false).
+  // FOUNDER: judges heal, they never silently kill. PAM is a cold privacy gate:
+  // credential/EBC facts and a bounded inability to scan those facts are explicit
+  // holds. If PAM itself disappears or throws despite its total contract, that is a
+  // missing verdict rather than invented evidence, so this stage records a fail-open.
   var realHold = verdict && verdict.ok === false;
   return {
     ok: !realHold,
@@ -1571,10 +1589,12 @@ async function defaultShadowStage(ctx, injected) {
   var identityReceiptFlags = identityEvidenceReceiptContradictions(ctx);
   // ⬡B:core.pai_outbound_council:FIX:memory_absence_phrasing_is_evidence_not_a_veto:20260718⬡
   // ⬡B:core.pai_outbound_council:REPAIR:contradicted_categorical_absence_is_a_real_hold_again:20260719⬡
-  // A CONTRADICTED categorical absence (answer claims an absence that stored evidence
-  // disproves, e.g. "no favorite adviser" when memory proves ELI is the favorite) is a real
-  // fabrication and must FLAG/hold every time; only non-contradicted absence phrasing stays
-  // advisory. Restored the contradicted flag to the deterministic findings.
+  // The 20260718 fix moved ALL memoryAbsence out of the deterministic findings so mere
+  // absence-phrasing would not silence her. But categoricalMemoryContradiction only fires when
+  // the answer claims an absence that stored evidence CONTRADICTS (e.g. "no favorite adviser"
+  // when memory proves ELI is the favorite) -- that is a real fabrication, not mere phrasing,
+  // and it must FLAG/hold every time. So a CONTRADICTED categorical absence goes back into the
+  // deterministic findings; only non-contradicted absence phrasing stays advisory.
   var deterministicFindings = ((boardResult && boardResult.flags) || [])
     .concat(namedContextFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
       identityReceiptFlags, memoryAbsenceFlags);
@@ -1840,6 +1860,16 @@ async function defaultMetaCommentaryStage(ctx) {
     hamUid: ctx.hamUid
   }, state);
   var output = result && typeof result.pendingOutbound === 'string' ? result.pendingOutbound : '';
+  // ⬡B:core.pai_outbound_council:BOUNDARY:meta_meaning_owned_here_not_pam:20260719⬡
+  // PAM no longer decides tone. This dedicated stage turns only explicit residual
+  // model/training self-description into a bounded hold, so the existing one-ladder
+  // healer rewrites it and this same stage judges the repaired bytes once more.
+  var explicitMeta = output.match(/\b(?:i\s+am|i['’]m)\s+(?:an?\s+)?(?:ai|language\s+model)\b|\bmy\s+(?:training|knowledge\s+cutoff|(?:ai|model)\s+limitations?)\b/i);
+  if (explicitMeta) return {
+    ok:false, answer:output, reason:'meta_commentary_detected',
+    evidence:{ flags:['explicit_model_self_description'],
+      phrase_digest:digestText(explicitMeta[0]) }
+  };
   return {
     ok: output.trim().length > 0,
     answer: output,
@@ -3275,6 +3305,7 @@ module.exports = {
     evidenceDefinesIdentityOrRole: evidenceDefinesIdentityOrRole,
     positiveEvidenceRecords: positiveEvidenceRecords,
     storedMemoryEvidenceItems: storedMemoryEvidenceItems,
+    operationalChoiceRequest: operationalChoiceRequest,
     currentAssistantPreferenceRequest: currentAssistantPreferenceRequest,
     preferenceOptionTerms: preferenceOptionTerms,
     preferenceJudgmentFindings: preferenceJudgmentFindings,

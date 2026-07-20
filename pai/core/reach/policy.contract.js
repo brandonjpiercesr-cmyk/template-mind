@@ -1,46 +1,67 @@
 // ⬡B:core.reach.policy_contract:MODULE:one_strict_reach_policy_shape:20260717⬡
 'use strict';
 
-const KEYS = ['action','reach','channel','importance','reason','recheck_at','message'];
+const KEYS = Object.freeze(['action','reach','channel','importance','reason','recheck_at','message']);
 const ACTIONS = new Set(['NOW','HOLD','DEFER']);
 const CHANNELS = new Set(['voice','text','email','command_center']);
-const voiceConversationPolicy = require('../voice.conversation.policy.js');
 
-const JSON_SCHEMA = {
-  type:'object',
-  additionalProperties:false,
-  required:KEYS.slice(),
-  properties:{
-    action:{type:'string',enum:['NOW','HOLD','DEFER']},
-    reach:{type:'boolean'},
-    channel:{type:'string',enum:['voice','text','email','command_center','none']},
-    importance:{type:'integer',minimum:1,maximum:10},
-    reason:{type:'string',minLength:1,maxLength:500},
-    recheck_at:{anyOf:[{type:'string'},{type:'null'}]},
-    message:{type:'string',maxLength:2000}
-  }
-};
+function buildJsonSchema(){
+  return{
+    type:'object',
+    additionalProperties:false,
+    required:KEYS.slice(),
+    properties:{
+      action:{type:'string',enum:['NOW','HOLD','DEFER']},
+      reach:{type:'boolean'},
+      channel:{type:'string',enum:['voice','text','email','command_center','none']},
+      importance:{type:'integer',minimum:1,maximum:10},
+      reason:{type:'string',minLength:1,maxLength:500},
+      recheck_at:{anyOf:[{type:'string'},{type:'null'}]},
+      message:{type:'string',maxLength:2000}
+    }
+  };
+}
+
+function deepFreeze(value){
+  if(!value||typeof value!=='object'||Object.isFrozen(value))return value;
+  Object.keys(value).forEach(function(key){deepFreeze(value[key]);});
+  return Object.freeze(value);
+}
+
+const JSON_SCHEMA=deepFreeze(buildJsonSchema());
 
 function responseFormat(){
   return{type:'json_schema',json_schema:{name:'reach_policy',strict:true,
-    schema:JSON_SCHEMA}};
+    schema:buildJsonSchema()}};
 }
 
 function validIso(value){
-  var ms=typeof value==='string'?Date.parse(value):NaN;
-  return Number.isFinite(ms)?new Date(ms).toISOString():null;
+  try{
+    var ms=typeof value==='string'?Date.parse(value):NaN;
+    return Number.isFinite(ms)?new Date(ms).toISOString():null;
+  }catch(e){return null;}
 }
 
 function wholeJsonText(raw){
-  if(typeof raw!=='string'||!raw.trim())return null;
-  var text=raw.trim();
-  var fenced=text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if(fenced)text=fenced[1].trim();
-  if(!text||text[0]!=='{'||text[text.length-1]!=='}')return null;
-  return text;
+  try{
+    if(typeof raw!=='string'||!raw.trim())return null;
+    var text=raw.trim();
+    var fenced=text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if(fenced)text=fenced[1].trim();
+    if(!text||text[0]!=='{'||text[text.length-1]!=='}')return null;
+    return text;
+  }catch(e){return null;}
 }
 
-function parseProposal(raw,nowMs){
+function voicePurposeAllowed(message){
+  try{
+    var policy=require('../voice.conversation.policy.js');
+    return!!(policy&&typeof policy.isAutonomousReachVoicePurposeStatement==='function'&&
+      policy.isAutonomousReachVoicePurposeStatement(message)===true);
+  }catch(e){return false;}
+}
+
+function parseProposalUnsafe(raw,nowMs){
   var text=wholeJsonText(raw);
   if(!text)return null;
   var parsed;try{parsed=JSON.parse(text);}catch(e){return null;}
@@ -62,8 +83,7 @@ function parseProposal(raw,nowMs){
   if(action==='NOW'){
     if(parsed.reach!==true||!CHANNELS.has(channel)||!message.trim()||recheckAt!==null)return null;
     if(channel==='email'&&!/^Subject: [^\r\n\0]+(?:\r?\n){2}\S[\s\S]*$/.test(message))return null;
-    if(channel==='voice'&&
-        !voiceConversationPolicy.isAutonomousReachVoicePurposeStatement(message))
+    if(channel==='voice'&&!voicePurposeAllowed(message))
       return null;
   }else if(action==='HOLD'){
     if(parsed.reach!==false||channel!=='none'||message!==''||recheckAt!==null)return null;
@@ -76,10 +96,19 @@ function parseProposal(raw,nowMs){
     reason:reason,recheck_at:recheckAt,message:message};
 }
 
+// ⬡B:core.reach.policy_contract:BOUNDARY:policy_validation_never_throws:20260719⬡
+// A provider draft or optional channel validator can invalidate a proposal, but
+// neither may tear down the PAI cycle. Callers receive one bounded invalid result.
+function parseProposal(raw,nowMs){
+  try{return parseProposalUnsafe(raw,nowMs);}catch(e){return null;}
+}
+
 function canonicalize(raw,nowMs){
-  var proposal=parseProposal(raw,nowMs);
-  return proposal?{ok:true,proposal:proposal,text:JSON.stringify(proposal)}:
-    {ok:false,reason:'reach_policy_json_invalid'};
+  try{
+    var proposal=parseProposal(raw,nowMs);
+    return proposal?{ok:true,proposal:proposal,text:JSON.stringify(proposal)}:
+      {ok:false,reason:'reach_policy_json_invalid'};
+  }catch(e){return{ok:false,reason:'reach_policy_json_invalid'};}
 }
 
 module.exports={KEYS:KEYS,JSON_SCHEMA:JSON_SCHEMA,responseFormat:responseFormat,

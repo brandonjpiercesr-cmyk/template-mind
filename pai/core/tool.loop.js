@@ -449,28 +449,82 @@ function openAiCompatibleHistory(msgs) {
 // context and completed tool results. No answer, roster, preference, or identity
 // is supplied here. If two independent plain-completion lanes still produce
 // plumbing instead of prose, return empty and let the canonical cycle fail closed.
-async function regenerateHollowAnswer(candidate, history, completers) {
+async function regenerateHollowAnswer(candidate, history, completers, options) {
+  options = options && typeof options === 'object' ? options : {};
   var original = typeof candidate === 'string' ? candidate.trim() : '';
-  if (isHumanFacingAnswer(original)) return { answer:original, repaired:false };
-  var repairHistory = openAiCompatibleHistory(history).concat([
-    { role:'assistant', content:original },
-    { role:'user', content:'That draft was only internal tool-protocol syntax, not a human answer. '
+  var accept = typeof options.accept === 'function' ? options.accept : isHumanFacingAnswer;
+  if (options.force !== true && accept(original)) return { answer:original, repaired:false };
+  var instruction = typeof options.instruction === 'string' && options.instruction.trim()
+    ? options.instruction.trim()
+    : 'That draft was only internal tool-protocol syntax, not a human answer. '
       + 'Answer the original request now in normal human-facing prose. Use only facts in the system '
       + 'context and completed tool results already present in this conversation. If the evidence '
       + 'does not establish a requested fact, say what is not established and do not guess. Do not '
-      + 'output XML tags, tool calls, function calls, JSON envelopes, or meta-commentary.' }
+      + 'output XML tags, tool calls, function calls, JSON envelopes, or meta-commentary.';
+  var repairHistory = openAiCompatibleHistory(history).concat([
+    { role:'assistant', content:original },
+    { role:'user', content:instruction }
   ]);
-  var lanes = Array.isArray(completers) ? completers.slice(0, 2) : [];
+  var maxAttempts = Number.isInteger(options.maxAttempts)
+    ? Math.max(0, Math.min(2, options.maxAttempts)) : 2;
+  var lanes = Array.isArray(completers) ? completers.slice(0, maxAttempts) : [];
   for (var i = 0; i < lanes.length; i++) {
     if (typeof lanes[i] !== 'function') continue;
     var proposed = '';
     try { proposed = await lanes[i](repairHistory); } catch (eRepairLane) { proposed = ''; }
     proposed = typeof proposed === 'string' ? proposed.trim() : '';
-    if (isHumanFacingAnswer(proposed)) {
+    if (accept(proposed)) {
       return { answer:proposed, repaired:true, lane:i + 1 };
     }
   }
   return { answer:'', repaired:false };
+}
+
+// ⬡B:core.tool_loop:REPAIR:strict_policy_stays_structured:20260719⬡
+// A malformed policy object can look "human-facing" to the generic protocol
+// predicate because JSON is valid output elsewhere. This repair is deliberately
+// separate: one attempt, no rejected-draft anchoring, and only canonical policy
+// JSON can pass. It never downgrades a policy decision into conversational prose.
+async function regenerateStructuredReachPolicy(candidate, history, completers, contract, nowMs) {
+  var policy = contract && typeof contract === 'object' ? contract : reachPolicyContract;
+  function canonical(value) {
+    try {
+      var checked = policy && typeof policy.canonicalize === 'function'
+        ? policy.canonicalize(value, nowMs) : null;
+      return checked && checked.ok === true && typeof checked.text === 'string'
+        ? checked : null;
+    } catch (ePolicy) { return null; }
+  }
+  var existing = canonical(candidate);
+  if (existing) return { answer:existing.text, repaired:false };
+  var schemaText = '';
+  try {
+    var format = policy && typeof policy.responseFormat === 'function'
+      ? policy.responseFormat() : null;
+    var schema = format && format.json_schema && format.json_schema.schema;
+    if (schema) schemaText = JSON.stringify(schema);
+  } catch (eFormat) { schemaText = ''; }
+  // An injected provider-format adapter is optional infrastructure, not a
+  // second policy judge. If it throws or exposes an unserializable schema, the
+  // one bounded repair still runs against this canonical textual shape; only
+  // contract.canonicalize can accept its bytes.
+  if (!schemaText) schemaText = '{"type":"object","additionalProperties":false,' +
+    '"required":["action","reach","channel","importance","reason","recheck_at","message"],' +
+    '"constraints":"action is NOW, HOLD, or DEFER; reach/channel/recheck_at/message must match that action"}';
+  var repairHistory = openAiCompatibleHistory(history).concat([{ role:'user', content:
+    'The prior policy result did not satisfy the strict REACH policy contract. Regenerate the '
+      + 'decision once from the exact bound evidence already in this conversation. Return only one '
+      + 'JSON object matching this schema, with no prose, fence, tool call, or new facts: '
+      + schemaText }]);
+  var lanes = Array.isArray(completers) ? completers.slice(0, 1) : [];
+  if (!lanes.length || typeof lanes[0] !== 'function') {
+    return { answer:'', repaired:false, reason:'reach_policy_json_invalid' };
+  }
+  var proposed = '';
+  try { proposed = await lanes[0](repairHistory); } catch (eRepair) { proposed = ''; }
+  var repaired = canonical(proposed);
+  return repaired ? { answer:repaired.text, repaired:true, lane:1 }
+    : { answer:'', repaired:false, reason:'reach_policy_json_invalid' };
 }
 
 function scrubLeakedToolProtocol(value) {
@@ -2049,8 +2103,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // not the banned Groq key. Falls back to empty (fail-soft) if Together absent.
   var t0=Date.now(),GROQ=(process.env.TOGETHER_API_KEY||'');
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
+  function _canonicalStructuredReachPolicy(value){
+    try{return reachPolicyContract.canonicalize(value,t0);}
+    catch(ePolicyContract){return{ok:false,reason:'reach_policy_json_invalid'};}
+  }
+  function _structuredReachResponseFormat(){
+    try{
+      var format=reachPolicyContract.responseFormat();
+      // Provider bodies must remain serializable even if an injected adapter
+      // hands us a cyclic or getter-backed object. The canonical validator below
+      // remains the authority whether or not this optional provider hint exists.
+      var encoded=JSON.stringify(format);
+      var safe=encoded&&JSON.parse(encoded);
+      return safe&&safe.type==='json_schema'&&safe.json_schema&&
+        safe.json_schema.schema?safe:null;
+    }catch(ePolicyFormat){return null;}
+  }
   function _validStructuredReachPolicy(value){
-    return!!reachPolicyContract.parseProposal(value);
+    return _canonicalStructuredReachPolicy(value).ok===true;
   }
   function _structuredProviderResult(result){
     if(!_structuredReachPolicy||!result||result.error)return result;
@@ -2061,7 +2131,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if(choice.finish_reason==='length'||choice.finish_reason==='content_filter'||
         modelMessage.refusal||(Array.isArray(modelMessage.tool_calls)&&
           modelMessage.tool_calls.length))return{error:{code:'reach_policy_provider_contract'}};
-    var canonical=reachPolicyContract.canonicalize(modelMessage.content);
+    var canonical=_canonicalStructuredReachPolicy(modelMessage.content);
     if(!canonical.ok)return{error:{code:'reach_policy_provider_contract'}};
     modelMessage.content=canonical.text;
     choice.message=modelMessage;
@@ -2738,7 +2808,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if (_structuredReachPolicy) {
       delete body.tools;
       delete body.tool_choice;
-      body.response_format=reachPolicyContract.responseFormat();
+      var _primaryPolicyFormat=_structuredReachResponseFormat();
+      if(_primaryPolicyFormat)body.response_format=_primaryPolicyFormat;
     }
     else if (iter===1) {
       // \u2b21B:core.tool_loop:FIX:forced_lookup_derailing_screen_commands_20260709\u2b21
@@ -2973,8 +3044,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           temperature:_structuredReachPolicy?0:0.3,
           // ⬡B:core.tool_loop:FIX:glm_reasoning_burn_returns_empty_content:20260718⬡
           chat_template_kwargs:{enable_thinking:false}};
-        if(_structuredReachPolicy)togetherBody.response_format=
-          reachPolicyContract.responseFormat();
+        if(_structuredReachPolicy){
+          var _togetherPolicyFormat=_structuredReachResponseFormat();
+          if(_togetherPolicyFormat)togetherBody.response_format=_togetherPolicyFormat;
+        }
         r=await fetch('https://api.together.xyz/v1/chat/completions',{method:'POST',
         headers:{Authorization:'Bearer '+TK,'Content-Type':'application/json'},
         body:JSON.stringify(togetherBody),
@@ -3008,7 +3081,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           messages:openAiCompatibleHistory(msgs),max_tokens:tokenCapFor(channel),
           temperature:_structuredReachPolicy?0:0.3};
         if(_structuredReachPolicy){
-          openRouterBody.response_format=reachPolicyContract.responseFormat();
+          var _routerPolicyFormat=_structuredReachResponseFormat();
+          if(_routerPolicyFormat)openRouterBody.response_format=_routerPolicyFormat;
           openRouterBody.provider={require_parameters:true};
         }
         r=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
@@ -3092,7 +3166,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // Structured policy is a judgment-only lane. It exits before generic
       // tool-call salvage or execution, so an unsolicited provider tool call
       // can never turn a policy draft into a read, write, or external effect.
-      var _structuredDraft=reachPolicyContract.canonicalize(msg&&msg.content);
+      var _structuredDraft=_canonicalStructuredReachPolicy(msg&&msg.content);
       ans=_structuredDraft.ok?_structuredDraft.text:'{}';
       break;
     }
@@ -3569,6 +3643,42 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   }
   if (await _turnCancelled()) return _turnCancelledResult('after_deliberation');
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
+  var _preCouncilHumanRepairUsed = false;
+  async function _completeBoundHistoryOnLadder(history, maxTokens, temperature, jsonMode) {
+    if (await _turnCancelled(true)) return '';
+    try {
+      var _repairLadder = require('./model.ladder.js');
+      var _repairHistory = openAiCompatibleHistory(history);
+      var _repairSystem = _repairHistory.filter(function (entry) {
+        return entry && entry.role === 'system';
+      }).map(function (entry) { return String(entry.content || ''); }).join('\n\n');
+      var _repairUser = _repairHistory.filter(function (entry) {
+        return entry && entry.role !== 'system';
+      }).map(function (entry) {
+        return String(entry.role || 'user').toUpperCase() + ': ' + String(entry.content || '');
+      }).join('\n\n');
+      var _repairResult = await _repairLadder.deliberate(_repairSystem, _repairUser,
+        {max_tokens:maxTokens || tokenCapFor(channel),temperature:temperature == null ? 0.1 : temperature,
+          timeout:60000,json:jsonMode === true,signal:_modelRequestSignal()});
+      if (await _turnCancelled(true)) return '';
+      return _repairResult && (_repairResult.content || _repairResult.answer ||
+        _repairResult.text) || '';
+    } catch (eRepairLadder) { return ''; }
+  }
+  async function _repairHumanOnce(candidate, failureCode) {
+    if (_preCouncilHumanRepairUsed) return {answer:'',repaired:false};
+    _preCouncilHumanRepairUsed = true;
+    var _oneRepairCap = tokenCapFor(channel);
+    var _repairedHuman = await regenerateHollowAnswer(candidate, msgs, [async function (repairMessages) {
+      return (await _completeBoundHistoryOnLadder(repairMessages, _oneRepairCap, 0.1, false)) || '';
+    }], { force:true, maxAttempts:1, instruction:
+      'The proposed answer failed the pre-council boundary (' + String(failureCode || 'invalid_answer') + '). '
+      + 'Repair it once as a direct human-facing answer to the original request, using only facts in '
+      + 'the bound system context and completed tool results already present. Fix only that named '
+      + 'failure. Do not add facts, claim an unexecuted action, emit tool syntax or JSON, mention the '
+      + 'repair, or describe yourself as an AI/model.' });
+    return _repairedHuman;
+  }
   // ⬡B:core.tool_loop:WIRE:loop_exit_receipt:20260718⬡ bisection instrument:
   // names whether the kill is inside the loop or in the post-loop passes.
   try{_stampStep('loop_exit_answer', 'len='+finalAns.length+' tools='+tools.length+' iter='+iter);}catch(_eLX){}
@@ -3602,6 +3712,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _preferenceDraftFlags = _structuredReachPolicy ? [] : preferenceJudgmentFindings(
     _exactUserMessage, finalAns, _preferenceEvidenceContext);
   if (_preferenceDraftFlags.length) {
+    _preCouncilHumanRepairUsed = true;
     var _preferenceViolationCodes = _preferenceDraftFlags.map(function (flag) {
       return flag.reason;
     }).join(',');
@@ -3611,21 +3722,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       'Answer the original request again from the completed evidence already in this message history. ' +
       'Choose one of the options named by the user and explicitly distinguish the choice as your fresh/current judgment or an actually stored preference. ' +
       'Ground every factual reason in the completed evidence. Do not mention this correction, internal tools, or a rejected draft.' }]);
-    var _preferenceRetry = await callGLMPlain(null, _preferenceRetryMessages,
-      tokenCapFor(channel));
-    if (!_preferenceRetry) {
-      try {
-        var _preferenceRetryResponse = await fetch(GB, { method:'POST',
-          headers:{ Authorization:'Bearer ' + GROQ, 'Content-Type':'application/json' },
-          body:JSON.stringify({ model:(process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b'),
-            messages:_preferenceRetryMessages, max_tokens:tokenCapFor(channel), temperature:0.1 }),
-          signal:_modelRequestSignal()
-        }).then(function (response) { return response.json(); });
-        _preferenceRetry = _preferenceRetryResponse && _preferenceRetryResponse.choices &&
-          _preferenceRetryResponse.choices[0] && _preferenceRetryResponse.choices[0].message &&
-          _preferenceRetryResponse.choices[0].message.content;
-      } catch (ePreferenceRetry) { _preferenceRetry = ''; }
-    }
+    var _preferenceRetry = await _completeBoundHistoryOnLadder(_preferenceRetryMessages,
+      tokenCapFor(channel), 0.1, false);
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_preference_repair');
     _preferenceRetry = String(_preferenceRetry || '').trim();
     var _preferenceRetryFlags = preferenceJudgmentFindings(
       _exactUserMessage, _preferenceRetry, _preferenceEvidenceContext);
@@ -3672,24 +3771,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // the same deterministic preparation once; no retry lane can skip a gate.
   if (!_structuredReachPolicy && finalAns && !isHumanFacingAnswer(finalAns)) {
     _stampStep('hollow_protocol_answer_caught', String(finalAns || '').slice(0, 80));
-    var _repairCap = tokenCapFor(channel);
-    var _repairedHuman = await regenerateHollowAnswer(finalAns, msgs, [
-      async function (repairMessages) {
-        return (await callGLMPlain(null, repairMessages, _repairCap)) || '';
-      },
-      async function (repairMessages) {
-        var repairResponse = await fetch(GB, { method:'POST',
-          headers:{ Authorization:'Bearer ' + GROQ, 'Content-Type':'application/json' },
-          body:JSON.stringify({ model:(process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b'),
-            messages:repairMessages, max_tokens:_repairCap, temperature:0.1 }),
-          signal:_modelRequestSignal()
-        }).then(function (response) { return response.json(); })
-          .catch(function () { return null; });
-        return repairResponse && repairResponse.choices && repairResponse.choices[0]
-          && repairResponse.choices[0].message
-          && repairResponse.choices[0].message.content || '';
-      }
-    ]);
+    var _repairedHuman = await _repairHumanOnce(finalAns, 'hollow_protocol_answer');
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_hollow_repair');
     if (!_repairedHuman.answer) {
       _stampStep('cycle_end_silent', 'hollow_protocol_answer_unrepaired');
       return {ok:false,reason:'hollow_protocol_answer',ham:hamObj,cycleId:_cycleId,
@@ -3705,26 +3788,23 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // gets raw data back. Cold detection: if the answer parses as JSON (starts with { or [ and
   // is valid JSON), it is never sent as-is. Composed instead, in plain words, from the shape
   // of what came back, so the tool result still reaches him, just as an actual sentence.
-  // \u2b21B:core.tool.loop:FIX:reach_policy_invalid_heals_not_silences:20260719\u2b21
-  // FOUNDER 911 20260719: this cold gate silenced 56+ turns TODAY alone. When the
-  // structured reach-policy lane returns JSON the contract cannot parse, the turn died
-  // BEFORE the council/healer ever ran -- a cold gate killing her voice, the exact
-  // anti-pattern the doctrine forbids. Judges heal; so does this. When the policy JSON
-  // is invalid, regenerate a PLAIN human answer (the same repair the hollow lane uses)
-  // and let THAT flow to the council/healer, instead of going silent. Only if the
-  // repair itself yields nothing real do we fall through to an honest silence.
+  // ⬡B:core.tool_loop:FIX:reach_policy_invalid_heals_as_strict_policy:20260719⬡
+  // R1D exposed the cold silence, but its generic human-answer repair treated malformed
+  // JSON as already human-facing and falsely stamped lane_undefined. R1E keeps the lane
+  // closed-world: one strict JSON regeneration, then the unchanged policy council,
+  // mutation guard, STAMP commit, and readback. It never degrades into plain prose.
   if (_structuredReachPolicy&&!_validStructuredReachPolicy(finalAns)) {
-    _stampStep('reach_policy_invalid_healing','regenerating_plain_answer');
+    _stampStep('reach_policy_invalid_healing','regenerating_strict_policy_json');
     var _rpCap = tokenCapFor(channel);
-    var _rpHuman = await regenerateHollowAnswer(finalAns, msgs, [
+    var _rpStrict = await regenerateStructuredReachPolicy(finalAns, msgs, [
       async function (repairMessages) {
-        return (await callGLMPlain(null, repairMessages, _rpCap)) || '';
+        return _completeBoundHistoryOnLadder(repairMessages, _rpCap, 0, true);
       }
-    ]);
-    if (_rpHuman && _rpHuman.answer && isHumanFacingAnswer(_rpHuman.answer)) {
-      finalAns = _rpHuman.answer;
-      _structuredReachPolicy = false; // it is now a plain answer, judge it as one
-      _stampStep('reach_policy_invalid_healed','plain_completion_lane_'+_rpHuman.lane);
+    ], reachPolicyContract, t0);
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_reach_policy_repair');
+    if (_rpStrict && _rpStrict.answer && _validStructuredReachPolicy(_rpStrict.answer)) {
+      finalAns = _rpStrict.answer;
+      _stampStep('reach_policy_invalid_healed','strict_json_lane_'+_rpStrict.lane);
     } else {
       _stampStep('cycle_end_silent','reach_policy_json_invalid_after_heal_attempt');
       return{ok:false,reason:'reach_policy_json_invalid',blocked_by:'A\'NU',ham:hamObj,
@@ -3765,23 +3845,39 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // tools, no new facts -- and the recovered text still crosses SHADOW, the full
   // council, STAMP, and readback. Empty again = silent, unchanged law.
   if (!finalAns && tools.length) {
+    _preCouncilHumanRepairUsed = true;
     try {
       var _evTail = msgs.slice(-14).map(function(m){
         var _ec = m && m.content;
         if (_ec != null && typeof _ec !== 'string') { try { _ec = JSON.stringify(_ec); } catch(eEv){ _ec = String(_ec); } }
         return (m && m.role || '') + ': ' + String(_ec||'').slice(0, 1200);
       }).join(String.fromCharCode(10));
-      var _synth = await callGLMPlain(
-        'You are finishing an in-flight assistant turn. Below is the real transcript including tool evidence already gathered this turn. Answer the user question directly in one to four sentences using ONLY facts present in the evidence. If the evidence does not contain the answer, say plainly that nothing surfaced.',
-        'QUESTION: ' + String(message||'').slice(0,500) + String.fromCharCode(10,10) + 'TRANSCRIPT AND EVIDENCE:' + String.fromCharCode(10) + _evTail.slice(0, 9000), 380);
+      var _synth = await _completeBoundHistoryOnLadder([
+        {role:'system',content:'You are finishing an in-flight assistant turn. Below is the real transcript including tool evidence already gathered this turn. Answer the user question directly in one to four sentences using ONLY facts present in the evidence. If the evidence does not contain the answer, say plainly that nothing surfaced.'},
+        {role:'user',content:'QUESTION: ' + String(message||'').slice(0,500) +
+          String.fromCharCode(10,10) + 'TRANSCRIPT AND EVIDENCE:' +
+          String.fromCharCode(10) + _evTail.slice(0, 9000)}
+      ], 380, 0.1, false);
+      if (await _turnCancelled(true)) return _turnCancelledResult('after_evidence_repair');
       if (_synth && _synth.trim()) {
         finalAns = _synth.trim();
         _stampStep('empty_draft_recovered', 'plain_synthesis_over_bound_evidence');
       }
     } catch(_eSynth){}
   }
+  // ⬡B:core.tool_loop:REPAIR:terminal_no_answer_single_repair:20260719⬡
+  // Provider fallbacks may all return empty even when the bound request itself is
+  // answerable. Give the exact transcript one final, single human-answer repair;
+  // its bytes still traverse every preparation, council, STAMP, and readback gate.
+  if (!finalAns && !_preCouncilHumanRepairUsed) {
+    var _emptyRepair = await _repairHumanOnce('', 'no_answer');
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_empty_repair');
+    if (_emptyRepair && _emptyRepair.answer) {
+      finalAns = _emptyRepair.answer;
+      _stampStep('empty_draft_recovered', 'single_bound_human_repair');
+    }
+  }
   if(!finalAns){
-    _stampStep('cycle_end_silent', 'no_answer, iterations='+iter);
     // ⬡B:core.tool.loop:BUILD:universal_tracker_no_silent_evaporation:20260713⬡
     // Architect-flagged live: a two-part text (recurring timeshare reminder + scan
     // calendars / consult advisors / book a haircut) hit THIS path and VANISHED -- no
@@ -3794,18 +3890,23 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // goes fully silent, unchanged.
     var _blockedFallback = false;
     try {
+      if (await _turnCancelled()) return _turnCancelledResult('before_tracker_recovery');
       var _trk = require('./tracker.js');
       var _wasAction = _trk.looksLikeActionRequest(message);
       await _trk.stampTrack({ hamUid: hamUid, status: 'BLOCKED', kind: 'request',
         request: String(message||''), channel: channel, cycleId: _cycleId, tools_used: tools,
         reason: 'cycle produced no answer after ' + iter + ' iterations; likely missing a tool for part of the ask' });
+      if (await _turnCancelled()) return _turnCancelledResult('after_tracker_recovery');
       if (_wasAction && ['blooio','text','sms','voice','iman','email','portal','omi','ccwa','cara'].indexOf(channel) !== -1) {
         finalAns = 'I have your request logged so it will not get lost. Part of it I could not finish on my own yet, and I have flagged that to get handled. If you tell me which piece matters most right now, I will take another run at it.';
         _blockedFallback = true;
       }
     } catch(_eTrk){}
-    if(!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,
-      tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null};
+    if(!finalAns) {
+      _stampStep('cycle_end_silent', 'no_answer, iterations='+iter);
+      return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null};
+    }
   }
   // THE REAL SECOND PASS. Deterministic, not another LLM guess trusting itself.
   if (!_structuredReachPolicy&&_verifiedRealNumbers.length && /\d/.test(finalAns)) {
@@ -3813,7 +3914,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _unverified = _answerNumbers.filter(function(n){ return _verifiedRealNumbers.indexOf(n) === -1; });
     if (_unverified.length) {
       _stampStep('verifier_caught_fabrication', 'unverified numbers: '+_unverified.join(','));
-      try {
+      var _retryText = '';
+      if (!_preCouncilHumanRepairUsed) try {
+        _preCouncilHumanRepairUsed = true;
         var _retryMsgs = msgs.concat([
           {role:'assistant',content:finalAns},
           {role:'user',content:'Real verification just ran on that answer: it contains the number(s) '+_unverified.join(', ')
@@ -3822,29 +3925,27 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             +'qualitatively with no invented figure, or say plainly that detail was not confirmed. Do not invent a '
             +'replacement number either.'}
         ]);
-        // \u2b21B:core.tool.loop:FIX:reasoning_model_token_starvation:20260712\u2b21
-        // Real, documented pattern found in another lane's session notes today:
-        // GROQ_MODEL_C2 (openai/gpt-oss-120b) is a reasoning model -- it writes an
-        // internal reasoning field before content, both counted against max_tokens.
-        // A hardcoded 400 here was within range of the exact failure another lane
-        // found and fixed elsewhere in this same codebase the same day (a 600-token
-        // call spending 598 on reasoning, content empty). This call site wasn't
-        // part of that sweep. Moved to the same configurable, safer cap (700
-        // default) every other real call in this file already uses.
-        // ⬡B:core.tool_loop:FIX:number_retry_rides_approved_together_not_banned_groq:20260718⬡
-        // Article A6: this number-verification retry hit banned api.groq.com directly.
-        // Repointed to the approved Together (GLM) endpoint with the Together key.
-        var _retryResp = await fetch(GB,{
-          method:'POST',headers:{Authorization:'Bearer '+GROQ,'Content-Type':'application/json'},
-          body:JSON.stringify({model:(process.env.TOGETHER_MODEL||'zai-org/GLM-5.2'),messages:_retryMsgs,max_tokens:tokenCapFor(channel),temperature:0.1})
-        }).then(function(x){return x.json();});
-        var _retryText = _retryResp && _retryResp.choices && _retryResp.choices[0] && _retryResp.choices[0].message && _retryResp.choices[0].message.content;
-        if (_retryText && _retryText.trim()) {
-          var _retryNumbers = (_retryText.match(/\b\d+\b/g) || []);
-          var _stillBad = _retryNumbers.filter(function(n){ return _verifiedRealNumbers.indexOf(n) === -1; });
-          finalAns = _stillBad.length ? finalAns.replace(/\b(\d+)-?\s*(hour|day|minute|item)s?\b/gi, 'a limited number of $2s') : _retryText.trim();
-        }
+        _retryText = await _completeBoundHistoryOnLadder(_retryMsgs,
+          tokenCapFor(channel), 0.1, false);
       } catch (eVerify) { /* verification itself must never crash a real turn */ }
+      if (await _turnCancelled(true)) return _turnCancelledResult('after_number_repair');
+      if (_retryText && _retryText.trim()) {
+        var _retryNumbers = (_retryText.match(/\b\d+\b/g) || []);
+        var _stillBad = _retryNumbers.filter(function(n){
+          return _verifiedRealNumbers.indexOf(n) === -1;
+        });
+        if (!_stillBad.length) finalAns = _retryText.trim();
+      }
+      var _remainingNumbers = (finalAns.match(/\b\d+\b/g) || []).filter(function(n){
+        return _verifiedRealNumbers.indexOf(n) === -1;
+      });
+      _remainingNumbers.forEach(function (number) {
+        finalAns = finalAns.replace(new RegExp('\\b' + number + '\\b', 'g'),
+          'an unverified number');
+      });
+      if (_remainingNumbers.length) {
+        _stampStep('unverified_numbers_removed', _remainingNumbers.join(','));
+      }
     }
   }
   // ⬡B:core.tool_loop:REPAIR:current_turn_false_negative_before_preparation:20260715⬡
@@ -3858,77 +3959,96 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     finalAns = _proofDraft.answer;
     _stampStep('current_turn_proof_claim_repaired', _proofDraft.reason);
   }
-  // ⬡B:core.tool.loop:WIRE:screen_awareness_act:20260709⬡ her own answer moves the
-  // glass: one [[SCREEN {json} ]] block is extracted, validated, pushed through the
-  // full gate stack to her live sessions, and the spoken answer stays human. A
-  // malformed block drops in silence; the words always still flow.
+  // ⬡B:core.tool.loop:WIRE:screen_awareness_act:20260709⬡
+  // ⬡B:core.tool_loop:REPAIR:one_full_preparation_resubmission:20260719⬡
+  // A deterministic preparation can empty or corrupt an otherwise real draft.
+  // Prepare once; if it fails and the one human-repair budget remains, heal the
+  // named failure and run the complete sequence once more before council.
   var _screenPushed = 0;
   var _screenBlock = null;
-  // Extract the screen intent before review, but do not move the live glass yet.
-  // The visible side effect is committed only after the exact spoken bytes have a
-  // durable council receipt and final STAMP proof.
-  if(!_structuredReachPolicy)try {
-    var _screenAware = require('./stream/screen.awareness.js');
-    var _scr = _screenAware.extract(finalAns);
-    finalAns = _scr.answer || finalAns;
-    _screenBlock = identity && identity.outbound_finalize === true ? null : (_scr.block || null);
-  } catch (eScrA) {}
-  if (!finalAns) { _stampStep('cycle_end_silent','answer_was_only_screen_block'); return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null}; }
-  // ⬡B:tool.loop:GUARD:leaked_tool_syntax_scrub:20260711⬡ on an empty NASH
-  // board the model retried and leaked "<function=...>" into its last line.
-  // Cold scrub; if nothing real remains, hollow-reply law: ok:false.
-  if(!_structuredReachPolicy)finalAns = scrubLeakedToolProtocol(finalAns);
-  // \u2b21B:core.tool_loop:WIRE:format_matrix_universal_choke_point:20260711\u2b21
-  // Founder, exact words: 'this should be for every CARA and chat instance and email
-  // and text! All reach should do this right??????' -- correct call. This is the ONE
-  // place every channel's final answer passes through (email/wren already call
-  // runPAI directly, CARA/command-center share the same /eanew/ask door, VARA voice
-  // reads this same field). Cleaning HERE means it is universal by construction, not
-  // a per-channel patch that drifts. Destination-aware: 'sms' gets the hard cap this
-  // channel needs so an outbound text is never a wall of text.
-  if(!_structuredReachPolicy)try {
-    var _fmtDest = (channel === 'text' || channel === 'sms') ? 'sms' : 'command_center';
-    finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
-  } catch (eFmt) {}
-  if (!finalAns) return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,tools_used:tools,iterations:iter,ms:Date.now()-t0,_dbg:global._paiLastError||'emptied_after_model_by_scrub_or_format'};
-  // ⬡B:core.tool_loop:WIRE:prepare_the_exact_council_draft:20260715⬡
-  // The older synthesize path used to do these pure output preparations after
-  // runPAI returned. They now happen before the durable council so no channel can
-  // change the reviewed bytes later and still call the turn successful.
-  if(!_structuredReachPolicy)try {
-    var _shadowPrepared = require('./synthesize.js').shadowAudit(finalAns);
-    if (!_shadowPrepared.clean) return {ok:false,reason:'shadow_scrubbed_to_empty',ham:hamObj,
-      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
-    finalAns = _shadowPrepared.clean;
-  } catch (ePrepShadow) {}
-  if(!_structuredReachPolicy)try {
-    var _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
-    if (_tierGate && _tierGate.gated) {
-      finalAns = 'I have some information for you but need to verify your access. Reply with your passcode.';
+  function _prepareHumanAnswerOnce(candidate) {
+    var finalAns = typeof candidate === 'string' ? candidate.trim() : '';
+    var preparedScreenBlock = null;
+    try {
+      var _screenAware = require('./stream/screen.awareness.js');
+      var _scr = _screenAware.extract(finalAns);
+      if (_scr && typeof _scr.answer === 'string') finalAns = _scr.answer.trim();
+      preparedScreenBlock = identity && identity.outbound_finalize === true
+        ? null : (_scr && _scr.block || null);
+    } catch (eScrA) {}
+    if (!finalAns) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
+      reason:'answer_was_only_screen_block'};
+    finalAns = scrubLeakedToolProtocol(finalAns);
+    try {
+      var _fmtDest = (channel === 'text' || channel === 'sms') ? 'sms' : 'command_center';
+      finalAns = require('./format.matrix.js').formatForDestination(finalAns, _fmtDest);
+    } catch (eFmt) {}
+    if (!finalAns) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
+      reason:'emptied_after_model_by_scrub_or_format'};
+    try {
+      var _shadowPrepared = require('./synthesize.js').shadowAudit(finalAns);
+      if (!_shadowPrepared.clean) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
+        reason:'shadow_scrubbed_to_empty'};
+      finalAns = _shadowPrepared.clean;
+    } catch (ePrepShadow) {}
+    try {
+      var _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
+      if (_tierGate && _tierGate.gated) {
+        finalAns = 'I have some information for you but need to verify your access. Reply with your passcode.';
+      }
+    } catch (ePrepPam) {}
+    try {
+      var _personaChoice = identity && identity.persona || hamObj && hamObj.persona;
+      if (_personaChoice) finalAns = require('./persona.js').applyPersona(finalAns,
+        { hamUid:hamUid,persona:_personaChoice,contributions:{} });
+    } catch (ePrepPersona) {}
+    if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns)) {
+      return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
+        reason:'false_current_turn_failure_claim_after_preparation'};
     }
-  } catch (ePrepPam) {}
-  if(!_structuredReachPolicy)try {
-    var _personaChoice = identity && identity.persona || hamObj && hamObj.persona;
-    if (_personaChoice) finalAns = require('./persona.js').applyPersona(finalAns,
-      { hamUid:hamUid,persona:_personaChoice,contributions:{} });
-  } catch (ePrepPersona) {}
-  // ⬡B:core.tool_loop:GUARD:no_false_current_turn_failure_reaches_council:20260715⬡
-  // Later preparation/persona code may reshape prose. Fail closed if it ever
-  // reintroduces the same contradiction; a false status claim is never stamped.
-  if (!_structuredReachPolicy&&
-      currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns)) {
-    _stampStep('cycle_end_silent', 'false_current_turn_failure_claim_after_preparation');
-    return {ok:false,reason:'false_current_turn_failure_claim',ham:hamObj,cycleId:_cycleId,
-      requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    if (!isHumanFacingAnswer(finalAns)) {
+      return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
+        reason:'hollow_protocol_after_preparation'};
+    }
+    return {ok:true,answer:finalAns,screenBlock:preparedScreenBlock,reason:null};
   }
-  // ⬡B:core.tool_loop:GUARD:human_answer_before_council_commit:20260715⬡
-  // The early repair has already crossed every canonical preparation above.
-  // This late boundary only validates; it never regenerates or bypasses a gate.
-  if ((_structuredReachPolicy&&!_validStructuredReachPolicy(finalAns))||
-      (!_structuredReachPolicy&&!isHumanFacingAnswer(finalAns))) {
-    _stampStep('cycle_end_silent', 'hollow_protocol_after_preparation');
-    return {ok:false,reason:'hollow_protocol_answer',ham:hamObj,cycleId:_cycleId,
-      requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  if (_structuredReachPolicy) {
+    if (!_validStructuredReachPolicy(finalAns)) {
+      _stampStep('cycle_end_silent', 'reach_policy_json_invalid_after_heal_attempt');
+      return {ok:false,reason:'reach_policy_json_invalid',blocked_by:'A\'NU',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+        ms:Date.now()-t0};
+    }
+  } else {
+    var _preparedHuman = _prepareHumanAnswerOnce(finalAns);
+    if (!_preparedHuman.ok && !_preCouncilHumanRepairUsed) {
+      _stampStep('preparation_answer_healing', _preparedHuman.reason);
+      var _lateRepair = await _repairHumanOnce(finalAns, _preparedHuman.reason);
+      if (await _turnCancelled(true)) return _turnCancelledResult('after_preparation_repair');
+      if (_lateRepair && _lateRepair.answer) {
+        _preparedHuman = _prepareHumanAnswerOnce(_lateRepair.answer);
+        if (_preparedHuman.ok) {
+          _stampStep('preparation_answer_healed', 'single_full_resubmission');
+        }
+      }
+    }
+    if (!_preparedHuman.ok) {
+      var _terminalPreparationReason = _preparedHuman.reason || 'hollow_protocol_after_preparation';
+      _stampStep('cycle_end_silent', _terminalPreparationReason);
+      var _terminalReason = /^answer_was_only_screen_block|^emptied_after_model/.test(
+        _terminalPreparationReason) ? 'no_answer'
+        : _terminalPreparationReason === 'shadow_scrubbed_to_empty'
+          ? 'shadow_scrubbed_to_empty'
+          : _terminalPreparationReason.indexOf('false_current_turn_failure_claim') === 0
+            ? 'false_current_turn_failure_claim' : 'hollow_protocol_answer';
+      return {ok:false,reason:_terminalReason,ham:hamObj,cycleId:_cycleId,
+        requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
+        _dbg:global._paiLastError||null};
+    }
+    finalAns = _preparedHuman.answer;
+    // A rejected draft cannot contribute screen bytes to a repaired answer.
+    // Only the exact preparation that passed every outbound boundary may commit.
+    _screenBlock = _preparedHuman.screenBlock || null;
   }
   // ⬡B:core.tool_loop:GUARD:full_pai_outbound_council_every_return:20260715⬡
   // This is the only successful exit. PAM, SHADOW, META_COMMENTARY, conditional
@@ -4374,7 +4494,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   return _successResult;
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
-  prioritizeVerifiedEvidence,regenerateHollowAnswer,scrubLeakedToolProtocol,
+  prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
   verifiedVoiceCallPurposeAnswer,voiceHearingContextSatisfiesTurn,
