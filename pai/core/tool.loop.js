@@ -870,6 +870,40 @@ TOOLS.forEach(function (tool) {
   tool.function.description = String(tool.function.description || '').trim() +
     '\n\n' + toolSelectionBoundary(tool.function.name);
 });
+
+async function planToolUse(message, tools, deliberateFn) {
+  var declared = Object.create(null);
+  var catalog = (tools || []).map(function (tool) {
+    var name = tool && tool.function && tool.function.name;
+    if (!name) return null;
+    declared[name] = true;
+    return name + ': ' + toolSelectionBoundary(name);
+  }).filter(Boolean).join('\n');
+  if (!catalog) return { decision:'UNAVAILABLE', reason:'no_tools' };
+  var deliberate = deliberateFn || require('./model.ladder.js').deliberate;
+  var system = 'You are the first-pass tool planner. Return exactly one JSON object: ' +
+    '{"decision":"NO_TOOL"|"TOOL","tool":null|"declared_name","reason":"short"}. ' +
+    'Choose NO_TOOL for creative writing, explanation, opinion, general knowledge, chit-chat, or planning that can be answered from the conversation and reasoning. ' +
+    'Choose TOOL only when the request needs live personal data, stored HAM evidence, external current data, or a real side effect. Never choose a tool just because context mentions its domain.\n\nDECLARED TOOLS:\n' + catalog;
+  try {
+    var result = await deliberate(system, 'EXACT USER MESSAGE:\n' + String(message || ''), {
+      json:true, max_tokens:180, temperature:0, timeout:7000, tightTimeout:true,
+      realtime:true, noGuard:true
+    });
+    var parsed = result && result.content;
+    if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+    if (!parsed || typeof parsed !== 'object') return { decision:'UNAVAILABLE', reason:'invalid_plan' };
+    if (parsed.decision === 'NO_TOOL' && (parsed.tool === null || parsed.tool === undefined || parsed.tool === '')) {
+      return { decision:'NO_TOOL', tool:null, reason:String(parsed.reason || '').slice(0,240) };
+    }
+    if (parsed.decision === 'TOOL' && declared[parsed.tool]) {
+      return { decision:'TOOL', tool:parsed.tool, reason:String(parsed.reason || '').slice(0,240) };
+    }
+    return { decision:'UNAVAILABLE', reason:'undeclared_or_invalid_plan' };
+  } catch (e) {
+    return { decision:'UNAVAILABLE', reason:'planner_failed' };
+  }
+}
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
 // Read tools contribute during deliberation. Every mutation is queued as
 // evidence, reviewed by the outbound council, and executed only after the
@@ -2871,6 +2905,30 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if (Array.isArray(body.tools) && body.tools.length) {
       body.messages = body.messages.concat([{ role:'system', content:NO_TOOL_BLESSING }]);
     }
+    // CLAIR_reach R4C: first decide whether this exact turn needs any tool.
+    // Voice stays on its latency-safe intent path; structured reach and finalizer
+    // lanes already carry bounded contracts and never enter general selection.
+    if (iter === 1 && Array.isArray(body.tools) && body.tools.length &&
+        !_structuredReachPolicy && !_reachIncidentIntake &&
+        String(channel || '').toLowerCase() !== 'voice' &&
+        !(identity && identity.outbound_finalize === true)) {
+      var _toolPlan = await planToolUse(
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
+        body.tools);
+      _stampStep('tool_plan_first_pass', _toolPlan.decision +
+        (_toolPlan.tool ? ':' + _toolPlan.tool : '') + ':' + String(_toolPlan.reason || '').slice(0,120));
+      if (_toolPlan.decision === 'NO_TOOL') {
+        delete body.tools;
+        delete body.tool_choice;
+        body.messages = body.messages.concat([{ role:'system',
+          content:'The first-pass plan decided NO TOOL for this exact message. Answer it directly from the conversation and reasoning. Do not call or describe a tool.' }]);
+      } else if (_toolPlan.decision === 'TOOL') {
+        body.tool_choice = 'auto';
+        body.messages = body.messages.concat([{ role:'system',
+          content:'The first-pass plan found that this message needs ' + _toolPlan.tool +
+            '. Use that plan as evidence, while keeping tool choice automatic and never substituting an unrelated tool.' }]);
+      }
+    }
     // ⬡B:core.tool_loop:FIX:tool_choice_never_set_defaults_to_skippable:20260705⬡
     // Real, live incident: Brandon asked directly "who is the founder value, now from env, show me
     // the original message" over text -- the single clearest possible
@@ -4637,7 +4695,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   return _successResult;
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
-  primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
+  primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,planToolUse,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
