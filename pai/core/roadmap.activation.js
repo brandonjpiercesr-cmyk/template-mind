@@ -17,9 +17,15 @@ function validatePath(path) {
   return path && path.indexOf('..') < 0 && !path.startsWith('.git/') && !path.startsWith('.github/workflows/');
 }
 
-function taskSource(roadmapSource, task, allowedPaths, repository) {
+function normalizeHamUid(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function taskSource(roadmapSource, task, allowedPaths, repository, hamUid, acceptance) {
+  const exactHam = normalizeHamUid(hamUid);
   const digest = crypto.createHash('sha256')
-    .update(JSON.stringify([roadmapSource, task, allowedPaths, repository])).digest('hex').slice(0, 20);
+    .update(JSON.stringify(['ham-scoped-v2', exactHam, roadmapSource, task,
+      allowedPaths, acceptance || [], repository])).digest('hex').slice(0, 20);
   return 'span.task.roadmap.' + digest;
 }
 
@@ -39,7 +45,7 @@ async function activate(spec, deps) {
   spec = spec || {};
   const brain = deps.brain || require('./brain.client.js');
   const queue = deps.queue || require('./task.queue.js');
-  const hamUid = String(spec.ham_uid || spec.hamUid || '').trim();
+  const hamUid = normalizeHamUid(spec.ham_uid || spec.hamUid);
   const roadmapSource = String(spec.roadmap_source || spec.roadmapSource || '').trim();
   const task = String(spec.task || '').trim();
   const repository = String(spec.repository || '').trim();
@@ -60,22 +66,30 @@ async function activate(spec, deps) {
     return { ok: false, reason: 'invalid_allowed_path' };
   }
 
-  const roadmap = await brain.findBySource(roadmapSource);
+  // ⬡B:core.roadmap.activation:FIX:roadmap_authority_is_bound_to_ham:20260719⬡
+  // The exact source is only authoritative inside the exact HAM world. The
+  // canonical client applies both predicates in one database query.
+  const roadmap = await brain.findBySource(roadmapSource, hamUid);
   if (await cancellationRequested(deps)) {
     return { ok:false, reason:'voice_turn_cancelled' };
   }
   if (!roadmap || String(roadmap.stamp_type || '').toUpperCase() !== 'ROADMAP') {
     return { ok: false, reason: 'exact_roadmap_not_found', roadmap_source: roadmapSource };
   }
+  if (roadmap.ham_uid && normalizeHamUid(roadmap.ham_uid) !== hamUid) {
+    return { ok:false, reason:'roadmap_ham_mismatch', roadmap_source:roadmapSource };
+  }
 
-  const source = taskSource(roadmapSource, task, allowedPaths, repository);
+  const source = taskSource(roadmapSource, task, allowedPaths, repository,
+    hamUid, acceptance);
   const content = {
+    ham_uid:hamUid,
     task: task,
     repository: repository,
     roadmap_source: roadmapSource,
     allowed_paths: allowedPaths,
     acceptance: acceptance,
-    lineage: { spawner: 'CODA', parent: roadmapSource },
+    lineage: { spawner: 'CODA', parent: roadmapSource, ham_uid:hamUid },
     budget: {
       maxIterations: Number(spec.max_iterations || 3),
       maxLlmCalls: Number(spec.max_llm_calls || 3)
@@ -108,4 +122,5 @@ async function activate(spec, deps) {
   };
 }
 
-module.exports = { activate: activate, taskSource: taskSource };
+module.exports = { activate: activate, taskSource: taskSource,
+  _test:{ normalizeHamUid:normalizeHamUid } };
