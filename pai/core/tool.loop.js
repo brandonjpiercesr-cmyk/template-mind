@@ -965,6 +965,11 @@ function routeToolIntent(message) {
   // sports-score or calendar calls. General/zero-tool lets the grounded face
   // answer from current context or say it does not know rather than guessing.
   if (/\b(favou?rite|preferred) (team|sport)\b/.test(text)) return 'general';
+  // An explicit station command owns the turn even when its task text names a
+  // calendar, inbox, or other live-data scenario to grade. The founder caught
+  // two R4 acceptance asks being hijacked into calendar_read before Wonder
+  // Games could run. Command intent outranks subject matter inside the task.
+  if (/\b(run|start|launch|invoke)\b.*\b(wonder games?|cook[ -]?off)\b/.test(text)) return 'code';
   if (/\b(weather|forecast|temperature|rain|snow)\b/.test(text) && /\b(today|tomorrow|current|now|in |at |for )/.test(text)) return 'weather';
   if (/\b(score|scores|won|lost|standings|results?|game result|latest game)\b/.test(text) && /\b(nba|nfl|mlb|nhl|wnba|lakers|bills|yankees|team|game)\b/.test(text)) return 'sports';
   if (/\b(my|our)\b.*\b(calendar|schedule|availability|free time|open slot|events?)\b/.test(text) ||
