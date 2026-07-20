@@ -8,7 +8,7 @@ function _memorySelected(){return !!(process.env.MEMORY_BANK_URL||process.env.ME
 function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_brain');}
 function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 
-// IMAN — Nylas email. Outbound send + inbox read. No hardcode.
+// IMAN, Nylas email. Outbound send + inbox read. No hardcode.
 // Grant resolution: world -> env var. Key resolution: sandbox vs production app.
 // ANYHAM test: route works for any valid world. EBC firewall: reads only the world passed in.
 
@@ -79,13 +79,25 @@ function getGrant(world) {
 }
 
 // List emails from a specific world inbox
+// ⬡B:reach.iman:WIRE:recipients_and_unread_for_inbox_zero:20260720⬡
+// Additive, non-breaking: opts.unread lets a caller pull ONLY unread mail (the
+// Inbox Zero cycle needs this); default stays unread=false so every existing
+// caller is untouched. Each message now also carries its full To/CC lists and
+// recipient_count so the judgment organ can catch a blast that only LOOKS
+// personal. Cold code fetches the counts; the LLM decides what they mean.
+function _addrList(arr) {
+  return (Array.isArray(arr) ? arr : []).map(function (a) {
+    return { email: (a && a.email) || '', name: (a && a.name) || '' };
+  }).filter(function (a) { return a.email; });
+}
 async function listEmails(world, opts) {
   var grant = resolveGrant(world);
   var key   = resolveKey(world);
   if (!grant) return { ok: false, reason: 'no_grant_for_world:' + world, messages: [] };
   if (!key)   return { ok: false, reason: 'no_nylas_key_for_world:' + world, messages: [] };
   var limit = (opts && opts.limit) || 10;
-  var url = 'https://api.us.nylas.com/v3/grants/' + grant + '/messages?limit=' + limit + '&unread=false';
+  var unread = (opts && opts.unread) ? 'true' : 'false';
+  var url = 'https://api.us.nylas.com/v3/grants/' + grant + '/messages?limit=' + limit + '&unread=' + unread;
   var r = await fetch(url, {
     headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' }
   }).catch(function() { return null; });
@@ -95,6 +107,7 @@ async function listEmails(world, opts) {
   }
   var data = await r.json().catch(function(){return{};});
   var messages = (data.data || []).map(function(m) {
+    var to = _addrList(m.to), cc = _addrList(m.cc);
     return {
       id:        m.id,
       thread_id: m.thread_id || null,
@@ -104,9 +117,66 @@ async function listEmails(world, opts) {
       date:      m.date  || 0,
       snippet:   m.snippet || '',
       unread:    m.unread  || false,
+      to:        to,
+      cc:        cc,
+      recipient_count: to.length + cc.length,
+      has_attachments: !!(m.attachments && m.attachments.length),
     };
   });
   return { ok: true, world: world, messages: messages, count: messages.length };
+}
+
+// ⬡B:reach.iman:WIRE:full_thread_before_drafting_inbox_zero:20260720⬡
+// The Inbox Zero spec is explicit: read the ENTIRE thread chronologically before
+// drafting, not just the newest message. This is that door, EBC-walled to the one
+// world's grant. Returns messages oldest-first, each with body text and the
+// attachment metadata on it. Cold fetch only; the organ judges.
+async function getThread(world, threadId) {
+  if (!threadId) return { ok: false, reason: 'no_thread_id', messages: [] };
+  var grant = resolveGrant(world);
+  var key   = resolveKey(world);
+  if (!grant || !key) return { ok: false, reason: 'no_nylas_config_for_world:' + world, messages: [] };
+  var url = 'https://api.us.nylas.com/v3/grants/' + grant + '/messages?thread_id=' + encodeURIComponent(threadId) + '&limit=25';
+  var r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' } }).catch(function(){return null;});
+  if (!r || !r.ok) return { ok: false, reason: 'nylas_error', messages: [] };
+  var data = await r.json().catch(function(){return{};});
+  var msgs = (data.data || []).map(function(m) {
+    return {
+      id:        m.id,
+      thread_id: m.thread_id || threadId,
+      subject:   m.subject || '',
+      from:      (m.from && m.from[0] && m.from[0].email) || '',
+      from_name: (m.from && m.from[0] && m.from[0].name)  || '',
+      to:        _addrList(m.to),
+      cc:        _addrList(m.cc),
+      date:      m.date || 0,
+      snippet:   m.snippet || '',
+      body:      typeof m.body === 'string' ? m.body : '',
+      attachments: (m.attachments || []).map(function(a){ return { id:a.id, filename:a.filename||'', content_type:a.content_type||'', size:a.size||0 }; }),
+    };
+  }).sort(function(a,b){ return (a.date||0) - (b.date||0); }); // chronological, oldest first
+  return { ok: true, world: world, thread_id: threadId, messages: msgs, count: msgs.length };
+}
+
+// ⬡B:reach.iman:WIRE:attachment_download_inbox_zero:20260720⬡
+// "Attachments must actually be opened, not assumed." Downloads one attachment and,
+// when it is a text/plain-ish body, returns its decoded text so the organ can read
+// it for real. Binary types return their metadata only (the organ is told plainly it
+// could not read the bytes). EBC-walled to the one world's grant.
+async function downloadAttachment(world, messageId, attachmentId, contentType) {
+  if (!messageId || !attachmentId) return { ok: false, reason: 'missing_ids' };
+  var grant = resolveGrant(world);
+  var key   = resolveKey(world);
+  if (!grant || !key) return { ok: false, reason: 'no_nylas_config_for_world:' + world };
+  var url = 'https://api.us.nylas.com/v3/grants/' + grant + '/attachments/' + encodeURIComponent(attachmentId)
+    + '/download?message_id=' + encodeURIComponent(messageId);
+  var r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + key } }).catch(function(){return null;});
+  if (!r || !r.ok) return { ok: false, reason: 'nylas_error' };
+  var ct = String(contentType || r.headers.get('content-type') || '');
+  var readable = /text\/|json|csv|xml|html|markdown/i.test(ct);
+  if (!readable) return { ok: true, readable: false, content_type: ct, text: null };
+  var text = await r.text().catch(function(){ return null; });
+  return { ok: true, readable: true, content_type: ct, text: text ? text.slice(0, 8000) : null };
 }
 
 // FIX 20260706: the advisor was drafting replies to inbound threads Brandon had
@@ -650,6 +720,7 @@ async function sendCommittedToHam(hamUid, exactEmail, artifact, world, authoriza
 module.exports = { send: send, sendFromClaudette: sendFromClaudette,
   sendToHam: sendToHam, sendCommittedToHam:sendCommittedToHam, listEmails: listEmails,
   alreadyRepliedOnThread: alreadyRepliedOnThread, getGrant: getGrant,
+  getThread: getThread, downloadAttachment: downloadAttachment,
   resolveGrant: resolveGrant, resolveKey: resolveKey,
   resolveAnuProductionSender:resolveAnuProductionSender,
   _test:{ providerSend:providerSend, requireExactRecipientOwnership:requireExactRecipientOwnership } };
