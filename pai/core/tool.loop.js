@@ -904,6 +904,50 @@ async function planToolUse(message, tools, deliberateFn) {
     return { decision:'UNAVAILABLE', reason:'planner_failed' };
   }
 }
+
+var TOOL_INTENT_NAMES = Object.freeze({
+  schedule:['calendar_read','calendar_book','propose_working_session','find_in_brain'],
+  email:['inbox_read','email_send','get_pending_drafts'],
+  messaging:['find_contact','contact_send','notify_ham'],
+  weather:['weather_check'],
+  sports:['nash_sports'],
+  reminders:['read_reminders','create_reminder','stop_mentioning'],
+  budget:['get_budget_summary','get_budget_upcoming'],
+  memory:['find_in_brain','find_identity_evidence'],
+  code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','read_lane_board','read_render_logs','get_recent_builds','read_own_code','consult_coda','activate_roadmap_task','fix_file_in_github','trigger_deploy'],
+  screen:['update_screen','save_layout','edit_layout'],
+  general:[]
+});
+
+function routeToolIntent(message) {
+  var text = String(message || '').trim().toLowerCase();
+  // The roadmap's canonical regression: preference questions must not become
+  // sports-score or calendar calls. General/zero-tool lets the grounded face
+  // answer from current context or say it does not know rather than guessing.
+  if (/\b(favou?rite|preferred) (team|sport)\b/.test(text)) return 'general';
+  if (/\b(weather|forecast|temperature|rain|snow)\b/.test(text) && /\b(today|tomorrow|current|now|in |at |for )/.test(text)) return 'weather';
+  if (/\b(score|scores|won|lost|standings|game result|latest game)\b/.test(text) && /\b(nba|nfl|mlb|nhl|wnba|lakers|bills|yankees|team|game)\b/.test(text)) return 'sports';
+  if (/\b(my|our)\b.*\b(calendar|schedule|availability|free time|open slot|events?)\b/.test(text) ||
+      /\b(am i|are we) free\b/.test(text) || /\b(calendar|schedule)\b.*\b(today|tomorrow|this week|next week)\b/.test(text) ||
+      /\b(find|show)\b.*\b(open )?(time|slot)\b/.test(text)) return 'schedule';
+  if (/\b(my|our|unread|recent|pending)\b.*\b(inbox|emails?|reply drafts?)\b/.test(text) ||
+      /\b(show|read|check)\b.*\b(inbox|emails?)\b/.test(text)) return 'email';
+  if (/\b(remind me|my reminders|what reminders|read reminders|stop mentioning)\b/.test(text)) return 'reminders';
+  if (/\b(budget|bnpl|buy.now.pay.later|payments? (are )?(due|coming)|income vs expenses|spending by category)\b/.test(text)) return 'budget';
+  if (/\b(text|message|contact details|phone number|email address)\b.*\b(my |the )?(brother|sister|mom|mother|dad|father|contact|person)\b/.test(text)) return 'messaging';
+  if (/\b(screen|glass|background|wallpaper|layout|dashboard)\b/.test(text) && /\b(show|open|change|move|save|edit|put|display)\b/.test(text)) return 'screen';
+  if (/\b(code|repo|repository|deploy|builds?|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
+  if (/\b(my|our|stored|brain|memory|bead|previous|recent|most recent|last)\b/.test(text) &&
+      /\b(decision|preference|history|result|failure|flagged|built|did we|identity|who is)\b/.test(text)) return 'memory';
+  return 'general';
+}
+
+function toolsForIntent(tools, intent) {
+  var allowed = TOOL_INTENT_NAMES[intent] || TOOL_INTENT_NAMES.general;
+  return (tools || []).filter(function (tool) {
+    return tool && tool.function && allowed.indexOf(tool.function.name) !== -1;
+  });
+}
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
 // Read tools contribute during deliberation. Every mutation is queued as
 // evidence, reviewed by the outbound council, and executed only after the
@@ -2902,6 +2946,17 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),
       temperature:_structuredReachPolicy?0:_reachIncidentIntake?0.1:0.3};
     if (iter<=3) body.tools=_turnToolDefinitions;
+    var _routedToolIntent = null;
+    if (iter === 1 && Array.isArray(body.tools) && body.tools.length &&
+        !_structuredReachPolicy && !_reachIncidentIntake &&
+        String(channel || '').toLowerCase() !== 'voice' &&
+        !(identity && identity.outbound_finalize === true)) {
+      _routedToolIntent = routeToolIntent(
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
+      body.tools = toolsForIntent(body.tools, _routedToolIntent);
+      _stampStep('tool_intent_route', _routedToolIntent + ':visible=' + body.tools.length);
+      if (!body.tools.length) delete body.tools;
+    }
     if (Array.isArray(body.tools) && body.tools.length) {
       body.messages = body.messages.concat([{ role:'system', content:NO_TOOL_BLESSING }]);
     }
@@ -4696,6 +4751,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,planToolUse,
+  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
