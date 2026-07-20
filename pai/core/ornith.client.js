@@ -13,6 +13,8 @@
 // not a place to silently degrade a turn that needs a real tool call.
 'use strict';
 
+var outputGuard = require('./model.output.guard.js');
+
 var ORNITH_URL = process.env.ORNITH_URL;
 var RUNPOD_KEY = process.env.RUNPOD_API_KEY;
 var ORNITH_MODEL = process.env.ORNITH_MODEL || 'maxwell1500/ornith-35b:Q4_K_M';
@@ -28,8 +30,8 @@ async function callOrnith(system, userContent, maxTokens) {
   if (!ORNITH_URL || !RUNPOD_KEY) return null;
   try {
     var payload = { input: { mode: 'chat', model: ORNITH_MODEL, think: false,
-      options: { num_predict: maxTokens || 400, temperature: 0.3 },
-      messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }] } };
+      options: outputGuard.ornithSampling(maxTokens || 400, true),
+      messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: userContent }] } };
     var jobResp = await fetch(ORNITH_URL.replace(/\/$/, '') + '/run', {
       method: 'POST', headers: { Authorization: 'Bearer ' + RUNPOD_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -45,7 +47,8 @@ async function callOrnith(system, userContent, maxTokens) {
         var out = statusResp.output;
         var msg = Array.isArray(out) ? (out[0] && out[0].choices && out[0].choices[0] && out[0].choices[0].message)
           : (out && out.choices && out.choices[0] && out.choices[0].message);
-        return (msg && msg.content) || null;
+        var content = (msg && msg.content) || null;
+        return outputGuard.containsCjk(content) ? null : content;
       }
       if (statusResp && statusResp.status === 'FAILED') return null;
     }

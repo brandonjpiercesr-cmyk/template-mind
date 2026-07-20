@@ -3,6 +3,7 @@ var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '3000', 10); // ⬡B:cor
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
+var outputGuard = require('./model.output.guard.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
 // Real incident: GUIDE pass 2 (strict JSON, 12 fields per destination) was
 // truncated mid-JSON by the one global 700 cap and died as
@@ -3076,11 +3077,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           var ornResp = await fetch(ORN.replace(/\/$/,'') + '/runsync', {
             method: 'POST',
             headers: { Authorization: 'Bearer ' + ORK, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ input: { method_name: 'chat', input: { messages: msgs, options: { temperature: 0.3, num_predict: tokenCapFor(channel) } } } }),
+            body: JSON.stringify({ input: { method_name: 'chat', input: {
+              messages: [{ role:'system', content:outputGuard.englishSystem('Answer the user directly.') }].concat(msgs),
+              options: outputGuard.ornithSampling(tokenCapFor(channel), true) } } }),
             signal:_modelRequestSignal()
           }).then(function(x){ return x.json(); }).catch(function(e){ return { error: e.message }; });
           var ornText = ornResp && ornResp.output && (ornResp.output.message && ornResp.output.message.content || ornResp.output.response);
-          if (ornResp && ornResp.status === 'COMPLETED' && ornText) {
+          if (ornResp && ornResp.status === 'COMPLETED' && ornText && !outputGuard.containsCjk(ornText)) {
             r = { choices: [{ message: { role: 'assistant', content: ornText } }], _provider: 'ornith' };
           }
         }
@@ -3192,6 +3195,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       break;
     }
     var ch=r.choices[0],msg=ch.message;
+    // R3B: vLLM qwen3_xml can return the canonical XML in content while marking
+    // finish_reason=tool_calls. Recover only tools declared on this exact request;
+    // every other text shape remains under the existing non-execution rules.
+    if (msg && !((msg.tool_calls || []).length)) {
+      var _qwen3Calls = outputGuard.recoverQwen3XmlToolCalls(
+        msg.content, ch.finish_reason, body && body.tools);
+      if (_qwen3Calls) {
+        msg = ch.message = { role:'assistant', content:null, tool_calls:_qwen3Calls };
+        _stampStep('qwen3_xml_tool_calls_recovered', _qwen3Calls.map(function (call) {
+          return call.function.name;
+        }).join(','));
+      }
+    }
     // ⬡B:core.tool_loop:FIX:continuation_stitch_kills_the_guillotine:20260717⬡
     // Founder's question, answered in code: why a cap at all? Because a provider requires
     // a number and a runaway generation burns money forever without one. The cap is a
@@ -3225,6 +3241,18 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _structuredDraft=_canonicalStructuredReachPolicy(msg&&msg.content);
       ans=_structuredDraft.ok?_structuredDraft.text:'{}';
       break;
+    }
+    if (msg && !((msg.tool_calls || []).length) && outputGuard.containsCjk(msg.content)) {
+      try {
+        var _englishRewrite = await require('./model.ladder.js').deliberate(
+          'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
+          String(msg.content || ''), { max_tokens:tokenCapFor(channel), temperature:0.2, timeout:12000, noGuard:true });
+        msg.content = _englishRewrite && _englishRewrite.content || '';
+        _stampStep('cjk_output_regenerated', msg.content ? 'english' : 'failed_closed');
+      } catch (_eEnglish) {
+        msg.content = '';
+        _stampStep('cjk_output_regenerated', 'failed_closed');
+      }
     }
     try{_stampStep('corridor_a_post_stitch','content_len='+String(msg&&msg.content||'').length+' has_tc_tag='+(String(msg&&msg.content||'').indexOf('<tool_call>')!==-1)+' has_fn_tag='+(String(msg&&msg.content||'').indexOf('<function')!==-1)+' finish='+String(ch&&ch.finish_reason||'?'));}catch(_eCA){}
     // ⬡B:core.tool_loop:FIX:safe_tool_text_salvage_20260710⬡

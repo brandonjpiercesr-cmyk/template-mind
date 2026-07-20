@@ -10,6 +10,8 @@
 // SHADOW judgment, so provider fallback remains inside the same wired cycle.
 'use strict';
 
+var outputGuard = require('./model.output.guard.js');
+
 // ⬡B:core.model.ladder:GUARD:json_contract_falls_through_provider_ladder:20260715⬡
 // A provider returning non-empty prose is not a successful JSON deliberation.
 // Validate the requested wire contract at each provider boundary so a malformed
@@ -17,6 +19,7 @@
 // strict JSON object, deliberate() still returns null and the caller fails closed.
 function hasAcceptedContent(content, opts) {
   if (typeof content !== 'string' || !content.trim()) return false;
+  if (outputGuard.containsCjk(content)) return false;
   if (!opts || opts.json !== true) return true;
   // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
   // GLM-5.2 and other reasoning models can wrap the real JSON in a thinking
@@ -85,7 +88,7 @@ async function tryRunPodGLM(system, user, opts) {
     // reached the person or failed the JSON parse and cascaded to a PAID provider.
     // Pin English hard on this rung so its output is always usable and never bleeds
     // the turn to OpenRouter. English-only prepend, caller's system content preserved.
-    var _rpSystem = 'Respond only in English. ' + String(system || '');
+    var _rpSystem = outputGuard.englishSystem(system);
     var body = { model: process.env.GLM_RUNPOD_MODEL || 'glm-5.2', messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
     // ⬡B:core.model_ladder:FIX:runpod_honors_an_explicit_tight_caller_timeout:20260719⬡
@@ -106,7 +109,7 @@ async function tryRunPodGLM(system, user, opts) {
 async function tryTogetherGLM(system, user, opts) {
   var key = process.env.TOGETHER_API_KEY; if (!key) return null;
   try {
-    var body = { model: process.env.GLM_MODEL || 'zai-org/GLM-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    var body = { model: process.env.GLM_MODEL || 'zai-org/GLM-5.2', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_together_so_it_returns_fast_clean_json:20260719⬡
     // GLM-5.2 is a 744B reasoning model that THINKS by default, emitting a long
@@ -134,7 +137,7 @@ async function tryOpenRouterGLM(system, user, opts) {
     // A stale default model string silently pins the whole system to an old brain.
     // Now 5.2 everywhere, env-overridable. Truncation fall-through (same file) covers
     // 5.2's reasoning-burn so an empty never wins.
-    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_openrouter_too:20260719⬡
     // Same disease as the Together rung: GLM-5.2 thinks by default, the content
@@ -157,7 +160,7 @@ async function tryOrnith(system, user, opts) {
   try {
     var base = url.replace(/\/+$/, '');
     var full = /\/(chat\/)?completions$/.test(base) ? base : (/\/openai\/v1$/.test(base) ? base + '/chat/completions' : base + '/openai/v1/chat/completions');
-    var body = { model: process.env.ORNITH_MODEL || 'ornith', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    var body = Object.assign({ model: process.env.ORNITH_MODEL || 'ornith', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }] }, outputGuard.ornithSampling(opts.max_tokens, false));
     // Ornith is called through its OpenAI-compatible chat-completions surface.
     // response_format is that surface's compatible JSON-mode request; ordinary
     // deliberations keep their existing request shape.
@@ -173,7 +176,7 @@ async function tryQwen(system, user, opts) {
   var key = process.env.OPENROUTER_API_KEY; if (!key) return null;
   try {
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b', messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature }), signal: requestSignal(opts, opts.timeout) });
+      body: JSON.stringify({ model: process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature }), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
     return hasAcceptedContent(c, opts) ? { content: c, model: 'qwen3-235b', via: 'openrouter' } : null;
@@ -345,4 +348,5 @@ async function transcribe(audio, opts) {
   return null;
 }
 
-module.exports = { deliberate: deliberate, transcribe: transcribe };
+module.exports = { deliberate: deliberate, transcribe: transcribe,
+  _test: { hasAcceptedContent: hasAcceptedContent } };
