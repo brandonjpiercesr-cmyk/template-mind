@@ -294,6 +294,23 @@ function buildJudgmentPrompt(packet, config) {
   return { system: system, user: user };
 }
 
+// Cold-code post-validation. The live cook-off judge's own correction: verify each
+// decision's bucket is in the closed set before routing, and strip em/en dashes from
+// anything a human will read (belt to WRIT's suspenders) so a stray dash never reaches
+// the principal's own voice. Cold code enforces, it does not judge meaning.
+var ALLOWED_BUCKETS = { personal:1, blast:1, not_mine:1, automated:1, calendar:1, resolved:1 };
+function stripDashes(text) { return String(text || '').replace(/\s*[\u2014\u2013]\s*/g, ', '); }
+function enforceDecisions(decisions) {
+  return (Array.isArray(decisions) ? decisions : []).map(function (d) {
+    if (!d || typeof d !== 'object') return null;
+    // Unknown bucket is not a silent pass: default to the safe non-drafting bucket.
+    if (!ALLOWED_BUCKETS[d.bucket]) { d.bucket = 'automated'; d.needsReply = false; d.reasoning = '[bucket coerced: organ returned an unknown bucket] ' + (d.reasoning || ''); }
+    if (d.bucket !== 'personal') { d.needsReply = false; d.draftBody = ''; } // only personal drafts
+    if (d.draftBody) d.draftBody = stripDashes(d.draftBody);
+    return d;
+  }).filter(Boolean);
+}
+
 async function judgeAndDraft(packet, config) {
   if (!packet.messages.length) return { ok: true, decisions: [] };
   var p = buildJudgmentPrompt(packet, config);
@@ -302,13 +319,14 @@ async function judgeAndDraft(packet, config) {
   if (!res || !res.content) return { ok: false, reason: 'organ_unavailable', decisions: [] };
   var parsed = null;
   try { parsed = typeof res.content === 'string' ? JSON.parse(res.content) : res.content; } catch (e) { return { ok: false, reason: 'organ_bad_json', decisions: [] }; }
-  var decisions = (parsed && parsed.decisions) || [];
-  // WRIT-gate every draft into the principal's voice; strip any markdown the organ leaked.
+  var decisions = enforceDecisions((parsed && parsed.decisions) || []);
+  // WRIT-gate every draft into the principal's voice; strip markdown, then dashes last.
   for (var i = 0; i < decisions.length; i++) {
     var d = decisions[i];
     if (d && d.bucket === 'personal' && d.draftBody) {
       try { var w = await require('../board/writ/writ').writCheck(d.draftBody); if (w && w.ok && typeof w.content === 'string') d.draftBody = w.content; } catch (e) {}
       try { d.draftBody = formatMatrix.stripMarkdown(d.draftBody); } catch (e) {}
+      d.draftBody = stripDashes(d.draftBody);
     }
   }
   return { ok: true, decisions: decisions, via: res.via || res.model || 'ladder' };
@@ -349,6 +367,7 @@ async function composeHerReport(decisions, packet, config, HAM, priorLoop) {
   // One-voice gate: strip hollow phrasing, dead names, and any markdown.
   try { var wr = await require('../board/writ/writ').writCheck(report); if (wr && wr.ok && typeof wr.content === 'string') report = wr.content; } catch (e) {}
   try { report = formatMatrix.stripMarkdown(report); } catch (e) {}
+  report = stripDashes(report);
   return report;
 }
 
