@@ -19,7 +19,17 @@ require('./pai/core/provider.boundary.js').install();
 
 const express = require('express');
 const app = express();
-app.use(express.json());
+// ⬡B:mind.entry:REACH:preserve_signed_webhook_bytes:20260720⬡
+// R2B channel law: provider signatures cover the exact bytes received, not a
+// JSON object reconstructed after parsing. Preserve those bytes at the one
+// shared per-HAM entry boundary so IMAN can verify Nylas before accepting work.
+// This stays world-neutral: every mind uses the same parser and its own env key.
+app.use(express.json({
+  limit: '10mb',
+  verify: function preserveRawWebhookBody(req, _res, buf) {
+    req.rawBody = Buffer.from(buf);
+  }
+}));
 
 const HAM = (process.env.HAM_UID || '').toUpperCase();
 const BANK = process.env.MEMORY_BANK_URL || '';
