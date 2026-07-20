@@ -19,8 +19,18 @@
 // (env-driven, deterministic) -- forcing an LLM in here would be theater.
 function brainUrl() { return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function brainKey() { return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
-function beadTable() { return process.env.BEAD_TABLE || 'aibe_brain'; }
-function brainSchema() { return process.env.BRAIN_SCHEMA || 'abacia_core'; }
+function memoryBankSelected() {
+    return !!(process.env.MEMORY_BANK_URL || process.env.MEMORY_BANK_KEY);
+}
+function beadTable() {
+    return process.env.BEAD_TABLE || (memoryBankSelected() ? 'beads' : 'aibe_brain');
+}
+function brainSchema() {
+    return process.env.BRAIN_SCHEMA || (memoryBankSelected() ? 'memory_bank' : 'abacia_core');
+}
+function normalizeHamUid(value) {
+    return String(value || '').trim().toUpperCase();
+}
 
 /**
  * Build a four‑colon ACL stamp wrapped in hex B markers.
@@ -132,12 +142,19 @@ async function readBead(filter = {}) {
  * @param {string} source - bead source address
  * @returns {Promise<Object|null>} first matching bead or null
  */
-async function findBySource(source) {
+async function findBySource(source, hamUid) {
     // ⬡B:core.brain_client:FIX:findBySource_missing_eq_operator:20260709⬡
     // This passed the raw value as the filter, producing ?source=<value> — PostgREST
     // requires an operator (?source=eq.<value>) and 400s without one. Found live when
     // the idempotency layer's first real claim failed. Every caller gets the fix here.
-    const results = await readBead({ source: 'eq.' + source, limit: '1' });
+    // ⬡B:core.brain_client:FIX:source_reads_bind_the_exact_ham_world:20260719⬡
+    // A source is an address inside one HAM world, not a globally unique identity.
+    // Both predicates are mandatory in the same PostgREST read. Missing HAM
+    // identity fails closed before fetch rather than widening into a global read.
+    const exactHam = normalizeHamUid(hamUid);
+    if (!exactHam) return null;
+    const results = await readBead({ source: 'eq.' + source,
+        ham_uid: 'eq.' + exactHam, limit: '1' });
     return results.length > 0 ? results[0] : null;
 }
 
@@ -158,5 +175,6 @@ module.exports = {
     writeBead,
     readBead,
     findBySource,
-    parseEdges
+    parseEdges,
+    _test: { normalizeHamUid }
 };

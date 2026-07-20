@@ -125,7 +125,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     findIdentity(hamUid),
     findAgentJDs(hamUid),
     findContext(hamUid, 5),
-    findRecentResults(5),
+    findRecentResults(hamUid, 5),
     findDoctrine(hamUid, 3),
     findPersonProfile(hamUid)
   ];

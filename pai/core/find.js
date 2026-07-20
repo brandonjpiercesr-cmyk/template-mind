@@ -307,9 +307,13 @@ async function findBySource(sourcePrefix, limit) {
   return find([{ source_prefix: sourcePrefix, limit: limit || 10 }]);
 }
 
-// Recent RESULT BEADs across all activity (for meeting minutes context)
-async function findRecentResults(limit) {
-  return find([{ stamp_type: 'RESULT', importance_gte: 7, limit: limit || 10 }]);
+// Recent RESULT BEADs inside one exact HAM world (for meeting minutes context).
+// A missing HAM is not permission to read globally: fail closed before the bank.
+async function findRecentResults(hamUid, limit) {
+  var exactHam = String(hamUid || '').trim().toUpperCase();
+  if (!exactHam) return { beads: [], ms: 0, count: 0 };
+  return find([{ stamp_type: 'RESULT', ham_uid: exactHam,
+    importance_gte: 7, limit: limit || 10 }]);
 }
 
 // ⬡B:core.find:WIRE:findDoctrine_20260701⬡
