@@ -1,0 +1,19 @@
+COST-BLEED REMEDIATION — every deliberate change made 20260720 by CLAIR (reach_healers_cost lane), so no other chat hunts a bug that is actually an intentional fix.
+
+WHY THIS EXISTS: every change below is INVISIBLE unless you know to look. If another chat sees the system feeling slower, a 429 on a paid call, or the autonomous cycle firing less often, it is almost certainly one of these ON PURPOSE. Do NOT revert without reading the reason and checking the live bill first. Reverting reopens the cost bleed.
+
+1. AUTONOMOUS_INTERVAL_MS = 900000 on cycle-dc499d0c (srv-d9e99o5aeets73amut20) and defaulted on mind. WAS 180000 (3 min), NOW 900000 (15 min). WHY: the autonomous cycle fired a full PAI cook + SPAN + build-drain + 6-agent proactive sweep every 3 min = 480x/day, hitting all providers each tick. This is the single biggest volume driver. If she feels less proactive/responsive on the autonomous channel, THIS is why, and it is intentional. The RIGHT long-term fix (not yet built, belongs to founder roadmap): make the "is anything worth acting on" pre-check cheap/cold-code so the full expensive cook only wakes on real signal, then this can go back to 3 min safely.
+
+2. DAILY_MODEL_CALL_CEIL set: cycle-dc499d0c=200, mind-dc499d0c=400, anew=400. This is a SAFETY CAP, not a fix. spend.guard.js trips at this many paid calls/day/service and returns null/429. WHY: backstop so a runaway loop cannot drain a card past a line. If a real high-volume day legitimately hits the cap and calls start returning "daily_spend_ceiling_reached", RAISE the number, do not delete the guard. It is per-process/in-memory so it resets on deploy.
+
+3. core/ornith.client.js — cancel-on-abandon (commit 9d3f937b, anew PR#720 + mind PR#145). The Ornith poller now cancels its RunPod job when it gives up after 64s. WAS: abandoned the job without canceling, so it billed forever and the queue grew to 500+ zombies. Do not remove the /cancel call.
+
+4. core/model.ladder.js — tight-timeout callers skip the RunPod GLM rung (commit d6650fbe, anew PR#722 + mind PR#146). WHY: a 7s tight timeout against a scale-to-zero GPU cold-starts slower than 7s and RunPod bills the wasted time (2708 failed jobs). Tight callers now go straight to Together. If someone wants RunPod GLM back for tight calls, they must first make that endpoint always-warm or they reopen the waste.
+
+5. reach/reach.department.js — llm() now routes through model.ladder.js (commit 0de53a31, anew PR#723 + mind PR#147). WAS: a rogue bare fetch to OpenRouter's URL authed with a Groq key (mismatch, silently no-op'ing). Now correct AND inherits the spend guard. Do not restore the old bare fetch.
+
+6. core/provider.boundary.js — now METERS the 3 paid providers (Together, OpenRouter, RunPod) through spend.guard.js, not just reroutes banned hosts (commit 29a5540b, anew PR#725 + mind PR merged). WHY: ~60 files raw-fetch paid providers directly, bypassing the ladder's spend guard entirely — the structural leak. Now every paid model-spend call (chat/completions, /run, /runsync, /v1/messages) passes the guard at the one door. A 429 "daily_spend_ceiling_reached_at_boundary" on a paid call is THIS, working as intended, not a broken provider. eanew/canew boundaries were intentionally NOT given this meter (canew = coding builder, its coding spend is intentional).
+
+7. ababase (srv-d7hu7u9f9bms73frs5d0) — removed a directly-set GROQ_API_KEY (Groq is perma-banned) and redeployed. If something on ababase suddenly errors reaching Groq, it is because the banned key is correctly gone, not a regression.
+
+STILL OPEN (not a decision, an honest gap): Together has no balance/usage API, so its specific leak was never pinpointed — only reduced via the volume cut + metered + capped. If the Together bill stays high, instrument the boundary to log every Together call.
