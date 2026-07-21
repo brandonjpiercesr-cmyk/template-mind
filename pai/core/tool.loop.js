@@ -1003,6 +1003,26 @@ function toolsForIntent(tools, intent) {
   });
 }
 
+// ⬡B:core.tool_loop:WIRE:imperative_background_set_is_done_not_promised:20260721⬡
+// The say-it-without-doing-it gaslight, caught live: an imperative "set my background to X"
+// left the mutation UNFORCED (the screen path unforces UI commands so a brain lookup cannot
+// derail them), so the model was free to reply "let me get that set up" and never call the
+// tool. Cold detection of an UNAMBIGUOUS imperative to set the standing background lets the
+// existing forced-tool retry net make the change actually happen this turn. Tight on purpose:
+// a question ("what's my background", "can you change backgrounds?") is not a command and must
+// never force a mutation; only a real imperative with a background/scene target does.
+function backgroundSetIntent(message) {
+  var t = String(message || '').trim().toLowerCase();
+  if (/[?]\s*$/.test(t)) return false;
+  var verb = /\b(set|change|switch|make|put|give me|update|turn|use)\b/;
+  var target = /\b(background|wallpaper|backdrop|scene)\b/;
+  if (!verb.test(t) || !target.test(t)) return false;
+  // A capability/what question that happens to contain a set-word is still a question, not a do.
+  if (/\b(what|which|whats|what's|is my|are my|how do|do you|could you just tell)\b/.test(t)
+      && !/\b(set|change|switch|make|put|update|turn)\b.{0,40}\b(background|wallpaper|backdrop|scene)\b/.test(t)) return false;
+  return true;
+}
+
 function intentRequiresLiveTool(intent) {
   // These two routes are unambiguously current external facts and contain only
   // one read-only tool each. Requiring a call cannot release a mutation and
@@ -3324,6 +3344,23 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             body._codingReadNudge = { repo: _mcRepo[1], path: _mcPath[1], action: 'read_file' };
           }
         }
+      }
+      // ⬡B:core.tool_loop:FIX:she_does_it_now_and_says_it_warm_not_promises_it:20260721⬡
+      // The say-it-without-doing-it gaslight the founder caught: an imperative "set my background
+      // to X" got a "let me get that set up" with no tool call and no change. When the request is
+      // an UNAMBIGUOUS imperative to set the standing background and set_background is on the table,
+      // force that exact call so the change actually happens this turn (the retry net below already
+      // catches a model that ignores a forced tool_choice). And carry a confirmation directive so
+      // she speaks it in her full voice as the one who already handled it, anchored to what she
+      // truly knows about them right now, never a bare call-and-response echo. The warmth is the
+      // persona plus their real context doing the work, not a hardcoded line.
+      if (_routedToolIntent === 'screen' && backgroundSetIntent(_mSt) &&
+          Array.isArray(body.tools) && body.tools.some(function (t) {
+            return t && t.function && t.function.name === 'set_background'; })) {
+        body.tool_choice = { type: 'function', function: { name: 'set_background' } };
+        body.messages = body.messages.concat([{ role: 'system', content:
+          'This is a direct request to set their standing background. Call set_background now with the scene that best fits what they actually asked, and make the change this turn. Never say you will get to it, that you are setting it up, or that it is on the way; you do it now. Then confirm it in your own warm voice as the one who already handled it, and if something you genuinely know about them right now naturally fits, let it show. Do not hand back a flat call-and-response line.' }]);
+        _stampStep('background_set_forced', 'imperative_background_set');
       }
     }
     if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
