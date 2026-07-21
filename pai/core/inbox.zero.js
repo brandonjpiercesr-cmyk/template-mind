@@ -444,6 +444,45 @@ async function previewSendToFounder(HAM, config, decisions, packet, opts) {
   return { sent: sent, results: results, enabled: true, of: personal.length };
 }
 
+// ── SAVE TO THE MAILBOX'S DRAFTS FOLDER ───────────────────────────────────────────────
+// The founder's own ask: he wants the owed replies sitting in his real Drafts folder, so
+// he opens his mailbox and they are there, threaded to the original, ready to read, edit,
+// and send himself. This saves each owed reply as a real Nylas draft (IMAN.createDraft),
+// threaded via thread_id + reply_to_message_id, and DOES NOT SEND anything: a draft on
+// the account is not outbound, nothing leaves the mailbox, the hard line holds. OFF by
+// default; fires only when opts.saveToDrafts is true or INBOX_ZERO_SAVE_DRAFTS is set.
+async function saveDraftsToMailbox(HAM, config, decisions, packet, opts) {
+  var on = (opts && opts.saveToDrafts === true) || process.env.INBOX_ZERO_SAVE_DRAFTS === '1';
+  if (!on) return { saved: 0, results: [], enabled: false };
+  var personal = decisions.filter(function (d) { return d.bucket === 'personal' && d.needsReply && d.draftBody; });
+  if (!personal.length) return { saved: 0, results: [], enabled: true };
+  var results = [], saved = 0;
+  for (var i = 0; i < personal.length; i++) {
+    var d = personal[i], m = byId(packet, d.id);
+    var subject = (m && m.subject) ? (/^re:/i.test(m.subject) ? m.subject : ('Re: ' + m.subject)) : ('Reply for ' + config.world_name);
+    var out = { to: m ? m.from : null, subject: subject, ok: false, reason: null, draftId: null };
+    try {
+      var r = await IMAN.createDraft(config.world_name, {
+        to: m ? m.from : null, subject: subject, body: String(d.draftBody || ''),
+        thread_id: m ? m.thread_id : null, reply_to_message_id: d.id
+      });
+      out.ok = !!(r && r.ok); out.reason = r && r.reason || null; out.draftId = r && r.draftId || null;
+      if (out.ok) saved++;
+    } catch (e) { out.reason = e.message; }
+    results.push(out);
+  }
+  // Stamp what actually landed in the mailbox so the loop is auditable, never a send.
+  await writeBead({
+    ham_uid: HAM, agent_global: config.advisor_id, stamp_type: 'DRAFTS_SAVED',
+    acl_stamp: brainClient.buildStamp('inbox_zero.' + config.world_name + '.drafts_saved', 'DRAFTS_SAVED', ''),
+    source: 'ham_' + String(HAM).toLowerCase() + '.inbox_zero.' + config.world_name + '.drafts_saved.' + Date.now(),
+    importance: 7,
+    summary: '[INBOX ZERO DRAFTS] ' + saved + '/' + personal.length + ' saved to the ' + config.world_name + ' Drafts folder, nothing sent',
+    content: JSON.stringify({ mode: 'mailbox_drafts', world: config.world_name, saved: saved, results: results, note: 'Real drafts in the mailbox Drafts folder, threaded to the original. Nothing was sent.', createdAt: new Date().toISOString() }),
+  });
+  return { saved: saved, results: results, enabled: true, of: personal.length };
+}
+
 // ── THE MAIN CYCLE ────────────────────────────────────────────────────────────────────
 // entry the cycle calls; exits to LOGFUL and returns a structured result back into the cycle.
 async function runInboxZero(opts) {
@@ -530,12 +569,17 @@ async function runInboxZero(opts) {
   // founder's own inbox via IMAN's founderTest redirect, never to the real person.
   var preview = await previewSendToFounder(HAM, config, decisions, packet, opts);
 
+  // 8c) Save owed replies into the mailbox's own Drafts folder (OFF by default). Real
+  // drafts, threaded, never sent, for the founder to open and send himself.
+  var mailboxDrafts = await saveDraftsToMailbox(HAM, config, decisions, packet, opts);
+
   // 9) The brain, write, stamped. A RESULT bead records every action for honest audit.
   var resultContent = lineage.attachLineage({
     world: world, agent: 'INBOX_ZERO', unread_reviewed: packet.messages.length,
     drafted: personal.length, skipped: skippedMsgs.length, escalations_proposed: escalations,
     prior_drafts_closed: priorLoop.closed, prior_drafts_dropped: priorLoop.dropped,
     preview_sent_to_founder: preview.enabled ? preview.sent : 0, preview_mode: preview.enabled,
+    drafts_saved_to_mailbox: mailboxDrafts.enabled ? mailboxDrafts.saved : 0, mailbox_drafts_mode: mailboxDrafts.enabled,
     organ_ok: judged.ok, organ_via: judged.via || null,
     actions: decisions.map(function (d) { var m = byId(packet, d.id); return { subject: m ? m.subject : d.id, bucket: d.bucket, action: (d.bucket === 'personal' && d.needsReply) ? 'drafted' : 'skipped', why: d.reasoning || '' }; }),
     report: report,
@@ -562,6 +606,7 @@ async function runInboxZero(opts) {
     escalations_proposed: escalations, prior_drafts_closed: priorLoop.closed, prior_drafts_dropped: priorLoop.dropped,
     imb_empty: !!(packet.imb && packet.imb.empty), organ_ok: judged.ok,
     preview_mode: preview.enabled, preview_sent_to_founder: preview.enabled ? preview.sent : 0,
+    mailbox_drafts_mode: mailboxDrafts.enabled, drafts_saved_to_mailbox: mailboxDrafts.enabled ? mailboxDrafts.saved : 0,
     report: report, ms: Date.now() - t0,
     note: preview.enabled
       ? 'universal inbox-zero, preview mode: drafts also sent to the founder-test address only, never the real person.'
@@ -618,7 +663,7 @@ function registerInboxZero(app) {
   app.post('/inbox-zero/:world/run', async function (req, res) {
     try {
       var body = req.body || {};
-      var out = await runInboxZero({ world: req.params.world, hamUid: body.hamUid || body.ham_uid, intent: body.intent, limit: body.limit, previewSend: body.previewSend === true });
+      var out = await runInboxZero({ world: req.params.world, hamUid: body.hamUid || body.ham_uid, intent: body.intent, limit: body.limit, previewSend: body.previewSend === true, saveToDrafts: body.saveToDrafts === true });
       res.json(out);
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
