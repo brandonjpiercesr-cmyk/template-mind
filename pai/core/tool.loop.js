@@ -844,6 +844,12 @@ var TOOLS = [
           chart:{type:'object',description:'A chart of REAL numbers only (from your tools or the conversation), which grows to its values on the glass. Every series value must be a real finite number; never estimate or invent one.',
             properties:{title:{type:'string'},series:{type:'array',items:{type:'object',properties:{label:{type:'string'},value:{type:'number'}}}}}}}}}
     }}}},
+  {type:'function',function:{name:'set_background',description:'Set the person\'s PERSISTENT living background -- the cinematic scene, or a free looping video, that drifts behind ALL their surfaces (their apps, the command center) and stays until they change it. This is NOT update_screen: update_screen paints their live glass for the moment, while set_background is the standing preference every surface reads when it loads. Use when they ask to change, set, or keep a background/wallpaper/scene ("give me the beach behind everything", "make my background calmer", "put the city up"). Pick the scene that best fits what they asked. It is free and always works. Only pass a video url if they actually gave a real one; never invent one. This only ever sets their own world.',
+    parameters:{type:'object',properties:{
+      scene:{type:'string',enum:['skyscrapers','fireworks','beach','mountains','lake','future_city','teams','aurora'],description:'The cinematic scene to drift behind their surfaces. Choose the one that fits the mood or place they named (calm water -> lake, the city -> skyscrapers or future_city, celebration -> fireworks).'},
+      mode:{type:'string',enum:['scene','video'],description:'scene for the free cinematic gradient (default, always works); video only when a real looping video url is given.'},
+      video_url:{type:'string',description:'A free https looping video url ending in .mp4, .webm, or .m4v, ONLY when they gave a real one. Never invent a url.'},
+      app:{type:'string',description:'Optional: set the background for ONE surface only (e.g. "peak"), leaving their other surfaces on the default. Omit to set the default everywhere.'}}}}},
   {type:'function',function:{name:'get_recent_builds',description:'Get the REAL recent deploy history for the coding service -- real commit ids, real timestamps, real live/failed status, straight from Render. Use this before ever putting a "build status" or "recent builds" card on the screen -- never invent build names or numbers.',
     parameters:{type:'object',properties:{limit:{type:'number',description:'how many recent deploys, default 5'}}}}},
   {type:'function',function:{name:'read_own_code',description:'Real, live, read-only search of your OWN actual source code -- not the brain, the real code that runs you. '
@@ -955,7 +961,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   budget:['get_budget_summary','get_budget_upcoming'],
   memory:['find_in_brain','find_identity_evidence'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','read_lane_board','read_render_logs','get_recent_builds','read_own_code','consult_coda','activate_roadmap_task','fix_file_in_github','trigger_deploy'],
-  screen:['update_screen','save_layout','edit_layout'],
+  screen:['update_screen','save_layout','edit_layout','set_background'],
   general:[]
 });
 
@@ -1040,6 +1046,7 @@ var POST_COUNCIL_TOOLS = Object.freeze({
   save_layout:true,
   edit_layout:true,
   update_screen:true,
+  set_background:true,
   activate_roadmap_task:true
 });
 
@@ -1452,6 +1459,37 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       }
       return JSON.stringify({ok:false,reason:'nothing_applied'});
     } catch (eUpd) { return JSON.stringify({ok:false,reason:eUpd.message}); }
+  }
+  if (name === 'set_background') {
+    // ⬡B:tool.loop:WIRE:set_background_is_a_wonder:20260721⬡ The LLM judges which scene
+    // fits what the person asked ("calmer" -> lake, "the city" -> skyscrapers); cold code only
+    // persists the choice to the one writer (POST /os/background/:ham). The living background
+    // (Phase 8 Group A) is now settable through the one cycle, not only the UI. Per-HAM by the
+    // route's own construction, so a set can never paint another person's world.
+    try {
+      var _bgHam = String(hamUid || '').toUpperCase();
+      if (!/^[0-9A-F]{8}$/.test(_bgHam)) return JSON.stringify({ok:false,reason:'ham_uid_required'});
+      var setBgCancelled = await cancelBeforeEffect(name, runtime);
+      if (setBgCancelled) return setBgCancelled;
+      var _bgSelf = process.env.OS_API_BASE || process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
+      var _bgBody = {
+        mode: (args && args.mode === 'video') ? 'video' : 'scene',
+        scene: (args && args.scene) || 'aurora',
+        videoUrl: (args && args.video_url) || ''
+      };
+      if (args && args.app) _bgBody.app = args.app;
+      var _bgRes = await fetch(_bgSelf.replace(/\/+$/, '') + '/os/background/' + encodeURIComponent(_bgHam), {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(_bgBody),
+        signal:(runtime && runtime.abortSignal)
+      }).then(function(x){return x.ok?x.json():null;}).catch(function(){return null;});
+      if (_bgRes && _bgRes.ok) {
+        var _bgWhere = _bgBody.app ? ('the ' + _bgBody.app + ' surface') : 'all their surfaces';
+        var _bgScene = (_bgRes.background && _bgRes.background.scene) || _bgBody.scene;
+        var _bgWhat = _bgBody.mode === 'video' ? 'a looping video' : ('the ' + _bgScene + ' scene');
+        return JSON.stringify({ok:true,set:_bgWhat,where:_bgWhere,background:_bgRes.background||null});
+      }
+      return JSON.stringify({ok:false,reason:(_bgRes && _bgRes.error) || 'background_set_failed'});
+    } catch (eBg) { return JSON.stringify({ok:false,reason:eBg.message}); }
   }
   if (name === 'read_lane_board') {
     // ⬡B:core.tool_loop:WIRE:read_lane_board_cross_chat_alignment:20260719⬡ Founder
