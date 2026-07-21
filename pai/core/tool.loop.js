@@ -4351,7 +4351,45 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         reason: 'cycle produced no answer after ' + iter + ' iterations; likely missing a tool for part of the ask' });
       if (await _turnCancelled()) return _turnCancelledResult('after_tracker_recovery');
       if (_wasAction && ['blooio','text','sms','voice','iman','email','portal','omi','ccwa','cara'].indexOf(channel) !== -1) {
-        finalAns = 'I have your request logged so it will not get lost. Part of it I could not finish on my own yet, and I have flagged that to get handled. If you tell me which piece matters most right now, I will take another run at it.';
+        // ⬡B:core.tool_loop:FIX:exhaustion_synthesizes_never_begs_a_narrower_ask:20260721⬡
+        // FOUNDER DIRECT (Buffalo doctrine, 20260721): she must handle the WHOLE ask. This
+        // path used to hard-set a reply that asked the human to "tell me which piece matters
+        // most right now" -- a coded beg for a tighter ask, the exact anti-pattern the
+        // founder named. A capable mind never shrinks the request; it synthesizes from what
+        // it already gathered. The upstream _synth recovery is gated on tools.length, so a
+        // pure-reasoning ask that fired no tool (e.g. "name this doctrine" over a long input)
+        // reached NO synthesis and dropped straight to the beg. Give that case one real,
+        // bounded, no-tool synthesis over the full request plus this turn's evidence, with an
+        // explicit "do not narrow, cover the whole ask" instruction. Only if that yields
+        // nothing do we return an HONEST working-limit status -- never a narrow-it-down beg.
+        // Scope is this leaf only: the deeper starvation of the shared recovery passes (the
+        // 380-token _synth cap and its tools.length gate above) is intentionally left to the
+        // reach/PAI single-source lanes (#512/#519/#610/#621) so this cannot clobber them.
+        var _forcedTail = '';
+        try {
+          _forcedTail = msgs.slice(-16).map(function(m){
+            var _fc = m && m.content;
+            if (_fc != null && typeof _fc !== 'string') { try { _fc = JSON.stringify(_fc); } catch(eFc){ _fc = String(_fc); } }
+            return (m && m.role || '') + ': ' + String(_fc||'').slice(0, 1200);
+          }).join(String.fromCharCode(10));
+        } catch(_eTail){ _forcedTail = ''; }
+        var _forced = '';
+        try {
+          _forced = await _completeBoundHistoryOnLadder([
+            {role:'system',content:'You are finishing an in-flight assistant turn that ran out of tool iterations. Using ONLY the request and the evidence already gathered below, write your best COMPLETE, direct answer to the whole request now. Do NOT call tools. Do NOT ask the person to narrow, repeat, or pick one piece. Answer every part the evidence supports; if one part is genuinely unsupported, answer the rest fully and name that single gap in one short clause.'},
+            {role:'user',content:'FULL REQUEST: ' + String(message||'').slice(0,16000) +
+              String.fromCharCode(10,10) + 'EVIDENCE GATHERED THIS TURN:' +
+              String.fromCharCode(10) + _forcedTail.slice(0, 12000)}
+          ], tokenCapFor(channel), 0.2, false);
+        } catch(_eForce){ _forced = ''; }
+        if (await _turnCancelled(true)) return _turnCancelledResult('after_exhaustion_synthesis');
+        if (_forced && String(_forced).trim()) {
+          finalAns = String(_forced).trim();
+          _stampStep('exhaustion_forced_synthesis', 'len=' + finalAns.length + ' iter=' + iter);
+        } else {
+          finalAns = 'I hit my working limit on this turn. I have logged your full request so nothing is lost, and I am not asking you to narrow it down.';
+          _stampStep('exhaustion_honest_limit', 'synthesis_empty iter=' + iter);
+        }
         _blockedFallback = true;
       }
     } catch(_eTrk){}
