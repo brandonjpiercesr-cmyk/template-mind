@@ -36,6 +36,10 @@ function formatCcwa(output) {
     // trailing sign-off is an artifact, stripped here mechanically like em dashes. Tight to the very
     // end so a real sentence that happens to contain "thanks" mid-reply is untouched.
     .replace(/[\s\n]*\n\s*(thanks(?:\s+(?:so\s+much|again|a\s+lot))?|thank\s+you|best|regards|cheers|warmly|sincerely|yours)[,.!]*(?:\s*\n\s*[-\u2013]?\s*a['\u2019]?nu)?[\s.!]*$/i, '')
+    // Form 2: the model, once the on-its-own-line sign-off is stripped, moves it INLINE as a final
+    // "Thanks." sentence. Strip a trailing courtesy word that stands as the last sentence, only when
+    // preceded by sentence-ending punctuation so a mid-reply "thanks for the heads up" is untouched.
+    .replace(/([.!?])\s+(thanks(?:\s+(?:so\s+much|again|a\s+lot))?|thank\s+you)[,.!]*\s*$/i, '$1')
     .trim();
 }
 
