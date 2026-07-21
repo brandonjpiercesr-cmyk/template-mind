@@ -29,6 +29,13 @@ function formatCcwa(output) {
     .replace(/\*\*(.*?)\*\*/g, '$1')
     .replace(/\u2014/g, ',')   // em dash -> comma (voice law)
     .replace(/--/g, ',')
+    // \u2b21B:core.anu:FIX:strip_the_courtesy_signoff_the_model_wont_stop_adding:20260721\u2b21 Same class
+    // as the em-dash law: the persona forbids a courtesy sign-off, but the model keeps tacking a
+    // trailing "Thanks"/"Best"/"Regards" (often on its own line, sometimes with a signature) onto
+    // her replies. She is mid-conversation with someone she knows, not writing a letter, so a
+    // trailing sign-off is an artifact, stripped here mechanically like em dashes. Tight to the very
+    // end so a real sentence that happens to contain "thanks" mid-reply is untouched.
+    .replace(/[\s\n]*\n\s*(thanks(?:\s+(?:so\s+much|again|a\s+lot))?|thank\s+you|best|regards|cheers|warmly|sincerely|yours)[,.!]*(?:\s*\n\s*[-\u2013]?\s*a['\u2019]?nu)?[\s.!]*$/i, '')
     .trim();
 }
 
