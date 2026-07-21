@@ -31,6 +31,7 @@ var advisorExit  = require('../advisors/advisor.exit');
 var watermark    = require('./inboxWatermark');
 var grounding    = require('../board/grounding');
 var ladder       = require('./model.ladder');
+var publicTurn   = require('./pai.public.finalizer'); // the one real exit: council + WRIT + meta_commentary + synthesize
 var brainClient  = require('./brain.client');
 var lineage      = require('./lineage.attach');
 var formatMatrix = require('./format.matrix');
@@ -96,9 +97,39 @@ async function resolveAdvisorConfig(world, HAM) {
     grant_id: grantId || null,
     send_as_email: sendAs,
     bcc_email: bcc,
+    signature: resolveSignature(w, grantInfo, sendAs),
     imb_source_tag: advisorGlobalFor(w),   // scope every IMB search to her own tag
     roster: roster,
   };
+}
+
+// THE SIGNATURE. Nylas does not append the mailbox signature through the create-draft API,
+// so the draft the principal opens would land bare without this. The block is resolved per
+// world at run time, never hardcoded here (the 847392 test holds for signatures too): an
+// explicit per-world override wins, else the grant's own from-name and address, else the
+// founder's configured display name. A world with nothing configured gets no invented block.
+function resolveSignature(world, grantInfo, sendAs) {
+  var W = String(world || '').toUpperCase();
+  var override = String(process.env['INBOX_ZERO_SIGNATURE_' + W] || process.env['NYLAS_' + W + '_SIGNATURE'] || '').trim();
+  if (override) return override.replace(/\\n/g, '\n');   // env-escaped newlines become real ones
+  var name  = (grantInfo && (grantInfo.fromName || grantInfo.display_name)) || process.env['NYLAS_' + W + '_FROM_NAME'] || process.env.FOUNDER_DISPLAY_NAME || '';
+  var email = sendAs || (grantInfo && grantInfo.from) || '';
+  var phone = String(process.env['INBOX_ZERO_SIGNOFF_PHONE_' + W] || process.env.FOUNDER_PHONE || '').trim();
+  var lines = [];
+  if (name)  lines.push(name);
+  var contact = [email, phone].filter(Boolean).join('  |  ');
+  if (contact) lines.push(contact);
+  return lines.length ? lines.join('\n') : '';   // nothing configured => no block, never guessed
+}
+
+// Attach the signature to a finished draft body, once, after all voice processing. Idempotent:
+// if the composed body already ends with the exact block, it is not doubled.
+function withSignature(body, signature) {
+  var b = String(body || '').replace(/\s+$/, '');
+  var sig = String(signature || '').trim();
+  if (!sig) return b;
+  if (b.indexOf(sig) !== -1 && b.slice(-sig.length - 4).indexOf(sig) !== -1) return b; // already present at the tail
+  return b + '\n\n' + sig;
 }
 
 // ── THE FCW WALL ──────────────────────────────────────────────────────────────────────
@@ -317,9 +348,9 @@ function buildJudgmentPrompt(packet, config) {
     + '" world. You serve ' + (process.env.FOUNDER_DISPLAY_NAME || 'the principal') + '. EBC FIREWALL: you have zero access to any other world; never name another client or organization.\n'
     + 'Decide, for EACH email, exactly one bucket: personal (owed a real reply), blast (looks personal but went wide, do not answer warmly), not_mine (a named staffer already owns it, principal only CC\'d), automated (no human to write back to), calendar (resolves on accept/decline), or resolved (already answered).\n'
     + 'RULES: Check the full To/CC before calling anything personal. If a named person is already corresponding, it is not the principal\'s to answer. Open attachments before referencing them; if something was referenced but never attached, say so plainly. Flag anything older than two days before drafting. NEVER fabricate a person, update, meeting, or trip not present in the evidence. Use IMB history only when it is real, sourced as what it is.\n'
-    + 'Only for bucket=personal do you write draftBody, and it must be in the PRINCIPAL\'S OWN VOICE: no em dashes, no dropped subjects, no robotic parallel structure, no call-to-action ending, a correct capitalized greeting, ending on the last real thought. Everything is DRAFT ONLY; nothing sends without his explicit word.\n'
+    + 'You TRIAGE here; you do NOT write the reply. For bucket=personal, a separate full deliberation (his own window cycle, with council and WRIT and meta commentary) composes the actual draft in his voice afterward. Your job is to decide the bucket and to write a plain "intent" of what a reply owes: what he needs to say back, any real fact from the thread it must turn on, and the tone. Do not compose the email itself. Everything downstream is DRAFT ONLY; nothing sends without his explicit word.\n'
     + 'THE REACH LADDER. The default resting place for everything is the Command Center, where a draft waits for him on his own time. Almost every email stays there. You raise the ladder ONLY for a genuine priority one: a real deadline inside the next few hours that a resting draft would blow past, or content that signals real risk if he does not see it until he happens to check in. When that bar is truly met, set escalate.propose=true, name the tier you would suggest (text | email | call) and write two sentences of reasoning that give the evidence: what the deadline or risk is, and why it cannot wait for the Command Center. You are only PROPOSING. You never send, you never reach him yourself, and the tier is a suggestion, not a decision: a separate deliberating mind (the reach cycle, Overseer-cleared) reads your reasoning and decides the real channel, or overrules you entirely. If in doubt, leave it on the Command Center and do not propose.\n'
-    + 'Return STRICT JSON only: {"decisions":[{"id":"<email id>","bucket":"...","needsReply":true|false,"draftBody":"<his voice or empty>","escalate":{"propose":false,"tier":null,"reasoning":""},"reasoning":"<why, one or two sentences>"}]}';
+    + 'Return STRICT JSON only: {"decisions":[{"id":"<email id>","bucket":"...","needsReply":true|false,"intent":"<for personal: what the reply owes, one or two sentences; else empty>","escalate":{"propose":false,"tier":null,"reasoning":""},"reasoning":"<why, one or two sentences>"}]}';
 
   var user = imbLine + '\n\nCALENDAR (this world only):\n' + (packet.calendar || '(none)') + '\n\nUNREAD MAIL:\n' + lines.join('\n')
     + '\n\nReturn the JSON now. One decision object per email above, matched by id.';
@@ -337,31 +368,81 @@ function enforceDecisions(decisions) {
     if (!d || typeof d !== 'object') return null;
     // Unknown bucket is not a silent pass: default to the safe non-drafting bucket.
     if (!ALLOWED_BUCKETS[d.bucket]) { d.bucket = 'automated'; d.needsReply = false; d.reasoning = '[bucket coerced: organ returned an unknown bucket] ' + (d.reasoning || ''); }
-    if (d.bucket !== 'personal') { d.needsReply = false; d.draftBody = ''; } // only personal drafts
-    if (d.draftBody) d.draftBody = stripDashes(d.draftBody);
+    if (d.bucket !== 'personal') { d.needsReply = false; d.intent = ''; } // only personal owes a reply
+    d.draftBody = '';   // the triage organ never composes the body; the window cycle fills this
     return d;
   }).filter(Boolean);
 }
 
-async function judgeAndDraft(packet, config) {
+// Compact single-email evidence for the composing cycle: the same facts the triage saw,
+// scoped to one thread, so the window cycle drafts from the real material and nothing else.
+function buildOneEmailEvidence(m, config) {
+  var lines = [];
+  lines.push('World (this world only, EBC firewall): ' + config.world_name);
+  lines.push('From: ' + (m.from_name ? (m.from_name + ' <' + m.from + '>') : m.from));
+  lines.push('Subject: ' + m.subject);
+  if (m.already_replied) lines.push('Note: the principal has already replied on this thread before.');
+  lines.push('Thread (' + (m.thread || []).length + ' msgs, chronological):');
+  (m.thread || []).forEach(function (t) { lines.push('  - ' + (t.from || '?') + ': ' + (t.snippet || t.body || '').slice(0, 400)); });
+  if (!m.thread || !m.thread.length) lines.push('  (no thread history) snippet: ' + m.snippet);
+  (m.attachment_text || []).forEach(function (at) { lines.push('  attachment "' + at.filename + '": ' + (at.text ? at.text.slice(0, 600) : (at.note || 'unreadable'))); });
+  return lines.join('\n');
+}
+
+// THE DRAFT, THROUGH THE REAL TURN. A reply the principal may send to a real person is
+// human-facing output, so it is NOT written by the triage organ. It runs the entire window
+// cycle (finalizePublicTurn: council + WRIT + meta commentary + synthesize), the same exit
+// every other public A'NU turn takes. If the cycle cannot run, there is no draft, we do not
+// fall back to a lightweight shortcut. The signature is attached last, after all voice work.
+async function composeDraftViaCycle(HAM, config, d, m) {
+  if (!m) return '';
+  var evidence = buildOneEmailEvidence(m, config)
+    + '\n\nWhat this reply owes (from triage): ' + (d.intent || d.reasoning || 'a genuine, useful reply in his own voice.')
+    + '\n\nCompose ONLY the reply body he would send, in his own voice: a correct capitalized greeting, no em dashes, no dropped subjects, no robotic parallel structure, no forced call-to-action ending, ending on the last real thought. Do not invent a person, meeting, update, or fact not present above. Do not add a signature line; that is attached separately. Draft only, nothing sends.';
+  var question = 'Draft my reply to this ' + config.world_name + ' email from ' + (m.from_name || m.from) + ' about "' + m.subject + '".';
+  var out = null;
+  try {
+    out = await publicTurn.finalizePublicTurn({
+      hamUid: HAM,
+      question: question,
+      deliberationInput: evidence,
+      channel: 'inbox_zero',
+      world: config.world_name,
+      councilContext: { surface: 'inbox_zero_draft', world: config.world_name, reply_to: (m.from || null) }
+    });
+  } catch (e) { out = null; }
+  if (!out || !out.ok || typeof out.answer !== 'string' || !out.answer.trim()) return '';
+  var body = out.answer;
+  try { body = formatMatrix.stripMarkdown(body); } catch (e) {}
+  body = stripDashes(body);                       // belt to the cycle's own WRIT suspenders
+  body = withSignature(body, config.signature);   // the Nylas signature the API will not add itself
+  d.cycleId = out.cycleId || null;                // carry the proof the real turn ran
+  return body;
+}
+
+async function judgeAndDraft(packet, config, HAM) {
   if (!packet.messages.length) return { ok: true, decisions: [] };
   var p = buildJudgmentPrompt(packet, config);
   var res = null;
-  try { res = await ladder.deliberate(p.system, p.user, { max_tokens: 2600, temperature: 0.2, json: true, timeout: 45000 }); } catch (e) {}
+  // The TRIAGE is a single cold classification into a closed bucket set (routing, not prose):
+  // that stays an organ call. The human-facing draft below does NOT; it runs the full cycle.
+  try { res = await ladder.deliberate(p.system, p.user, { max_tokens: 2000, temperature: 0.2, json: true, timeout: 45000 }); } catch (e) {}
   if (!res || !res.content) return { ok: false, reason: 'organ_unavailable', decisions: [] };
   var parsed = null;
   try { parsed = typeof res.content === 'string' ? JSON.parse(res.content) : res.content; } catch (e) { return { ok: false, reason: 'organ_bad_json', decisions: [] }; }
   var decisions = enforceDecisions((parsed && parsed.decisions) || []);
-  // WRIT-gate every draft into the principal's voice; strip markdown, then dashes last.
+  // Every owed reply is composed through its own full window cycle. No shortcut path.
+  var composed = 0, cycleFailed = 0;
   for (var i = 0; i < decisions.length; i++) {
     var d = decisions[i];
-    if (d && d.bucket === 'personal' && d.draftBody) {
-      try { var w = await require('../board/writ/writ').writCheck(d.draftBody); if (w && w.ok && typeof w.content === 'string') d.draftBody = w.content; } catch (e) {}
-      try { d.draftBody = formatMatrix.stripMarkdown(d.draftBody); } catch (e) {}
-      d.draftBody = stripDashes(d.draftBody);
+    if (d && d.bucket === 'personal' && d.needsReply) {
+      var m = byId(packet, d.id);
+      var body = await composeDraftViaCycle(HAM, config, d, m);
+      if (body) { d.draftBody = body; composed++; }
+      else { d.draftBody = ''; d.reasoning = '[draft deferred: window cycle unavailable, no shortcut taken] ' + (d.reasoning || ''); cycleFailed++; }
     }
   }
-  return { ok: true, decisions: decisions, via: res.via || res.model || 'ladder' };
+  return { ok: true, decisions: decisions, via: 'window_cycle', triage_via: res.via || res.model || 'ladder', composed: composed, cycle_failed: cycleFailed };
 }
 
 // ── THE VOICE LAYER: HER REPORT ───────────────────────────────────────────────────────
@@ -388,12 +469,21 @@ async function composeHerReport(decisions, packet, config, HAM, priorLoop, reach
   }
   if (packet.imb && packet.imb.empty) facts.push('Note: her memory bank had nothing on file for this world yet, so new faces were treated as new relationships, not guessed.');
 
-  var system = 'You are A\'NU speaking to ' + (process.env.FOUNDER_DISPLAY_NAME || 'the principal')
-    + ' in his Command Center after reviewing the ' + config.world_name + ' inbox. Speak in your one voice: warm, sharp, a serving butler with spunk and funk, JARVIS by way of a Black woman, full natural sentences. Lead with what actually matters, not a list in identical tone. Tell him plainly what is drafted and waiting on his word, what you handled and why, and anything you want to reach him about sooner. Never a system readout, never bullet-graded, no em dashes, never robotic. Give him as much useful signal as he can use, no filler.';
-  var user = 'Compose your Command Center report from these facts. Do not invent anything not here:\n\n' + facts.join('\n');
+  var question = 'Give me your Command Center report on the ' + config.world_name + ' inbox.';
+  var deliberationInput = 'Speak to ' + (process.env.FOUNDER_DISPLAY_NAME || 'the principal')
+    + ' in your one voice after reviewing the ' + config.world_name + ' inbox: lead with what actually matters, tell him plainly what is drafted and waiting on his word, what you handled and why, and anything you want to reach him about sooner. Full natural sentences, never a system readout, never bullet-graded, no em dashes. Do not invent anything not in these facts:\n\n' + facts.join('\n');
 
+  // Her report to the principal is human-facing, so it runs the full window cycle too, the
+  // same exit every public A'NU turn takes (council, WRIT, meta commentary, synthesize).
   var report = '';
-  try { var res = await ladder.deliberate(system, user, { max_tokens: 900, temperature: 0.5, timeout: 30000 }); if (res && res.content) report = res.content; } catch (e) {}
+  try {
+    var turn = await publicTurn.finalizePublicTurn({
+      hamUid: HAM, question: question, deliberationInput: deliberationInput,
+      channel: 'inbox_zero', world: config.world_name,
+      councilContext: { surface: 'inbox_zero_report', world: config.world_name }
+    });
+    if (turn && turn.ok && typeof turn.answer === 'string') report = turn.answer;
+  } catch (e) {}
   // Fail safe: if the organ is down, compose an honest plain report rather than nothing.
   if (!report) {
     report = personal.length
@@ -572,8 +662,9 @@ async function runInboxZero(opts) {
       'Have A\'NU\'s cycle capture relationship history for "' + world + '" so future runs are not blind (RELATIONSHIP beads under ' + config.advisor_id + ').');
   }
 
-  // 4) The organ judges and drafts. Cold code decided nothing; it only gathered.
-  var judged = await judgeAndDraft(packet, config);
+  // 4) The organ triages; every owed reply is composed through its own full window cycle.
+  //    Cold code decided nothing; it only gathered.
+  var judged = await judgeAndDraft(packet, config, HAM);
   var decisions = judged.decisions || [];
 
   // 5) Mark read/handled ONLY after a real decision, drafted or a deliberate skip, never
