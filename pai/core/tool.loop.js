@@ -989,7 +989,17 @@ function routeToolIntent(message) {
       /\b(read|show|list|check)\b.*\b(my |current |active |pending )?reminders?\b/.test(text)) return 'reminders';
   if (/\b(budget|bnpl|buy.now.pay.later|payments? (are )?(due|coming)|income vs expenses|spending by category)\b/.test(text)) return 'budget';
   if (/\b(text|message|contact details|phone number|email address)\b.*\b(my |the )?(brother|sister|mom|mother|dad|father|contact|person)\b/.test(text)) return 'messaging';
-  if (/\b(screen|glass|background|wallpaper|layout|dashboard)\b/.test(text) && /\b(show|open|change|move|save|edit|put|display)\b/.test(text)) return 'screen';
+  // Route surface/UI turns to 'screen' so her surface tools (update_screen, set_background, layouts)
+  // are ON THE TABLE. This is cold code HINTING availability, never deciding the action: she still
+  // reasons and chooses which tool, or none. Broadened past the old narrow verb/target lists (which
+  // missed "set my background", "switch me to the lake") because a missed route drops the tool
+  // entirely and she cannot act even when she wants to. A named scene with a background/spatial cue
+  // counts too, so the tool is present; the model, not a regex, decides to use it.
+  if ((/\b(screen|glass|background|wallpaper|backdrop|scene|theme|layout|dashboard|wallpapers?)\b/.test(text)
+        && /\b(show|open|change|move|save|edit|put|display|set|switch|make|turn|use|bring|throw|give)\b/.test(text))
+      || (/\b(skyscrapers?|fireworks?|beach|mountains?|lake|future[ _]?city|aurora)\b/.test(text)
+        && /\b(behind everything|behind (all|my|the)|up behind|as (my|the) (background|wallpaper|backdrop|scene|screen)|on (my|the) screen)\b/.test(text)))
+    return 'screen';
   if (/\b(my|our|stored|brain|memory|bead|previous|recent|most recent|most recently|recently|last)\b/.test(text) &&
       /\b(decision|preference|history|result|failure|flagged|built|build|did we|identity|who is)\b/.test(text)) return 'memory';
   if (/\b(code|repo|repository|deploy|builds?|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
@@ -1003,32 +1013,14 @@ function toolsForIntent(tools, intent) {
   });
 }
 
-// ⬡B:core.tool_loop:WIRE:imperative_background_set_is_done_not_promised:20260721⬡
-// The say-it-without-doing-it gaslight, caught live: an imperative "set my background to X"
-// left the mutation UNFORCED (the screen path unforces UI commands so a brain lookup cannot
-// derail them), so the model was free to reply "let me get that set up" and never call the
-// tool. Cold detection of an UNAMBIGUOUS imperative to set the standing background lets the
-// existing forced-tool retry net make the change actually happen this turn. Tight on purpose:
-// a question ("what's my background", "can you change backgrounds?") is not a command and must
-// never force a mutation; only a real imperative with a background/scene target does.
-function backgroundSetIntent(message) {
-  var t = String(message || '').trim().toLowerCase();
-  if (/[?]\s*$/.test(t)) return false;
-  var verb = /\b(set|change|switch|make|put|give me|update|turn|use|throw|bring up)\b/;
-  if (!verb.test(t)) return false;
-  // A capability/what question that happens to contain a set-word is still a question, not a do.
-  if (/\b(what|which|whats|what's|is my|are my|how do|do you|could you just tell)\b/.test(t)
-      && !/\b(set|change|switch|make|put|update|turn)\b.{0,40}\b(background|wallpaper|backdrop|scene)\b/.test(t)) return false;
-  var directTarget = /\b(background|wallpaper|backdrop|scene)\b/;
-  if (directTarget.test(t)) return true;
-  // Named a real scene ("put the mountains up behind everything", "switch to fireworks") -- the
-  // word "background" is often left implicit. Require a background/spatial cue so a scene name in
-  // an unrelated sentence ("add the lake house to my notes") never forces a background mutation.
-  var sceneName = /\b(skyscrapers?|fireworks?|beach|mountains?|lake|future[ _]?city|aurora)\b/;
-  var bgCue = /\b(behind everything|behind (all|my|the)|up behind|up back|as (my|the) (background|wallpaper|backdrop|scene|screen)|on (my|the) screen)\b/;
-  if (sceneName.test(t) && bgCue.test(t)) return true;
-  return false;
-}
+// ⬡B:core.tool_loop:WONDER:surface_intent_is_a_hint_not_a_decision:20260721⬡
+// A prior version detected an "imperative background set" with a growing regex and FORCED the tool.
+// The founder pulled it: MAKE THE GENERATIVE UI A WONDER, NOT COLD CODE. Deciding "the founder wants
+// the lake behind everything" is a meaning judgment and belongs to the model, not a word list, and
+// forcing one tool violates his load-all-tools-let-her-reason law. So there is no cold decider here
+// any more: routeToolIntent only ROUTES surface turns to 'screen' so her surface tools are on the
+// table, and she -- the one deciding wonder -- chooses to act and which scene. Cold code renders and
+// reads back; it never decides.
 
 function intentRequiresLiveTool(intent) {
   // These two routes are unambiguously current external facts and contain only
@@ -3352,32 +3344,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           }
         }
       }
-      // ⬡B:core.tool_loop:FIX:she_does_it_now_and_says_it_warm_not_promises_it:20260721⬡
-      // The say-it-without-doing-it gaslight the founder caught: an imperative "set my background
-      // to X" got a "let me get that set up" with no tool call and no change. This must NOT depend
-      // on the routed intent -- routeToolIntent's screen verbs are narrow ("set", and a "scene"
-      // target, miss it), so "set my background" and "put the fireworks scene up" route to general,
-      // set_background gets dropped, and the force never fires. So it is self-sufficient: on an
-      // UNAMBIGUOUS imperative to set the standing background, reconstruct set_background from the
-      // full turn tool set, expose ONLY it, and force that exact call so the change actually happens
-      // this turn (the retry net below catches a model that ignores a forced tool_choice). A
-      // confirmation directive rides with it so she speaks it in her full voice as the one who
-      // already handled it, anchored to what she truly knows about them right now, never a bare
-      // call-and-response echo. The warmth is the persona plus their real context, not a hardcoded line.
-      if (backgroundSetIntent(_mSt)) {
-        var _sbDef = (Array.isArray(_turnToolDefinitions) ? _turnToolDefinitions : []).filter(function (t) {
-          return t && t.function && t.function.name === 'set_background'; });
-        if (_sbDef.length) {
-          body.tools = _sbDef;
-          body.tool_choice = { type: 'function', function: { name: 'set_background' } };
-          // The confirmation is written on the NEXT iteration, after the queued mutation acks, so
-          // this directive is pushed into msgs (persistent) not body.messages (this-iter only) -- or
-          // it never reaches the compose turn and the confirmation comes back flat, which is exactly
-          // what happened live. It shapes the compose, not the forced tool-call turn.
-          msgs.push({ role: 'system', content:
-            'You are setting their standing background this turn (set_background); the change is real, do not say you will get to it or that it is on the way. When you confirm, do NOT hand back a flat call-and-response line like "Mountains are set behind everything now." Speak as A’NU, the one who already handled it: warm, in full natural sentences, the way a butler who knows them would. If something you genuinely know about them right now from their world fits naturally (where they are, what they have been into lately, what they are up to), let it show, unforced. One or two real sentences of her, not a status label.' });
-          _stampStep('background_set_forced', 'imperative_background_set');
-        }
+      // ⬡B:core.tool_loop:WONDER:generative_ui_is_a_wonder_she_decides_cold_code_renders:20260721⬡
+      // Founder law, direct: MAKE ALL THE GENERATIVE UI A WONDER, NOT COLD CODE. The prior version
+      // of this block was cold code deciding a semantic thing -- a regex enumerating scene words to
+      // decide "this is a background command", then FORCING tool_choice onto one tool, which is the
+      // exact railroad his own doctrine forbids (load_all_tools_let_her_reason_do_not_railroad_one_tool,
+      // 20260719: forcing tool_choice onto ONE tool strips her reasoning). So the force is gone. The
+      // wonder shape: her surface tools are already on the table (routeToolIntent put them there), she
+      // is the one who decides to change the surface and which scene, and cold code only renders and
+      // reads back. This block does two non-deciding things: a FIRM NUDGE (her own mechanism, same as
+      // the coding/lane nudges, tool_choice stays auto so she still reasons) so she reliably reaches
+      // for the surface tool when they asked for a surface change, and the warm-confirmation directive
+      // pushed into msgs (persistent, so it reaches the compose turn) so she confirms from what she
+      // actually did, in her voice, reading back the real result -- never a promise, never a flat label.
+      if (_routedToolIntent === 'screen' && Array.isArray(body.tools) && body.tools.some(function (t) {
+            return t && t.function && (t.function.name === 'set_background' || t.function.name === 'update_screen'); })) {
+        msgs.push({ role: 'system', content:
+          'This turn is about their surface -- their background, their screen, what they see. You hold your surface tools (set_background for the standing background, update_screen for the live glass). If they asked you to change what is behind everything or on their screen, actually do it this turn by calling the right tool; do not say you will get to it or that it is on the way, and do not answer as if you did something you did not call. Then confirm from what actually happened, reading back the real result, and speak it as A’NU -- the one who already handled it, warm, in full natural sentences the way a butler who knows them would, letting something you genuinely know about them show if it fits, never a flat status label. You still hold all your judgment; if it is genuinely not a surface change, do not force one.' });
+        _stampStep('surface_wonder_nudge', 'screen_tools_available_she_decides');
       }
     }
     if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
