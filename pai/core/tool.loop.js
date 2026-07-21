@@ -3363,8 +3363,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         if (_sbDef.length) {
           body.tools = _sbDef;
           body.tool_choice = { type: 'function', function: { name: 'set_background' } };
-          body.messages = body.messages.concat([{ role: 'system', content:
-            'This is a direct request to set their standing background. Call set_background now with the scene that best fits what they actually asked, and make the change this turn. Never say you will get to it, that you are setting it up, or that it is on the way; you do it now. Then confirm it in your own warm voice as the one who already handled it, and if something you genuinely know about them right now naturally fits, let it show. Do not hand back a flat call-and-response line.' }]);
+          // The confirmation is written on the NEXT iteration, after the queued mutation acks, so
+          // this directive is pushed into msgs (persistent) not body.messages (this-iter only) -- or
+          // it never reaches the compose turn and the confirmation comes back flat, which is exactly
+          // what happened live. It shapes the compose, not the forced tool-call turn.
+          msgs.push({ role: 'system', content:
+            'You are setting their standing background this turn (set_background); the change is real, do not say you will get to it or that it is on the way. When you confirm, do NOT hand back a flat call-and-response line like "Mountains are set behind everything now." Speak as A’NU, the one who already handled it: warm, in full natural sentences, the way a butler who knows them would. If something you genuinely know about them right now from their world fits naturally (where they are, what they have been into lately, what they are up to), let it show, unforced. One or two real sentences of her, not a status label.' });
           _stampStep('background_set_forced', 'imperative_background_set');
         }
       }
