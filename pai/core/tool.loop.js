@@ -3347,20 +3347,26 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
       // ⬡B:core.tool_loop:FIX:she_does_it_now_and_says_it_warm_not_promises_it:20260721⬡
       // The say-it-without-doing-it gaslight the founder caught: an imperative "set my background
-      // to X" got a "let me get that set up" with no tool call and no change. When the request is
-      // an UNAMBIGUOUS imperative to set the standing background and set_background is on the table,
-      // force that exact call so the change actually happens this turn (the retry net below already
-      // catches a model that ignores a forced tool_choice). And carry a confirmation directive so
-      // she speaks it in her full voice as the one who already handled it, anchored to what she
-      // truly knows about them right now, never a bare call-and-response echo. The warmth is the
-      // persona plus their real context doing the work, not a hardcoded line.
-      if (_routedToolIntent === 'screen' && backgroundSetIntent(_mSt) &&
-          Array.isArray(body.tools) && body.tools.some(function (t) {
-            return t && t.function && t.function.name === 'set_background'; })) {
-        body.tool_choice = { type: 'function', function: { name: 'set_background' } };
-        body.messages = body.messages.concat([{ role: 'system', content:
-          'This is a direct request to set their standing background. Call set_background now with the scene that best fits what they actually asked, and make the change this turn. Never say you will get to it, that you are setting it up, or that it is on the way; you do it now. Then confirm it in your own warm voice as the one who already handled it, and if something you genuinely know about them right now naturally fits, let it show. Do not hand back a flat call-and-response line.' }]);
-        _stampStep('background_set_forced', 'imperative_background_set');
+      // to X" got a "let me get that set up" with no tool call and no change. This must NOT depend
+      // on the routed intent -- routeToolIntent's screen verbs are narrow ("set", and a "scene"
+      // target, miss it), so "set my background" and "put the fireworks scene up" route to general,
+      // set_background gets dropped, and the force never fires. So it is self-sufficient: on an
+      // UNAMBIGUOUS imperative to set the standing background, reconstruct set_background from the
+      // full turn tool set, expose ONLY it, and force that exact call so the change actually happens
+      // this turn (the retry net below catches a model that ignores a forced tool_choice). A
+      // confirmation directive rides with it so she speaks it in her full voice as the one who
+      // already handled it, anchored to what she truly knows about them right now, never a bare
+      // call-and-response echo. The warmth is the persona plus their real context, not a hardcoded line.
+      if (backgroundSetIntent(_mSt)) {
+        var _sbDef = (Array.isArray(_turnToolDefinitions) ? _turnToolDefinitions : []).filter(function (t) {
+          return t && t.function && t.function.name === 'set_background'; });
+        if (_sbDef.length) {
+          body.tools = _sbDef;
+          body.tool_choice = { type: 'function', function: { name: 'set_background' } };
+          body.messages = body.messages.concat([{ role: 'system', content:
+            'This is a direct request to set their standing background. Call set_background now with the scene that best fits what they actually asked, and make the change this turn. Never say you will get to it, that you are setting it up, or that it is on the way; you do it now. Then confirm it in your own warm voice as the one who already handled it, and if something you genuinely know about them right now naturally fits, let it show. Do not hand back a flat call-and-response line.' }]);
+          _stampStep('background_set_forced', 'imperative_background_set');
+        }
       }
     }
     if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
