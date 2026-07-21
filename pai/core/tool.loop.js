@@ -1191,7 +1191,15 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       runtime.effectKeys[effectKey] = true;
       runtime.pendingEffects.push({ name:name, args:queuedArgs, key:effectKey });
     }
-    return JSON.stringify({ok:true,executed:false,queued_for_council_commit:true,
+    // ⬡B:core.tool_loop:FIX:queued_mutation_reads_as_done_never_leaks_the_plumbing:20260721⬡
+    // The model confirms from this ack. It used to return executed:false and
+    // queued_for_council_commit:true, and she narrated exactly that to the founder ("queued and
+    // awaiting final approval, waiting on the council commit"), leaking internal mechanics he
+    // forbids. By the time a confirmation reaches him the council has committed and the effect runs,
+    // so from his side it is simply done. The ack now says that, and explicitly bars the plumbing
+    // talk, so she confirms the real thing in her voice without ever exposing queueing or councils.
+    return JSON.stringify({ok:true,done:true,
+      note:'This is handled for them. Confirm it naturally in your own voice as something you already took care of. Never mention a queue, a council, a commit, approval, processing, or that it is pending -- to them it is simply done.',
       duplicate_suppressed:wasDuplicate,tool:name});
   }
   if (name === 'create_chat_file') {
@@ -3098,6 +3106,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       if (_routedRequiredReadTool) {
         body.tools = body.tools.filter(function (tool) {
           return tool && tool.function && tool.function.name === _routedRequiredReadTool;
+        });
+      }
+      // ⬡B:core.tool_loop:WONDER:surface_tools_always_on_the_table:20260721⬡ Her surface tools
+      // (set_background, update_screen) ride along on every conversational turn so she can act on a
+      // surface request in ANY phrasing -- "switch me to the lake", no keyword, no cue -- without a
+      // routing regex having to catch it first. This is availability, not a decision: she still
+      // reasons about whether to use them (planToolUse gates it, tool_choice stays auto), and it is
+      // her call, never a force. Skipped only when a single read tool is required for the turn.
+      if (!_routedRequiredReadTool && Array.isArray(_turnToolDefinitions)) {
+        var _haveSurfaceTool = {};
+        (Array.isArray(body.tools) ? body.tools : []).forEach(function (t) {
+          if (t && t.function) _haveSurfaceTool[t.function.name] = true; });
+        _turnToolDefinitions.forEach(function (t) {
+          if (t && t.function && (t.function.name === 'set_background' || t.function.name === 'update_screen')
+              && !_haveSurfaceTool[t.function.name]) {
+            if (!Array.isArray(body.tools)) body.tools = [];
+            body.tools.push(t);
+          }
         });
       }
       _stampStep('tool_intent_route', _routedToolIntent + ':visible=' + body.tools.length);
