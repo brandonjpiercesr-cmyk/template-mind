@@ -166,6 +166,38 @@ async function closeLoopOnPriorDrafts(HAM, config) {
   return { closed: closed, dropped: dropped };
 }
 
+// ── CLOSE THE LOOP ON PROPOSED REACHES ────────────────────────────────────────────────
+// A wonder does not fire and forget its escalations either. Each run it looks back at its
+// own recent REACH_RECOMMENDATIONs and checks whether the reach cycle's deliberating mind
+// has ruled on them yet (the reach cycle stamps RECOMMENDATION_RULED at source
+// anew.ruled.<rec.source>). Ruled ones are closed in the report; still-pending ones are
+// noted so a priority-one never silently evaporates between the proposal and the decision.
+async function closeLoopOnEscalations(HAM, config) {
+  var out = { proposed: 0, ruled: 0, pending: 0, verdicts: [] };
+  try {
+    if (!_bu() || !_bk()) return out;
+    var prefix = 'ham_' + String(HAM).toLowerCase() + '.inbox_zero.' + config.world_name + '.reach.';
+    var url = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + String(HAM).toUpperCase()
+      + '&stamp_type=eq.REACH_RECOMMENDATION&source=like.' + encodeURIComponent(prefix) + '*'
+      + '&order=created_at.desc&limit=10&select=source,summary,created_at';
+    var r = await fetch(url, { headers: rh(), signal: AbortSignal.timeout(9000) });
+    var recs = r.ok ? await r.json() : [];
+    out.proposed = (recs || []).length;
+    for (var i = 0; i < (recs || []).length; i++) {
+      var ruledUrl = _bu() + '/rest/v1/' + _tbl() + '?stamp_type=eq.RECOMMENDATION_RULED&source=eq.'
+        + encodeURIComponent('anew.ruled.' + recs[i].source) + '&limit=1&select=content';
+      var rr = await fetch(ruledUrl, { headers: rh(), signal: AbortSignal.timeout(8000) })
+        .then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; });
+      if (rr && rr.length) {
+        out.ruled++;
+        var verdict = null; try { verdict = JSON.parse(rr[0].content || '{}').verdict; } catch (e) {}
+        out.verdicts.push({ about: String(recs[i].summary || '').slice(0, 90), verdict: verdict || 'ruled' });
+      } else { out.pending++; }
+    }
+  } catch (e) {}
+  return out;
+}
+
 // ── THE BRAIN, READ FIRST ─────────────────────────────────────────────────────────────
 // Find in the brain first before assuming nothing is known, scoped to THIS advisor's own
 // IMB (her agent_global + this HAM), never a blind search across every advisor at once.
@@ -286,7 +318,7 @@ function buildJudgmentPrompt(packet, config) {
     + 'Decide, for EACH email, exactly one bucket: personal (owed a real reply), blast (looks personal but went wide, do not answer warmly), not_mine (a named staffer already owns it, principal only CC\'d), automated (no human to write back to), calendar (resolves on accept/decline), or resolved (already answered).\n'
     + 'RULES: Check the full To/CC before calling anything personal. If a named person is already corresponding, it is not the principal\'s to answer. Open attachments before referencing them; if something was referenced but never attached, say so plainly. Flag anything older than two days before drafting. NEVER fabricate a person, update, meeting, or trip not present in the evidence. Use IMB history only when it is real, sourced as what it is.\n'
     + 'Only for bucket=personal do you write draftBody, and it must be in the PRINCIPAL\'S OWN VOICE: no em dashes, no dropped subjects, no robotic parallel structure, no call-to-action ending, a correct capitalized greeting, ending on the last real thought. Everything is DRAFT ONLY; nothing sends without his explicit word.\n'
-    + 'If a draft is genuinely time-critical (a real deadline within hours that a resting draft would blow past), set escalate.propose=true with a tier (text|email|call) and one sentence of reasoning. You never send; you only propose, and the Overseer clears it.\n'
+    + 'THE REACH LADDER. The default resting place for everything is the Command Center, where a draft waits for him on his own time. Almost every email stays there. You raise the ladder ONLY for a genuine priority one: a real deadline inside the next few hours that a resting draft would blow past, or content that signals real risk if he does not see it until he happens to check in. When that bar is truly met, set escalate.propose=true, name the tier you would suggest (text | email | call) and write two sentences of reasoning that give the evidence: what the deadline or risk is, and why it cannot wait for the Command Center. You are only PROPOSING. You never send, you never reach him yourself, and the tier is a suggestion, not a decision: a separate deliberating mind (the reach cycle, Overseer-cleared) reads your reasoning and decides the real channel, or overrules you entirely. If in doubt, leave it on the Command Center and do not propose.\n'
     + 'Return STRICT JSON only: {"decisions":[{"id":"<email id>","bucket":"...","needsReply":true|false,"draftBody":"<his voice or empty>","escalate":{"propose":false,"tier":null,"reasoning":""},"reasoning":"<why, one or two sentences>"}]}';
 
   var user = imbLine + '\n\nCALENDAR (this world only):\n' + (packet.calendar || '(none)') + '\n\nUNREAD MAIL:\n' + lines.join('\n')
@@ -337,7 +369,7 @@ async function judgeAndDraft(packet, config) {
 // not his: A'NU, JARVIS from Iron Man but a Black woman, a serving butler with spunk and
 // funk, full natural sentences, matters-first, never a system readout, never a grading
 // sheet listing twelve items in identical tone. She tells him what actually matters first.
-async function composeHerReport(decisions, packet, config, HAM, priorLoop) {
+async function composeHerReport(decisions, packet, config, HAM, priorLoop, reachLoop) {
   var personal = decisions.filter(function (d) { return d.bucket === 'personal' && d.needsReply; });
   var skipped  = decisions.filter(function (d) { return d.bucket !== 'personal' || !d.needsReply; });
   var escal    = decisions.filter(function (d) { return d.escalate && d.escalate.propose; });
@@ -350,6 +382,10 @@ async function composeHerReport(decisions, packet, config, HAM, priorLoop) {
   skipped.forEach(function (d) { var m = byId(packet, d.id); facts.push('  - ' + (m ? m.subject : d.id) + ' [' + d.bucket + ']: ' + (d.reasoning || '')); });
   if (escal.length) { facts.push('Proposing to reach him sooner (Overseer must clear, ' + escal.length + '):'); escal.forEach(function (d) { facts.push('  - ' + (d.escalate.tier || 'text') + ': ' + (d.escalate.reasoning || '')); }); }
   if (priorLoop && (priorLoop.closed || priorLoop.dropped)) facts.push('Housekeeping: closed ' + priorLoop.closed + ' stale draft note(s), dropped ' + priorLoop.dropped + ' whose thread resolved elsewhere.');
+  if (reachLoop && reachLoop.proposed) {
+    if (reachLoop.ruled) facts.push('Earlier reach proposals the Overseer\'s reach cycle has now ruled on (' + reachLoop.ruled + '): ' + reachLoop.verdicts.map(function (v) { return v.about + ' -> ' + v.verdict; }).join('; '));
+    if (reachLoop.pending) facts.push('Reach proposals still waiting on the Overseer\'s decision: ' + reachLoop.pending + '. Not dropped, still pending.');
+  }
   if (packet.imb && packet.imb.empty) facts.push('Note: her memory bank had nothing on file for this world yet, so new faces were treated as new relationships, not guessed.');
 
   var system = 'You are A\'NU speaking to ' + (process.env.FOUNDER_DISPLAY_NAME || 'the principal')
@@ -375,23 +411,38 @@ function byId(packet, id) { for (var i = 0; i < packet.messages.length; i++) if 
 
 // ── THE REACH LADDER ──────────────────────────────────────────────────────────────────
 // Default rest state for every draft is the Command Center. The ladder climbs only under a
-// real bar, and even then the advisor only PROPOSES: the escalation routes backward to the
-// Overseer and is never fired by the cycle. A real reach is never sent by the cycle alone.
+// real bar, and even then the advisor only PROPOSES: the escalation is submitted BACKWARD
+// as a REACH_RECOMMENDATION the reach cycle (outreach.js gatherReachRecommendations) reads,
+// where a separate DELIBERATING MIND, Overseer-cleared, decides the real channel or overrules
+// it, and only then a reach agent (text via CARA, call via VARA) touches the founder. This
+// file never fires a reach and never picks the channel. It hands over the evidence and steps
+// back. A real reach is never sent by the cycle alone, and the tier here is a suggestion only.
 async function proposeEscalations(HAM, config, decisions, packet) {
   var escal = decisions.filter(function (d) { return d.escalate && d.escalate.propose; });
   for (var i = 0; i < escal.length; i++) {
     var d = escal[i], m = byId(packet, d.id);
+    var ageHours = m && m.date ? Math.floor((Date.now() / 1000 - m.date) / 3600) : null;
     await writeBead({
       ham_uid: HAM, agent_global: 'INBOX_ZERO', stamp_type: 'REACH_RECOMMENDATION',
       acl_stamp: brainClient.buildStamp('inbox_zero.' + config.world_name + '.reach', 'REACH_RECOMMENDATION', ''),
       source: 'ham_' + String(HAM).toLowerCase() + '.inbox_zero.' + config.world_name + '.reach.' + Date.now() + '.' + i,
       importance: 9,
-      summary: '[INBOX ZERO REACH] ' + config.world_name + ' → ' + (d.escalate.tier || 'text') + ': ' + String(d.escalate.reasoning || '').slice(0, 90),
+      // The summary is the index label; the reach judge reads the content as the real evidence,
+      // so carry the who / what / why-now the deliberating mind needs to rule on the channel.
+      summary: '[INBOX ZERO REACH] ' + config.world_name + ', priority-one from '
+        + (m ? (m.from_name || m.from) : '?') + ': ' + String(d.escalate.reasoning || '').slice(0, 90),
       content: JSON.stringify({
-        world: config.world_name, tier: d.escalate.tier || 'text', reasoning: d.escalate.reasoning || '',
-        about: m ? { from: m.from, subject: m.subject, thread_id: m.thread_id } : null,
+        world: config.world_name,
+        suggested_tier: d.escalate.tier || null,   // a suggestion the reach mind may override or ignore
+        channel_decision: 'deferred_to_reach_cycle_deliberating_mind',
+        why_now: d.escalate.reasoning || '',
+        evidence: m ? {
+          from: m.from, from_name: m.from_name, subject: m.subject,
+          snippet: (m.snippet || '').slice(0, 300), age_hours: ageHours,
+          thread_id: m.thread_id, message_id: m.id
+        } : null,
         routing: 'submit_backward_to_overseer', fired: false,
-        note: 'Proposal only. The Overseer must clear this before anything beyond the Command Center fires.',
+        note: 'Inbox Zero proposes only. The reach cycle, Overseer-cleared, decides the channel and whether to fire; nothing beyond the Command Center happens here.',
         createdAt: new Date().toISOString(),
       }),
     });
@@ -508,8 +559,9 @@ async function runInboxZero(opts) {
     return { ok: false, reason: 'no_grant_for_world', world: world, wall: gap2 };
   }
 
-  // 2) Close the loop on prior drafts BEFORE pulling new mail.
+  // 2) Close the loop on prior drafts AND prior proposed reaches BEFORE pulling new mail.
   var priorLoop = await closeLoopOnPriorDrafts(HAM, config);
+  var reachLoop = await closeLoopOnEscalations(HAM, config);
 
   // 3) Cold gather.
   var packet = await gatherEvidence(config, HAM, opts.limit);
@@ -535,7 +587,7 @@ async function runInboxZero(opts) {
   try { await watermark.markHandled(config.advisor_id, HAM, skippedMsgs, 'skipped', 'inbox_zero.' + world + '.' + Date.now()); } catch (e) {}
 
   // 6) Her-voice report for the Command Center.
-  var report = await composeHerReport(decisions, packet, config, HAM, priorLoop);
+  var report = await composeHerReport(decisions, packet, config, HAM, priorLoop, reachLoop);
 
   // 7) Reach ladder: escalation proposals route backward to the Overseer (never fired here).
   var escalations = await proposeEscalations(HAM, config, decisions, packet);
@@ -577,6 +629,7 @@ async function runInboxZero(opts) {
   var resultContent = lineage.attachLineage({
     world: world, agent: 'INBOX_ZERO', unread_reviewed: packet.messages.length,
     drafted: personal.length, skipped: skippedMsgs.length, escalations_proposed: escalations,
+    reach_proposals_ruled: reachLoop.ruled, reach_proposals_pending: reachLoop.pending,
     prior_drafts_closed: priorLoop.closed, prior_drafts_dropped: priorLoop.dropped,
     preview_sent_to_founder: preview.enabled ? preview.sent : 0, preview_mode: preview.enabled,
     drafts_saved_to_mailbox: mailboxDrafts.enabled ? mailboxDrafts.saved : 0, mailbox_drafts_mode: mailboxDrafts.enabled,
