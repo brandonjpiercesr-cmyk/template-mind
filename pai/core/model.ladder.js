@@ -165,11 +165,14 @@ async function tryOrnith(system, user, opts) {
     // response_format is that surface's compatible JSON-mode request; ordinary
     // deliberations keep their existing request shape.
     if (opts.json) body.response_format = { type: 'json_object' };
-    var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.ORNITH_KEY || process.env.RUNPOD_API_KEY || '') },
+    var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.ORNITH_KEY || process.env.OPENROUTER_API_KEY || process.env.RUNPOD_API_KEY || '') },
       body: JSON.stringify(body), signal: requestSignal(opts, Math.min(opts.timeout, 10000)) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'ornith', via: 'runpod' } : null;
+    // ⬡B:core.model_ladder:AMEND:ornith_via_reflects_real_host_not_hardcoded_runpod:20260721⬡
+    // Ornith moved off RunPod to a managed API; the via label is env-driven so cost
+    // telemetry (METER) names the true host instead of a hardcoded, now-wrong 'runpod'.
+    return hasAcceptedContent(c, opts) ? { content: c, model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
   } catch (e) { return null; }
 }
 async function tryQwen(system, user, opts) {
@@ -279,14 +282,20 @@ async function deliberate(system, user, options) {
   // That one weak primary drove both the empty drafts and the probabilistic SHADOW
   // holds on the founder's own chat turns. The order inside the GLM rung is now
   // env truth (GLM_PROVIDER_ORDER), no provider banned, RunPod stays in the chain.
-  var glmSeq = String(process.env.GLM_PROVIDER_ORDER || 'runpod,together,openrouter')
+  // ⬡B:core.model_ladder:AMEND:runpod_retired_default_is_together_first:20260721⬡
+  // FOUNDER RULING 20260721: RunPod is retired. The default no longer leads with
+  // runpod, so a wiped GLM_PROVIDER_ORDER env can never send GLM to the retired
+  // RunPod GPU first. Live env already reads together,openrouter; this makes the
+  // code fallback match the ruling instead of masking it. The runpod runner stays
+  // in the map so the seat can be restored by env if ever wanted, just not defaulted.
+  var glmSeq = String(process.env.GLM_PROVIDER_ORDER || 'together,openrouter')
     .split(',').map(function (s) { return s.trim().toLowerCase(); });
   var glmRunners = {
     runpod: function (o) { return tryRunPodGLM(system, user, o); },
     together: function (o) { return tryTogetherGLM(system, user, o); },
     openrouter: function (o) { return tryOpenRouterGLM(system, user, o); } };
   var glmChain = glmSeq.filter(function (n) { return typeof glmRunners[n] === 'function'; });
-  if (!glmChain.length) glmChain = ['runpod', 'together', 'openrouter'];
+  if (!glmChain.length) glmChain = ['together', 'openrouter'];
   // \u2b21B:core.model_ladder:FIX:tight_timeout_skips_runpod_glm:20260720\u2b21
   // FOUNDER 911 20260720: the RunPod GLM endpoint showed 2708 failed jobs against
   // 1402 completed, a real live number pulled from RunPod's own health API. Root

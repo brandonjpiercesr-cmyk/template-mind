@@ -4,6 +4,7 @@ var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
 var outputGuard = require('./model.output.guard.js');
+var toolRetrieval = require('./tool.retrieval.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
 // Real incident: GUIDE pass 2 (strict JSON, 12 fields per destination) was
 // truncated mid-JSON by the one global 700 cap and died as
@@ -3127,6 +3128,23 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         });
       }
       _stampStep('tool_intent_route', _routedToolIntent + ':visible=' + body.tools.length);
+      if (!body.tools.length) delete body.tools;
+    }
+    // CLAIR_reach R4E: at catalog scale, bound the routed set to the few tools
+    // whose USE WHEN context matches this exact turn, and expose none on weak
+    // relevance. Inert at or below the scale threshold, so today's small routed
+    // sets pass through unchanged. Cold code ranks and fetches; the model still
+    // chooses among the returned subset.
+    if (iter === 1 && Array.isArray(body.tools) && body.tools.length &&
+        !_structuredReachPolicy && !_reachIncidentIntake && !_routedRequiresLiveTool &&
+        String(channel || '').toLowerCase() !== 'voice' &&
+        !(identity && identity.outbound_finalize === true)) {
+      var _ragBefore = body.tools.length;
+      body.tools = toolRetrieval.retrieveToolSubset(
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message, body.tools);
+      if (body.tools.length !== _ragBefore) {
+        _stampStep('tool_rag_bounded', _ragBefore + '->' + body.tools.length);
+      }
       if (!body.tools.length) delete body.tools;
     }
     if (Array.isArray(body.tools) && body.tools.length) {
