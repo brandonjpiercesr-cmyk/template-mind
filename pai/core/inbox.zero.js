@@ -32,6 +32,10 @@ var watermark    = require('./inboxWatermark');
 var grounding    = require('../board/grounding');
 var ladder       = require('./model.ladder');
 var publicTurn   = require('./pai.public.finalizer'); // the one real exit: council + WRIT + meta_commentary + synthesize
+// Per-world deep intelligence (SCW facts + CORE_DIRECTIVE), firewalled. Defensive require so a
+// mirror that carries only core/ (no agents/) degrades gracefully to no-SCW instead of breaking.
+var advisorSCW; try { advisorSCW = require('../agents/advisor_scw'); }
+catch (e) { advisorSCW = { readWorldSCWText: async function () { return { hasScw: false, coreDirective: null, facts: [] }; } }; }
 var brainClient  = require('./brain.client');
 var lineage      = require('./lineage.attach');
 var formatMatrix = require('./format.matrix');
@@ -257,8 +261,13 @@ async function gatherEvidence(config, HAM, limit) {
   var world = config.world_name;
   var out = { world: world, messages: [], calendar: '', imb: null, blast_hints: [], errors: [] };
 
-  // Own IMB first.
+  // Own IMB first (brief relationship summaries).
   out.imb = await readAdvisorIMB(config, HAM);
+  // The deep SCW: the world's verified intelligence (team, writing law, live open items) and
+  // its CORE_DIRECTIVE north star. Firewalled to this world. This is what makes a draft RIGHT,
+  // not just clean. Resolved from the brain per world, never hardcoded (the 847392 test holds).
+  try { out.scw = await advisorSCW.readWorldSCWText(world, HAM); }
+  catch (e) { out.scw = { hasScw: false, coreDirective: null, facts: [] }; }
 
   // Unread inbox, this world's grant only. EBC firewall.
   var inbox;
@@ -343,6 +352,14 @@ function buildJudgmentPrompt(packet, config) {
   var imbLine = packet.imb && !packet.imb.empty
     ? 'Advisor IMB history (' + packet.imb.count + ' notes): ' + packet.imb.notes.join(' | ')
     : 'Advisor IMB history: NOTHING on file, treat unknown people as new/uncaptured relationships, do not invent history.';
+  // The deep SCW: verified world knowledge the judgment must honor (writing law, team, live
+  // open items). Only real, seeded facts, never invented. If empty, say so, do not guess.
+  var scw = packet.scw || { hasScw: false, coreDirective: null, facts: [] };
+  var scwBlock = scw.hasScw
+    ? ('YOUR VERIFIED WORLD KNOWLEDGE (honor it exactly, it is real and checked; never contradict or invent past it):\n'
+        + (scw.coreDirective ? ('NORTH STAR: ' + scw.coreDirective + '\n') : '')
+        + scw.facts.map(function (f, i) { return '- ' + f; }).join('\n'))
+    : 'YOUR VERIFIED WORLD KNOWLEDGE: none seeded for this world yet, so treat relationships and history as uncaptured, do not invent them.';
 
   var system = 'You are the judgment organ of the Inbox Zero cycle for the "' + config.world_name
     + '" world. You serve ' + (process.env.FOUNDER_DISPLAY_NAME || 'the principal') + '. EBC FIREWALL: you have zero access to any other world; never name another client or organization.\n'
@@ -352,7 +369,7 @@ function buildJudgmentPrompt(packet, config) {
     + 'THE REACH LADDER. The default resting place for everything is the Command Center, where a draft waits for him on his own time. Almost every email stays there. You raise the ladder ONLY for a genuine priority one: a real deadline inside the next few hours that a resting draft would blow past, or content that signals real risk if he does not see it until he happens to check in. When that bar is truly met, set escalate.propose=true, name the tier you would suggest (text | email | call) and write two sentences of reasoning that give the evidence: what the deadline or risk is, and why it cannot wait for the Command Center. You are only PROPOSING. You never send, you never reach him yourself, and the tier is a suggestion, not a decision: a separate deliberating mind (the reach cycle, Overseer-cleared) reads your reasoning and decides the real channel, or overrules you entirely. If in doubt, leave it on the Command Center and do not propose.\n'
     + 'Return STRICT JSON only: {"decisions":[{"id":"<email id>","bucket":"...","needsReply":true|false,"intent":"<for personal: what the reply owes, one or two sentences; else empty>","escalate":{"propose":false,"tier":null,"reasoning":""},"reasoning":"<why, one or two sentences>"}]}';
 
-  var user = imbLine + '\n\nCALENDAR (this world only):\n' + (packet.calendar || '(none)') + '\n\nUNREAD MAIL:\n' + lines.join('\n')
+  var user = scwBlock + '\n\n' + imbLine + '\n\nCALENDAR (this world only):\n' + (packet.calendar || '(none)') + '\n\nUNREAD MAIL:\n' + lines.join('\n')
     + '\n\nReturn the JSON now. One decision object per email above, matched by id.';
   return { system: system, user: user };
 }
@@ -394,11 +411,18 @@ function buildOneEmailEvidence(m, config) {
 // cycle (finalizePublicTurn: council + WRIT + meta commentary + synthesize), the same exit
 // every other public A'NU turn takes. If the cycle cannot run, there is no draft, we do not
 // fall back to a lightweight shortcut. The signature is attached last, after all voice work.
-async function composeDraftViaCycle(HAM, config, d, m) {
+async function composeDraftViaCycle(HAM, config, d, m, scw) {
   if (!m) return '';
+  scw = scw || { hasScw: false, coreDirective: null, facts: [] };
+  var scwBlock = scw.hasScw
+    ? ('\n\nYOUR VERIFIED WORLD KNOWLEDGE (honor it exactly, including the writing law for who is addressed how; it is real and checked, never contradict or invent past it):\n'
+        + (scw.coreDirective ? ('NORTH STAR: ' + scw.coreDirective + '\n') : '')
+        + scw.facts.map(function (f) { return '- ' + f; }).join('\n'))
+    : '';
   var evidence = buildOneEmailEvidence(m, config)
+    + scwBlock
     + '\n\nWhat this reply owes (from triage): ' + (d.intent || d.reasoning || 'a genuine, useful reply in his own voice.')
-    + '\n\nCompose ONLY the reply body he would send, in his own voice: a correct capitalized greeting, no em dashes, no dropped subjects, no robotic parallel structure, no forced call-to-action ending, ending on the last real thought. Do not invent a person, meeting, update, or fact not present above. Do not add a signature line; that is attached separately. Draft only, nothing sends.';
+    + '\n\nCompose ONLY the reply body he would send, in his own voice, following the world writing law above exactly (correct greeting for this exact person, correct sign-off): no em dashes, no dropped subjects, no robotic parallel structure, no forced call-to-action ending, ending on the last real thought. Do not invent a person, meeting, update, or fact not present above. Do not add a signature line; that is attached separately. Draft only, nothing sends.';
   var question = 'Draft my reply to this ' + config.world_name + ' email from ' + (m.from_name || m.from) + ' about "' + m.subject + '".';
   var out = null;
   try {
@@ -437,7 +461,7 @@ async function judgeAndDraft(packet, config, HAM) {
     var d = decisions[i];
     if (d && d.bucket === 'personal' && d.needsReply) {
       var m = byId(packet, d.id);
-      var body = await composeDraftViaCycle(HAM, config, d, m);
+      var body = await composeDraftViaCycle(HAM, config, d, m, packet.scw);
       if (body) { d.draftBody = body; composed++; }
       else { d.draftBody = ''; d.reasoning = '[draft deferred: window cycle unavailable, no shortcut taken] ' + (d.reasoning || ''); cycleFailed++; }
     }
@@ -468,6 +492,14 @@ async function composeHerReport(decisions, packet, config, HAM, priorLoop, reach
     if (reachLoop.pending) facts.push('Reach proposals still waiting on the Overseer\'s decision: ' + reachLoop.pending + '. Not dropped, still pending.');
   }
   if (packet.imb && packet.imb.empty) facts.push('Note: her memory bank had nothing on file for this world yet, so new faces were treated as new relationships, not guessed.');
+  // Cook toward the directive: give her the north star and the live open items so she can
+  // connect what came through the inbox to the standing work, and surface anything owed.
+  var scw = packet.scw || {};
+  if (scw.coreDirective) facts.push('Your standing directive for this world: ' + scw.coreDirective);
+  if (scw.hasScw && scw.facts && scw.facts.length) {
+    var openItems = scw.facts.filter(function (f) { return /OPEN ITEM|OVERDUE|URGENT|open,|still open|unanswered|not found in the inbox/i.test(f); });
+    if (openItems.length) facts.push('Live open work you are carrying (surface anything a reviewed email touches, and flag anything time-sensitive): ' + openItems.map(function (f) { return f.slice(0, 220); }).join('  ||  '));
+  }
 
   var question = 'Give me your Command Center report on the ' + config.world_name + ' inbox.';
   var deliberationInput = 'Speak to ' + (process.env.FOUNDER_DISPLAY_NAME || 'the principal')
