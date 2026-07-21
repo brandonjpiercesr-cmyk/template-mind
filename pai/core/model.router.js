@@ -78,9 +78,18 @@ var PROVIDERS = {
     endpoint: 'https://openrouter.ai/api/v1/chat/completions',
     keyEnv: 'OPENROUTER_API_KEY',
     models: {
+      // ⬡B:core.model.router:FIX:scrub_banned_deepseek_defaults_to_approved_glm:20260721⬡
+      // The groq/together blocks above were cleaned to GLM-5.2 defaults, but when
+      // OpenRouter was restored (20260709) this block kept its banned deepseek
+      // defaults. DeepSeek is perma-banned and routed through the *permitted*
+      // OpenRouter host, so the host-level provider gate never catches it — a live
+      // ENV override was the only thing standing between the founder and a banned
+      // fallback. Per founder doctrine ("fix what reaches the cap, not the cap"),
+      // the wiring itself must never fall back to a banned provider: defaults are
+      // now the approved open-weight GLM, so an unset env can never wake DeepSeek.
       c1_gate:  process.env.OPENROUTER_MODEL_C1 || 'meta-llama/llama-3.1-8b-instruct',
-      c2_organ: process.env.OPENROUTER_MODEL_C2 || 'deepseek/deepseek-chat',
-      c2_deep:  process.env.OPENROUTER_MODEL_C2_DEEP || 'deepseek/deepseek-r1',
+      c2_organ: process.env.OPENROUTER_MODEL_C2 || 'z-ai/glm-5.2',
+      c2_deep:  process.env.OPENROUTER_MODEL_C2_DEEP || 'z-ai/glm-5.2',
       c3_mind:  process.env.OPENROUTER_MODEL_C3 || 'qwen/qwen-2.5-72b-instruct',
       c4_watch: process.env.OPENROUTER_MODEL_C1 || 'meta-llama/llama-3.1-8b-instruct'
     }
