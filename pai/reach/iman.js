@@ -213,6 +213,42 @@ async function alreadyRepliedOnThread(world, threadId, sinceEpochSeconds) {
   return { ok: true, replied: !!replyAfter, matchedMessageId: replyAfter ? replyAfter.id : null, checkedCount: sentMsgs.length };
 }
 
+// ⬡B:reach.iman:WIRE:create_draft_not_send_for_inbox_zero:20260721⬡
+// Save a reply as a real DRAFT in the world's own Drafts folder, and DO NOT SEND it.
+// The founder opens his own mailbox and the draft is sitting there, threaded to the
+// original, ready for him to read, edit, and hit send himself. This is NOT the outbound
+// send boundary: Nylas POST /drafts only stores a draft on the account, nothing leaves
+// the mailbox, so it never touches the PAI send council or REACH_SEND_MODE. It is the
+// exact "she did the work, I just send it" surface, and it keeps the hard line, because
+// a draft is not a send. EBC-walled to the one world's grant, threaded when a real
+// thread_id + reply_to_message_id are given so the draft lands inside the conversation.
+async function createDraft(world, opts) {
+  opts = opts || {};
+  var grant = resolveGrant(world);
+  var key   = resolveKey(world);
+  if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
+  var to = normalizeRecipients(opts.to);
+  if (!to || !to.length) return fail('draft_recipient_invalid');
+  if (typeof opts.body !== 'string' || !/\S/.test(opts.body)) return fail('draft_body_invalid');
+  var payload = { to: to, subject: String(opts.subject || '').slice(0, 400), body: opts.body };
+  // Thread the draft into the real conversation when the caller has the ids.
+  if (opts.thread_id) payload.thread_id = String(opts.thread_id);
+  if (opts.reply_to_message_id) payload.reply_to_message_id = String(opts.reply_to_message_id);
+  try {
+    var r = await fetch('https://api.us.nylas.com/v3/grants/' + grant + '/drafts', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(15000)
+    });
+    var data = await r.json().catch(function(){ return {}; });
+    if (r.status >= 200 && r.status < 300) {
+      var d = data && data.data || {};
+      return { ok: true, draftId: d.id || null, threadId: d.thread_id || opts.thread_id || null, world: world, sent: false };
+    }
+    return fail('draft_create_' + r.status, { detail: JSON.stringify(data).slice(0, 200) });
+  } catch (e) { return fail('draft_create_unreachable'); }
+}
+
 // ⬡B:reach.iman:GUARD:one_committed_pai_boundary_for_every_provider_send:20260715⬡
 // IMAN is the outbound email provider boundary. Every exported send path arrives
 // here with an explicit HAM, runs the canonical PAI cycle in read-only finalizer
@@ -720,7 +756,7 @@ async function sendCommittedToHam(hamUid, exactEmail, artifact, world, authoriza
 module.exports = { send: send, sendFromClaudette: sendFromClaudette,
   sendToHam: sendToHam, sendCommittedToHam:sendCommittedToHam, listEmails: listEmails,
   alreadyRepliedOnThread: alreadyRepliedOnThread, getGrant: getGrant,
-  getThread: getThread, downloadAttachment: downloadAttachment,
+  getThread: getThread, downloadAttachment: downloadAttachment, createDraft: createDraft,
   resolveGrant: resolveGrant, resolveKey: resolveKey,
   resolveAnuProductionSender:resolveAnuProductionSender,
   _test:{ providerSend:providerSend, requireExactRecipientOwnership:requireExactRecipientOwnership } };
