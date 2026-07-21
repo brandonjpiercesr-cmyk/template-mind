@@ -1014,13 +1014,20 @@ function toolsForIntent(tools, intent) {
 function backgroundSetIntent(message) {
   var t = String(message || '').trim().toLowerCase();
   if (/[?]\s*$/.test(t)) return false;
-  var verb = /\b(set|change|switch|make|put|give me|update|turn|use)\b/;
-  var target = /\b(background|wallpaper|backdrop|scene)\b/;
-  if (!verb.test(t) || !target.test(t)) return false;
+  var verb = /\b(set|change|switch|make|put|give me|update|turn|use|throw|bring up)\b/;
+  if (!verb.test(t)) return false;
   // A capability/what question that happens to contain a set-word is still a question, not a do.
   if (/\b(what|which|whats|what's|is my|are my|how do|do you|could you just tell)\b/.test(t)
       && !/\b(set|change|switch|make|put|update|turn)\b.{0,40}\b(background|wallpaper|backdrop|scene)\b/.test(t)) return false;
-  return true;
+  var directTarget = /\b(background|wallpaper|backdrop|scene)\b/;
+  if (directTarget.test(t)) return true;
+  // Named a real scene ("put the mountains up behind everything", "switch to fireworks") -- the
+  // word "background" is often left implicit. Require a background/spatial cue so a scene name in
+  // an unrelated sentence ("add the lake house to my notes") never forces a background mutation.
+  var sceneName = /\b(skyscrapers?|fireworks?|beach|mountains?|lake|future[ _]?city|aurora)\b/;
+  var bgCue = /\b(behind everything|behind (all|my|the)|up behind|up back|as (my|the) (background|wallpaper|backdrop|scene|screen)|on (my|the) screen)\b/;
+  if (sceneName.test(t) && bgCue.test(t)) return true;
+  return false;
 }
 
 function intentRequiresLiveTool(intent) {
