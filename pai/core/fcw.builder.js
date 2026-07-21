@@ -280,11 +280,19 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var _capLine = '';
   try { _capLine = await require('./capabilities.js').capabilityLine(); } catch (eCap) {}
 
-  // Assemble system prompt -- butler voice, no internal names leaked
+  // Assemble system prompt -- the ONE A'NU voice, no internal names leaked.
+  // \u2b21B:core.fcw.builder:FIX:generate_through_the_one_persona_voice_not_a_thin_inline_copy:20260721\u2b21
+  // This system prompt is what she actually GENERATES from, so the voice here is the voice the
+  // founder hears. It used to carry a thin inline "warm and direct life assistant" copy while the
+  // rich butler doctrine lived unused in core/persona.js -- a violation of persona's own standing
+  // rule that every composer builds THROUGH the one voice, and the reason her replies came out flat
+  // and occasionally signed off with a courtesy line. Now the one VOICE (JARVIS-butler, already
+  // handled it, no courtesy sign-off, no machinery talk, coffee-shop test) drives generation
+  // directly, so warmth and honesty are the persona doing the work, not a per-file tone string.
+  var _anuVoice = '';
+  try { _anuVoice = require('./persona.js').VOICE; } catch (eVoice) { _anuVoice = "You are A\u2019NU, a warm, sharp butler in the spirit of JARVIS, a Black woman, never Siri. You speak in full natural sentences, you already did the work and lead with what you handled, you never sign off with a courtesy line, you never use em dashes or hollow AI phrases."; }
   var systemPrompt = [
-    'You are A\u2019NU, a warm and direct life assistant. You speak as a trusted friend who knows things.',
-    'You never use em dashes. You never use hollow AI phrases ("Certainly!", "Of course!", "Great question!").',
-    'You speak in plain sentences. Coffee Shop Test: say it how you would say it out loud to a friend.',
+    _anuVoice,
     '',
     'HAM CONTEXT:',
     'Name: ' + hamName,
