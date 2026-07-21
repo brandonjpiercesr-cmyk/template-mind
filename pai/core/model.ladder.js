@@ -182,6 +182,35 @@ async function tryQwen(system, user, opts) {
     return hasAcceptedContent(c, opts) ? { content: c, model: 'qwen3-235b', via: 'openrouter' } : null;
   } catch (e) { return null; }
 }
+// ⬡B:core.model_ladder:FIX:anthropic_backup_floor_kills_no_answer:20260721⬡
+// The gaslight cycle, root cause found live: the ladder's open-weight rungs (GLM on
+// runpod/together/openrouter, Ornith, Qwen) can ALL be down at once (Together out of credits,
+// OpenRouter strained, RunPod cold), and with nothing beneath them deliberate() returns null,
+// which the council surfaces as no_answer and the founder experiences as A'NU going silent. The
+// two Anthropic backup keys the router's own bleed provider already uses (Haiku for C0/C1,
+// Sonnet for C2/C3) are a live hosted API immune to the open-weight outage. This adds them as
+// the last-resort floor: it only ever runs after every open-weight rung has definitively
+// failed, so it changes nothing when they work and gives the cycle a live answer when they do
+// not. Still gated by the one spend door at deliberate() entry, so the ceiling holds.
+async function tryAnthropicBackup(system, user, opts) {
+  var sonnet = process.env.ANTHROPIC_BACKUP_C2_SONNET5;
+  var haiku = process.env.ANTHROPIC_BACKUP_C0C1_HAIKU;
+  var key = sonnet || haiku;
+  if (!key) return null;
+  var model = sonnet ? (process.env.ANTHROPIC_MODEL_SONNET || 'claude-sonnet-4-6') : (process.env.ANTHROPIC_MODEL_HAIKU || 'claude-haiku-4-5');
+  try {
+    var r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
+      headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model, max_tokens: opts.max_tokens || 3000,
+        temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.4,
+        system: outputGuard.englishSystem(system), messages: [{ role: 'user', content: user }] }),
+      signal: requestSignal(opts, opts.timeout) });
+    if (!r.ok) return null;
+    var d = await r.json();
+    var c = (d.content || []).map(function (b) { return b.text || ''; }).join('');
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: model, via: 'anthropic' } : null;
+  } catch (e) { return null; }
+}
 // ⬡B:core.model_ladder:CLEANUP:groq_runner_deleted_stack_spotless:20260717⬡
 // The Groq floor is gone. GROQ_API_KEY is off every service, the fetch boundary
 // reroutes any stray banned call, and the four-API law leaves no seat for it. The
@@ -286,7 +315,14 @@ async function deliberate(system, user, options) {
       return null;
     },
     ornith: function (runOpts) { return tryOrnith(system, user, runOpts || opts); },
-    qwen: function (runOpts) { return tryQwen(system, user, runOpts || opts); }, };
+    qwen: function (runOpts) { return tryQwen(system, user, runOpts || opts); },
+    anthropic: function (runOpts) { return tryAnthropicBackup(system, user, runOpts || opts); }, };
+  // The Anthropic backup is always the last rung whenever a key is present, so the cycle has a
+  // live floor beneath the open-weight ladder. Appended, never inserted, so it runs only after
+  // every higher rung has failed, and only added when it is not already in the configured order.
+  if ((process.env.ANTHROPIC_BACKUP_C2_SONNET5 || process.env.ANTHROPIC_BACKUP_C0C1_HAIKU) && order.indexOf('anthropic') === -1) {
+    order.push('anthropic');
+  }
   // ⬡B:core.model_ladder:BUILD:realtime_voice_judgment_race:20260716⬡
   // A phone turn cannot wait behind four sequential cold starts. Hedge the
   // complete authorized order for the same strict JSON judgment while
