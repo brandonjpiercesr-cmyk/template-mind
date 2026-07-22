@@ -72,35 +72,38 @@ function _hasFinancialEvidence(evidenceText) {
   return /projectedIncomeTotal|projectedBillsTotal|incomePosture|recurringBills|incomeSources|netProjected|BUDGET_CONFIG|BUDGET_TX/i.test(String(evidenceText || ''));
 }
 
-// Grounded if the value is present in evidence, or is the sum or absolute
-// difference of two evidence values (covers real derived totals and net).
-function _isGroundedValue(value, evSet, evList) {
-  if (evSet[value]) return true;
-  for (var a = 0; a < evList.length; a++) {
-    for (var b = a; b < evList.length; b++) {
-      if (evList[a] + evList[b] === value) return true;
-      if (Math.abs(evList[a] - evList[b]) === value) return true;
-    }
-  }
-  return false;
+// Grounded ONLY if the exact value is present in the real evidence. The
+// get_budget_summary result already carries every legitimate figure as an
+// explicit number -- each income source, each bill, AND the derived totals and
+// net (projectedIncomeTotal, projectedBillsTotal, netProjected) -- so a truly
+// grounded answer is always a direct match. Codex P1s (correct): DO NOT treat an
+// arbitrary sum or difference of two evidence numbers as grounded -- that falsely
+// grounds fabrication (e.g. "rent $2,000" passing because income 5,000 minus
+// bills 3,000 = 2,000 with no real rent). Real derived values are already explicit
+// evidence numbers, so direct-match is both sufficient and safe.
+function _isGroundedValue(value, evSet) {
+  return !!evSet[value];
 }
 
+// Financial fabrication: with budget evidence present, EVERY dollar figure in the
+// answer must trace to a real evidence number. Codex P1 (correct): a majority
+// threshold let a mostly-real answer smuggle one invented line through (real
+// income/bills/rent + a fake "Car: $999" was 3/4 grounded, so it passed). For the
+// founder's own money a single ungrounded figure is a fabrication and must hold.
+// So: flag whenever ANY dollar figure is ungrounded. She quotes his real figures
+// (all direct matches) or holds honestly; no invented dollar ever reaches him.
 function financialFabricationFlags(content, evidenceText) {
   if (!_hasFinancialEvidence(evidenceText)) return [];
   var answerMoney = _extractMoneyInts(content);
   if (!answerMoney.length) return [];
   var evSet = _evidenceNumberSet(evidenceText);
-  var evList = Object.keys(evSet).map(Number);
-  if (evList.length > 400) evList = evList.slice(0, 400); // bound the pair scan
-  var grounded = 0;
   var ungrounded = [];
   for (var i = 0; i < answerMoney.length; i++) {
-    if (_isGroundedValue(answerMoney[i], evSet, evList)) grounded++;
-    else ungrounded.push(answerMoney[i]);
+    if (!_isGroundedValue(answerMoney[i], evSet)) ungrounded.push(answerMoney[i]);
   }
-  if (grounded / answerMoney.length < 0.5) {
+  if (ungrounded.length) {
     return [{
-      claim: 'dollar figures not grounded in real budget evidence: $' + ungrounded.slice(0, 6).join(', $'),
+      claim: 'dollar figure(s) not grounded in real budget evidence: $' + ungrounded.slice(0, 6).join(', $'),
       reason: 'fabricated_financial_figures'
     }];
   }
@@ -119,8 +122,6 @@ async function shadow(content, context) {
   // hold. context.sourcedClaims stays as the existing caller-vouched escape.
   var evidenceText = typeof context.evidence_text === 'string' ? context.evidence_text : '';
   var evSet = _evidenceNumberSet(evidenceText);
-  var evList = Object.keys(evSet).map(Number);
-  if (evList.length > 400) evList = evList.slice(0, 400);
   function traced(claim) {
     if (!evidenceText) return false;
     for (var k = 0; k < statPatterns.length; k++) {
@@ -131,7 +132,7 @@ async function shadow(content, context) {
       // compare. Non-money stats keep the exact-bytes rule.
       if (statPatterns[k] === MONEY) {
         var v = _moneyToInt(m[0]);
-        if (v === null || !_isGroundedValue(v, evSet, evList)) return false;
+        if (v === null || !_isGroundedValue(v, evSet)) return false;
       } else if (evidenceText.indexOf(m[0]) === -1) {
         return false;
       }
