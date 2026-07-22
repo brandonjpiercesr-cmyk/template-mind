@@ -47,14 +47,18 @@ function isExplicitIllustration(claim) {
 // figure holds honestly; a real grounded answer (its figures ARE the evidence) passes.
 // Scoped to financial-evidence turns so general/public numeric answers are untouched.
 function _moneyToInt(tok) {
-  var n = parseFloat(String(tok).replace(/[$,\s]/g, ''));
+  var str = String(tok);
+  // Shorthand suffix: "$213k" is $213,000 and "$1.2m" is $1,200,000. A suffix adjacent to the
+  // number scales it; without this "$213k" parsed as 213 and a real annual figure held.
+  var mult = /\d[kK]\s*$/.test(str) ? 1000 : (/\d[mM]\s*$/.test(str) ? 1000000 : 1);
+  var n = parseFloat(str.replace(/[$,\s]/g, '').replace(/[kKmM]$/, ''));
   if (!isFinite(n)) return null;
-  return Math.round(n);
+  return Math.round(n * mult);
 }
 
 function _extractMoneyInts(str) {
   var out = [];
-  var re = /\$\s?\d[\d,]*(?:\.\d+)?/g, m;
+  var re = /\$\s?\d[\d,]*(?:\.\d+)?[kKmM]?/g, m;
   while ((m = re.exec(String(str || ''))) !== null) {
     var v = _moneyToInt(m[0]);
     if (v !== null && v > 0) out.push(v);
@@ -72,14 +76,14 @@ function _extractMoneyInts(str) {
 function _evidenceMoneySet(str) {
   var s = String(str || '');
   var set = Object.create(null), m;
-  var reDollar = /\$\s?\d[\d,]*(?:\.\d+)?/g;
+  var reDollar = /\$\s?\d[\d,]*(?:\.\d+)?[kKmM]?/g;
   while ((m = reDollar.exec(s)) !== null) { var v = _moneyToInt(m[0]); if (v !== null) set[v] = true; }
   // The value capture must END on a digit, not a comma: a bare `[\d,]*` greedily ate
   // the JSON field-delimiter comma and the trailing `"?` then ate the NEXT field's
   // opening quote, so every OTHER adjacent numeric field was skipped (monthlyNet and
   // projectedBillsTotal never entered the set). `\d(?:[\d,]*\d)?` keeps thousands
   // commas but stops before a trailing delimiter comma. Founder A2, 20260722.
-  var reField = /"(?:amount|installmentamount|projectedincometotal|projectedbillstotal|projectedtotal|netprojected|monthlyincometotal|monthlybillstotal|monthlynet|totalincome|totalexpenses|net|livingmoney|balance|monthlytotal)"\s*:\s*"?(\d(?:[\d,]*\d)?(?:\.\d+)?)"?/gi;
+  var reField = /"(?:amount|installmentamount|projectedincometotal|projectedbillstotal|projectedtotal|netprojected|monthlyincometotal|monthlybillstotal|monthlynet|annualincometotal|annualbillstotal|annualnet|totalincome|totalexpenses|net|livingmoney|balance|monthlytotal)"\s*:\s*"?(\d(?:[\d,]*\d)?(?:\.\d+)?)"?/gi;
   while ((m = reField.exec(s)) !== null) { var v2 = _moneyToInt(m[1]); if (v2 !== null) set[v2] = true; }
   return set;
 }
@@ -105,14 +109,19 @@ function _hasFinancialEvidence(evidenceText) {
 // This is deliberately TIGHT and does NOT reopen the Codex P1 hole (arbitrary sums/
 // differences): the value must be an exact multiple of 100 AND a real figure must fall
 // within $50 of it, so it can only be a real number spoken to the nearest hundred. We
-// deliberately do NOT allow a nearest-1000 band: at $500 half-width it grounds a
-// fabricated "$2,000" against a real $1,500 (which legitimately rounds to $2,000), a
-// real fabrication hole. So the wall holds any invented figure that is not within $50
-// of a real one, while "$17,700" for a real $17,744.67 still grounds. Founder A2, 20260722.
-function _roundingBands() { return [[100, 50]]; }
+// allow a nearest-1000 band ONLY for large figures (>= $10,000): at that magnitude a real
+// figure sits within $500 of at most one clean thousand, and this person's large figures are
+// sparse, so a fabrication almost never lands in a band -- while "$213,000" for a real annual
+// $212,936 grounds. At small magnitudes nearest-1000 is unsafe (it grounds a fabricated
+// "$2,000" against a real $1,500, which legitimately rounds to $2,000), so small figures keep
+// the tight nearest-100 band only. The wall holds any invented figure not within one honest
+// rounding step of a real one, at either scale. Founder A2, 20260722.
+function _roundingBands(value) {
+  return value >= 10000 ? [[100, 50], [1000, 500]] : [[100, 50]];
+}
 function _isGroundedValue(value, evSet) {
   if (evSet[value]) return true;
-  var bands = _roundingBands();
+  var bands = _roundingBands(value);
   for (var b = 0; b < bands.length; b++) {
     var step = bands[b][0], half = bands[b][1];
     if (value % step !== 0) continue;           // not a clean round at this precision
@@ -155,7 +164,7 @@ async function shadow(content, context) {
   var flags = [];
   // MONEY must include the decimals: `/\$[\d,]+/` truncated "$17,744.67" to "$17,744"
   // (17744), which never matched the evidence's rounded 17745 and held a real exact quote.
-  var MONEY = /\$[\d,]+(?:\.\d+)?/;
+  var MONEY = /\$[\d,]+(?:\.\d+)?[kKmM]?/;
   var statPatterns = [/\b\d+%(?!\w)/, MONEY, /\d+ (people|users|companies|years)/i];
   // ⬡B:board.shadow:FIX:statistics_trace_to_bound_evidence:20260716⬡
   // A statistic is sourced when its exact bytes appear in the evidence the
