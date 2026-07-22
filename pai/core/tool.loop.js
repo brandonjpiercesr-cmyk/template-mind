@@ -4151,7 +4151,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
       }
       msgs.push({role:'assistant',content:msg.content||null,tool_calls:msg.tool_calls});
-      var _budgetGroundNeeded = false;
+      var _budgetGroundNeeded = false, _budgetSummaryRaw = null;
       for (var i=0;i<msg.tool_calls.length;i++){
         if (await _turnCancelled()) return _turnCancelledResult('before_tool');
         var tc=msg.tool_calls[i],targs={};
@@ -4247,16 +4247,34 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         // Just FLAG it here; the grounding system message is pushed ONCE after this loop finishes, so
         // it never lands between an assistant tool_calls message and its tool responses (Codex: an
         // OpenAI-compatible turn requires every tool response to immediately follow the tool_calls).
-        if (tc.function.name === 'get_budget_summary') _budgetGroundNeeded = true;
+        if (tc.function.name === 'get_budget_summary') { _budgetGroundNeeded = true; _budgetSummaryRaw = tr; }
       }
       // Deferred budget grounding: appended only after EVERY tool result for this turn is in msgs, so
       // a get_budget_summary + get_budget_upcoming turn keeps its tool responses contiguous. She must
       // answer FROM the returned figures and never deny income/bills the result plainly shows.
       if (_budgetGroundNeeded) {
+        // Lead the compose turn with this person's REAL figures pulled straight from the
+        // result, stated plainly, so the mind quotes them instead of hunting through a large
+        // JSON and inventing a plausible-looking budget (founder-caught: /budget/ask returned
+        // confident fake figures, different every call). Every value comes from this person's
+        // own get_budget_summary result; none is invented here.
+        var _bHead = '';
+        try {
+          var _bs = _budgetSummaryRaw ? (typeof _budgetSummaryRaw === 'string' ? JSON.parse(_budgetSummaryRaw) : _budgetSummaryRaw) : null;
+          if (_bs && !_bs.empty && _bs.monthlyIncomeTotal != null) {
+            var _srcLine = Array.isArray(_bs.monthlyIncomeBySource)
+              ? _bs.monthlyIncomeBySource.filter(function (x) { return x && x.name; }).map(function (x) { return String(x.name) + ' $' + x.amount + '/mo'; }).join(', ')
+              : '';
+            _bHead = 'REAL FIGURES FOR THIS PERSON, from the result above, quote these exactly and never a different number: monthly income $' + _bs.monthlyIncomeTotal
+              + ', monthly bills $' + _bs.monthlyBillsTotal + ', monthly net $' + _bs.monthlyNet
+              + (_bs.annualIncomeTotal != null ? (', annual income $' + _bs.annualIncomeTotal + ', annual net $' + _bs.annualNet) : '') + '.'
+              + (_srcLine ? (' Income by source per month: ' + _srcLine + '.') : '') + ' ';
+          }
+        } catch (eBH) {}
         msgs.push({ role:'system', content:
-          'The get_budget_summary result above is this person\'s REAL, current budget. Answer their money question directly FROM it, in plain words, and honor its incomePosture note if present. Their income is tracked as recurring SOURCES, so a logged totalIncome of 0 alongside projectedIncome entries is NORMAL and does NOT mean they have no income. '
-          + 'STATE ONLY dollar figures that the result literally carries: its monthly figures (monthlyIncomeTotal, monthlyBillsTotal, monthlyNet), its annual figures (annualIncomeTotal, annualBillsTotal, annualNet), each source\'s amount in monthlyIncomeBySource / each bill in monthlyBillsBySource, the per-payment amounts in projectedIncome, and the window totals. Quote each one EXACTLY as given (you may round to the nearest hundred, or the nearest thousand for figures over ten thousand, and nothing finer). '
-          + 'Do NOT state any PERCENTAGE, ratio, or "X% of your income", and do NOT state any dollar figure you compute yourself that is not one of the numbers above (no subtracting a specific bill, no adding your own subtotal); if you want to say what is left, use monthlyNet or annualNet, never your own arithmetic. '
+          _bHead
+          + 'The get_budget_summary result above is this person\'s REAL, current budget. Answer their money question directly using the figures above, in plain words. Every dollar amount you state MUST be one of the figures above (or a per-payment amount / window total the result carries); NEVER invent, estimate, or guess a number, and if you are unsure of a figure, use the monthly or annual total rather than making one up. Their income is tracked as recurring SOURCES, so a logged totalIncome of 0 is NORMAL and does NOT mean they have no income. '
+          + 'Do NOT state any percentage or ratio, and do NOT state a dollar figure you compute yourself; for what is left over, use monthly net or annual net, never your own arithmetic. '
           + 'NEVER say their budget is not set up, or that they have no income or no bills, when the result shows projectedIncome, incomeSources, or recurringBills. Only if the result is genuinely empty (empty:true) do you say the budget is not set up yet.' });
       }
       continue;
