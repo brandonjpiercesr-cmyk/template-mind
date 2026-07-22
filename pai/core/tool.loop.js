@@ -1012,7 +1012,7 @@ function routeToolIntent(message) {
       /\b(show|read|list|check|get)\b.*\b(bdif|mediators?|gmg|mh[\s_-]*action)\b.*\bdrafts?\b/.test(text)) return 'email';
   if (/\b(remind me|my reminders|what reminders|read reminders|stop mentioning)\b/.test(text) ||
       /\b(read|show|list|check)\b.*\b(my |current |active |pending )?reminders?\b/.test(text)) return 'reminders';
-  if (/\b(budget|bnpl|buy.now.pay.later|payments? (are )?(due|coming)|income vs expenses|spending by category)\b/.test(text)) return 'budget';
+  if (/\b(budget|bnpl|buy.now.pay.later|payments? (are )?(due|coming)|income vs expenses|spending by category|income|expenses?|paychecks?|salary|take[- ]?home|(recurring|monthly|my|utility|phone|electric) bills?|net (income|pay)|cash ?flow|afford|savings?|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'budget';
   if (/\b(text|message|contact details|phone number|email address)\b.*\b(my |the )?(brother|sister|mom|mother|dad|father|contact|person)\b/.test(text)) return 'messaging';
   // Route surface/UI turns to 'screen' so her surface tools (update_screen, set_background, layouts)
   // are ON THE TABLE. This is cold code HINTING availability, never deciding the action: she still
@@ -1065,7 +1065,7 @@ function requiredReadToolForMessage(message, intent) {
   if (intent === 'email' && /\b(inbox|unread emails?|recent emails?)\b/.test(text) && !/\b(send|reply|draft)\b/.test(text)) return 'inbox_read';
   if (intent === 'reminders' && /\b(what|read|show|list|check|current|active|pending)\b/.test(text) && !/\b(create|add|set|stop|remove|delete)\b/.test(text)) return 'read_reminders';
   if (intent === 'budget' && /\b(payments? (?:are )?(?:due|coming)|due soon|upcoming|bnpl)\b/.test(text)) return 'get_budget_upcoming';
-  if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track)\b/.test(text)) return 'get_budget_summary';
+  if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track|income|expenses?|paychecks?|salary|take[- ]?home|bills?|net (income|pay)|cash ?flow|afford|savings?|money|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'get_budget_summary';
   if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
   if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat)\b/.test(text)) return 'read_lane_board';
   return null;
