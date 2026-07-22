@@ -80,7 +80,7 @@ async function stampMinutes(hamUid, channel, question, answer, toolsUsed, ms) {
     source: 'pai.minutes.' + hamUid + '.' + Date.now(),
     acl_stamp: '\u2b21B:pai.minutes:MINUTES:turn:20260630\u2b21',
     summary: summary,
-    content: JSON.stringify({ channel, question: question.slice(0), answer: answer.slice(0), toolsUsed, ms }), // 200-char slice lost the tail of the founder's INVOLVE doctrine drop 20260702 — conversations are the record, keep them
+    content: JSON.stringify({ channel, question: question.slice(0,2000), answer: answer.slice(0,2000), toolsUsed, ms }), // 200-char slice lost the tail of the founder's INVOLVE doctrine drop 20260702 — conversations are the record, keep them
     importance: 6
   };
   try {
@@ -188,25 +188,25 @@ async function synthesize(paiResult, question, channel) {
       // worst case a memory does not get saved, recoverable, not harmful.
       var sysMem = 'You detect when a person is GIVING a memory to keep: a decision, a rename, a moment, an instruction like keep this or remember this or never lose this. Not questions, not small talk. Reply EXACTLY: KEEP: YES or KEEP: NO, then on the next line GIST: one sentence in their words if YES.';
       var ornithMem = require('./ornith.client');
-      var out = await ornithMem.callOrnith(sysMem, question.slice(0), 120);
+      var out = await ornithMem.callOrnith(sysMem, question.slice(0, 1200), 120);
       if (!out) {
         var r = await fetch('https://api.together.xyz/v1/chat/completions', {
           method: 'POST', headers: { Authorization: 'Bearer ' + GK, 'Content-Type': 'application/json' },
           body: JSON.stringify({ model: (process.env.TOGETHER_MODEL || 'zai-org/GLM-5.2'), max_tokens: 120, temperature: 0,
             messages: [{ role: 'system', content: sysMem },
-                       { role: 'user', content: question.slice(0) }] })
+                       { role: 'user', content: question.slice(0, 1200) }] })
         });
         var d = await r.json(); out = (d.choices && d.choices[0] && d.choices[0].message.content) || '';
       }
       if (!/KEEP:\s*YES/i.test(out)) return;
-      var gm = out.match(/GIST:\s*([\s\S]+)/i); var gist = gm ? gm[1].trim().slice(0) : question.slice(0);
+      var gm = out.match(/GIST:\s*([\s\S]+)/i); var gist = gm ? gm[1].trim().slice(0, 300) : question.slice(0, 300);
       await fetch(_bu() + '/rest/v1/' + _tbl() + '', { method: 'POST',
         headers: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema(), 'Content-Profile': _schema(), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
         body: JSON.stringify({ ham_uid: hamUid, agent_global: 'ANEW', stamp_type: 'MEMORY',
           acl_stamp: '\u2b21B:anew.memory:MEMORY:gifted:' + ymd() + '\u2b21',
           source: 'memory.gifted.' + hamUid + '.' + Date.now(),
           summary: '[MEMORY, given to me] ' + gist,
-          content: JSON.stringify({ their_words: question.slice(0), my_confirmation: text.slice(0), channel: channel, kept_at: new Date().toISOString() }),
+          content: JSON.stringify({ their_words: question.slice(0, 2000), my_confirmation: text.slice(0, 300), channel: channel, kept_at: new Date().toISOString() }),
           importance: 9 }) });
     } catch (e) {}
   })();
