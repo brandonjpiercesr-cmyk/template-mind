@@ -396,7 +396,13 @@ function boundedVerifiedEvidence(value) {
 // the model input stays finite without pretending that the preview is whole.
 function boundedDeliberationEvidence(value) {
   var text = String(value || '');
-  var maxChars = 32000;
+  // ⬡B:core.pai_outbound_council:FIX:stop_starving_the_shadow_judge:20260721⬡ FOUNDER 911: SHADOW
+  // held long answers because the grounding was truncated to 32000 chars, so the judge quoted a
+  // claim it could not see the proof for and silenced her. Modern judges (GLM-5.2, the Anthropic
+  // floor) carry 100K+ token windows, so the 32K slice was pure dumbing-down. Give the judge the
+  // whole deliberation; truncation now only trips on a genuinely massive turn, and when it does the
+  // hold logic treats a blindfolded judge as unable to silence her (see judgeWasBlindfolded below).
+  var maxChars = parseInt(process.env.PAI_SHADOW_EVIDENCE_MAXCHARS || '160000', 10);
   var half = maxChars / 2;
   var truncated = text.length > maxChars;
   return {
@@ -1776,8 +1782,18 @@ async function defaultShadowStage(ctx, injected) {
     (reviewParsed && _verbatimClaimFound(reviewParsed));
   // An attempted relay with an unavailable judge must HOLD, not fail-open through this branch
   // either -- see attemptedRelayEvidence above. Excluded here the same way.
+  // ⬡B:core.pai_outbound_council:FIX:a_blindfolded_judge_cannot_silence_her:20260721⬡ FOUNDER 911:
+  // when the turn is so large the deliberation evidence STILL truncated after the raised bound, the
+  // model judge saw only a slice, so its "unsupported claim" verdict is untrustworthy -- it may have
+  // quoted a claim whose proof sat in the part it never saw. The deterministic board, by contrast,
+  // scans the FULL deliberation text (shadowEvidenceText, unbounded) and found nothing. So on a clean
+  // board, a model hold from a blindfolded judge fails open instead of going silent. A real
+  // fabrication either trips the deterministic board or is quotable-verifiable within the slice; a
+  // starved judge never gets to silence her voice from what it could not see.
+  var judgeWasBlindfolded = !!(deliberationEvidence && deliberationEvidence.truncated === true);
   var shadowFailOpenCleanBoard = !!(boardPassed && deterministicFindings.length === 0 &&
-    !modelPassed && !shadowHasQuotableFalseClaim && !(attemptedRelayEvidence && (!judgment || !parsed)));
+    !modelPassed && (!shadowHasQuotableFalseClaim || judgeWasBlindfolded) &&
+    !(attemptedRelayEvidence && (!judgment || !parsed)));
   var relayUnavailableHold = !!(attemptedRelayEvidence && (!judgment || !parsed));
   // ⬡B:core.pai_outbound_council:REPAIR:verified_exact_relay_overrides_a_flaky_model_rejection:20260719⬡
   // verifiedExactNamedEvidenceRelay (exactRelay) is a strict, code-verified match: exact text
