@@ -37,10 +37,10 @@ function isExplicitIllustration(claim) {
 // The cure keeps this a COLD deterministic check (no model): normalize every money
 // figure to an integer dollar value on both sides, and when the turn actually
 // carries budget/financial evidence, scan the WHOLE answer (not just linking-verb
-// sentences) for dollar figures and require each to be grounded in the real
-// evidence -- present verbatim, or a plausible sum/difference of two real figures
-// (derived totals and net). A wholesale-invented budget (few/none grounded) flags
-// and holds honestly; a real grounded answer (its figures ARE the evidence) passes.
+// sentences) for dollar figures and require EVERY one to be a direct match to a real
+// money value in the evidence (each source, each bill, and the derived totals/net,
+// which get_budget_summary already carries as explicit numbers). Any ungrounded
+// figure holds honestly; a real grounded answer (its figures ARE the evidence) passes.
 // Scoped to financial-evidence turns so general/public numeric answers are untouched.
 function _moneyToInt(tok) {
   var n = parseFloat(String(tok).replace(/[$,\s]/g, ''));
@@ -58,18 +58,31 @@ function _extractMoneyInts(str) {
   return out;
 }
 
-function _evidenceNumberSet(str) {
-  var set = Object.create(null);
-  var re = /\d[\d,]*(?:\.\d+)?/g, m;
-  while ((m = re.exec(String(str || ''))) !== null) {
-    var v = _moneyToInt(m[0]);
-    if (v !== null) set[v] = true;
-  }
+// Build the set of REAL money values from the evidence. Codex P1 (correct): a
+// blanket "every numeral" scan pulled non-money numbers -- due dates, day-of-month,
+// counts, years -- into the grounded set, so a fabricated "$15" matched the 15 in a
+// date like 2026-07-15. So the set is built from MONEY only: (a) any $-formatted
+// figure in prose/notes/incomePosture, and (b) the numeric values of monetary JSON
+// fields (amount, the *Total fields, net, totalIncome/Expenses, livingMoney, ...),
+// never bare date/day/count/year numerals.
+function _evidenceMoneySet(str) {
+  var s = String(str || '');
+  var set = Object.create(null), m;
+  var reDollar = /\$\s?\d[\d,]*(?:\.\d+)?/g;
+  while ((m = reDollar.exec(s)) !== null) { var v = _moneyToInt(m[0]); if (v !== null) set[v] = true; }
+  var reField = /"(?:amount|installmentamount|projectedincometotal|projectedbillstotal|projectedtotal|netprojected|totalincome|totalexpenses|net|livingmoney|balance|monthlytotal)"\s*:\s*"?(\d[\d,]*(?:\.\d+)?)"?/gi;
+  while ((m = reField.exec(s)) !== null) { var v2 = _moneyToInt(m[1]); if (v2 !== null) set[v2] = true; }
   return set;
 }
 
+// The turn carries financial evidence when the budget tool ran -- whether it
+// returned real figures OR the empty-budget shape. Codex P1 (correct): the empty
+// get_budget_summary result ("No budget is set up yet...") has none of the field
+// markers, so without this a label-form fabrication ("Income: $3,200") would PASS
+// precisely when the real result says no numbers exist. Detect the empty shape and
+// the tool name too, so the money scan runs and holds any invented figure.
 function _hasFinancialEvidence(evidenceText) {
-  return /projectedIncomeTotal|projectedBillsTotal|incomePosture|recurringBills|incomeSources|netProjected|BUDGET_CONFIG|BUDGET_TX/i.test(String(evidenceText || ''));
+  return /projectedIncomeTotal|projectedBillsTotal|incomePosture|recurringBills|incomeSources|netProjected|BUDGET_CONFIG|BUDGET_TX|get_budget_summary|no budget is set up yet/i.test(String(evidenceText || ''));
 }
 
 // Grounded ONLY if the exact value is present in the real evidence. The
@@ -96,7 +109,7 @@ function financialFabricationFlags(content, evidenceText) {
   if (!_hasFinancialEvidence(evidenceText)) return [];
   var answerMoney = _extractMoneyInts(content);
   if (!answerMoney.length) return [];
-  var evSet = _evidenceNumberSet(evidenceText);
+  var evSet = _evidenceMoneySet(evidenceText);
   var ungrounded = [];
   for (var i = 0; i < answerMoney.length; i++) {
     if (!_isGroundedValue(answerMoney[i], evSet)) ungrounded.push(answerMoney[i]);
@@ -121,7 +134,7 @@ async function shadow(content, context) {
   // answer was deliberated from. Real receipts pass, invented numbers still
   // hold. context.sourcedClaims stays as the existing caller-vouched escape.
   var evidenceText = typeof context.evidence_text === 'string' ? context.evidence_text : '';
-  var evSet = _evidenceNumberSet(evidenceText);
+  var evSet = _evidenceMoneySet(evidenceText);
   function traced(claim) {
     if (!evidenceText) return false;
     for (var k = 0; k < statPatterns.length; k++) {
