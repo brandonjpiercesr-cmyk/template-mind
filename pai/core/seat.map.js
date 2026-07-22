@@ -33,7 +33,12 @@ function env(key, dflt) {
 // per-function named key env, telemetry via label, and a daily USD cap intent.
 var SEATS = {
   c1_cellm:    { role: 'C1 penny gate',        envModel: 'SEAT_C1_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C1_CELLM',    via: 'openrouter', dailyCapUsd: 2 },
-  c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'zai-org/GLM-5.2',          provider: 'together',   keyEnv: 'TOGETHER_API_KEY',   via: 'together',   dailyCapUsd: null },
+  // Founder ruling 20260722: use a fresh, never-before-wired model on the everyday
+  // organ. MiniMax-01 (instruct, 1M ctx, ~$0.20/$1.10) is strong, cheap enough for the
+  // high-volume workhorse, and returns clean JSON in ~3.7s (verified live), unlike the
+  // MiniMax M2 reasoners which burn the whole budget thinking. GLM-5.2 is the failover.
+  c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'minimax/minimax-01',       provider: 'openrouter', keyEnv: 'OR_KEY_C2_ORGAN',    via: 'openrouter', dailyCapUsd: 6,
+                 fallbackModel: 'zai-org/GLM-5.2', fallbackProvider: 'together', fallbackKeyEnv: 'TOGETHER_API_KEY' },
   // Founder ruling 20260722: Grok 4.5 is the mind; GLM-5.2 is its failover. Grok is
   // closed-weight (xAI) and founder-lifted from the ban for this seat. Seated on C3
   // (the flagship mind) only, not the high-volume C2 organ, to keep the $2/$6-per-M
