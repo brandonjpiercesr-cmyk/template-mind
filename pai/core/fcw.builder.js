@@ -125,7 +125,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     findIdentity(hamUid),
     findAgentJDs(hamUid),
     findContext(hamUid, 5),
-    findRecentResults(5),
+    findRecentResults(hamUid, 5),
     findDoctrine(hamUid, 3),
     findPersonProfile(hamUid)
   ];
@@ -289,8 +289,25 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // and occasionally signed off with a courtesy line. Now the one VOICE (JARVIS-butler, already
   // handled it, no courtesy sign-off, no machinery talk, coffee-shop test) drives generation
   // directly, so warmth and honesty are the persona doing the work, not a per-file tone string.
+  // \u2b21B:core.fcw.builder:FIX:inbox_zero_drafts_are_the_founders_voice_not_the_butler_persona:20260722\u2b21
+  // Founder-caught: an inbox-zero draft reply came out condescending and mansplaining ("you deserve
+  // more than a quick skim... that is the part most people skip") because it was generated through
+  // A'NU's serving-butler VOICE with the founder as HAM context -- an assistant speaking TO him,
+  // aimed at a peer. But an inbox-zero DRAFT is the ONE case where the output is not A'NU speaking:
+  // it is A'NU GHOSTWRITING an email the founder will send FROM HIS OWN account to another person, in
+  // HIS voice. So for that surface only, the persona is swapped for a ghostwriter frame. Gated on the
+  // DRAFT surface, not the whole channel (Codex): composeHerReport also runs on channel inbox_zero
+  // (surface inbox_zero_report) and must keep A'NU's own advisor voice speaking TO the founder.
+  var _izSurface = '';
+  try { _izSurface = String((identity && identity.council_context && identity.council_context.surface) || ''); } catch (eSurf) { _izSurface = ''; }
+  var _isDraftSurface = String(channel || '') === 'inbox_zero' && _izSurface === 'inbox_zero_draft';
   var _anuVoice = '';
-  try { _anuVoice = require('./persona.js').VOICE; } catch (eVoice) { _anuVoice = "You are A\u2019NU, a warm, sharp butler in the spirit of JARVIS, a Black woman, never Siri. You speak in full natural sentences, you already did the work and lead with what you handled, you never sign off with a courtesy line, you never use em dashes or hollow AI phrases."; }
+  if (_isDraftSurface) {
+    _anuVoice = 'You are ghostwriting an email that ' + (hamName || 'the account owner')
+      + ' will send FROM HIS OWN email account to another person. Write it in HIS voice, as if he wrote it himself: warm, direct, real, peer to peer. You are NOT an assistant and you are NOT speaking to him; you ARE him, writing to someone else. Do not explain, over-affirm, praise, or coach the recipient, and never write anything condescending or that reads as talking down to them; match the real relationship and the tone of the moment. Full natural sentences, no em dashes, no hollow AI phrases, no assistant framing, no "I already handled it" narration.';
+  } else {
+    try { _anuVoice = require('./persona.js').VOICE; } catch (eVoice) { _anuVoice = "You are A\u2019NU, a warm, sharp butler in the spirit of JARVIS, a Black woman, never Siri. You speak in full natural sentences, you already did the work and lead with what you handled, you never sign off with a courtesy line, you never use em dashes or hollow AI phrases."; }
+  }
   var systemPrompt = [
     _anuVoice,
     '',

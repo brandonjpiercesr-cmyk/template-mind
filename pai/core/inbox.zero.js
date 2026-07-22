@@ -647,12 +647,43 @@ async function saveDraftsToMailbox(HAM, config, decisions, packet, opts) {
     var subject = (m && m.subject) ? (/^re:/i.test(m.subject) ? m.subject : ('Re: ' + m.subject)) : ('Reply for ' + config.world_name);
     var out = { to: m ? m.from : null, subject: subject, ok: false, reason: null, draftId: null };
     try {
+      // ⬡B:core.inbox_zero:FIX:one_email_one_draft_not_two:20260722⬡ Founder-caught: he opened GMG
+      // Drafts and found TWO drafts for the same email, because createDraft blindly POSTs a new draft
+      // every call and two entrypoints (/inbox-zero/:world/run and /advisors/:world/c3run) can each
+      // compose. So a re-run must REPLACE the prior draft, not stack a second one, done SAFELY and
+      // concurrency-safely (Codex): CREATE THE NEW ONE FIRST -- a transient create failure then leaves
+      // the founder's existing draft untouched. Only AFTER the new draft exists do we RE-LIST the
+      // thread (so a draft another overlapping run created is seen too), keep just the single NEWEST
+      // draft by created_at, and delete the rest. Both overlapping runs converge on the same newest
+      // draft, so the two-entrypoint race can no longer leave two. A failed DELETE is recorded on the
+      // audit result, never silently swallowed.
       var r = await IMAN.createDraft(config.world_name, {
         to: m ? m.from : null, subject: subject, body: String(d.draftBody || ''),
+        bodyIsPlaintext: true,
         thread_id: m ? m.thread_id : null, reply_to_message_id: d.id
       });
       out.ok = !!(r && r.ok); out.reason = r && r.reason || null; out.draftId = r && r.draftId || null;
-      if (out.ok) saved++;
+      if (out.ok) {
+        saved++;
+        if (m && m.thread_id) {
+          try {
+            var after = await IMAN.listDrafts(config.world_name, { thread_id: m.thread_id });
+            var drafts = (after && after.ok && Array.isArray(after.drafts)) ? after.drafts.filter(function (x) { return x && x.id; }) : [];
+            if (drafts.length > 1) {
+              var sorted = drafts.slice().sort(function (a, b) {
+                return (Number(b.created_at || b.date || 0)) - (Number(a.created_at || a.date || 0));
+              });
+              out.keptDraftId = sorted[0].id;                 // the newest survives; all runs agree on it
+              var cleanupFailed = false;
+              for (var pj = 1; pj < sorted.length; pj++) {
+                var del = await IMAN.deleteDraft(config.world_name, sorted[pj].id).catch(function () { return { ok: false }; });
+                if (!del || del.ok !== true) cleanupFailed = true;
+              }
+              if (cleanupFailed) { out.cleanupFailed = true; out.reason = (out.reason ? out.reason + ';' : '') + 'draft_dedup_incomplete'; }
+            }
+          } catch (eDedup) { out.cleanupFailed = true; out.reason = (out.reason ? out.reason + ';' : '') + 'draft_dedup_threw'; }
+        }
+      }
     } catch (e) { out.reason = e.message; }
     results.push(out);
   }

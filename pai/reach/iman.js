@@ -61,15 +61,11 @@ function resolveAnuProductionSender() {
 // so the calendar capability was dead on require. Returns the rich shape the
 // calendar module needs ({grantId, keyEnv, from, world}). Additive, per-world,
 // EBC firewall intact -- resolves ONLY the world passed in, never cross-grant.
-// ⬡B:pai.reach.iman:FIX:from_addresses_are_env_only_never_a_literal:20260722⬡
-// Identity is env-only, per-world (founder-PII leak-guard law). The sender address for each world
-// comes from that world's own env var; no person is baked in as a fallback, so a stranger world
-// never inherits someone else's mailbox. This world's own env supplies its real addresses.
 var WORLD_FROM = {
-  'gmg':        process.env.NYLAS_GMG_FROM_EMAIL       || '',
-  'bdif':       process.env.NYLAS_BDIF_FROM_EMAIL      || '',
-  'mediators':  process.env.NYLAS_MEDIATORS_FROM_EMAIL || '',
-  'mh_action':  process.env.NYLAS_MH_ACTION_FROM_EMAIL || '',
+  'gmg':        process.env.NYLAS_GMG_FROM_EMAIL,
+  'bdif':       process.env.NYLAS_BDIF_FROM_EMAIL,
+  'mediators':  process.env.NYLAS_MEDIATORS_FROM_EMAIL,
+  'mh_action':  process.env.NYLAS_MH_ACTION_FROM_EMAIL,
 };
 function getGrant(world) {
   var grantId = resolveGrant(world);
@@ -226,6 +222,47 @@ async function alreadyRepliedOnThread(world, threadId, sinceEpochSeconds) {
 // exact "she did the work, I just send it" surface, and it keeps the hard line, because
 // a draft is not a send. EBC-walled to the one world's grant, threaded when a real
 // thread_id + reply_to_message_id are given so the draft lands inside the conversation.
+// ⬡B:reach.iman:FIX:plaintext_body_renders_as_html_so_the_signature_mashed_into_one_line:20260722⬡
+// Founder-caught: the composed reply and its signature carry real newlines, but Nylas /drafts treats
+// the `body` field as HTML, so every newline collapsed to a space and the whole sign-off rendered as
+// one mashed line ("Thanks, Brandon Brandon Pierce Sr. brandon@... | +1..."). Callers that hand us a
+// PLAINTEXT body ask for bodyIsPlaintext:true; we HTML-escape it and turn newlines into <br> so the
+// draft renders with the line breaks the writer intended. Callers already sending HTML are untouched.
+function _plaintextToHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n/g, '<br>\n');
+}
+
+// List drafts on a world's grant, optionally filtered to one thread. Read-only.
+async function listDrafts(world, opts) {
+  opts = opts || {};
+  var grant = resolveGrant(world), key = resolveKey(world);
+  if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
+  var url = 'https://api.us.nylas.com/v3/grants/' + grant + '/drafts?limit=50';
+  if (opts.thread_id) url += '&thread_id=' + encodeURIComponent(String(opts.thread_id));
+  try {
+    var r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' }, signal: AbortSignal.timeout(15000) });
+    var data = await r.json().catch(function(){ return {}; });
+    if (r.status >= 200 && r.status < 300) return { ok: true, drafts: (data && data.data) || [] };
+    return fail('draft_list_' + r.status);
+  } catch (e) { return fail('draft_list_unreachable'); }
+}
+
+// Delete one draft by id. Used to keep a thread to a single current draft.
+async function deleteDraft(world, draftId) {
+  var grant = resolveGrant(world), key = resolveKey(world);
+  if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
+  if (!draftId) return fail('draft_id_required');
+  try {
+    var r = await fetch('https://api.us.nylas.com/v3/grants/' + grant + '/drafts/' + encodeURIComponent(String(draftId)), {
+      method: 'DELETE', headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' }, signal: AbortSignal.timeout(15000) });
+    if (r.status >= 200 && r.status < 300) return { ok: true, deleted: draftId };
+    return fail('draft_delete_' + r.status);
+  } catch (e) { return fail('draft_delete_unreachable'); }
+}
+
 async function createDraft(world, opts) {
   opts = opts || {};
   var grant = resolveGrant(world);
@@ -234,7 +271,8 @@ async function createDraft(world, opts) {
   var to = normalizeRecipients(opts.to);
   if (!to || !to.length) return fail('draft_recipient_invalid');
   if (typeof opts.body !== 'string' || !/\S/.test(opts.body)) return fail('draft_body_invalid');
-  var payload = { to: to, subject: String(opts.subject || '').slice(0, 400), body: opts.body };
+  var bodyOut = opts.bodyIsPlaintext ? _plaintextToHtml(opts.body) : opts.body;
+  var payload = { to: to, subject: String(opts.subject || '').slice(0, 400), body: bodyOut };
   // Thread the draft into the real conversation when the caller has the ids.
   if (opts.thread_id) payload.thread_id = String(opts.thread_id);
   if (opts.reply_to_message_id) payload.reply_to_message_id = String(opts.reply_to_message_id);
@@ -761,6 +799,7 @@ module.exports = { send: send, sendFromClaudette: sendFromClaudette,
   sendToHam: sendToHam, sendCommittedToHam:sendCommittedToHam, listEmails: listEmails,
   alreadyRepliedOnThread: alreadyRepliedOnThread, getGrant: getGrant,
   getThread: getThread, downloadAttachment: downloadAttachment, createDraft: createDraft,
+  listDrafts: listDrafts, deleteDraft: deleteDraft,
   resolveGrant: resolveGrant, resolveKey: resolveKey,
   resolveAnuProductionSender:resolveAnuProductionSender,
   _test:{ providerSend:providerSend, requireExactRecipientOwnership:requireExactRecipientOwnership } };
