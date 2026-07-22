@@ -437,6 +437,16 @@ async function composeDraftViaCycle(HAM, config, d, m, scw) {
   } catch (e) { out = null; }
   if (!out || !out.ok || typeof out.answer !== 'string' || !out.answer.trim()) return '';
   var body = out.answer;
+  // ⬡B:core.inbox_zero:GUARD:no_day_fusion_dump_as_a_reply_body:20260722⬡ 911, caught in the
+  // real Drafts folder: a schedule-flavored email (the "Big Lake gathering" thread) drove the
+  // compose turn's runPAI down the day/schedule path, and the answer came back as the founder's
+  // own day-fusion context dump ("What I found for right now: answer_this_first_for_day_or_
+  // schedule : WORLD CONTEXT ...") instead of a composed reply. That is internal scaffolding,
+  // never a sendable email. A draft is human-facing output: a bad draft beats no draft is FALSE
+  // here (the file's own law), so if the cycle handed back a fusion/context dump we treat it as
+  // a failed compose and write NO draft rather than land machinery in his mailbox.
+  var _leak = /answer_this_first_for_day_or_schedule|^what i found for right now|world context, as of|recency_instruction/i;
+  if (_leak.test(body)) { d.cycleFailed = true; return ''; }
   try { body = formatMatrix.stripMarkdown(body); } catch (e) {}
   body = stripDashes(body);                       // belt to the cycle's own WRIT suspenders
   body = withSignature(body, config.signature);   // the Nylas signature the API will not add itself
@@ -622,10 +632,12 @@ async function previewSendToFounder(HAM, config, decisions, packet, opts) {
 // he opens his mailbox and they are there, threaded to the original, ready to read, edit,
 // and send himself. This saves each owed reply as a real Nylas draft (IMAN.createDraft),
 // threaded via thread_id + reply_to_message_id, and DOES NOT SEND anything: a draft on
-// the account is not outbound, nothing leaves the mailbox, the hard line holds. OFF by
-// default; fires only when opts.saveToDrafts is true or INBOX_ZERO_SAVE_DRAFTS is set.
+// the account is not outbound, nothing leaves the mailbox, the hard line holds. ON by
+// default now (the founder was not seeing drafts in his own Drafts folder because this was
+// gated off): every owed reply lands in the world's real Drafts folder. Turned off only by
+// an explicit opts.saveToDrafts === false or INBOX_ZERO_SAVE_DRAFTS === '0'.
 async function saveDraftsToMailbox(HAM, config, decisions, packet, opts) {
-  var on = (opts && opts.saveToDrafts === true) || process.env.INBOX_ZERO_SAVE_DRAFTS === '1';
+  var on = !(opts && opts.saveToDrafts === false) && process.env.INBOX_ZERO_SAVE_DRAFTS !== '0';
   if (!on) return { saved: 0, results: [], enabled: false };
   var personal = decisions.filter(function (d) { return d.bucket === 'personal' && d.needsReply && d.draftBody; });
   if (!personal.length) return { saved: 0, results: [], enabled: true };
@@ -684,6 +696,14 @@ async function runInboxZero(opts) {
   // 2) Close the loop on prior drafts AND prior proposed reaches BEFORE pulling new mail.
   var priorLoop = await closeLoopOnPriorDrafts(HAM, config);
   var reachLoop = await closeLoopOnEscalations(HAM, config);
+
+  // 2b) Optional: clear this advisor's handled-watermark so already-reviewed mail is drafted
+  // again. Off by default (the watermark is what stops re-drafting the same thread every
+  // cycle); the founder turns it on to force a fresh full pass, e.g. to see drafts actually
+  // land in the Drafts folder now that saving is on.
+  if (opts.clearWatermark === true) {
+    try { await watermark.clearWatermark(config.advisor_id, HAM, 'all'); } catch (e) {}
+  }
 
   // 3) Cold gather.
   var packet = await gatherEvidence(config, HAM, opts.limit);
@@ -839,7 +859,7 @@ function registerInboxZero(app) {
   app.post('/inbox-zero/:world/run', async function (req, res) {
     try {
       var body = req.body || {};
-      var out = await runInboxZero({ world: req.params.world, hamUid: body.hamUid || body.ham_uid, intent: body.intent, limit: body.limit, previewSend: body.previewSend === true, saveToDrafts: body.saveToDrafts === true });
+      var out = await runInboxZero({ world: req.params.world, hamUid: body.hamUid || body.ham_uid, intent: body.intent, limit: body.limit, previewSend: body.previewSend === true, saveToDrafts: body.saveToDrafts !== false, clearWatermark: body.clearWatermark === true });
       res.json(out);
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });

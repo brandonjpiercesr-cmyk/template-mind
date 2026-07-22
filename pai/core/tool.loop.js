@@ -1675,7 +1675,16 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // answer to lead with for day/schedule/lane questions. Bead history follows. This
     // is object-key ordering the model reads top-down, not a new instruction to hope on.
     var _result = {};
-    if (_fusionLine) {
+    // ⬡B:core.tool_loop:GUARD:day_fusion_lead_is_the_founders_day_question_not_a_compose:20260722⬡
+    // The day/schedule fusion lead is for the founder asking about HIS day. On a compose or
+    // advisor turn (drafting an email reply, an advisor report) the deliberationInput is an
+    // email thread that can carry schedule words ("gathering", "aligned on the date"), and
+    // leading the answer with his day-fusion turned a real Drafts-folder reply into a raw
+    // context dump. Gate the lead off for those channels: they compose external output for
+    // someone else, they are not the founder's own day question. Caught live in the Mediators
+    // Drafts folder ("Big Lake gathering" reply came back as a WORLD CONTEXT dump).
+    var _composeTurn = /^(inbox_zero|advisor)$/.test(String(runtime && runtime.channel || '').toLowerCase());
+    if (_fusionLine && !_composeTurn) {
       _result.answer_this_first_for_day_or_schedule = _fusionLine.trim();
     }
     // ⬡B:core.tool_loop:FIX:no_recency_on_find_results_stale_reported_as_live_20260713⬡
