@@ -287,6 +287,9 @@ const RUNPOD_KEY = process.env.RUNPOD_API_KEY;
 const ORNITH_MODEL = process.env.ORNITH_MODEL || 'maxwell1500/ornith-35b:Q4_K_M';
 
 async function callOrnith(system, userContent, maxTokens) {
+  // ⬡B:core.outreach:KILL:ornith_retired_founder_911:20260722⬡ FOUNDER 911: Ornith
+  // retired, RunPod out. Null falls to the next provider exactly like a timeout.
+  if (process.env.ORNITH_ENABLED !== 'on') return null;
   if (!ORNITH_URL || !RUNPOD_KEY) return null;
   try {
     const payload = { input: { mode: 'chat', model: ORNITH_MODEL,

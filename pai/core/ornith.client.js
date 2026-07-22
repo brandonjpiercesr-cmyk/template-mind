@@ -27,6 +27,14 @@ var ORNITH_MODEL = process.env.ORNITH_MODEL || 'maxwell1500/ornith-35b:Q4_K_M';
 // it -- confirmed live, finish_reason=stop, real content, first try. This touches every
 // production caller of Ornith at once, not just the cook-off station.
 async function callOrnith(system, userContent, maxTokens) {
+  // ⬡B:core.ornith.client:KILL:ornith_retired_founder_911:20260722⬡ FOUNDER 911
+  // 20260722: Ornith is RETIRED and RunPod is out. The live endpoint was in a
+  // failure loop (937 failures, 0 completions in the audit window) burning GPU for
+  // nothing. This is THE one choke point every Ornith caller flows through, so
+  // gating here kills every RunPod submission at once. Callers already treat null
+  // as "rung unavailable" and fall to their next provider, so nothing goes silent.
+  // Env opt-in ORNITH_ENABLED===on can resurrect it for a supervised test only.
+  if (process.env.ORNITH_ENABLED !== 'on') return null;
   if (!ORNITH_URL || !RUNPOD_KEY) return null;
   try {
     var payload = { input: { mode: 'chat', model: ORNITH_MODEL, think: false,
