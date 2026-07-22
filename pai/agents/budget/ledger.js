@@ -408,10 +408,24 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
   // True monthly run-rate from THIS person's own config, so a monthly-view answer has an
   // explicit figure to quote and the board can verify it. Window-independent by design.
   var monthlyIncomeTotal = 0, monthlyBillsTotal = 0, monthlyNet = 0;
+  // ⬡B:agents.budget.ledger:FIX:per_source_monthly_must_be_in_evidence_or_she_holds:20260722⬡
+  // When she breaks income down by source in MONTHLY terms she states each source's monthly
+  // figure (a $2,829 semimonthly paycheck reads as $5,658/month), but the summary only carried
+  // the per-PAYMENT amount ($2,829), so that computed $5,658 grounded against nothing and SHADOW
+  // held her whole reply. Carry each source's and each bill's own monthly amount (name + amount,
+  // so it lands in the evidence money set via the "amount" field) -- every figure derived from
+  // this person's own config, none hardcoded -- so any monthly figure she quotes verifies.
+  var monthlyIncomeBySource = [], monthlyBillsBySource = [];
   if (config) {
     monthlyIncomeTotal = _monthlyRunRate(config.incomeSources);
     monthlyBillsTotal  = _monthlyRunRate(config.recurringBills);
     monthlyNet = Math.round((monthlyIncomeTotal - monthlyBillsTotal) * 100) / 100;
+    if (Array.isArray(config.incomeSources)) monthlyIncomeBySource = config.incomeSources.map(function (s) {
+      return { name: s && s.name, amount: Math.round((parseFloat((s && s.amount) || 0) * _perMonth(s && s.frequency)) * 100) / 100 };
+    });
+    if (Array.isArray(config.recurringBills)) monthlyBillsBySource = config.recurringBills.map(function (b) {
+      return { name: b && b.name, amount: Math.round((parseFloat((b && b.amount) || 0) * _perMonth(b && b.frequency)) * 100) / 100 };
+    });
   }
 
   return {
@@ -431,6 +445,8 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
     monthlyIncomeTotal: monthlyIncomeTotal,
     monthlyBillsTotal: monthlyBillsTotal,
     monthlyNet: monthlyNet,
+    monthlyIncomeBySource: monthlyIncomeBySource,
+    monthlyBillsBySource: monthlyBillsBySource,
     bnplActive: bnplActive.length,
     bnplPlans: bnplActive,
     config: config
