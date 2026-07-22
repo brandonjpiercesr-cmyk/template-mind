@@ -303,7 +303,7 @@ function draftArgsFromMessage(message) {
 var DATA_READER_TOOLS = {
   calendar_read: function(m){ return {}; },
   find_in_brain: memoryArgsFromMessage,
-  find_identity_evidence: function(m){ return { query: String(m||'').slice(0,200) }; },
+  find_identity_evidence: function(m){ return { query: String(m||'').slice(0) }; },
   weather_check: weatherArgsFromMessage,
   nash_sports: sportsArgsFromMessage,
   inbox_read: function(m){ return { unread_only:!/\brecent\b/i.test(String(m||'')) }; },
@@ -413,11 +413,11 @@ function injectNamedAgentEvidence(msgs, verifiedEvidence, fcw, hamUid) {
       id: row.id == null ? null : row.id,
       ham_uid: exactHamUid,
       agent_global: row.agent_global,
-      stamp_type: row.stamp_type == null ? null : String(row.stamp_type).slice(0, 120),
-      source: row.source == null ? null : String(row.source).slice(0, 300),
-      summary: row.summary == null ? '' : String(row.summary).slice(0, 500),
+      stamp_type: row.stamp_type == null ? null : String(row.stamp_type).slice(0),
+      source: row.source == null ? null : String(row.source).slice(0),
+      summary: row.summary == null ? '' : String(row.summary).slice(0),
       content: row.content == null ? '' : (typeof row.content === 'string'
-        ? row.content : JSON.stringify(row.content)).slice(0, 2400),
+        ? row.content : JSON.stringify(row.content)).slice(0),
       created_at: row.created_at == null ? null : String(row.created_at).slice(0, 80)
     };
     return {
@@ -1122,7 +1122,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!_m || _m.ok !== true) return JSON.stringify({ok:false,reason:(_m && (_m.error || _m.reason)) || 'mace_no_result',via:'MACE'});
       if (_act === 'list_files') {
         return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,count:_m.count,
-          entries:(_m.entries||[]).slice(0,200)});
+          entries:(_m.entries||[]).slice(0)});
       }
       return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,sha:_m.sha,size:_m.size,
         content:String(_m.content_text||'').slice(0, Number(process.env.MACE_READ_CHARS||20000)),
@@ -1143,7 +1143,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         var _b = await fetch(_stationBase + '/bcw?topic=' + encodeURIComponent(_topic),
           { signal: AbortSignal.timeout(90000) }).then(function (x) { return x.json(); });
         if (!_b || !_b.bcw) return JSON.stringify({ok:false,note:'BCW station returned nothing'});
-        return JSON.stringify({ok:true,topic:_topic,chars:_b.chars,armory:String(_b.bcw).slice(0,14000)});
+        return JSON.stringify({ok:true,topic:_topic,chars:_b.chars,armory:String(_b.bcw).slice(0)});
       }
       if (name === 'run_cookoff') {
         var _task = String(args.task || '').trim();
@@ -1251,7 +1251,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
           if (!parsed || !parsed.found || !Array.isArray(parsed.files)) return parsed;
           return { ok:parsed.ok, found:true, query:terms[index], files:parsed.files.slice(0, 2).map(function (file) {
             return { file:file.file, startLine:file.startLine, endLine:file.endLine,
-              excerpt:String(file.excerpt || '').slice(0, 900) };
+              excerpt:String(file.excerpt || '').slice(0) };
           }) };
         } catch (eCompact) { return { ok:false, query:terms[index], note:'unparseable repository result' }; }
       });
@@ -1373,7 +1373,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
           var windowStart = bestIdx > 300 ? bestIdx - 300 : 0;
           var excerpt = bestIdx !== -1
             ? rawStr.slice(windowStart, windowStart+1800)
-            : rawStr.slice(0,1500);
+            : rawStr.slice(0);
           // \u2b21B:core.tool.loop:FIX:real_line_citations_per_actual_research:20260710\u2b21
           // Real, researched fix (arxiv 2512.12117, code-comprehension RAG hallucination):
           // "mechanical citation verification: requiring LLMs cite specific line ranges
@@ -1548,7 +1548,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         var _doing = String(row.summary || '').replace(/\s+/g, ' ').trim();
         // pull the roadmap/lane phrase if present, else a short summary
         var _cut = _doing.split(/CURRENT ROADMAP\/LANE:|CURRENT TRACK:|LANE:|doing:|-- /i);
-        var _short = (_cut.length > 1 ? _cut[1] : _doing).trim().slice(0, 140);
+        var _short = (_cut.length > 1 ? _cut[1] : _doing).trim().slice(0);
         _lines.push(_nm + ': ' + _short);
       });
       if (!_lines.length) return 'The lane board has no registered lanes right now.';
@@ -1683,8 +1683,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // context dump. Gate the lead off for those channels: they compose external output for
     // someone else, they are not the founder's own day question. Caught live in the Mediators
     // Drafts folder ("Big Lake gathering" reply came back as a WORLD CONTEXT dump).
-    var _composeTurn = (runtime && runtime.outboundFinalize === true)
-      || /^(inbox_zero|advisor)$/.test(String(runtime && runtime.channel || '').toLowerCase());
+    var _composeTurn = /^(inbox_zero|advisor)$/.test(String(runtime && runtime.channel || '').toLowerCase());
     if (_fusionLine && !_composeTurn) {
       _result.answer_this_first_for_day_or_schedule = _fusionLine.trim();
     }
@@ -1741,7 +1740,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // whole turn died as pai_cycle_threw. Evidence readers coerce, never crash.
       var _bc = b.content;
       if (_bc != null && typeof _bc !== 'string') { try { _bc = JSON.stringify(_bc); } catch (eBc) { _bc = String(_bc); } }
-      return {stamp_type:b.stamp_type,summary:b.summary,content:(_bc||'').slice(0,200),stamped:ageLabel};
+      return {stamp_type:b.stamp_type,summary:b.summary,content:(_bc||'').slice(0),stamped:ageLabel};
     });
     _result.recency_instruction = 'Every result above carries "stamped: X ago", real elapsed time, not a guess. Before stating anything as a CURRENT problem, loop, or status, check its age. Anything more than a few hours old may already be resolved -- state it as history ("as of N ago, X was happening") not as present-tense fact ("X is happening right now"), unless you have separately confirmed it is still true today.';
     _result.ms = res.ms;
@@ -1809,7 +1808,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!draftRows||!draftRows.length) return JSON.stringify({ok:true,found:false,org:args.org,message:'No pending drafts on file for '+args.org+' right now.'});
       var latest=draftRows[0];
       var c=latest.content; try{c=JSON.parse(c);}catch(e){c={};}
-      return JSON.stringify({ok:true,found:true,org:args.org,summary:latest.summary,threads:c.threads_needing_reply||[],draftText:(c.output||'').slice(0,1500),asOf:latest.created_at});
+      return JSON.stringify({ok:true,found:true,org:args.org,summary:latest.summary,threads:c.threads_needing_reply||[],draftText:(c.output||'').slice(0),asOf:latest.created_at});
     } catch(eGpd){ return JSON.stringify({ok:false,error:eGpd.message}); }
   }
   if (name === 'request_new_capability') {
@@ -1822,7 +1821,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // instead of guessing or refusing outright.
     var BUc=_bu(), BKc=_bk();
     var cHam = args.ham_uid || hamUid;
-    var desc = String(args.capability_description||'').slice(0,200);
+    var desc = String(args.capability_description||'').slice(0);
     if (!BUc||!BKc) return JSON.stringify({ok:false,built:false,reason:'no_brain'});
     var keywords = desc.split(/\s+/).filter(function(w){return w.length>3;}).slice(0,4);
     var relatedCount = 0;
@@ -1903,7 +1902,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // the same text for this ham. If one exists, do not duplicate. This breaks the loop
     // at the tool itself, no matter how the delivery prompt is phrased.
     try {
-      var _rt = String(args.text || '').trim().toLowerCase().slice(0, 100);
+      var _rt = String(args.text || '').trim().toLowerCase().slice(0);
       if (_rt) {
         var _dq = await fetch(_bu() + '/rest/v1/' + _tbl() + '?stamp_type=eq.REMINDER&ham_uid=eq.' + encodeURIComponent(rHam)
           + '&summary=ilike.' + encodeURIComponent('%' + _rt.slice(0, 40) + '%') + '&order=created_at.desc&limit=15',
@@ -1914,7 +1913,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         var reminderReadCancelled = await cancelBeforeEffect(name, runtime);
         if (reminderReadCancelled) return reminderReadCancelled;
         var _dup = (Array.isArray(_ex) ? _ex : []).find(function (b) {
-          try { var c = JSON.parse(b.content || '{}'); return !c.fired && String(c.text || '').trim().toLowerCase().slice(0, 100) === _rt; } catch (e) { return false; }
+          try { var c = JSON.parse(b.content || '{}'); return !c.fired && String(c.text || '').trim().toLowerCase().slice(0) === _rt; } catch (e) { return false; }
         });
         if (_dup) {
           return JSON.stringify({ ok: true, duplicate: true, text: args.text, note: 'a reminder with this text is already pending; not creating a duplicate' });
@@ -1931,7 +1930,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         body:JSON.stringify({ham_uid:rHam,agent_global:'PAI',stamp_type:'REMINDER',
           source:reminderSource,
           acl_stamp:'\u2b21B:pai.reminder:REMINDER:created:'+ymd()+'\u2b21',
-          summary:'[REMINDER] '+String(args.text||'').slice(0,100),
+          summary:'[REMINDER] '+String(args.text||'').slice(0),
           content:JSON.stringify({text:args.text,due_at:dueAt,fired:false,defaultedDate:!isValidFuture,createdAt:new Date().toISOString()}),
           importance:6}), signal:runtime && runtime.abortSignal});
       var reminderRows = reminderWrite.ok
@@ -1964,7 +1963,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _res = await _mod.runCycle(_q, _cHam, _q);
       var _brief = _res && (_res.answer || _res.output || _res.summary || _res.brief);
       if (!_brief) return JSON.stringify({ok:false,reason:'advisor_returned_empty',advisor:_station});
-      return JSON.stringify({ok:true,advisor:_station,brief:String(_brief).slice(0,4000)});
+      return JSON.stringify({ok:true,advisor:_station,brief:String(_brief).slice(0)});
     } catch(eCons){ return JSON.stringify({ok:false,error:eCons.message}); }
   }
   if (name === 'weather_check') {
@@ -2051,8 +2050,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _unreadOnly = !(args && args.unread_only === false);
       if (_unreadOnly) _msgs = _msgs.filter(function(m){ return m.unread; });
       _msgs = _msgs.slice(0, 8).map(function(m){
-        return { from: String(m.from||'someone').slice(0,80), subject: String(m.subject||'(no subject)').slice(0,140),
-          snippet: String(m.snippet||m.preview||'').slice(0,200), unread: !!m.unread, id: m.id||null, grant: m.grant||null };
+        return { from: String(m.from||'someone').slice(0,80), subject: String(m.subject||'(no subject)').slice(0),
+          snippet: String(m.snippet||m.preview||'').slice(0), unread: !!m.unread, id: m.id||null, grant: m.grant||null };
       });
       return JSON.stringify({ ok:true, count:_msgs.length, messages:_msgs,
         note: _msgs.length ? 'Real inbox. To show on the glass call update_screen with piece email. To draft a reply use the id.' : 'Inbox is clear, nothing unread.' });
@@ -2193,7 +2192,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _ymd3 = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       if (args.authorized_in_message === true) {
         var _sendCouncil = runtime && runtime.councilResult;
-        var _exactContactMessage = String(args.message || '').slice(0, 1500);
+        var _exactContactMessage = String(args.message || '').slice(0);
         var _resolvedAtCouncil = canonicalizeDeliveryTarget({ kind:'phone',
           value:args._resolved_contact_phone || '' });
         var _resolvedAtCommit = canonicalizeDeliveryTarget({ kind:'phone', value:_hit2.phone });
@@ -2220,7 +2219,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         try { await fetch(_bu3 + '/rest/v1/' + _tbl(), { method: 'POST', headers: _wh3, body: JSON.stringify({
           ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'OUTBOUND_THIRD_PARTY',
           acl_stamp: '\u2b21B:core.tool.loop:OUTBOUND_THIRD_PARTY:sent:' + _ymd3 + '\u2b21',
-          source: 'contact.send.' + Date.now(), summary: '[SENT to ' + (_hit2.name || 'contact') + '] ' + String(args.message || '').slice(0, 100),
+          source: 'contact.send.' + Date.now(), summary: '[SENT to ' + (_hit2.name || 'contact') + '] ' + String(args.message || '').slice(0),
           content: JSON.stringify({ contact: _hit2.name, phone: _hit2.phone, message: args.message, result: _sendRes }), importance: 6
         }) }); } catch (eStamp) {}
         return JSON.stringify({ ok: true, sent: true, to: _hit2.name, result: _sendRes });
@@ -2233,7 +2232,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         var _draftWrite = await fetch(_bu3 + '/rest/v1/' + _tbl(), { method: 'POST', headers: _wh3, body: JSON.stringify({
         ham_uid: String(_csHam).toUpperCase(), agent_global: 'A\u2019NU', stamp_type: 'PENDING_SEND',
         acl_stamp: '\u2b21B:core.tool.loop:PENDING_SEND:drafted:' + _ymd3 + '\u2b21',
-        source: _draftSource, summary: '[DRAFT for ' + (_hit2.name || 'contact') + ', AWAITING CONFIRM] ' + String(args.message || '').slice(0, 100),
+        source: _draftSource, summary: '[DRAFT for ' + (_hit2.name || 'contact') + ', AWAITING CONFIRM] ' + String(args.message || '').slice(0),
         content: JSON.stringify({ contact: _hit2.name, phone: _hit2.phone, message: args.message }), importance: 6
         }), signal:runtime && runtime.abortSignal });
         var _draftRows = _draftWrite.ok
@@ -2298,7 +2297,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _swHam = args.ham_uid || hamUid;
       var _swParentRequest = runtime && runtime.parentRequestId;
       var _swRequestId = _swParentRequest
-        ? String(_swParentRequest).slice(0, 140) + '.session' : undefined;
+        ? String(_swParentRequest).slice(0) + '.session' : undefined;
       var sessionCancelled = await cancelBeforeEffect(name, runtime);
       if (sessionCancelled) return sessionCancelled;
       var sessionCancellation = effectCancellation(runtime);
@@ -2543,7 +2542,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       body:JSON.stringify({ham_uid:hamUid,agent_global:'PAI',stamp_type:'CYCLE_STEP',
         source:'pai.cycle.'+_cycleId,
         acl_stamp:'\u2b21B:core.tool.loop:CYCLE_STEP:'+step+':'+Date.now()+'\u2b21',
-        summary:'[CYCLE '+_cycleId.slice(-8)+'] '+step+(detail?': '+String(detail).slice(0,100):''),
+        summary:'[CYCLE '+_cycleId.slice(-8)+'] '+step+(detail?': '+String(detail).slice(0):''),
         content:JSON.stringify({cycleId:_cycleId,step:step,channel:channel,
           sessionId:_voiceSessionId || null,turnId:_voiceTurnId || null,
           detail:detail||null,atMs:Date.now()-t0}),
@@ -2592,7 +2591,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     ok:true, system_prompt:_reachIncidentIntake
       ? _reachIncidentSystemPrompt : _structuredReachSystemPrompt,
     ham:{ uid:hamUid, name:String(identity&&identity.name||'Unknown').slice(0,160),
-      tier:_isolatedHamTier, world:String(identity&&identity.world||'unknown').slice(0,120) },
+      tier:_isolatedHamTier, world:String(identity&&identity.world||'unknown').slice(0) },
     context:[], named_agent_records:[], identity_record:null,
     identity_evidence:{ schema:'anew.identity.evidence.result.v1', ok:true,
       available:true, ham_uid:String(hamUid||'').toUpperCase(), subjects:[],
@@ -2628,7 +2627,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             source:'gap.needs_clair.'+Date.now(),
             acl_stamp:'\u2b21B:core.tool.loop:GAP_FLAGS:needs_clair:'+ymd()+'\u2b21',
             summary:'[SHE NEEDS CLAIR] ran on thin context ('+((fcw&&fcw.reason)||'unknown')+') for: '+String(message||'').slice(0,80),
-            content:JSON.stringify({question:String(message||'').slice(0,300),reason:(fcw&&fcw.reason)||'unknown',askClairFirst:true}),importance:7})
+            content:JSON.stringify({question:String(message||'').slice(0),reason:(fcw&&fcw.reason)||'unknown',askClairFirst:true}),importance:7})
         }).catch(function(){});
       }
     } catch (eNC) {}
@@ -2677,7 +2676,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       human:{ name:String(hamObj.name).slice(0, 160),
         source:String(fcw.identity_record.source || '').slice(0, 260),
         row_id:fcw.identity_record.id == null ? null : fcw.identity_record.id,
-        stamp_type:String(fcw.identity_record.stamp_type || '').slice(0, 120) }
+        stamp_type:String(fcw.identity_record.stamp_type || '').slice(0) }
     };
     systemPrompt += '\nCURRENT IDENTITY PROOF (server-owned for this exact turn): ' +
       JSON.stringify(_runtimeIdentityEvidence) +
@@ -2866,7 +2865,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: 3 }
       ]);
       if (_wgSynthRes && _wgSynthRes.beads && _wgSynthRes.beads.length) {
-        var _wgResult = JSON.stringify(_wgSynthRes).slice(0,4000);
+        var _wgResult = JSON.stringify(_wgSynthRes).slice(0);
         _verifiedToolEvidence.push({ tool:'find_in_brain',
           provenance:'memory_bank.exact_ham',
           args:JSON.stringify({ stamp_type:'WONDER_GAMES', ham_uid:hamUid }),
@@ -2900,7 +2899,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // WONDER CYCLE doctrine (382567): cold code must never decide meaning. ilike
       // noun-guess removed; PREFERENCE stamp_type preload stays. Fails open to the organ.
       if (_prefSynthRes && _prefSynthRes.beads && _prefSynthRes.beads.length) {
-        var _prefResult = JSON.stringify(_prefSynthRes).slice(0,4000);
+        var _prefResult = JSON.stringify(_prefSynthRes).slice(0);
         _verifiedToolEvidence.push({ tool:'find_in_brain',
           provenance:'memory_bank.exact_ham',
           args:JSON.stringify({ stamp_type:'PREFERENCE', ham_uid:hamUid }),
@@ -2943,7 +2942,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       if (_codaParsed && _codaParsed.ok === true && _codaParsed.provenanceVerified === true &&
           _codaIdentityReceiptVerified &&
           typeof _codaParsed.answer === 'string' && _codaParsed.answer.trim()) {
-        _codaProvenanceAnswer = _codaParsed.answer.trim().slice(0, 5000);
+        _codaProvenanceAnswer = _codaParsed.answer.trim().slice(0);
       }
       if (_codaParsed && _codaParsed.ok === true &&
           (_codaParsed.activationDecision === 'APPROVE' || _codaParsed.activationDecision === 'HOLD')) {
@@ -2956,13 +2955,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           codingRelay.exactContract(_codaParsed.relay) &&
           _codaParsed.evidence && _codaParsed.evidence.repository === true &&
           typeof _codaParsed.answer === 'string' && _codaParsed.answer.trim()) {
-        _codaRepositoryAnswer = _codaParsed.answer.trim().slice(0, 5000);
+        _codaRepositoryAnswer = _codaParsed.answer.trim().slice(0);
       }
       if (_codaParsed && _codaParsed.ok === true && _codaParsed.evidenceRelay === true &&
           _codaParsed.relayContractVerified === true &&
           codingRelay.exactContract(_codaParsed.relay) &&
           typeof _codaParsed.answer === 'string' && _codaParsed.answer.trim()) {
-        _codaEvidenceRelayAnswer = _codaParsed.answer.trim().slice(0, 5000);
+        _codaEvidenceRelayAnswer = _codaParsed.answer.trim().slice(0);
         if (_codaParsed.directNamedEvidence === true &&
             _codaParsed.evidenceMode === 'direct_named_evidence' &&
             _codaParsed.retried === false) {
@@ -3020,11 +3019,6 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{} };
   _effectRuntime.channel = String(channel || '').toLowerCase();
-  // Every advisor/compose turn (finance, legal, business, jobs, life, inbox_zero, ...) enters
-  // through finalizePublicTurn, which stamps identity.outbound_finalize. This single flag marks
-  // "composing external output, not answering the founder's own day question", so gates keyed on
-  // it cover all advisor channels present and future without enumerating channel names.
-  _effectRuntime.outboundFinalize = !!(identity && identity.outbound_finalize);
   _effectRuntime.exactHamReads = _effectRuntime.channel === 'voice' &&
     !!verifiedVoiceCallContext(identity, hamUid);
   _effectRuntime.abortSignal = _turnAbortSignal || null;
@@ -3159,7 +3153,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
         body.tools);
       _stampStep('tool_plan_first_pass', _toolPlan.decision +
-        (_toolPlan.tool ? ':' + _toolPlan.tool : '') + ':' + String(_toolPlan.reason || '').slice(0,120));
+        (_toolPlan.tool ? ':' + _toolPlan.tool : '') + ':' + String(_toolPlan.reason || '').slice(0));
       if (_toolPlan.decision === 'NO_TOOL') {
         delete body.tools;
         delete body.tool_choice;
@@ -3497,8 +3491,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           global._paiLastError='together_empty_content_reasoning_burn';r=null;
         } else { global._paiLastError=null; }
       }
-      else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0,120);}
-      else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0,150);}
+      else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0);}
+      else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0);}
       }else{global._paiLastError='together_no_key';}
     }
     // ⬡B:core.tool_loop:FIX:openrouter_third_tier_20260713⬡
@@ -3533,8 +3527,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           global._paiLastError='openrouter_empty_content_reasoning_burn';r=null;
         } else { global._paiLastError=null; }
       }
-      else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0,120);}
-      else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0,150);}
+      else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0);}
+      else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0);}
       }else{global._paiLastError='openrouter_no_key';}
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
@@ -3554,7 +3548,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
           global._paiLastError=null;
         } else if(!global._paiLastError){ global._paiLastError='ladder_no_content'; }
-      }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0,120); }
+      }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0); }
     }
     try{
       var _rc=(r&&r.choices&&r.choices[0])||null;
@@ -3564,8 +3558,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         ' choices='+((r&&r.choices&&r.choices.length)||0)+
         ' content_len='+String(((_rc&&_rc.message&&_rc.message.content)||'')).length+
         ' tool_calls='+(((_rc&&_rc.message&&_rc.message.tool_calls)||[]).length)+
-        ' err='+String((r&&r.error)?JSON.stringify(r.error).slice(0,80):(global._paiLastError||'none')).slice(0,100)+
-        ' preview='+JSON.stringify(String(((_rc&&_rc.message&&_rc.message.content)||'')).slice(0,110)));
+        ' err='+String((r&&r.error)?JSON.stringify(r.error).slice(0,80):(global._paiLastError||'none')).slice(0)+
+        ' preview='+JSON.stringify(String(((_rc&&_rc.message&&_rc.message.content)||'')).slice(0)));
     }catch(_eRR){}
     if (!r||r.error||!r.choices){
       ans=_structuredReachPolicy?'{}':'';
@@ -3760,7 +3754,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         try {
           var _forcedArgs = body._codingReadNudge;
           var _forcedResult = await executeTool('consult_mace', _forcedArgs, hamUid, message,
-            { cycleId:_cycleId, requestId:_requestId, channel:channel, outboundFinalize:_effectRuntime.outboundFinalize });
+            { cycleId:_cycleId, requestId:_requestId, channel:channel });
           tools.push('consult_mace');
           // ⬡B:core.tool_loop:FIX:forced_consult_mace_result_becomes_shadow_evidence_no_false_hold:20260719⬡
           // Same fix as the data-reader force-execute: a cold force-execute must
@@ -3770,8 +3764,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           _verifiedToolEvidence.push({ tool:'consult_mace',
             provenance:'pai.current_turn.execute_tool', request_id:_requestId,
             cycle_id:_cycleId,
-            args:JSON.stringify(_forcedArgs||{}).slice(0,4000),
-            result:String(_forcedResult||'').slice(0,4000) });
+            args:JSON.stringify(_forcedArgs||{}).slice(0),
+            result:String(_forcedResult||'').slice(0) });
           if (_verifiedToolEvidence.length > 8) _verifiedToolEvidence.shift();
           _stampStep('forced_tool_direct_executed',
             'consult_mace ran in cold code with parsed args; '+String(_forcedResult||'').length+' chars of real file');
@@ -3809,7 +3803,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         try {
           var _forcedArgs = DATA_READER_TOOLS[_requiredToolName](message);
           var _forcedResult = await executeTool(_requiredToolName, _forcedArgs, hamUid, message,
-            { cycleId:_cycleId, requestId:_requestId, channel:channel, outboundFinalize:_effectRuntime.outboundFinalize });
+            { cycleId:_cycleId, requestId:_requestId, channel:channel });
           tools.push(_requiredToolName);
           // ⬡B:core.tool_loop:FIX:forced_data_reader_result_becomes_shadow_evidence_no_false_hold:20260719⬡
           // NUCLEAR 911 part 2 (founder caught it): after the raw-words intent fix,
@@ -3828,8 +3822,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           _verifiedToolEvidence.push({ tool:_requiredToolName,
             provenance:'pai.current_turn.execute_tool', request_id:_requestId,
             cycle_id:_cycleId,
-            args:JSON.stringify(_forcedArgs||{}).slice(0,4000),
-            result:String(_forcedResult||'').slice(0,4000) });
+            args:JSON.stringify(_forcedArgs||{}).slice(0),
+            result:String(_forcedResult||'').slice(0) });
           if (_verifiedToolEvidence.length > 8) _verifiedToolEvidence.shift();
           _stampStep('forced_tool_direct_executed',
             _requiredToolName+' ran in cold code; '+String(_forcedResult||'').length+' chars of real data');
@@ -3864,11 +3858,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             msg={role:'assistant',content:_groundMsg.content};
           } else {
             // never ship raw tool JSON; keep words flowing to the council with a plain honest line
-            msg={role:'assistant',content:'Here is what I found for right now: '+String(_forcedResult||'').replace(/[{}\[\]"]/g,' ').replace(/\s+/g,' ').trim().slice(0,600)};
+            msg={role:'assistant',content:'Here is what I found for right now: '+String(_forcedResult||'').replace(/[{}\[\]"]/g,' ').replace(/\s+/g,' ').trim().slice(0)};
           }
         } catch(_eForced) {
           _stampStep('forced_tool_direct_execute_failed',
-            _requiredToolName+': '+String(_eForced&&_eForced.message||_eForced).slice(0,120));
+            _requiredToolName+': '+String(_eForced&&_eForced.message||_eForced).slice(0));
           _stampStep('forced_tool_unavailable_words_to_council',
             'direct execute failed; '+String((msg&&msg.content)||'').length+' chars continue to council');
         }
@@ -4035,8 +4029,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         _verifiedToolEvidence.push({ tool:tc.function.name,
           provenance:'pai.current_turn.execute_tool', request_id:_requestId,
           cycle_id:_cycleId,
-          args:JSON.stringify(_evidenceArgs).slice(0,4000),
-          result:String(tr||'').slice(0,4000) });
+          args:JSON.stringify(_evidenceArgs).slice(0),
+          result:String(tr||'').slice(0) });
         if (_verifiedToolEvidence.length > 8) _verifiedToolEvidence.shift();
         if (tc.function.name === 'read_own_code') {
           try {
@@ -4101,7 +4095,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
               acl_stamp: '\u2b21B:clair.diagnostic:RESULT:no_tool_turn:20260704\u2b21',
               source: 'clair.diagnostic.no_tool_turn.' + Date.now(),
               summary: '[CLAIR DIAGNOSTIC] no-tool turn on channel ' + channel,
-              content: JSON.stringify({ channel: channel, question: String(message || '').slice(0, 150), answer_preview: ans.slice(0, 200) }),
+              content: JSON.stringify({ channel: channel, question: String(message || '').slice(0), answer_preview: ans.slice(0) }),
               importance: 5 })
           }).catch(function () {});
         }
@@ -4318,13 +4312,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _evTail = msgs.slice(-14).map(function(m){
         var _ec = m && m.content;
         if (_ec != null && typeof _ec !== 'string') { try { _ec = JSON.stringify(_ec); } catch(eEv){ _ec = String(_ec); } }
-        return (m && m.role || '') + ': ' + String(_ec||'').slice(0, 1200);
+        return (m && m.role || '') + ': ' + String(_ec||'').slice(0);
       }).join(String.fromCharCode(10));
       var _synth = await _completeBoundHistoryOnLadder([
         {role:'system',content:'You are finishing an in-flight assistant turn. Below is the real transcript including tool evidence already gathered this turn. Answer the user question directly in one to four sentences using ONLY facts present in the evidence. If the evidence does not contain the answer, say plainly that nothing surfaced.'},
-        {role:'user',content:'QUESTION: ' + String(message||'').slice(0,500) +
+        {role:'user',content:'QUESTION: ' + String(message||'').slice(0) +
           String.fromCharCode(10,10) + 'TRANSCRIPT AND EVIDENCE:' +
-          String.fromCharCode(10) + _evTail.slice(0, 9000)}
+          String.fromCharCode(10) + _evTail.slice(0)}
       ], 380, 0.1, false);
       if (await _turnCancelled(true)) return _turnCancelledResult('after_evidence_repair');
       if (_synth && _synth.trim()) {
@@ -4385,16 +4379,16 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           _forcedTail = msgs.slice(-16).map(function(m){
             var _fc = m && m.content;
             if (_fc != null && typeof _fc !== 'string') { try { _fc = JSON.stringify(_fc); } catch(eFc){ _fc = String(_fc); } }
-            return (m && m.role || '') + ': ' + String(_fc||'').slice(0, 1200);
+            return (m && m.role || '') + ': ' + String(_fc||'').slice(0);
           }).join(String.fromCharCode(10));
         } catch(_eTail){ _forcedTail = ''; }
         var _forced = '';
         try {
           _forced = await _completeBoundHistoryOnLadder([
             {role:'system',content:'You are finishing an in-flight assistant turn that ran out of tool iterations. Using ONLY the request and the evidence already gathered below, write your best COMPLETE, direct answer to the whole request now. Do NOT call tools. Do NOT ask the person to narrow, repeat, or pick one piece. Answer every part the evidence supports; if one part is genuinely unsupported, answer the rest fully and name that single gap in one short clause.'},
-            {role:'user',content:'FULL REQUEST: ' + String(message||'').slice(0,16000) +
+            {role:'user',content:'FULL REQUEST: ' + String(message||'').slice(0) +
               String.fromCharCode(10,10) + 'EVIDENCE GATHERED THIS TURN:' +
-              String.fromCharCode(10) + _forcedTail.slice(0, 12000)}
+              String.fromCharCode(10) + _forcedTail.slice(0)}
           ], tokenCapFor(channel), 0.2, false);
         } catch(_eForce){ _forced = ''; }
         if (await _turnCancelled(true)) return _turnCancelledResult('after_exhaustion_synthesis');
@@ -4603,8 +4597,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     return { provenance:'memory_bank.exact_ham',
       ham_uid:bead&&bead.ham_uid||hamUid,
       source:bead&&bead.source||null, stamp_type:bead&&bead.stamp_type||null,
-      summary:String(bead&&bead.summary||'').slice(0,500),
-      content:String(beadContent||'').slice(0,1200) };
+      summary:String(bead&&bead.summary||'').slice(0),
+      content:String(beadContent||'').slice(0) };
   }) : [];
   var _councilEvidence = (_runtimeIdentityEvidence ? [_runtimeIdentityEvidence] : [])
     .concat(_priorityEvidence);
@@ -4693,8 +4687,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           acl_stamp:'\u2b21B:pai.council:HOLD:' + _cycleId + ':' + ymd() + '\u2b21',
           summary:('[COUNCIL HOLD] cycle ' + _cycleId + ': ' + (_blockedCouncilCodes || 'receipt_unverified')).slice(0, 280),
           content: JSON.stringify({ codes:_blockedCouncilCodes || null,
-            judge_reason:_holdJudge ? String(_holdJudge).slice(0, 300) : null,
-            review_reason:_holdReview ? String(_holdReview).slice(0, 300) : null }) }) }).catch(function () {});
+            judge_reason:_holdJudge ? String(_holdJudge).slice(0) : null,
+            review_reason:_holdReview ? String(_holdReview).slice(0) : null }) }) }).catch(function () {});
     } catch (_eHold) {}
     return {ok:false,reason:(_council&&_council.reason)
         || (_committedCouncil&&_committedCouncil.reason) || 'pai_council_receipt_unverified',
@@ -4762,7 +4756,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           _effectResults.push({ name:_effect.name, ok:false, reason:'outbound_effect_target_invalid' });
           continue;
         }
-        var _proposedEffectMessage = String(_effectArgs.message || '').slice(0, 1500);
+        var _proposedEffectMessage = String(_effectArgs.message || '').slice(0);
         if (!_proposedEffectMessage.trim()) {
           _effectResults.push({ name:_effect.name, ok:false, reason:'outbound_effect_message_required' });
           continue;
