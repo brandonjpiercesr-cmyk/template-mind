@@ -3760,7 +3760,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         try {
           var _forcedArgs = body._codingReadNudge;
           var _forcedResult = await executeTool('consult_mace', _forcedArgs, hamUid, message,
-            { cycleId:_cycleId, requestId:_requestId, channel:channel });
+            { cycleId:_cycleId, requestId:_requestId, channel:channel, outboundFinalize:_effectRuntime.outboundFinalize });
           tools.push('consult_mace');
           // ⬡B:core.tool_loop:FIX:forced_consult_mace_result_becomes_shadow_evidence_no_false_hold:20260719⬡
           // Same fix as the data-reader force-execute: a cold force-execute must
@@ -3809,7 +3809,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         try {
           var _forcedArgs = DATA_READER_TOOLS[_requiredToolName](message);
           var _forcedResult = await executeTool(_requiredToolName, _forcedArgs, hamUid, message,
-            { cycleId:_cycleId, requestId:_requestId, channel:channel });
+            { cycleId:_cycleId, requestId:_requestId, channel:channel, outboundFinalize:_effectRuntime.outboundFinalize });
           tools.push(_requiredToolName);
           // ⬡B:core.tool_loop:FIX:forced_data_reader_result_becomes_shadow_evidence_no_false_hold:20260719⬡
           // NUCLEAR 911 part 2 (founder caught it): after the raw-words intent fix,
