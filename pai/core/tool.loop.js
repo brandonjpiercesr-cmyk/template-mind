@@ -1,5 +1,10 @@
 // ⬡B:core.tool.loop:MODULE:pai_executor:20260630⬡
-var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '3000', 10); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
+var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '8000', 10); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
+// ⬡B:core.tool.loop:FOUNDER_LAW:no_length_ceiling_on_her_voice:20260722⬡ Founder law, verbatim
+// intent ("remove all length ceilings everywhere"): her composed answers are NEVER truncated. This
+// hard floor holds on every channel and no lower Render env value can hold her under it; a per-channel
+// env may only RAISE it. Being cut off mid-thought is the one thing that uncrowns a living mind.
+var ANSWER_FLOOR = parseInt(process.env.PAI_ANSWER_FLOOR || '8000', 10);
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
@@ -12,13 +17,11 @@ var outputGuard = require('./model.output.guard.js');
 function tokenCapFor(channel) {
   var c = String(channel || '').toUpperCase().replace(/[^A-Z0-9]/g, '_');
   var v = parseInt(process.env['PAI_MAX_TOKENS_' + c] || '', 10);
-  // Coding handoffs on the live face routinely carry a CODA decision plus roadmap,
-  // lifecycle, ownership, and acceptance evidence. An older explicit Render value
-  // still capped the portal after the fallback was raised, so the minimum must hold
-  // whether the value came from code or environment.
-  if (c === 'PORTAL') return Math.max(v || 0, MAX_TOKENS, 2200);
-  if (v && v > 0) return v;
-  return MAX_TOKENS;
+  // FOUNDER LAW 20260722: every channel gets at least ANSWER_FLOOR, generalizing the old
+  // PORTAL-only minimum so no surface, and no lower Render env value, can hold her under it.
+  // Coding handoffs, the daily knock, and her long answers all run past the old 3000 cap; a
+  // per-channel env (PAI_MAX_TOKENS_<CHANNEL>) may only RAISE the ceiling, never lower it.
+  return Math.max(v || 0, MAX_TOKENS, ANSWER_FLOOR);
 }
 
 function shouldIncludeWorldContext(channel, identity, hamUid, question) {
