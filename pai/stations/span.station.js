@@ -97,7 +97,7 @@ function summarizeWall(wall) {
   if (!wall) return '(no wall)';
   var c = wall.contributors || {};
   var present = Object.keys(c).filter(function (k) { return c[k]; });
-  var focus = (wall.question || wall.questionFocus || '').toString().slice(0, 200);
+  var focus = (wall.question || wall.questionFocus || '').toString().slice(0);
   return 'wall contributors present: ' + present.join(', ') +
     '; resolved ' + (wall.contributorsResolved != null ? wall.contributorsResolved : '?') +
     '; current focus: ' + (focus || '(none)');

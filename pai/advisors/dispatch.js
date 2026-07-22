@@ -47,7 +47,7 @@ async function planTeam(advisorName, ask, ctx) {
     + 'MONITOR, or ANALYST) and one specific job it can actually do (find X, draft Y, track Z, analyze W). '
     + 'Return ONLY a JSON array like [{"station":"RESEARCHER","job":"find current grant cycles open for youth sports in PA"}]. '
     + 'No prose, no markdown, just the array.';
-  var out = await llm(sys, 'The ask: ' + ask + '\n\nContext from the wall:\n' + String(ctx || 'none').slice(0, 1500), 500); // ⬡B:advisors.dispatch:FIX:ctx_not_always_a_string:20260713⬡ was (ctx||'none').slice, crashed on object ctx
+  var out = await llm(sys, 'The ask: ' + ask + '\n\nContext from the wall:\n' + String(ctx || 'none').slice(0), 500); // ⬡B:advisors.dispatch:FIX:ctx_not_always_a_string:20260713⬡ was (ctx||'none').slice, crashed on object ctx
   if (!out) return [];
   try {
     var arr = JSON.parse(out.replace(/```json|```/g, '').trim());
@@ -182,7 +182,7 @@ async function stationCook(advisorName, hamUid, assignment, identityHint) {
   // every role. Cold search feeds real data in; the wonder still may not invent beyond it.
   var s = await realSearch(job, identityHint);
   if (s.ok && s.grounded) {
-    searchBlock = '\n\nREAL SEARCH RESULTS (verified, just retrieved, you may cite these specifics):\n' + s.text.slice(0, 2500);
+    searchBlock = '\n\nREAL SEARCH RESULTS (verified, just retrieved, you may cite these specifics):\n' + s.text.slice(0);
     searchedReal = true;
   }
 
@@ -197,7 +197,7 @@ async function stationCook(advisorName, hamUid, assignment, identityHint) {
     var wg = await realWonderCompete(hamUid, job);
     wonderUsed = wg.ok;
     wonderBlock = wg.ok
-      ? '\n\nREAL WONDER GAMES RESULT (just ran):\n' + JSON.stringify(wg.result).slice(0, 1500)
+      ? '\n\nREAL WONDER GAMES RESULT (just ran):\n' + JSON.stringify(wg.result).slice(0)
       : '\n\n[Wonder Games was invoked for this job but did not complete: ' + wg.reason + '. Say so plainly, do not invent a result.]';
   }
 
@@ -215,7 +215,7 @@ async function stationCook(advisorName, hamUid, assignment, identityHint) {
     acl_stamp: '\u2b21B:advisors.dispatch:STATION_RESULT:' + role.toLowerCase() + ':' + ymd() + '\u2b21',
     source: 'station.' + role.toLowerCase() + '.' + Date.now(),
     summary: '[' + role + ' for ' + advisorName + '] ' + job.slice(0, 100) + (searchedReal ? ' (real search)' : '') + (wonderUsed ? ' (real wonder station)' : ''),
-    content: JSON.stringify(_lineage.attachLineage({ role: role, job: job, deliverable: (deliverable || 'no output').slice(0, 3000), real_search_used: searchedReal, real_wonder_station_used: wonderUsed }, { chain: [advisorName.toUpperCase(), role], deliveredBy: role, why: 'assigned by ' + advisorName, audience: 'builder' })), importance: 5 });
+    content: JSON.stringify(_lineage.attachLineage({ role: role, job: job, deliverable: (deliverable || 'no output').slice(0), real_search_used: searchedReal, real_wonder_station_used: wonderUsed }, { chain: [advisorName.toUpperCase(), role], deliveredBy: role, why: 'assigned by ' + advisorName, audience: 'builder' })), importance: 5 });
   return { role: role, job: job, deliverable: deliverable || null };
 }
 
@@ -261,7 +261,7 @@ async function dispatch(advisorName, hamUid, ask, ctx) {
         acl_stamp: '\u2b21B:advisors.dispatch:CONTEST_FIRED:' + _co.kind + ':' + ymd() + '\u2b21',
         source: 'dispatch.contest.' + advisorName.toLowerCase() + '.' + Date.now(),
         summary: '[' + advisorName + ' FIRED ' + _co.kind + '] winner=' + (_co.winner || 'n/a'),
-        content: JSON.stringify({ ask: String(ask).slice(0, 300), kind: _co.kind, winner: _co.winner, correction: _co.correction }), importance: 7 });
+        content: JSON.stringify({ ask: String(ask).slice(0), kind: _co.kind, winner: _co.winner, correction: _co.correction }), importance: 7 });
     }
   }
   var synthesis = await llm(
@@ -306,7 +306,7 @@ async function maybeDispatch(advisorName, hamUid, ask, ctx) {
   try {
     var out = await dispatch(advisorName, hamUid, ask, ctx || '');
     if (out && out.ok && out.answer) {
-      return { ok: true, answer: out.answer.slice(0, 800), dispatched: out.dispatched, team: out.team, viaTeam: true };
+      return { ok: true, answer: out.answer.slice(0), dispatched: out.dispatched, team: out.team, viaTeam: true };
     }
   } catch (e) { /* fall through to the advisor's own path, never block a real cycle */ }
   return null;
@@ -326,7 +326,7 @@ async function actOnBrief(advisorName, hamUid, brief) {
     + 'A real consultant books time, assigns work, and sets follow-ups -- they do not just advise. '
     + 'Output a JSON array (no prose) of 0-3 concrete actions; [] is correct when none is truly warranted. '
     + 'Each: {"type":"reminder"|"meeting"|"assignment_for_founder"|"assignment_for_team","text":"plain words","when":"ISO date or empty","why":"one line"}.',
-    'Brief:\n' + String(brief).slice(0, 800), 400);
+    'Brief:\n' + String(brief).slice(0), 400);
   var actions = [];
   try {
     var _clean = String(actorRaw || '').replace(/```json|```/g, '').trim();

@@ -257,14 +257,14 @@ module.exports = function(app) {
             + 'If it names a specific fact, an alert, a dollar amount, a sender, or a deadline, '
             + 'your answer MUST include that specific fact. Do not replace a specific finding with '
             + 'a generic summary like "nothing found" when the station\'s own answer names something real.\n\n'
-            + 'THE STATION\'S OWN COMPOSED ANSWER:\n' + stationOwnAnswer.slice(0, 4000) + '\n\n')
+            + 'THE STATION\'S OWN COMPOSED ANSWER:\n' + stationOwnAnswer.slice(0) + '\n\n')
           : '')
         + 'Use the station output only as internal deliberation evidence. Do not expose '
         + 'private model traces, email bodies, or internal object fields. Give the human '
         + 'a direct, grounded answer to their request. If this was a scheduled cycle with '
         + 'no question, report what completed and what remains.\n\n'
-        + 'ORIGINAL REQUEST:\n' + publicQuestion.slice(0, 2000) + '\n\n'
-        + 'INTERNAL STATION EVIDENCE (full, for anything not already covered above):\n' + String(stationEvidence).slice(0, 12000);
+        + 'ORIGINAL REQUEST:\n' + publicQuestion.slice(0) + '\n\n'
+        + 'INTERNAL STATION EVIDENCE (full, for anything not already covered above):\n' + String(stationEvidence).slice(0);
       var finalized = await publicPAI.finalizePublicTurn({
         hamUid:hamUid, envelope:identity.envelope,
         requestId:publicPAI.requestIdFor(req, body), question:publicQuestion,

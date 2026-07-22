@@ -64,7 +64,7 @@ function packLine(b) {
       if (detail && typeof detail !== 'string') detail = JSON.stringify(detail);
     }
   } catch (e) {}
-  return rowLine(b, 360) + (detail ? '\n  ' + String(detail).slice(0, 900) : '');
+  return rowLine(b, 360) + (detail ? '\n  ' + String(detail).slice(0) : '');
 }
 
 function newestBySource(rows) {

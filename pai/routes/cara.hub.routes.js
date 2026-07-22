@@ -302,7 +302,7 @@ async function storeGeneratedFile(ham, options) {
   const fileId = 'file_' + Date.now();
   const fileRec = { id:fileId, projectId:projectId, conversationId:conversationId,
     filename:filename, mime:mime, size:buf.length, key:storedBytes.key, from:'anu',
-    excerpt:content.slice(0, 12000), hasText:true, uploadedAt:Date.now() };
+    excerpt:content.slice(0), hasText:true, uploadedAt:Date.now() };
   const stored = project ? await writeToMembers(project, 'file', fileId, fileRec, options)
     : await writeBead(ham, 'file', fileId, fileRec, options);
   if (!stored) return { ok:false, reason:'file_bead_not_stored' };
@@ -329,12 +329,12 @@ async function buildTurnContext(ham, options) {
   if (project) {
     sections.push('PROJECT: ' + project.name);
     sections.push('PROJECT VISIBILITY: ' + (project.shared ? 'shared' : 'solo'));
-    if (project.instructions) sections.push('PROJECT INSTRUCTIONS FROM THE PROJECT MEMBERS:\n' + String(project.instructions).slice(0, 6000));
+    if (project.instructions) sections.push('PROJECT INSTRUCTIONS FROM THE PROJECT MEMBERS:\n' + String(project.instructions).slice(0));
     const files = latestById(await readBeads(ham, 'file')).filter(function (file) {
       return file.projectId === projectId && !file.deleted;
     }).slice(0, 12);
     files.forEach(function (file) {
-      sections.push('PROJECT FILE ' + file.filename + (file.excerpt ? ':\n' + String(file.excerpt).slice(0, 6000) : ' (binary file metadata only)'));
+      sections.push('PROJECT FILE ' + file.filename + (file.excerpt ? ':\n' + String(file.excerpt).slice(0) : ' (binary file metadata only)'));
     });
   }
   if (advisorWorld) sections.push('ACTIVE ADVISOR WORLD: ' + advisorWorld + '. Keep this client-bound station context isolated to this channel.');
@@ -347,7 +347,7 @@ async function buildTurnContext(ham, options) {
     if (conversation && Array.isArray(conversation.messages)) {
       history = conversation.messages.slice(-18).filter(function (turn) {
         return turn && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.content === 'string' && turn.content.trim();
-      }).map(function (turn) { return { role:turn.role, content:turn.content.slice(0, 5000) }; });
+      }).map(function (turn) { return { role:turn.role, content:turn.content.slice(0) }; });
     }
   }
   const priorTurns = [];
@@ -398,7 +398,7 @@ function caraHubRoutes(app) {
       owner: ownerHamUid,
       ownerHamUid: ownerHamUid,
       members: memberResult.members,
-      instructions: String(b.instructions === undefined && existing ? existing.instructions || '' : b.instructions || '').slice(0, 12000),
+      instructions: String(b.instructions === undefined && existing ? existing.instructions || '' : b.instructions || '').slice(0),
       files: Array.isArray(b.files) ? b.files : (existing && existing.files || []),
       deleted: !!b.deleted,
       updatedAt: Date.now()
@@ -481,7 +481,7 @@ function caraHubRoutes(app) {
     const textLike = ['.txt', '.md', '.csv', '.json', '.js', '.py', '.html', '.css', '.log', '.tsv', '.xml', '.yml', '.yaml'];
     let excerpt = '';
     if (textLike.indexOf(ext) !== -1 || mime.indexOf('text') === 0 || mime === 'application/json') {
-      excerpt = buf.toString('utf8').slice(0, 12000);
+      excerpt = buf.toString('utf8').slice(0);
     }
 
     // Land real bytes first, then stamp metadata and extracted knowledge.

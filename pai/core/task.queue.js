@@ -82,7 +82,7 @@ async function execSql(sql) {
     headers: { apikey: BRAIN_KEY, Authorization: 'Bearer ' + BRAIN_KEY, 'Content-Type': 'application/json' },
     body: JSON.stringify({ query: sql })
   });
-  if (!res.ok) throw new Error('exec_sql ' + res.status + ' ' + (await res.text().catch(() => '')).slice(0, 200));
+  if (!res.ok) throw new Error('exec_sql ' + res.status + ' ' + (await res.text().catch(() => '')).slice(0));
 }
 let attemptsEnsured = false;
 async function ensureAttemptsColumn() {
@@ -385,7 +385,7 @@ async function sweepStale(days) {
         acl_stamp: '⬡B:core.task.queue:RESULT:stale_sweep:' + ts + '⬡',
         source: 'queue.stale_sweep.' + ts,
         summary: '[QUEUE] ' + moved.length + ' stale TASK rows older than ' + d + 'd resolved in place to TASK_STALE, superseded never deleted',
-        content: JSON.stringify({ count: moved.length, cutoff: cutoff, ids: moved.map(x => x.id).slice(0, 200) })
+        content: JSON.stringify({ count: moved.length, cutoff: cutoff, ids: moved.map(x => x.id).slice(0) })
       })
     }).catch(() => {});
   }
