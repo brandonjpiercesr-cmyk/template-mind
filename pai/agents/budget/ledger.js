@@ -55,18 +55,37 @@ async function brainWrite(hamUid, stampType, ns, desc, content, summary, importa
   } catch(e) { return { ok: false, error: e.message }; }
 }
 
+// ⬡B:agents.budget.ledger:FIX:transient_read_miss_is_the_budget_gaslight:20260722⬡
+// Founder-caught, live-verified: the SAME budget read came back sometimes full, sometimes
+// EMPTY, and on empty she declared "no budget is set up" for a person who has 7 income
+// sources and 26 bills -- the exact gaslight this module already fought once. Root: a
+// transient brain hiccup (5xx, 429, reset, or a hung socket) made fetch throw or return
+// non-ok, and the old code swallowed it as [] -- indistinguishable from a real absence. A
+// transient failure must NOT read as "no data." Retry a non-ok/error/timeout response a few
+// times with a short backoff and a bounded per-attempt timeout; a genuine 200-empty returns
+// immediately (no retry, no added latency for a truly new user). Universal, no identity.
 async function brainRead(hamUid, stampTypes, extraFilter, limit) {
   var BU = process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL, BK = process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY;
   if (!BU || !BK) return [];
-  try {
-    var types = Array.isArray(stampTypes) ? stampTypes.join(',') : stampTypes;
-    var url = BU + '/rest/v1/' + TABLE + '?stamp_type=in.(' + types + ')&ham_uid=eq.' + hamUid;
-    if (extraFilter) url += '&' + extraFilter;
-    url += '&order=created_at.desc&limit=' + (limit || 200);
-    var r = await fetch(url, { headers: bh(BK, false) });
-    if (!r.ok) return [];
-    return await r.json();
-  } catch(e) { return []; }
+  var types = Array.isArray(stampTypes) ? stampTypes.join(',') : stampTypes;
+  var url = BU + '/rest/v1/' + TABLE + '?stamp_type=in.(' + types + ')&ham_uid=eq.' + hamUid;
+  if (extraFilter) url += '&' + extraFilter;
+  url += '&order=created_at.desc&limit=' + (limit || 200);
+  for (var attempt = 0; attempt < 3; attempt++) {
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 8000) : null;
+    try {
+      var r = await fetch(url, { headers: bh(BK, false), signal: ctrl ? ctrl.signal : undefined });
+      if (timer) clearTimeout(timer);
+      if (r.ok) return await r.json();
+      // non-ok (5xx/429/…): fall through to a bounded retry rather than reporting empty.
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      // network error or aborted timeout: retry.
+    }
+    if (attempt < 2) await new Promise(function (res) { setTimeout(res, 200 * (attempt + 1)); });
+  }
+  return [];
 }
 
 // ── TOOLS ────────────────────────────────────────────────────────────────────
@@ -269,6 +288,18 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
     brainRead(hamUid, ['BUDGET_TX_VOID'], null, 200),
     brainRead(hamUid, ['BUDGET_TX_EDIT'], null, 200)
   ]);
+
+  // The BUDGET_CONFIG read is the "does this person have a budget" signal: if it comes
+  // back empty, the whole summary reads empty and she says "no budget is set up." A
+  // transient 200-empty (which brainRead's error-retry does not cover) would gaslight a
+  // real user, so re-read the config a couple times before trusting the emptiness. A
+  // genuinely new user stays empty after the retries; a flaky miss recovers.
+  if (!cfgRows || !cfgRows.length) {
+    for (var _cfgTry = 0; _cfgTry < 2 && (!cfgRows || !cfgRows.length); _cfgTry++) {
+      await new Promise(function (res) { setTimeout(res, 200 * (_cfgTry + 1)); });
+      try { cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 1); } catch (e) {}
+    }
+  }
 
   var start = cycleStart ? new Date(cycleStart) : null;
   var end   = cycleEnd   ? new Date(cycleEnd)   : null;
