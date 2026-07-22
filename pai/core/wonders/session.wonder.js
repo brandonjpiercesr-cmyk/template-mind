@@ -134,7 +134,7 @@ async function reasonAgenda(hamUid, coldAnchorText) {
   try {
     var r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.2, max_tokens: 500, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] })
+      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.2, max_tokens: 4096, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] })
     }).then(function (x) { return x.json(); });
     var out = r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content;
     if (out && String(out).trim().length > 10) {
