@@ -4790,9 +4790,20 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     memory_contributors:(fcw&&fcw.contributors)||null }, _callerCouncilContext);
   var _reachHandoffMode = String(identity&&identity.council_context&&
     identity.council_context.mode || '');
-  var _reachHandoffEligible = !(identity && (identity.outbound_finalize ||
+  // ⬡B:core.tool_loop:FIX:autonomous_turns_do_not_auto_spin_a_reach_cycle:20260722⬡
+  // Cost audit P0-4, A'NU cross-approved live via her gate 20260722: a routine
+  // background/action cycle was auto-creating a reach candidate that costs a SECOND
+  // full PAI just to almost always decide "nothing to tell him" (measured
+  // anew_action~=reach, near 1:1). Her ruling: the background cycle does its work and
+  // rests; the existing urgent-SIGNAL path (THINK -> outreach, which carries the full
+  // council/killswitch/presence gauntlet) is the ONLY thing that wakes him. So an
+  // autonomous/action turn is no longer reach-eligible. Real inbound/user turns keep
+  // full reach; the action itself (a reminder/calendar) is its own effect.
+  var _autonomousChannel = /^(anew_action|autonomous)$/.test(String(channel||'').toLowerCase());
+  var _reachHandoffEligible = !_autonomousChannel && !(identity && (identity.outbound_finalize ||
     identity.delivery&&identity.delivery.external ||
-    /^(outbound|outreach)/.test(_reachHandoffMode)));
+    /^(outbound|outreach)/.test(_reachHandoffMode) ||
+    _reachHandoffMode==='proposed_action_dispatch'));
   // This flag is committed inside the canonical CYCLE_RECEIPT/STAMP pair. If
   // the later candidate append loses its response or fails, the queue scanner
   // can reconstruct exactly this ordinary cycle. Finalizer/external cycles are
