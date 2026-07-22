@@ -70,7 +70,7 @@ function _evidenceMoneySet(str) {
   var set = Object.create(null), m;
   var reDollar = /\$\s?\d[\d,]*(?:\.\d+)?/g;
   while ((m = reDollar.exec(s)) !== null) { var v = _moneyToInt(m[0]); if (v !== null) set[v] = true; }
-  var reField = /"(?:amount|installmentamount|projectedincometotal|projectedbillstotal|projectedtotal|netprojected|totalincome|totalexpenses|net|livingmoney|balance|monthlytotal)"\s*:\s*"?(\d[\d,]*(?:\.\d+)?)"?/gi;
+  var reField = /"(?:amount|installmentamount|projectedincometotal|projectedbillstotal|projectedtotal|netprojected|monthlyincometotal|monthlybillstotal|monthlynet|totalincome|totalexpenses|net|livingmoney|balance|monthlytotal)"\s*:\s*"?(\d[\d,]*(?:\.\d+)?)"?/gi;
   while ((m = reField.exec(s)) !== null) { var v2 = _moneyToInt(m[1]); if (v2 !== null) set[v2] = true; }
   return set;
 }

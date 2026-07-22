@@ -229,6 +229,36 @@ async function saveConfig(hamUid, config) {
   return brainWrite(hamUid, 'BUDGET_CONFIG', 'budget.config', 'setup', content, summary, 10);
 }
 
+// ⬡B:agents.budget.ledger:BUILD:monthly_run_rate_so_she_can_quote_a_monthly_figure:20260722⬡
+// Founder-caught A2 hold: getCycleSummary carried per-payment amounts and WINDOW totals
+// (the income cycle is not necessarily one month), so when she answered in the natural
+// MONTHLY view her figure was computed on the fly and matched nothing in the evidence --
+// SHADOW's money gate then held the whole reply as ungrounded. Fix the organ's evidence,
+// not the gate: derive a true monthly RUN-RATE from each source's own amount and frequency
+// (every figure from THIS person's own config, none hardcoded) and carry it as an explicit
+// number she can quote and the board can verify by direct match. Multipliers are the real
+// payments-per-month for each cadence: monthly x1, semimonthly x2, biweekly 26/12, weekly 52/12.
+function _perMonth(frequency) {
+  switch (String(frequency || 'monthly').toLowerCase()) {
+    case 'semimonthly': return 2;
+    case 'biweekly':    return 26 / 12;
+    case 'weekly':      return 52 / 12;
+    case 'monthly':
+    default:            return 1;
+  }
+}
+function _monthlyRunRate(items) {
+  if (!Array.isArray(items)) return 0;
+  var total = 0;
+  items.forEach(function(it) {
+    if (!it) return;
+    var amt = parseFloat(it.amount);
+    if (!isFinite(amt)) return;
+    total += amt * _perMonth(it.frequency);
+  });
+  return Math.round(total * 100) / 100;
+}
+
 // Aggregate cycle summary — income vs expenses by category
 async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
   var [txRows, incRows, bnplRows, cfgRows, voidRows, editRows] = await Promise.all([
@@ -317,6 +347,15 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
     } catch(e) {}
   }
 
+  // True monthly run-rate from THIS person's own config, so a monthly-view answer has an
+  // explicit figure to quote and the board can verify it. Window-independent by design.
+  var monthlyIncomeTotal = 0, monthlyBillsTotal = 0, monthlyNet = 0;
+  if (config) {
+    monthlyIncomeTotal = _monthlyRunRate(config.incomeSources);
+    monthlyBillsTotal  = _monthlyRunRate(config.recurringBills);
+    monthlyNet = Math.round((monthlyIncomeTotal - monthlyBillsTotal) * 100) / 100;
+  }
+
   return {
     hamUid: hamUid,
     cycleStart: cycleStart || null,
@@ -331,6 +370,9 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
     projectedBillsTotal: projectedBillsTotal,
     projectedIncome: projectedIncome,
     projectedIncomeTotal: projectedIncomeTotal,
+    monthlyIncomeTotal: monthlyIncomeTotal,
+    monthlyBillsTotal: monthlyBillsTotal,
+    monthlyNet: monthlyNet,
     bnplActive: bnplActive.length,
     bnplPlans: bnplActive,
     config: config
