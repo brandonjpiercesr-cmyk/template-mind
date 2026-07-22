@@ -176,7 +176,7 @@ async function downloadAttachment(world, messageId, attachmentId, contentType) {
   var readable = /text\/|json|csv|xml|html|markdown/i.test(ct);
   if (!readable) return { ok: true, readable: false, content_type: ct, text: null };
   var text = await r.text().catch(function(){ return null; });
-  return { ok: true, readable: true, content_type: ct, text: text ? text.slice(0, 8000) : null };
+  return { ok: true, readable: true, content_type: ct, text: text ? text.slice(0) : null };
 }
 
 // FIX 20260706: the advisor was drafting replies to inbound threads Brandon had

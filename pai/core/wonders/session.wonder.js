@@ -134,7 +134,7 @@ async function reasonAgenda(hamUid, coldAnchorText) {
   try {
     var r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.2, max_tokens: 500, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] })
+      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.2, max_tokens: 4096, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] })
     }).then(function (x) { return x.json(); });
     var out = r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content;
     if (out && String(out).trim().length > 10) {
@@ -223,7 +223,7 @@ async function completeSession(hamUid, outcome) {
     } catch (e) {}
     var tracked = 0;
     for (var i = 0; i < assignments.length; i++) {
-      var a = String(assignments[i] && assignments[i].text ? assignments[i].text : assignments[i]).slice(0, 200);
+      var a = String(assignments[i] && assignments[i].text ? assignments[i].text : assignments[i]).slice(0);
       if (!a.trim()) continue;
       var owner = (assignments[i] && assignments[i].owner) ? String(assignments[i].owner) : 'A\u2019NU';
       try {

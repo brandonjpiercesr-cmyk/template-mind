@@ -259,9 +259,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
       var body = '';
       try {
         var c = typeof b.content === 'string' ? b.content : JSON.stringify(b.content || '');
-        body = c.slice(0, 500);
+        body = c.slice(0);
       } catch(e) {}
-      return '[' + (b.stamp_type||'?') + '] ' + (b.summary||'').slice(0,120) + (body ? '\n  ' + body : '');
+      return '[' + (b.stamp_type||'?') + '] ' + (b.summary||'').slice(0) + (body ? '\n  ' + body : '');
     }).join('\n');
   }
 
@@ -304,7 +304,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
         var pb = profile && profile.beads && profile.beads[0];
         if (!pb) return '';
         var body = typeof pb.content === 'string' ? pb.content : JSON.stringify(pb.content || '');
-        return 'WHO THIS IS (know them, speak from this naturally, never recite it as a file):\n' + body.slice(0, 1200);
+        return 'WHO THIS IS (know them, speak from this naturally, never recite it as a file):\n' + body.slice(0);
       } catch(e) { return ''; }
     })(),
     'Trust tier: ' + hamTier,
@@ -423,7 +423,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
           acl_stamp: '\u2b21B:core.fcw.builder:MINUTES:wall_built:' + _wm + '\u2b21',
           source: 'ham_' + String(hamUid).toLowerCase() + '.fcw.build.' + _wm,
           content: JSON.stringify({
-            entrance: { hamUid: String(hamUid).toUpperCase(), channel: channel || null, question: String(question || '').slice(0, 120), gateIdentity: !!identity },
+            entrance: { hamUid: String(hamUid).toUpperCase(), channel: channel || null, question: String(question || '').slice(0), gateIdentity: !!identity },
             exit: { ok: true, contributors: contributors, contributorsResolved: Object.keys(contributors).length - empties.length, ms: (Date.now() - t0) },
             note: empties.length ? ('Memory Bank wall assembled with EMPTY contributors: ' + empties.join(', ') + ' -- if she answered wrong on this turn, start here')
                                   : 'Memory Bank wall assembled with all contributors present'

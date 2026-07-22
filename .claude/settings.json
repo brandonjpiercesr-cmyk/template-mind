@@ -4,9 +4,29 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/ccwa-session-start.sh" }
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/ccwa-session-start.sh"
+          }
         ]
       }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "Read",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Task",
+      "mcp__github",
+      "mcp__Claude_Code_Remote"
     ]
   }
 }

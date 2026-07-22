@@ -184,7 +184,7 @@ async function push(hamUid, block, options) { // ⬡B async: pulls real live pie
           comps.push({ type: 'email_draft',
             to: isRealValue(em.to) ? String(em.to).slice(0, 120) : '',
             subject: isRealValue(em.subject) ? String(em.subject).slice(0, 160) : '',
-            body: isRealValue(em.body) ? String(em.body).slice(0, 4000) : '' });
+            body: isRealValue(em.body) ? String(em.body).slice(0) : '' });
         }
       }
       // chart: real finite numbers only; a series item that is not a number is dropped,

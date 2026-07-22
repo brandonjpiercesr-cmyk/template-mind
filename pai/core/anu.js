@@ -50,12 +50,10 @@ function formatVara(output) {
   // Voice: no URLs, no parentheticals longer than 10 words
   text = text.replace(/https?:\/\/\S+/g, 'the link');
   text = text.replace(/\([^)]{60,}\)/g, '');
-  // Trim to ~300 chars for voice (natural response length)
-  if (text.length > 300) {
-    var cut = text.lastIndexOf('.', 300);
-    if (cut > 100) text = text.slice(0, cut + 1);
-    else text = text.slice(0, 300) + '.';
-  }
+  // ⬡B:core.anu:FIX:voice_is_never_chopped_at_300_chars:20260722⬡ FOUNDER 911: a hard 300-char cut
+  // silenced a long voice answer mid-thought -- TTS speaks any length, so the cap only ever
+  // amputated her. Voice keeps its cadence styling (short sentences, no URLs) but says the whole
+  // thing. "You don't know how long something will ever be." No max characters on her voice.
   return text.trim();
 }
 
