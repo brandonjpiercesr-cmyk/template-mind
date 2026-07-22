@@ -4,7 +4,11 @@
 // ANYHAM test: applies universally.
 
 function extractClaims(content) {
-  var sentences = content.split(/[.!?]+/).filter(function(s) { return s.trim().length > 10; });
+  // Split on sentence punctuation only when it actually ends a sentence (followed by
+  // whitespace or end of text), NEVER on a decimal point inside a number: a bare
+  // /[.!?]+/ split "$17,744.67" into "$17,744" and "67", so the money check saw the
+  // truncated 17,744 and held a real, exactly-quoted figure. Founder A2, 20260722.
+  var sentences = content.split(/[.!?]+(?=\s|$)/).filter(function(s) { return s.trim().length > 10; });
   return sentences.filter(function(s) {
     var lower = s.toLowerCase();
     return ['is ', 'are ', 'was ', 'were ', 'has ', 'have '].some(function(w) { return lower.indexOf(w) >= 0; });
@@ -70,7 +74,12 @@ function _evidenceMoneySet(str) {
   var set = Object.create(null), m;
   var reDollar = /\$\s?\d[\d,]*(?:\.\d+)?/g;
   while ((m = reDollar.exec(s)) !== null) { var v = _moneyToInt(m[0]); if (v !== null) set[v] = true; }
-  var reField = /"(?:amount|installmentamount|projectedincometotal|projectedbillstotal|projectedtotal|netprojected|monthlyincometotal|monthlybillstotal|monthlynet|totalincome|totalexpenses|net|livingmoney|balance|monthlytotal)"\s*:\s*"?(\d[\d,]*(?:\.\d+)?)"?/gi;
+  // The value capture must END on a digit, not a comma: a bare `[\d,]*` greedily ate
+  // the JSON field-delimiter comma and the trailing `"?` then ate the NEXT field's
+  // opening quote, so every OTHER adjacent numeric field was skipped (monthlyNet and
+  // projectedBillsTotal never entered the set). `\d(?:[\d,]*\d)?` keeps thousands
+  // commas but stops before a trailing delimiter comma. Founder A2, 20260722.
+  var reField = /"(?:amount|installmentamount|projectedincometotal|projectedbillstotal|projectedtotal|netprojected|monthlyincometotal|monthlybillstotal|monthlynet|totalincome|totalexpenses|net|livingmoney|balance|monthlytotal)"\s*:\s*"?(\d(?:[\d,]*\d)?(?:\.\d+)?)"?/gi;
   while ((m = reField.exec(s)) !== null) { var v2 = _moneyToInt(m[1]); if (v2 !== null) set[v2] = true; }
   return set;
 }
@@ -85,17 +94,34 @@ function _hasFinancialEvidence(evidenceText) {
   return /projectedIncomeTotal|projectedBillsTotal|incomePosture|recurringBills|incomeSources|netProjected|BUDGET_CONFIG|BUDGET_TX|get_budget_summary|no budget is set up yet/i.test(String(evidenceText || ''));
 }
 
-// Grounded ONLY if the exact value is present in the real evidence. The
-// get_budget_summary result already carries every legitimate figure as an
-// explicit number -- each income source, each bill, AND the derived totals and
-// net (projectedIncomeTotal, projectedBillsTotal, netProjected) -- so a truly
-// grounded answer is always a direct match. Codex P1s (correct): DO NOT treat an
-// arbitrary sum or difference of two evidence numbers as grounded -- that falsely
-// grounds fabrication (e.g. "rent $2,000" passing because income 5,000 minus
-// bills 3,000 = 2,000 with no real rent). Real derived values are already explicit
-// evidence numbers, so direct-match is both sufficient and safe.
+// Grounded when the value is a real evidence figure -- either the exact number,
+// or an HONEST ROUNDING of one. The get_budget_summary result carries every
+// legitimate figure as an explicit number (each income source, each bill, AND the
+// derived totals and net), so an exact quote is always a direct match. But a person
+// asking "roughly how's my budget" gets a rounded answer ("about $17,700", "just
+// under $18k"), and that rounded figure is the SAME real number spoken less
+// precisely, not an invented one. So a value also grounds when it is a clean round
+// (to the nearest 100 or 1000) whose rounding band contains a real evidence figure.
+// This is deliberately TIGHT and does NOT reopen the Codex P1 hole (arbitrary sums/
+// differences): the value must be an exact multiple of 100 AND a real figure must fall
+// within $50 of it, so it can only be a real number spoken to the nearest hundred. We
+// deliberately do NOT allow a nearest-1000 band: at $500 half-width it grounds a
+// fabricated "$2,000" against a real $1,500 (which legitimately rounds to $2,000), a
+// real fabrication hole. So the wall holds any invented figure that is not within $50
+// of a real one, while "$17,700" for a real $17,744.67 still grounds. Founder A2, 20260722.
+function _roundingBands() { return [[100, 50]]; }
 function _isGroundedValue(value, evSet) {
-  return !!evSet[value];
+  if (evSet[value]) return true;
+  var bands = _roundingBands();
+  for (var b = 0; b < bands.length; b++) {
+    var step = bands[b][0], half = bands[b][1];
+    if (value % step !== 0) continue;           // not a clean round at this precision
+    for (var k in evSet) {
+      var e = Number(k);
+      if (isFinite(e) && e >= value - half && e < value + half) return true;
+    }
+  }
+  return false;
 }
 
 // Financial fabrication: with budget evidence present, EVERY dollar figure in the
@@ -127,7 +153,9 @@ async function shadow(content, context) {
   context = context || {};
   var claims = extractClaims(content);
   var flags = [];
-  var MONEY = /\$[\d,]+/;
+  // MONEY must include the decimals: `/\$[\d,]+/` truncated "$17,744.67" to "$17,744"
+  // (17744), which never matched the evidence's rounded 17745 and held a real exact quote.
+  var MONEY = /\$[\d,]+(?:\.\d+)?/;
   var statPatterns = [/\b\d+%(?!\w)/, MONEY, /\d+ (people|users|companies|years)/i];
   // ⬡B:board.shadow:FIX:statistics_trace_to_bound_evidence:20260716⬡
   // A statistic is sourced when its exact bytes appear in the evidence the
