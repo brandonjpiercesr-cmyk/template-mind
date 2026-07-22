@@ -4232,6 +4232,18 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
             _identityProvenanceRefocus });
           _identityEvidenceRefocusedAfterFind = true;
         }
+        // ⬡B:core.tool_loop:FIX:budget_result_must_be_grounded_or_she_denies_a_budget_that_exists:20260722⬡
+        // Founder-caught, live-verified: on the NORMAL path (the model DID call get_budget_summary),
+        // its full result lands here in msgs but the compose turn gets no instruction to answer FROM
+        // it, so the model leads with the raw top-level totalIncome:0 / negative net and composes
+        // "your budget isn't set up, no income, no bills" -- a FALSE denial of a budget that exists
+        // (7 income sources, 26 bills). The forced-refusal branch already carries a ground instruction;
+        // the normal branch was missing its twin. This is that twin: answer FROM the returned figures,
+        // honor the incomePosture, and never deny income/bills that the result plainly shows.
+        if (tc.function.name === 'get_budget_summary') {
+          msgs.push({ role:'system', content:
+            'The get_budget_summary result above is this person\'s REAL, current budget. Answer their money question directly FROM it, in plain words, with its exact figures, and honor its incomePosture note if present. Their income is tracked as recurring SOURCES, so a logged totalIncome of 0 alongside projectedIncome entries is NORMAL and does NOT mean they have no income. NEVER say their budget is not set up, or that they have no income or no bills, when the result shows projectedIncome, incomeSources, or recurringBills. Only if the result is genuinely empty (empty:true) do you say the budget is not set up yet.' });
+        }
       }
       continue;
     }
@@ -4790,20 +4802,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     memory_contributors:(fcw&&fcw.contributors)||null }, _callerCouncilContext);
   var _reachHandoffMode = String(identity&&identity.council_context&&
     identity.council_context.mode || '');
-  // ⬡B:core.tool_loop:FIX:autonomous_turns_do_not_auto_spin_a_reach_cycle:20260722⬡
-  // Cost audit P0-4, A'NU cross-approved live via her gate 20260722: a routine
-  // background/action cycle was auto-creating a reach candidate that costs a SECOND
-  // full PAI just to almost always decide "nothing to tell him" (measured
-  // anew_action~=reach, near 1:1). Her ruling: the background cycle does its work and
-  // rests; the existing urgent-SIGNAL path (THINK -> outreach, which carries the full
-  // council/killswitch/presence gauntlet) is the ONLY thing that wakes him. So an
-  // autonomous/action turn is no longer reach-eligible. Real inbound/user turns keep
-  // full reach; the action itself (a reminder/calendar) is its own effect.
-  var _autonomousChannel = /^(anew_action|autonomous)$/.test(String(channel||'').toLowerCase());
-  var _reachHandoffEligible = !_autonomousChannel && !(identity && (identity.outbound_finalize ||
+  var _reachHandoffEligible = !(identity && (identity.outbound_finalize ||
     identity.delivery&&identity.delivery.external ||
-    /^(outbound|outreach)/.test(_reachHandoffMode) ||
-    _reachHandoffMode==='proposed_action_dispatch'));
+    /^(outbound|outreach)/.test(_reachHandoffMode)));
   // This flag is committed inside the canonical CYCLE_RECEIPT/STAMP pair. If
   // the later candidate append loses its response or fails, the queue scanner
   // can reconstruct exactly this ordinary cycle. Finalizer/external cycles are
