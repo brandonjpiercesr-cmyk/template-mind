@@ -1683,7 +1683,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // context dump. Gate the lead off for those channels: they compose external output for
     // someone else, they are not the founder's own day question. Caught live in the Mediators
     // Drafts folder ("Big Lake gathering" reply came back as a WORLD CONTEXT dump).
-    var _composeTurn = /^(inbox_zero|advisor)$/.test(String(runtime && runtime.channel || '').toLowerCase());
+    var _composeTurn = (runtime && runtime.outboundFinalize === true)
+      || /^(inbox_zero|advisor)$/.test(String(runtime && runtime.channel || '').toLowerCase());
     if (_fusionLine && !_composeTurn) {
       _result.answer_this_first_for_day_or_schedule = _fusionLine.trim();
     }
@@ -3019,6 +3020,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{} };
   _effectRuntime.channel = String(channel || '').toLowerCase();
+  // Every advisor/compose turn (finance, legal, business, jobs, life, inbox_zero, ...) enters
+  // through finalizePublicTurn, which stamps identity.outbound_finalize. This single flag marks
+  // "composing external output, not answering the founder's own day question", so gates keyed on
+  // it cover all advisor channels present and future without enumerating channel names.
+  _effectRuntime.outboundFinalize = !!(identity && identity.outbound_finalize);
   _effectRuntime.exactHamReads = _effectRuntime.channel === 'voice' &&
     !!verifiedVoiceCallContext(identity, hamUid);
   _effectRuntime.abortSignal = _turnAbortSignal || null;
@@ -3754,7 +3760,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         try {
           var _forcedArgs = body._codingReadNudge;
           var _forcedResult = await executeTool('consult_mace', _forcedArgs, hamUid, message,
-            { cycleId:_cycleId, requestId:_requestId, channel:channel });
+            { cycleId:_cycleId, requestId:_requestId, channel:channel, outboundFinalize:_effectRuntime.outboundFinalize });
           tools.push('consult_mace');
           // ⬡B:core.tool_loop:FIX:forced_consult_mace_result_becomes_shadow_evidence_no_false_hold:20260719⬡
           // Same fix as the data-reader force-execute: a cold force-execute must
@@ -3803,7 +3809,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         try {
           var _forcedArgs = DATA_READER_TOOLS[_requiredToolName](message);
           var _forcedResult = await executeTool(_requiredToolName, _forcedArgs, hamUid, message,
-            { cycleId:_cycleId, requestId:_requestId, channel:channel });
+            { cycleId:_cycleId, requestId:_requestId, channel:channel, outboundFinalize:_effectRuntime.outboundFinalize });
           tools.push(_requiredToolName);
           // ⬡B:core.tool_loop:FIX:forced_data_reader_result_becomes_shadow_evidence_no_false_hold:20260719⬡
           // NUCLEAR 911 part 2 (founder caught it): after the raw-words intent fix,
