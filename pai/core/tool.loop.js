@@ -1817,6 +1817,35 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         && !(sum.projectedBills||[]).length && !(sum.projectedIncome||[]).length) {
       return JSON.stringify({ ok:true, empty:true, note:'No budget is set up yet for this person -- no income, expenses, or transactions on record. Say plainly that their budget is not set up yet; do not invent any numbers.' });
     }
+    // ⬡B:core.tool.loop:FIX:projected_income_read_as_no_income_made_her_lie_and_hold:20260722⬡
+    // Founder-caught root of the budget-answer SHADOW hold. When income is tracked as recurring
+    // SOURCES (his real case: 7 sources), logged paychecks this cycle read 0 BY DESIGN, so the
+    // raw summary leads with totalIncome:0 and net:-X. The mind read that and composed the FALSE
+    // claim "you have no income recorded" -- a categorical ABSENCE claim contradicted by the 7
+    // income sources sitting right there as positive evidence, so SHADOW's deterministic board
+    // correctly HELD the whole reply (categorical_memory_absence_contradicted) and she went
+    // silent. The gate was right; the evidence was misleading her. Fix the organ's output, not
+    // the gate: when projected income sources exist but nothing is logged this cycle, hand the
+    // mind an honest lead with the real projected figures so it grounds on the truth and never
+    // claims no income. Universal -- every figure derives from THIS person's own config, none
+    // hardcoded. She composes the true numbers; the board verifies them; the hold dissolves.
+    if (sum && (sum.projectedIncome||[]).length > 0) {
+      var _incTotal = Math.round((sum.projectedIncomeTotal||0)*100)/100;
+      var _billTotal = Math.round((sum.projectedBillsTotal||0)*100)/100;
+      var _srcCount = (sum.projectedIncome||[]).length;
+      // Same-window income minus same-window bills: a valid apples-to-apples net regardless of
+      // how long the window is, because both sides are projected over the identical window.
+      sum.netProjected = Math.round((_incTotal - _billTotal)*100)/100;
+      if ((sum.totalIncome||0) === 0) {
+        // Assert only what is TRUE and unarguable: income EXISTS (N recurring sources). That
+        // alone dissolves the false "no income" absence claim that SHADOW was holding. The
+        // totals are stated as covering THIS budget window (which is not necessarily one month),
+        // and the mind is told to read the per-source projectedIncome entries (each carries its
+        // own amount and dates) for exact figures, and never to pass the window total off as a
+        // monthly number. Honest evidence, no hardcoded amounts, no period it cannot defend.
+        sum.incomePosture = 'This person DOES have income -- it is tracked as ' + _srcCount + ' recurring SOURCE' + (_srcCount===1?'':'s') + ', so logged paychecks this cycle read 0 BY DESIGN. That is normal and does NOT mean they have no income; never say they have no income, and do not use the logged totalIncome of 0 or the logged net to conclude otherwise. The projectedIncome list below names each source with its amount and dates. projectedIncomeTotal ($' + _incTotal + ') and projectedBillsTotal ($' + _billTotal + ') both cover the SAME budget window, so they compare directly (projected net $' + sum.netProjected + '). Quote the per-source amounts and dates for exact figures; do not present the window total as a monthly figure unless the dates show it is one.';
+      }
+    }
     return JSON.stringify(sum);
   }
   // ⬡B:core.tool_loop:BUILD:budget_write_organs_the_mind_calls_from_conversation:20260722⬡ The
