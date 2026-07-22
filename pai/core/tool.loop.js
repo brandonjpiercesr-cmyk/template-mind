@@ -1862,6 +1862,21 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       sum.incomePosture = 'This person DOES have income -- it is tracked as ' + _srcCount + ' recurring SOURCE' + (_srcCount===1?'':'s') + ', so logged paychecks this cycle read 0 BY DESIGN. That is normal and does NOT mean they have no income; never say they have no income, and do not use the logged totalIncome of 0 or the logged net to conclude otherwise. The projectedIncome list below names each source with its amount and dates. projectedIncomeTotal ($' + _incTotal + ') and projectedBillsTotal ($' + _billTotal + ') both cover the SAME budget window, so they compare directly (projected net $' + sum.netProjected + '). For a MONTHLY view, use these true monthly run-rates: monthlyIncomeTotal ($' + _moIncome + '), monthlyBillsTotal ($' + _moBills + '), monthlyNet ($' + _moNet + '). Those are the figures to give when they ask about their budget monthly. Quote every figure EXACTLY as given here (the monthly run-rate, a per-source amount, or a window total); never round a dollar figure to the nearest hundred or thousand, and do not present the window total as a monthly figure.';
       }
     }
+    // ⬡B:core.tool.loop:FIX:lead_the_budget_result_with_the_real_figures_not_the_raw_zero:20260722⬡
+    // Founder-caught, definitively isolated: the tool returns the REAL budget, but the object LEADS
+    // with totalIncome:0 / net:-1100 (logged values) and the true monthlyIncomeTotal is buried deep,
+    // so the mind read the leading 0 and either denied a budget that exists or invented one ($4,200,
+    // different each call). Put this person's real, quotable monthly/annual figures FIRST so the mind
+    // reads the truth before the raw zero, on every path (main loop or force-executed). Every value is
+    // from THIS person's own summary; none hardcoded.
+    if (sum && !sum.empty && sum.monthlyIncomeTotal != null) {
+      var _leadOut = {
+        USE_THESE_EXACT_FIGURES: 'This person has a real budget. Income is tracked as recurring sources, so a logged totalIncome of 0 is NORMAL and never means no income. Quote these figures.',
+        monthlyIncomeTotal: sum.monthlyIncomeTotal, monthlyBillsTotal: sum.monthlyBillsTotal, monthlyNet: sum.monthlyNet,
+        annualIncomeTotal: sum.annualIncomeTotal, annualNet: sum.annualNet
+      };
+      return JSON.stringify(Object.assign(_leadOut, sum));
+    }
     return JSON.stringify(sum);
   }
   // ⬡B:core.tool_loop:BUILD:budget_write_organs_the_mind_calls_from_conversation:20260722⬡ The
