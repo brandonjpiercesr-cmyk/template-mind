@@ -124,6 +124,46 @@ async function finalizePublicTurn(options) {
     answer:pai && pai.answer,
     deliveryTarget:deliveryTarget
   });
+  // ⬡B:core.pai_public_finalizer:FIX:retry_a_flaky_clean_board_hold_before_silencing_the_advisor:20260722⬡
+  // Every founder-facing advisor answer (finance/legal/life/jobs/business, the budget read he asks
+  // for) is composed HERE, and this path had no retry -- so a single unlucky flip of SHADOW's
+  // known-flaky MODEL judge (documented: the same clean answer holds once and passes once, ~30s
+  // apart) silenced the whole advisor, which reads to him as "she stopped answering me". wren/reply.js
+  // already gives the exact same clean-board holds one real re-run before going silent; the public
+  // finalizer, which reaches him just as directly, was missing it. Mirror it: ONLY a bare
+  // probabilistic hold on an otherwise clean board (shadow_model_hold, shadow_wonder_hold, writ_hold,
+  // content_too_short) gets ONE more real cycle. A genuine deterministic integrity hold
+  // (shadow_deterministic_hold, a named-evidence contradiction, a fabrication catch) is NOT in the
+  // set and still goes silent, exactly as the hollow-reply rule requires. This does not weaken any
+  // gate; it only gives the flaky judge a second look before her voice is silenced.
+  if (!verified.ok) {
+    var _holdReason = String((pai && pai.reason) || verified.reason || '');
+    var _cleanBoardHold = ['shadow_model_hold','shadow_wonder_hold','writ_hold','content_too_short']
+      .indexOf(_holdReason) !== -1;
+    if (_cleanBoardHold) {
+      var retryRequestId = cleanRequestId(options.requestId) || crypto.randomUUID();
+      var retryIdentity = Object.assign({}, identity, { request_id:retryRequestId });
+      var retryPai;
+      try {
+        retryPai = await runPAI(hamUid, deliberationInput, options.channel || 'portal', retryIdentity,
+          Array.isArray(options.priorTurns) ? options.priorTurns : [], null);
+      } catch (eRetry) { retryPai = null; }
+      if (retryPai && typeof retryPai === 'object') {
+        var retryCycleId = retryPai.cycleId || retryPai.cycle_id;
+        var retryVerified = verifiedTurn(retryPai, {
+          hamUid:hamUid,
+          requestId:retryRequestId,
+          cycleId:retryCycleId,
+          question:question,
+          deliberationInput:deliberationInput,
+          answer:retryPai.answer,
+          deliveryTarget:deliveryTarget
+        });
+        // The retry replaces the first attempt outright; its result is authoritative.
+        pai = retryPai; cycleId = retryCycleId; requestId = retryRequestId; verified = retryVerified;
+      }
+    }
+  }
   if (!verified.ok) {
     return { ok:false, reason:pai && pai.reason || verified.reason,
       requestId:requestId, cycleId:cycleId || null };
