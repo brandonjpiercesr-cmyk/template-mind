@@ -3390,17 +3390,6 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // coding lead. HINT not a rail, she keeps all tools. Named machinery (MACE, CODA,
       // cook-off, wonder games, BCW) or a plain build/code/ship ask routes here.
       var _isCodingBuildQ = /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
-      // ⬡B:core.tool_loop:FIX:a_money_question_forces_the_budget_read_on_every_door_not_just_the_finance_channel:20260722⬡
-      // FOUNDER 911: when he asks A'NU his budget on his own text line (not through the finance
-      // advisor channel), the get_budget_summary force below was gated on channel==='finance', so
-      // his direct ask never pulled his real budget -- she answered from nothing and either claimed
-      // "no income" (false, held by SHADOW) or guessed "not set up". A question about HIS money is
-      // always about his real budget, on any channel. Detect it from his raw words and force the
-      // same budget read the finance channel already forces, so the real income vs bills (with the
-      // projected-income posture) becomes verified tool evidence she grounds on. HINT not a rail:
-      // a DATA_READER nudge, tool_choice stays auto, she still holds every tool and reasons.
-      var _isBudgetQ = /\b(budget|budgets|income|paychecks?|bills?|expenses?|spending|spend|afford|savings?|cash ?flow|take.?home|net (?:income|pay|worth)|financ(?:es|ial|ially)|money (?:situation|picture|left|coming)|how much (?:do i|i|money)|make a month|per month|monthly (?:income|take|pay))\b/i.test(_mSt)
-        && !_isScreenCmd && !_isCodingBuildQ && !_isLaneBoardQ;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
@@ -3432,7 +3421,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // get_budget_summary here: the real income vs bills becomes verified tool evidence the council
       // grounds on, killing the variance. It is a DATA_READER_TOOL with no required args, so the
       // forced-read net below makes the model call it even if it tries to skip it.
-      else if (String(channel||'').toLowerCase() === 'finance' || _isBudgetQ) _toolNudge='get_budget_summary';
+      else if (String(channel||'').toLowerCase() === 'finance') _toolNudge='get_budget_summary';
       else if (_isLaneBoardQ) _toolNudge='read_lane_board';
       else if (_isCodingBuildQ) _toolNudge='consult_mace';
       else if (_nashNeeded) { _toolNudge='nash_sports'; _nashNeeded=false; }
