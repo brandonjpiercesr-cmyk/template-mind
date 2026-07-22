@@ -3333,6 +3333,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       // a genuine refusal, so a real day/lookup question can never answer from nothing.
       var _toolNudge = null;
       if (_roadmapActivationNeeded) _toolNudge='activate_roadmap_task';
+      // ⬡B:core.tool_loop:FIX:finance_turns_force_the_budget_tool_so_the_answer_is_never_a_guess:20260722⬡
+      // FOUNDER 911: the LEDGER finance advisor holds the real budget in its deliberation, but the
+      // model was probabilistic about using it, so identical asks flip between the real bills and
+      // "I don't have access". A finance turn is ALWAYS about the person's money, so force
+      // get_budget_summary here: the real income vs bills becomes verified tool evidence the council
+      // grounds on, killing the variance. It is a DATA_READER_TOOL with no required args, so the
+      // forced-read net below makes the model call it even if it tries to skip it.
+      else if (String(channel||'').toLowerCase() === 'finance') _toolNudge='get_budget_summary';
       else if (_isLaneBoardQ) _toolNudge='read_lane_board';
       else if (_isCodingBuildQ) _toolNudge='consult_mace';
       else if (_nashNeeded) { _toolNudge='nash_sports'; _nashNeeded=false; }
