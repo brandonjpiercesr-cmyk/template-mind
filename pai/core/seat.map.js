@@ -103,10 +103,15 @@ function resolveKey(s) {
   if (!s) return '';
   var own = process.env[s.keyEnv];
   if (own) return own;
-  // The shared OpenRouter key is a safe fallback ONLY for an OpenRouter seat. A
-  // Together or RunPod seat must never authenticate to the wrong service, so a
-  // missing provider-specific key returns empty rather than a cross-provider key.
-  return s.provider === 'openrouter' ? (process.env.OPENROUTER_API_KEY || '') : '';
+  // A missing named key falls back only to the SAME service's shared key, never a
+  // cross-provider key (a Together seat must never authenticate to OpenRouter). An
+  // OpenRouter seat floors to OPENROUTER_API_KEY; a RunPod seat (the Ornith judge)
+  // floors to RUNPOD_API_KEY so a deployment carrying only RUNPOD_API_KEY still
+  // authenticates the judge instead of going silent (Codex 20260722). Together and
+  // any other provider still return empty rather than borrow a foreign key.
+  if (s.provider === 'openrouter') return process.env.OPENROUTER_API_KEY || '';
+  if (s.provider === 'runpod') return process.env.RUNPOD_API_KEY || '';
+  return '';
 }
 
 function seatNames() { return Object.keys(SEATS); }

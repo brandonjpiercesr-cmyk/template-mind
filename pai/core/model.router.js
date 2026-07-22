@@ -96,6 +96,37 @@ var PROVIDERS = {
   }
 };
 
+// ⬡B:core.model.router:WIRE:c_tier_resolves_through_the_one_seat_map:20260722⬡
+// Founder ruling 20260722 (B, full runtime adoption): the C-tier draws its model,
+// provider, and named key from pai/core/seat.map.js, the ONE source shared across
+// every world, so the live mind is Grok 4.5 (c3) and the everyday organ is
+// MiniMax-01 (c2). resolve()/chat() consult the seat first; the legacy provider
+// chain stays as the zero-regression net, so a seat with no routable key degrades
+// to exactly today's behavior and an un-provisioned seat is never silent.
+var seatMap = require('./seat.map.js');
+var TIER_SEAT = { c1: 'c1_cellm', c2: 'c2_organ', c2_deep: 'c2_organ', c3: 'c3_mind', c4: 'c4_watch' };
+var SEAT_ENDPOINT = {
+  openrouter: 'https://openrouter.ai/api/v1/chat/completions',
+  together:   'https://api.together.xyz/v1/chat/completions'
+};
+function seatResolveFor(s) {
+  if (!s) return null;
+  var endpoint = SEAT_ENDPOINT[s.provider];
+  if (!endpoint) return null;
+  var apiKey = seatMap.resolveKey(s);
+  if (!apiKey) return null;
+  var providerName = s.provider === 'openrouter' ? 'openrouter' : 'together';
+  return { model: s.model, endpoint: endpoint, apiKey: apiKey, providerName: providerName };
+}
+function seatResolve(tier) {
+  var name = TIER_SEAT[tier];
+  return name ? seatResolveFor(seatMap.seat(name)) : null;
+}
+function seatFallback(tier) {
+  var name = TIER_SEAT[tier];
+  return name ? seatResolveFor(seatMap.fallback(name)) : null;
+}
+
 function getProviderName(opts) {
   if (process.env.GROQ_API_KEY) return 'groq';
   // Groq is missing. Only fall through to a paid/banned-in-autonomous
@@ -112,6 +143,10 @@ function getProviderName(opts) {
 }
 
 function resolve(tier, opts) {
+  // Seat map is the one source: try the tier's seat first, then the legacy chain
+  // as the zero-regression net when the seat has no routable key.
+  var s = seatResolve(tier);
+  if (s) return s;
   var name = getProviderName(opts);
   if (!name) return null;
   var provider = PROVIDERS[name];
@@ -127,9 +162,7 @@ function resolve(tier, opts) {
   return { model:model, endpoint:provider.endpoint, apiKey:key, providerName:name };
 }
 
-async function chat(tier, messages, opts) {
-  var r = resolve(tier, opts);
-  if (!r) throw new Error('No provider available for tier ' + tier + ' -- GROQ_API_KEY missing and no allowFallback opt-in given. This is a fail-loud by design, not a bug.');
+async function _attempt(r, messages, opts) {
   var isAnthropic = r.providerName === 'anthropic_bleed';
   var sysMsg = null, rest = messages;
   if (isAnthropic && messages.length && messages[0].role === 'system') {
@@ -160,6 +193,25 @@ async function chat(tier, messages, opts) {
   return out;
 }
 
+async function chat(tier, messages, opts) {
+  // Try the tier's resolved primary (the seat when keyed, else the legacy
+  // provider), then the seat's own failover (Grok mind -> GLM-5.2), so a seat
+  // miss never leaves the tier unanswered. The chain is exactly today's single
+  // shot when no seat is keyed, so this only adds a live failover, never removes one.
+  var chain = [];
+  var primary = resolve(tier, opts);
+  if (primary) chain.push(primary);
+  var sf = seatFallback(tier);
+  if (sf) chain.push(sf);
+  if (!chain.length) throw new Error('No provider available for tier ' + tier + ' -- no seat key, GROQ_API_KEY missing and no allowFallback opt-in given. This is a fail-loud by design, not a bug.');
+  var lastErr = null;
+  for (var i = 0; i < chain.length; i++) {
+    try { return await _attempt(chain[i], messages, opts); }
+    catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('All providers failed for tier ' + tier);
+}
+
 function modelForDepth(depth, opts) {
   if (depth <= 0) return null;
   var tier = depth === 1 ? 'c1' : depth === 2 ? 'c2' : depth === 3 ? 'c3' : 'c4';
@@ -167,4 +219,4 @@ function modelForDepth(depth, opts) {
   return r ? r.model : null;
 }
 
-module.exports = { resolve:resolve, chat:chat, modelForDepth:modelForDepth, getProviderName:getProviderName, PROVIDERS:PROVIDERS };
+module.exports = { resolve:resolve, chat:chat, modelForDepth:modelForDepth, getProviderName:getProviderName, PROVIDERS:PROVIDERS, seatResolve:seatResolve, seatFallback:seatFallback };
