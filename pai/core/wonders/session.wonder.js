@@ -223,7 +223,7 @@ async function completeSession(hamUid, outcome) {
     } catch (e) {}
     var tracked = 0;
     for (var i = 0; i < assignments.length; i++) {
-      var a = String(assignments[i] && assignments[i].text ? assignments[i].text : assignments[i]).slice(0, 200);
+      var a = String(assignments[i] && assignments[i].text ? assignments[i].text : assignments[i]).slice(0);
       if (!a.trim()) continue;
       var owner = (assignments[i] && assignments[i].owner) ? String(assignments[i].owner) : 'A\u2019NU';
       try {

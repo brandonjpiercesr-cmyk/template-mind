@@ -24,7 +24,7 @@ async function surfaceToDesk(hamUid, advisor, title, body, importance) {
       acl_stamp:'\u2b21B:cc.note:CC_NOTE:'+String(advisor||'advisor').toLowerCase()+'_to_desk:'+ymd()+'\u2b21',
       stamp_type:'CC_NOTE', source:'cc.note.'+String(hamUid).toLowerCase()+'.'+Date.now(),
       summary:'[CC NOTE] '+String(title||body||'').slice(0,120),
-      content:JSON.stringify({ kind:'advisor', title:String(title||'').slice(0,160), body:String(body||'').slice(0,4000), origin:advisor }),
+      content:JSON.stringify({ kind:'advisor', title:String(title||'').slice(0,160), body:String(body||'').slice(0), origin:advisor }),
       importance: isFinite(importance)?importance:5, spawned_by:String(advisor||'advisor').toLowerCase()+'.cc.'+hamUid };
     var r = await fetch(_bu()+'/rest/v1/'+_tbl(), { method:'POST', headers:wh(), body:JSON.stringify(bead), signal:AbortSignal.timeout(8000) });
     return r && r.ok;

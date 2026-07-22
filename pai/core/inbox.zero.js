@@ -314,7 +314,7 @@ async function gatherEvidence(config, HAM, limit) {
       if (a.id) {
         try {
           var dl = await IMAN.downloadAttachment(world, m.id, a.id, a.content_type);
-          if (dl && dl.ok && dl.readable && dl.text) rec.attachment_text.push({ filename: a.filename, text: dl.text.slice(0, 2000) });
+          if (dl && dl.ok && dl.readable && dl.text) rec.attachment_text.push({ filename: a.filename, text: dl.text.slice(0) });
           else rec.attachment_text.push({ filename: a.filename, text: null, note: 'binary/unreadable, not fabricating its contents' });
         } catch (e) {}
       }
@@ -343,10 +343,10 @@ function buildJudgmentPrompt(packet, config) {
     var ageDays = m.date ? Math.floor((Date.now() / 1000 - m.date) / 86400) : null;
     if (ageDays != null) lines.push('Age: ' + ageDays + ' day(s)' + (ageDays > 2 ? '  [STALE: flag before drafting]' : ''));
     lines.push('Thread (' + (m.thread || []).length + ' msgs, chronological):');
-    (m.thread || []).forEach(function (t) { lines.push('  • ' + (t.from || '?') + ': ' + (t.snippet || t.body || '').slice(0, 240)); });
+    (m.thread || []).forEach(function (t) { lines.push('  • ' + (t.from || '?') + ': ' + (t.snippet || t.body || '').slice(0)); });
     if (!m.thread || !m.thread.length) lines.push('  (no thread history fetched) snippet: ' + m.snippet);
     if (m.attachments.length) lines.push('Attachments: ' + m.attachments.map(function (a) { return a.filename + (a.content_type ? (' [' + a.content_type + ']') : ''); }).join(', '));
-    (m.attachment_text || []).forEach(function (at) { lines.push('  attachment "' + at.filename + '": ' + (at.text ? at.text.slice(0, 600) : (at.note || 'unreadable'))); });
+    (m.attachment_text || []).forEach(function (at) { lines.push('  attachment "' + at.filename + '": ' + (at.text ? at.text.slice(0) : (at.note || 'unreadable'))); });
     lines.push('');
   });
   var imbLine = packet.imb && !packet.imb.empty
@@ -400,9 +400,9 @@ function buildOneEmailEvidence(m, config) {
   lines.push('Subject: ' + m.subject);
   if (m.already_replied) lines.push('Note: the principal has already replied on this thread before.');
   lines.push('Thread (' + (m.thread || []).length + ' msgs, chronological):');
-  (m.thread || []).forEach(function (t) { lines.push('  - ' + (t.from || '?') + ': ' + (t.snippet || t.body || '').slice(0, 400)); });
+  (m.thread || []).forEach(function (t) { lines.push('  - ' + (t.from || '?') + ': ' + (t.snippet || t.body || '').slice(0)); });
   if (!m.thread || !m.thread.length) lines.push('  (no thread history) snippet: ' + m.snippet);
-  (m.attachment_text || []).forEach(function (at) { lines.push('  attachment "' + at.filename + '": ' + (at.text ? at.text.slice(0, 600) : (at.note || 'unreadable'))); });
+  (m.attachment_text || []).forEach(function (at) { lines.push('  attachment "' + at.filename + '": ' + (at.text ? at.text.slice(0) : (at.note || 'unreadable'))); });
   return lines.join('\n');
 }
 
@@ -570,7 +570,7 @@ async function proposeEscalations(HAM, config, decisions, packet) {
         why_now: d.escalate.reasoning || '',
         evidence: m ? {
           from: m.from, from_name: m.from_name, subject: m.subject,
-          snippet: (m.snippet || '').slice(0, 300), age_hours: ageHours,
+          snippet: (m.snippet || '').slice(0), age_hours: ageHours,
           thread_id: m.thread_id, message_id: m.id
         } : null,
         routing: 'submit_backward_to_overseer', fired: false,
