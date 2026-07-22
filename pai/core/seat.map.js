@@ -48,14 +48,13 @@ var SEATS = {
   c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', dailyCapUsd: 2 },
   coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', dailyCapUsd: 8 },
   deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', dailyCapUsd: 4 },
-  // Founder ruling 20260722: Ornith judges the Wonder Games AND the coding cook-off
-  // (its self-scaffolding makes it a thinker/judge, per the Great Reset doctrine).
-  // Pick A (self-host, judge only): Ornith stays on its existing RunPod SERVERLESS
-  // endpoint (ORNITH_URL), scale-to-zero so an occasional judgment costs pennies and
-  // never resurrects the retired hot GLM/coding RunPod path. qwen3-235b is the
-  // reliability failover so a cold/failed Ornith never leaves a cook-off ungraded.
-  judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'ornith',                   provider: 'runpod',     keyEnv: 'ORNITH_KEY',        via: 'ornith',     dailyCapUsd: 4,
-                 fallbackModel: 'qwen/qwen3-235b-a22b-2507', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_JUDGE_QWEN' },
+  // FOUNDER 911 20260722: Ornith is RETIRED and RunPod is out entirely (the live
+  // endpoint was failure-looping: 937 failures, 0 completions, billed GPU). The
+  // judge seat moves to its own proven reliability pick: qwen3-235b (2-4s clean
+  // strict JSON, verified) on OpenRouter, with Kimi K3 as the failover so a qwen
+  // miss never leaves a contest ungraded. No RunPod anywhere in this map.
+  judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'qwen/qwen3-235b-a22b-2507',provider: 'openrouter', keyEnv: 'OR_KEY_JUDGE_QWEN', via: 'openrouter', dailyCapUsd: 4,
+                 fallbackModel: 'moonshotai/kimi-k3', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_CODA_KIMI' },
   canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'zai-org/GLM-5.2',          provider: 'together',   keyEnv: 'TOGETHER_API_KEY',   via: 'together',   dailyCapUsd: null },
   advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'zai-org/GLM-5.2',          provider: 'together',   keyEnv: 'TOGETHER_API_KEY',   via: 'together',   dailyCapUsd: null },
   voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', dailyCapUsd: 3 }

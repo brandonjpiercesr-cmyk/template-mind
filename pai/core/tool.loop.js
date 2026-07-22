@@ -2985,8 +2985,16 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     } catch (ePrefSynth) {}
   }
+  // ⬡B:core.tool_loop:FIX:break_coding_self_recursion:20260722⬡ Cost containment (audit
+  // P0-1, the single biggest bleed): consult_coda ran on EVERY coding-mode turn, but
+  // CODA's lead re-enters runPAI through the public finalizer in the SAME coding context,
+  // which satisfied this again and looped (386 recursive coding starts in one window).
+  // The finalizer re-entry is always an outbound_finalize turn, so excluding it makes the
+  // initial coding turn consult CODA once and the compose/finalize turn skip it. One
+  // coding request now yields one coding cycle, not a chain.
   var _codaLeadNeeded = !!(identity && identity.council_context
-    && identity.council_context.mode === 'coding');
+    && identity.council_context.mode === 'coding'
+    && identity.outbound_finalize !== true);
   var _codaEvidenceRelayAnswer = '';
   var _codaDirectNamedEvidenceAnswer = '';
   var _codaProvenanceAnswer = '';
@@ -3556,17 +3564,16 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // turn is ever pinned to a banned brain. r stays null here on purpose so the
     // Together block below picks it up.
     if (!r) { global._paiLastError = 'groq_rung_skipped_banned_provider'; }
-    // ⬡B:core.tool_loop:WIRE:grok_mind_writes_the_final_answer:20260722⬡
-    // Founder ruling 20260722 (B): the premium C3 mind (Grok 4.5) writes the final
-    // user-facing answer. Gated to pure-answer passes only (no tools on the body, so
-    // tool-selection and structured-policy turns keep the fast/GLM path) and only when
-    // the mind seat resolves an OpenRouter key. Spend-guarded, so a hit daily ceiling
-    // drops the premium mind for the turn instead of bleeding. FULL fall-through: any
-    // Grok miss (no key, ceiling, error, empty, reasoning-burn) leaves r null and the
-    // Together -> OpenRouter -> ladder chain below writes the answer exactly as today,
-    // so this can never silence a turn or take a working path away. The mind seat is the
-    // one source (core/seat.map.js); a re-seat or key swap is an env change, not a code edit.
-    if((!r||r.error||!r.choices)&&!body.tools&&!_structuredReachPolicy){
+    // ⬡B:core.tool_loop:FIX:grok_final_answer_is_off_by_default_cost_containment:20260722⬡
+    // The premium C3 mind (Grok 4.5, ~$2/$6 per M) can write the final user-facing answer,
+    // but it is now OFF BY DEFAULT (env MIND_GROK_FINAL_ANSWER===on). Cost containment (audit
+    // P0-3): this pure-answer path is HIGH VOLUME -- it carries autonomous contributor,
+    // action, and REACH answers, not only real interactive turns, so a premium model here
+    // bled hard. With the gate off, every answer stays on the cheap Together -> OpenRouter ->
+    // ladder chain exactly as before this tier existed. When enabled it is still gated to
+    // pure-answer passes (no tools, not structured-policy), still needs a resolved mind key,
+    // still spend-guarded, and still fully falls through on any Grok miss.
+    if((!r||r.error||!r.choices)&&!body.tools&&!_structuredReachPolicy&&process.env.MIND_GROK_FINAL_ANSWER==='on'){
       try{
         if(require('./spend.guard.js').allow('text')){
           var _seatMap=require('./seat.map.js');

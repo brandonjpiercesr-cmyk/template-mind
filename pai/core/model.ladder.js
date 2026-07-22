@@ -276,7 +276,12 @@ async function deliberate(system, user, options) {
   if (!opts.noGuard) {
     try { if (!require('./spend.guard.js').allow('text')) return null; } catch (eSG) {}
   }
-  var order = (process.env.MODEL_LADDER_ORDER || 'glm,ornith,qwen').split(',').map(function (s) { return s.trim(); });
+  // ⬡B:core.model_ladder:KILL:ornith_out_of_the_default_order_founder_911:20260722⬡
+  // FOUNDER 911 20260722: Ornith retired, RunPod out. The default rung order no
+  // longer contains ornith, so no ladder deliberation submits a RunPod job unless
+  // an env explicitly re-adds it (MODEL_LADDER_ORDER). The tryOrnith runner stays
+  // defined for that supervised opt-in only.
+  var order = (process.env.MODEL_LADDER_ORDER || 'glm,qwen').split(',').map(function (s) { return s.trim(); });
   // \u2b21B:core.model_ladder:FIX:glm_provider_order_is_env_truth:20260717\u2b21
   // Live receipt: the RunPod pod is serving glm4:9b, a small quantized model, and
   // because it always answers first the real GLM-5.2 rung (Together) never runs.
