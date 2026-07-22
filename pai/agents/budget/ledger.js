@@ -427,6 +427,12 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
       return { name: b && b.name, amount: Math.round((parseFloat((b && b.amount) || 0) * _perMonth(b && b.frequency)) * 100) / 100 };
     });
   }
+  // Annual period-view (monthly x12), so "how much do you make" answered as a yearly figure
+  // ("about $213,000 a year") grounds instead of holding. Derived from the same real monthly
+  // run-rate, none hardcoded. Carried as amount fields so they land in the evidence money set.
+  var annualIncomeTotal = Math.round(monthlyIncomeTotal * 12 * 100) / 100;
+  var annualBillsTotal  = Math.round(monthlyBillsTotal  * 12 * 100) / 100;
+  var annualNet         = Math.round(monthlyNet         * 12 * 100) / 100;
 
   return {
     hamUid: hamUid,
@@ -447,6 +453,9 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
     monthlyNet: monthlyNet,
     monthlyIncomeBySource: monthlyIncomeBySource,
     monthlyBillsBySource: monthlyBillsBySource,
+    annualIncomeTotal: annualIncomeTotal,
+    annualBillsTotal: annualBillsTotal,
+    annualNet: annualNet,
     bnplActive: bnplActive.length,
     bnplPlans: bnplActive,
     config: config
