@@ -134,11 +134,11 @@ async function recordIncome(hamUid, inc) {
 // re-stating a source updates it instead of duplicating.
 async function addIncomeSource(hamUid, source) {
   if (!source || !source.name || !(source.amount >= 0)) return { ok: false, reason: 'name_and_amount_required' };
-  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 1);
-  var config = {};
-  if (cfgRows.length && cfgRows[0].content) {
-    try { config = typeof cfgRows[0].content === 'string' ? JSON.parse(cfgRows[0].content) : cfgRows[0].content; } catch (e) { config = {}; }
-  }
+  // Read several config beads and take the most recent POPULATED one (with brainRead's retry
+  // underneath): a read-modify-write that started from a transiently-empty config would bury the
+  // real budget under a hollow newest bead. Start from the live config so a save never clobbers it.
+  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 5);
+  var config = _pickLiveConfig(cfgRows) || {};
   config.incomeSources = Array.isArray(config.incomeSources) ? config.incomeSources : [];
   var clean = { name: String(source.name).slice(0, 80), amount: parseFloat(source.amount) || 0,
     frequency: source.frequency || 'monthly' };
@@ -158,11 +158,10 @@ async function addIncomeSource(hamUid, source) {
 // Same read-modify-write pattern for a recurring BILL, so the mind can save a bill he names.
 async function addRecurringBill(hamUid, bill) {
   if (!bill || !bill.name || !(bill.amount >= 0)) return { ok: false, reason: 'name_and_amount_required' };
-  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 1);
-  var config = {};
-  if (cfgRows.length && cfgRows[0].content) {
-    try { config = typeof cfgRows[0].content === 'string' ? JSON.parse(cfgRows[0].content) : cfgRows[0].content; } catch (e) { config = {}; }
-  }
+  // Same read-modify-write hardening as addIncomeSource: start from the most recent POPULATED
+  // config so saving a bill never buries the real budget under a hollow newest bead.
+  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 5);
+  var config = _pickLiveConfig(cfgRows) || {};
   config.recurringBills = Array.isArray(config.recurringBills) ? config.recurringBills : [];
   var clean = { name: String(bill.name).slice(0, 80), amount: parseFloat(bill.amount) || 0,
     day: bill.day !== undefined ? bill.day : 1, category: bill.category || 'Uncategorized' };
@@ -278,13 +277,42 @@ function _monthlyRunRate(items) {
   return Math.round(total * 100) / 100;
 }
 
+function _parseConfigRow(row) {
+  if (!row || !row.content) return null;
+  try { return typeof row.content === 'string' ? JSON.parse(row.content) : row.content; }
+  catch (e) { return null; }
+}
+// ⬡B:agents.budget.ledger:FIX:a_later_empty_config_write_must_not_bury_the_real_budget:20260722⬡
+// Supersede-never-delete means a real, populated BUDGET_CONFIG still exists in the brain even
+// after a later empty/partial config was written over it -- exactly what a read-modify-write
+// organ (addIncomeSource/addRecurringBill) does when it reads the config as transiently EMPTY,
+// rebuilds it from {}, and saves it, burying the founder's 7 sources + 26 bills under a hollow
+// newest bead. Reading only the newest (limit 1) then shows "no budget is set up." So read
+// several config beads and pick the most recent one that actually carries income sources or
+// recurring bills; only fall back to the newest parsed when none has data (a genuinely new user,
+// unchanged behavior). This RECOVERS a real budget a bad write buried, and the write organs are
+// hardened the same way so they never bury it again.
+function _pickLiveConfig(cfgRows) {
+  if (!Array.isArray(cfgRows) || !cfgRows.length) return null;
+  var newestParsed = null;
+  for (var i = 0; i < cfgRows.length; i++) {
+    var c = _parseConfigRow(cfgRows[i]);
+    if (!c) continue;
+    if (newestParsed === null) newestParsed = c;
+    var inc = Array.isArray(c.incomeSources) ? c.incomeSources.length : 0;
+    var bills = Array.isArray(c.recurringBills) ? c.recurringBills.length : 0;
+    if (inc || bills) return c;
+  }
+  return newestParsed;
+}
+
 // Aggregate cycle summary — income vs expenses by category
 async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
   var [txRows, incRows, bnplRows, cfgRows, voidRows, editRows] = await Promise.all([
     brainRead(hamUid, ['BUDGET_TX'], null, 500),
     brainRead(hamUid, ['BUDGET_INCOME'], null, 100),
     brainRead(hamUid, ['BUDGET_BNPL'], null, 50),
-    brainRead(hamUid, ['BUDGET_CONFIG'], null, 1),
+    brainRead(hamUid, ['BUDGET_CONFIG'], null, 5),
     brainRead(hamUid, ['BUDGET_TX_VOID'], null, 200),
     brainRead(hamUid, ['BUDGET_TX_EDIT'], null, 200)
   ]);
@@ -294,10 +322,10 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
   // transient 200-empty (which brainRead's error-retry does not cover) would gaslight a
   // real user, so re-read the config a couple times before trusting the emptiness. A
   // genuinely new user stays empty after the retries; a flaky miss recovers.
-  if (!cfgRows || !cfgRows.length) {
-    for (var _cfgTry = 0; _cfgTry < 2 && (!cfgRows || !cfgRows.length); _cfgTry++) {
+  if (!_pickLiveConfig(cfgRows)) {
+    for (var _cfgTry = 0; _cfgTry < 2 && !_pickLiveConfig(cfgRows); _cfgTry++) {
       await new Promise(function (res) { setTimeout(res, 200 * (_cfgTry + 1)); });
-      try { cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 1); } catch (e) {}
+      try { cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 5); } catch (e) {}
     }
   }
 
@@ -351,8 +379,7 @@ async function getCycleSummary(hamUid, cycleStart, cycleEnd) {
 
   var bnplActive = _dedupeLatestBnpl(bnplRows).filter(function(p) { return p && p.active && p.remainingCount > 0; });
 
-  var config = null;
-  if (cfgRows.length) { try { config = typeof cfgRows[0].content === 'string' ? JSON.parse(cfgRows[0].content) : cfgRows[0].content; } catch(e) {} }
+  var config = _pickLiveConfig(cfgRows);
 
   // ⬡B:agents.budget.ledger:FIX:summary_includes_projections:20260709⬡
   // Real bug the founder caught: the grid reads /budget/summary, but summary
@@ -545,9 +572,8 @@ function getCycleWindow(year, month, config) {
 // and — reusing the real, already-proven getUpcoming/income data — where things
 // stand. Pure resolver plus one real read, no invented numbers.
 async function getCurrentCycle(hamUid, asOfDate) {
-  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 1);
-  var config = null;
-  if (cfgRows.length) { try { config = typeof cfgRows[0].content === 'string' ? JSON.parse(cfgRows[0].content) : cfgRows[0].content; } catch(e) {} }
+  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 5);
+  var config = _pickLiveConfig(cfgRows);
   if (!config) return { ok: false, reason: 'no_config_on_file' };
 
   var asOf = asOfDate || new Date().toISOString().slice(0, 10);
@@ -764,9 +790,8 @@ function _applyScenarioDeltas(config, deltas) {
 // same window, side by side -- exactly the "compare against real plan" pattern
 // every real scenario-modeling tool researched for this feature uses.
 async function computeScenario(hamUid, scenarioName, asOfDate) {
-  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 1);
-  var realConfig = null;
-  if (cfgRows.length) { try { realConfig = typeof cfgRows[0].content === 'string' ? JSON.parse(cfgRows[0].content) : cfgRows[0].content; } catch(e) {} }
+  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 5);
+  var realConfig = _pickLiveConfig(cfgRows);
   if (!realConfig) return { ok: false, reason: 'no_config_on_file' };
 
   var scenarios = await listScenarios(hamUid);
