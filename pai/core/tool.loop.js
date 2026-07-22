@@ -947,9 +947,16 @@ async function planToolUse(message, tools, deliberateFn) {
     'Choose NO_TOOL for creative writing, explanation, opinion, general knowledge, chit-chat, or planning that can be answered from the conversation and reasoning. ' +
     'Choose TOOL only when the request needs live personal data, stored HAM evidence, external current data, or a real side effect. Never choose a tool just because context mentions its domain.\n\nDECLARED TOOLS:\n' + catalog;
   try {
+    // ⬡B:core.tool_loop:FIX:planner_is_sequential_not_a_provider_hedge:20260722⬡ Cost
+    // audit P0-3: realtime:true made this tiny 180-token tool-pick HEDGE every ladder
+    // rung concurrently (Together GLM + OpenRouter GLM + qwen at once), so every gated
+    // turn paid multiple providers for one pattern-match; ranking picked a winner but
+    // never stopped the losers' billable work. Sequential now: the first rung that
+    // answers within the same tight 7s budget wins, the next runs only on a real miss.
+    // The realtime hedge stays reserved for genuine voice-latency paths.
     var result = await deliberate(system, 'EXACT USER MESSAGE:\n' + String(message || ''), {
       json:true, max_tokens:180, temperature:0, timeout:7000, tightTimeout:true,
-      realtime:true, noGuard:true
+      noGuard:true
     });
     var parsed = result && result.content;
     if (typeof parsed === 'string') parsed = JSON.parse(parsed);
