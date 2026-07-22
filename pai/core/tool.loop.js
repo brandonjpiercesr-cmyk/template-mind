@@ -1804,13 +1804,23 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       return JSON.stringify({ok:true,id:beadRows[0].id,source:bead.source});
     }catch(e){return JSON.stringify({ok:false,error:e.message});}
   }
+  // ⬡B:core.tool.loop:FIX:budget_read_must_use_the_authoritative_uppercase_ham:20260722⬡
+  // Founder-caught, live-verified: /cara/chat and /budget/ask returned an EMPTY budget (and she
+  // invented figures) while the direct /budget/summary route returned the real budget. Root: the
+  // budget beads are stored under the canonical UPPERCASE ham (the atmosphere gate uppercases every
+  // ham), but the model echoed a LOWERCASE ham into args.ham_uid (it sees lowercase in source
+  // strings like ham_dc499d0c...), and "args.ham_uid || hamUid" used the model's lowercase value --
+  // a case-sensitive PostgREST eq. miss -> empty read -> invented budget. The resolved hamUid is
+  // authoritative; prefer it and uppercase to the canonical form. Also stops the model redirecting a
+  // budget read/write to another ham. Universal, no identity literal.
+  function _budgetHam(_ham, _args) { return String(_ham || (_args && _args.ham_uid) || '').toUpperCase(); }
   if (name === 'get_budget_upcoming') {
-    var buHam = args.ham_uid || hamUid;
+    var buHam = _budgetHam(hamUid, args);
     var up = await ledger.getUpcoming(buHam, args.days || 45);
     return JSON.stringify(up);
   }
   if (name === 'get_budget_summary') {
-    var bsHam = args.ham_uid || hamUid;
+    var bsHam = _budgetHam(hamUid, args);
     var sum = await ledger.getCycleSummary(bsHam, args.cycle_start, args.cycle_end);
     // ⬡B:core.tool.loop:FIX:budget_empty_is_honest_not_a_hold:20260719⬡ Founder audit: budget
     // held every time because there is NO real budget data for him (all zeros), so she had
@@ -1860,19 +1870,19 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
   // budget, his own HAM: a safe self-write, gated through cancelBeforeEffect like every effect.
   if (name === 'record_income') {
     var riCancelled = await cancelBeforeEffect(name, runtime); if (riCancelled) return riCancelled;
-    var riHam = args.ham_uid || hamUid;
+    var riHam = _budgetHam(hamUid, args);
     var riRes = await ledger.addIncomeSource(riHam, { name:args.name, amount:args.amount, frequency:args.frequency, day:args.day, days:args.days, anchorDate:args.anchorDate, category:args.category });
     return JSON.stringify(riRes);
   }
   if (name === 'set_recurring_bill') {
     var rbCancelled = await cancelBeforeEffect(name, runtime); if (rbCancelled) return rbCancelled;
-    var rbHam = args.ham_uid || hamUid;
+    var rbHam = _budgetHam(hamUid, args);
     var rbRes = await ledger.addRecurringBill(rbHam, { name:args.name, amount:args.amount, day:args.day, category:args.category });
     return JSON.stringify(rbRes);
   }
   if (name === 'log_expense') {
     var leCancelled = await cancelBeforeEffect(name, runtime); if (leCancelled) return leCancelled;
-    var leHam = args.ham_uid || hamUid;
+    var leHam = _budgetHam(hamUid, args);
     var leRes = await ledger.recordTransaction(leHam, { merchant:args.merchant, amount:args.amount, category:args.category || 'Uncategorized', date:args.date });
     return JSON.stringify({ ok:!!(leRes && leRes.ok), merchant:args.merchant, amount:args.amount, source:leRes && leRes.source });
   }
