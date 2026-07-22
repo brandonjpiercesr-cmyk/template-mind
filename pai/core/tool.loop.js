@@ -1607,7 +1607,15 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // eighth attempt sticks, a real, mechanical fallback: if the model's own
     // choice comes back empty, and it did not already try ALERT, try ALERT
     // once before giving up. Deterministic, not another prompt bet.
-    if (res.beads.length===0 && q.stamp_type!=='ALERT') {
+    // ⬡B:core.tool_loop:GUARD:no_operational_alert_grabbag_on_advisor_turns:20260722⬡ The ALERT
+    // fallback is for the founder's own "what is wrong / stuck / broken" questions. On an advisor/
+    // compose turn (outbound_finalize) the deliberation is already grounded on the advisor's own
+    // curated context (the LEDGER budget for finance, the pipeline for jobs, and so on), and this
+    // fallback instead dumped the founder-HAM's whole operational ALERT grab-bag, deploy incidents,
+    // service crash sensors, provider credit warnings, into the answer, so the finance advisor
+    // reported crash fingerprints and a repo incident as the founder's "finances". Skip the ALERT
+    // grab-bag on outbound turns; they ground on what they were handed, never the operational wall.
+    if (res.beads.length===0 && q.stamp_type!=='ALERT' && !(runtime && runtime.outboundFinalize === true)) {
       var fallback=await find([{stamp_type:'ALERT',ham_uid:q.ham_uid,limit:q.limit,order:q.order}]);
       if (fallback.beads.length>0) { res=fallback; }
     }
@@ -1645,7 +1653,9 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // empty, run ONE ham-scoped ilike on summary against the question's key
     // nouns. Cold code, no model, ham-bound, capped and time-bounded so the
     // sub-100ms design intent holds for the common (exact-hit) path.
-    if (res.beads.length===0) {
+    // Same advisor guard as the ALERT fallback: on an outbound/compose turn the advisor grounds on
+    // its own curated context, so skip this keyword net that would pull arbitrary founder-wall beads.
+    if (res.beads.length===0 && !(runtime && runtime.outboundFinalize === true)) {
       var _kwStop = {the:1,and:1,for:1,you:1,your:1,what:1,whats:1,who:1,whos:1,does:1,did:1,is:1,are:1,was:1,were:1,my:1,me:1,do:1,i:1,a:1,an:1,of:1,to:1,in:1,on:1,about:1,tell:1,show:1,any:1,have:1,has:1,love:1,like:1,favorite:1};
       var _kw = String(origMessage||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
         .filter(function(w){return w.length>=3 && !_kwStop[w];});
