@@ -96,7 +96,12 @@ function fallback(name) {
 // resolve their own key env directly.
 function resolveKey(s) {
   if (!s) return '';
-  return process.env[s.keyEnv] || process.env.OPENROUTER_API_KEY || '';
+  var own = process.env[s.keyEnv];
+  if (own) return own;
+  // The shared OpenRouter key is a safe fallback ONLY for an OpenRouter seat. A
+  // Together or RunPod seat must never authenticate to the wrong service, so a
+  // missing provider-specific key returns empty rather than a cross-provider key.
+  return s.provider === 'openrouter' ? (process.env.OPENROUTER_API_KEY || '') : '';
 }
 
 function seatNames() { return Object.keys(SEATS); }
