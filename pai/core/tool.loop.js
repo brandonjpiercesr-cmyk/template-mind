@@ -3475,6 +3475,40 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // turn is ever pinned to a banned brain. r stays null here on purpose so the
     // Together block below picks it up.
     if (!r) { global._paiLastError = 'groq_rung_skipped_banned_provider'; }
+    // ⬡B:core.tool_loop:WIRE:grok_mind_writes_the_final_answer:20260722⬡
+    // Founder ruling 20260722 (B): the premium C3 mind (Grok 4.5) writes the final
+    // user-facing answer. Gated to pure-answer passes only (no tools on the body, so
+    // tool-selection and structured-policy turns keep the fast/GLM path) and only when
+    // the mind seat resolves an OpenRouter key. Spend-guarded, so a hit daily ceiling
+    // drops the premium mind for the turn instead of bleeding. FULL fall-through: any
+    // Grok miss (no key, ceiling, error, empty, reasoning-burn) leaves r null and the
+    // Together -> OpenRouter -> ladder chain below writes the answer exactly as today,
+    // so this can never silence a turn or take a working path away. The mind seat is the
+    // one source (core/seat.map.js); a re-seat or key swap is an env change, not a code edit.
+    if((!r||r.error||!r.choices)&&!body.tools&&!_structuredReachPolicy){
+      try{
+        if(require('./spend.guard.js').allow('text')){
+          var _seatMap=require('./seat.map.js');
+          var _mind=_seatMap.seat('c3_mind');
+          var _mindKey=_mind&&_mind.provider==='openrouter'?_seatMap.resolveKey(_mind):'';
+          if(_mind&&_mindKey){
+            var _mindBody=primaryProviderBody(body,msgs,_mind.model);
+            var _mr=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
+              headers:{Authorization:'Bearer '+_mindKey,'Content-Type':'application/json',
+                'HTTP-Referer':process.env.SELF_BASE_URL||process.env.AIBEBASE_URL||'https://aibebase.onrender.com','X-Title':'ANEW Envolve'},
+              body:JSON.stringify(_mindBody),
+              signal:_modelRequestSignal()
+            }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+            _mr=_structuredProviderResult(_mr);
+            if(_mr&&_mr.choices&&_mr.choices.length){
+              var _mMsg=(_mr.choices[0]&&_mr.choices[0].message)||{};
+              if(_mMsg.content||((_mMsg.tool_calls||[]).length)){r=_mr;global._paiLastError=null;}
+              else{global._paiLastError='mind_grok_empty_content';}
+            } else if(_mr&&_mr.error){global._paiLastError='mind_grok:'+JSON.stringify(_mr.error).slice(0,120);}
+          }
+        } else { global._paiLastError='mind_grok_spend_ceiling'; }
+      }catch(eMind){/* fall through to the Together chain below, unchanged */}
+    }
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
       if(TK){var togetherBody=primaryProviderBody(body,msgs,
