@@ -1814,7 +1814,10 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     var agentGlobal=orgMap[String(args.org||'').toLowerCase()];
     if (!agentGlobal) return JSON.stringify({ok:false,reason:'unknown_org',knownOrgs:Object.keys(orgMap)});
     try {
-      var dHam = args.ham_uid || hamUid;
+      // ⬡B:core.tool_loop:FIX:ham_mismatch_guard_matches_find_in_brain:20260722⬡
+      // The model may not steer this read to a different ham than the bound one.
+      if (args.ham_uid && String(args.ham_uid).toUpperCase() !== String(hamUid||'').toUpperCase()) return JSON.stringify({ok:false,reason:'ham_uid_mismatch',bound_ham_uid:String(hamUid||'').toUpperCase()});
+      var dHam = hamUid;
       var draftRows=await fetch(_bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.'+dHam+'&agent_global=eq.'+agentGlobal+'&stamp_type=eq.DRAFT_PENDING&order=created_at.desc&limit=1&select=summary,content,created_at',{headers:{apikey:BKd,Authorization:'Bearer '+BKd,'Accept-Profile':_schema()}}).then(function(x){return x.json();}).catch(function(){return [];});
       if (!draftRows||!draftRows.length) return JSON.stringify({ok:true,found:false,org:args.org,message:'No pending drafts on file for '+args.org+' right now.'});
       var latest=draftRows[0];
@@ -1831,7 +1834,9 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // brain about this HAM. Below threshold, she names what's missing
     // instead of guessing or refusing outright.
     var BUc=_bu(), BKc=_bk();
-    var cHam = args.ham_uid || hamUid;
+    // ⬡B:core.tool_loop:FIX:ham_mismatch_guard_matches_find_in_brain:20260722⬡
+    if (args.ham_uid && String(args.ham_uid).toUpperCase() !== String(hamUid||'').toUpperCase()) return JSON.stringify({ok:false,reason:'ham_uid_mismatch',bound_ham_uid:String(hamUid||'').toUpperCase()});
+    var cHam = hamUid;
     var desc = String(args.capability_description||'').slice(0);
     if (!BUc||!BKc) return JSON.stringify({ok:false,built:false,reason:'no_brain'});
     var keywords = desc.split(/\s+/).filter(function(w){return w.length>3;}).slice(0,4);
@@ -2027,7 +2032,9 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // tool. Fast bounded read of his real REMINDER beads, capped and time-limited so it
     // never hangs. Reads the new bank first, then legacy. Never invents a reminder.
     try {
-      var _rUid = String((args && args.ham_uid) || hamUid || '');
+      // ⬡B:core.tool_loop:FIX:ham_mismatch_guard_matches_find_in_brain:20260722⬡
+      if (args && args.ham_uid && String(args.ham_uid).toUpperCase() !== String(hamUid||'').toUpperCase()) return JSON.stringify({ ok:false, reason:'ham_uid_mismatch', bound_ham_uid:String(hamUid||'').toUpperCase() });
+      var _rUid = String(hamUid || '');
       var _rNb = (process.env.MEMORY_BANK_URL || '').replace(/\/$/, '');
       var _rNk = process.env.MEMORY_BANK_KEY || '';
       var _rRows = null;
@@ -2053,7 +2060,9 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // so she can access, reason about, and surface his email. Never invents a message.
     try {
       var _ibSelf = process.env.OS_API_BASE || process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
-      var _ibUid = String((args && args.ham_uid) || hamUid || '');
+      // ⬡B:core.tool_loop:FIX:ham_mismatch_guard_matches_find_in_brain:20260722⬡
+      if (args && args.ham_uid && String(args.ham_uid).toUpperCase() !== String(hamUid||'').toUpperCase()) return JSON.stringify({ ok:false, reason:'ham_uid_mismatch', bound_ham_uid:String(hamUid||'').toUpperCase() });
+      var _ibUid = String(hamUid || '');
       var _ir = await fetch(_ibSelf + '/os/email/' + encodeURIComponent(_ibUid))
         .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
       if (!_ir) return JSON.stringify({ ok:false, error:'inbox unreachable, do not guess' });
