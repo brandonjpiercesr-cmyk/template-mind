@@ -126,7 +126,7 @@ async function markFired(agentGlobal, hamUid, source, resultNote) {
     var c; try { c = JSON.parse(rows[0].content || '{}'); } catch (x) { c = {}; }
     c.fired = true;
     c.firedAt = new Date().toISOString();     // EXIT
-    c.result = String(resultNote || '').slice(0, 300); // NOTE
+    c.result = String(resultNote || '').slice(0); // NOTE
     var patch = await fetch(e.BU + '/rest/v1/' + _tbl() + '?source=eq.' + encodeURIComponent(source),
       { method: 'PATCH', headers: wh(e.BK), body: JSON.stringify({
         content: JSON.stringify(c),

@@ -120,7 +120,7 @@ async function handleReply(req) {
   // and emails, not just the channel it was thrown from.
   var killswitch = require('../killswitch.js');
   if (killswitch.looksLikeKillCommand(text)) {
-    var activation = await killswitch.activate(hamUid, text.slice(0, 140), 'wren_text');
+    var activation = await killswitch.activate(hamUid, text.slice(0), 'wren_text');
     if (!activation || activation.ok !== true) {
       return { ok:false, reason:activation && activation.reason || 'kill_switch_activation_unverified',
         ham_uid:hamUid };

@@ -55,7 +55,7 @@ async function checkGrounded(output, factsText) {
       method: 'POST', headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b', max_tokens: 150, temperature: 0,
-        messages: [{ role: 'system', content: sys }, { role: 'user', content: 'DATA:\n' + String(factsText).slice(0, 3000) + '\n\nDRAFT:\n' + String(output).slice(0, 3000) }]
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: 'DATA:\n' + String(factsText).slice(0) + '\n\nDRAFT:\n' + String(output).slice(0) }]
       })
     }).then(function (x) { return x.json(); });
     var verdict = (r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) || 'OK';

@@ -348,7 +348,7 @@ async function ensureFixedExactnessIndexes(config, required) {
         const detail = response && typeof response.text === 'function'
           ? await response.text().catch(function () { return ''; }) : '';
         throw new Error('exactness_rpc_failed:' +
-          (response && response.status || 'network') + ':' + detail.slice(0,120));
+          (response && response.status || 'network') + ':' + detail.slice(0));
       }
       const result = await response.json().catch(function () { return null; });
       if (!result || result.ready !== true ||
