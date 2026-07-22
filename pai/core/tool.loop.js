@@ -2837,6 +2837,23 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       'object, with no markdown or commentary.\n\n'+_exactUserMessage});
   }
   msgs.push({role:'user',content:message});
+  // ⬡B:tool.loop:ANCHOR:advisor_grounds_on_its_own_armory_not_the_ambient_wall:20260722⬡ Ground
+  // truth from a live probe: the finance advisor's own read returns the real budget (26 bills,
+  // $7,860) and its doctrine, all correctly in the user turn above, yet the model answered "I don't
+  // have your financial records, I only see operational data about the A'NU systems" because it
+  // anchored on the ambient FCW world context (system health, deploys) instead of the curated turn
+  // it was handed. Every advisor/compose turn (outbound_finalize) carries its OWN verified armory in
+  // that user turn; make it the authority, the same way the reach policy turn above is, so the
+  // station reasons from its budget/doctrine/pipeline and never claims to lack what it was given.
+  if (identity && identity.outbound_finalize === true) {
+    msgs.push({role:'system',content:
+      'ADVISOR COMPOSITION TURN. The user turn immediately above is this station\'s own curated, '
+      + 'verified context, its armory (for example the person\'s real budget and bills, its seeded '
+      + 'doctrine, or its job pipeline), and it is the AUTHORITATIVE ground for this answer. Lead from '
+      + 'it and use its concrete facts and numbers directly. Do NOT claim you lack access to anything '
+      + 'the user turn provides, and do NOT substitute ambient world or operational context (system '
+      + 'health, deploys, provider credit, unrelated alerts) for the real context you were handed.'});
+  }
   var _identityLookupCount = _structuredReachPolicy || _reachIncidentIntake ? 0
     : injectIdentityProvenanceEvidence(msgs, _identityVerifiedEvidence, fcw,
       hamUid, _namedEvidenceQuestion, _identityEvidenceProof);
