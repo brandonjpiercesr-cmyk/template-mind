@@ -61,11 +61,15 @@ function resolveAnuProductionSender() {
 // so the calendar capability was dead on require. Returns the rich shape the
 // calendar module needs ({grantId, keyEnv, from, world}). Additive, per-world,
 // EBC firewall intact -- resolves ONLY the world passed in, never cross-grant.
+// ⬡B:pai.reach.iman:FIX:from_addresses_are_env_only_never_a_literal:20260722⬡
+// Identity is env-only, per-world (founder-PII leak-guard law). The sender address for each world
+// comes from that world's own env var; no person is baked in as a fallback, so a stranger world
+// never inherits someone else's mailbox. This world's own env supplies its real addresses.
 var WORLD_FROM = {
-  'gmg':        process.env.NYLAS_GMG_FROM_EMAIL       || 'brandon@globalmajoritygroup.com',
-  'bdif':       process.env.NYLAS_BDIF_FROM_EMAIL      || 'brandon@briandawkins.com',
-  'mediators':  process.env.NYLAS_MEDIATORS_FROM_EMAIL || 'brandon@mediatorsfoundation.org',
-  'mh_action':  process.env.NYLAS_MH_ACTION_FROM_EMAIL || 'bpierce@mhaction.org',
+  'gmg':        process.env.NYLAS_GMG_FROM_EMAIL       || '',
+  'bdif':       process.env.NYLAS_BDIF_FROM_EMAIL      || '',
+  'mediators':  process.env.NYLAS_MEDIATORS_FROM_EMAIL || '',
+  'mh_action':  process.env.NYLAS_MH_ACTION_FROM_EMAIL || '',
 };
 function getGrant(world) {
   var grantId = resolveGrant(world);

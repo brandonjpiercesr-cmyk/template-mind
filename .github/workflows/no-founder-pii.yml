@@ -1,0 +1,21 @@
+name: no-founder-pii
+# THE FOUNDER-PII LEAK-GUARD. Founder law 20260722: identity is env-only, per-world. This repo is the
+# mind-template every world inherits, so it must be a TRUE ZERO: no email, phone, child's name, or
+# HAM UID hardcoded anywhere in shippable code, or a stranger's deploy would carry a real human's
+# data. The baseline here is empty on purpose. The denylist stores only SHA-256 hashes, so the guard
+# never itself leaks what it guards.
+on:
+  pull_request:
+    branches: [ main ]
+jobs:
+  no-founder-pii:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Scan for hardcoded founder identity (must be zero)
+        run: node scripts/checks/no-founder-pii.js .

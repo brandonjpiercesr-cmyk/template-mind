@@ -111,8 +111,8 @@ async function sendEmailReply(toEmail, subject, body, grant, replyToId, hamUid, 
   };
   // ⬡B:routes.iman:FIX:from_address_was_alias_not_real_account:20260704⬡
   // Founder correction, direct and repeated, live tonight: Nylas' own grant
-  // lookup reports claudette@globalmajoritygroup.com as this grant's email,
-  // but in Google Workspace the real account username is aba, and Claudette
+  // lookup reports the grant's own mailbox address as this grant's email,
+  // but in Google Workspace the real account username can differ, and the alias
   // is only a send-as alias layered on top -- backwards from what Nylas
   // auto-detected. An explicit override takes priority over the grant's own
   // (wrong, for this account) self-reported address; falls back to the old
@@ -366,8 +366,8 @@ module.exports = function(app) {
       const obj = (b.data && b.data.object) ? b.data.object : b;
       // ⬡B:routes.iman:FIX:sender_extraction_and_self_mail:20260703⬡
       // Live failure 20260703: a real founder email arrived and fromEmail resolved to
-      // the grant's own mailbox address (claudette@globalmajoritygroup.com), so the real
-      // sender never resolved and the unresolved stamp carried nothing but that address.
+      // the grant's own mailbox address, so the real sender never resolved and the
+      // unresolved stamp carried nothing but that address.
       // Three real causes closed here together:
       // 1. The old chain ended in `|| obj.from` -- when Nylas sends from as a bare string
       //    or an unexpected shape, whole objects/strings leaked through unvalidated.
@@ -387,9 +387,11 @@ module.exports = function(app) {
       if (folders.indexOf('SENT') >= 0 || folders.indexOf('DRAFT') >= 0) return;
 
       // Self-mail guard: if the "sender" is one of our own grant mailboxes, this is our
-      // own outbound echoing back through the webhook, never a real inbound.
-      var OWN_MAILBOXES = ['claudette@globalmajoritygroup.com', 'aba@globalmajoritygroup.com', 'anu@anu-anew.com'];
-      if (OWN_MAILBOXES.indexOf(fromEmail) >= 0) return;
+      // own outbound echoing back through the webhook, never a real inbound. The mailbox list
+      // is env-only, per-world (founder-PII leak-guard law): OWN_MAILBOXES is a comma-separated
+      // env var, so no world's real addresses are baked into the shared template.
+      var OWN_MAILBOXES = String(process.env.OWN_MAILBOXES || '').split(',').map(function(s){ return s.trim().toLowerCase(); }).filter(Boolean);
+      if (OWN_MAILBOXES.indexOf(String(fromEmail || '').toLowerCase()) >= 0) return;
 
       // Resolve HAM
       const hamData = await resolveHam(fromEmail);
