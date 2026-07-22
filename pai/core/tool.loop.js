@@ -744,6 +744,21 @@ var TOOLS = [
   {type:'function',function:{name:'get_budget_summary',description:'Get the HAM\'s real income vs expenses for the current or a specific budget cycle, spending by category, and active BNPL plan count. '
     +'Use for any question about being on track, how much has come in or gone out, or spending by category.',
     parameters:{type:'object',properties:{ham_uid:{type:'string'},cycle_start:{type:'string'},cycle_end:{type:'string'}}}}},
+  // ⬡B:core.tool_loop:BUILD:the_mind_can_now_SAVE_budget_facts_from_conversation:20260722⬡ Until
+  // now the mind could only READ the budget, so when the founder TOLD her his income or a bill in
+  // conversation she had no organ to save it and it was silently dropped. These are the write
+  // organs: when he states a recurring paycheck or a monthly bill, she decides to call these and
+  // it lands in his real budget. She (the mind) decides when; the tool is the traceable leash.
+  {type:'function',function:{name:'record_income',description:'Save a recurring INCOME SOURCE the person just told you about (a paycheck, retainer, or fee they receive on a schedule). '
+    +'Call this whenever they state income they get regularly, e.g. "MHAction pays me $2829 on the 15th and 31st" or "ITAVTFOC is $1500 on the last day of the month". Upserts by name, so restating a source updates it. '
+    +'Pick the frequency that matches: monthly (set day, a number 1-31 or "last"), semimonthly (set days, e.g. [15,31]), or biweekly/weekly (set anchorDate YYYY-MM-DD, a real recent payday they named).',
+    parameters:{type:'object',properties:{name:{type:'string',description:'source name, e.g. "MHAction" or "ITAVTFOC"'},amount:{type:'number',description:'dollar amount per payment'},frequency:{type:'string',enum:['monthly','semimonthly','biweekly','weekly'],description:'how often it arrives'},day:{description:'monthly only: day of month 1-31 or the string "last"'},days:{type:'array',items:{type:'number'},description:'semimonthly only: the two pay days, e.g. [15,31]'},anchorDate:{type:'string',description:'biweekly/weekly only: a real recent payday YYYY-MM-DD to anchor the cadence'},category:{type:'string'}},required:['name','amount','frequency']}}},
+  {type:'function',function:{name:'set_recurring_bill',description:'Save a recurring monthly BILL the person just told you about (rent, a car payment, a subscription). '
+    +'Call this whenever they state a bill they pay every month. Upserts by name so restating it updates the amount.',
+    parameters:{type:'object',properties:{name:{type:'string'},amount:{type:'number'},day:{type:'number',description:'day of month it is due, 1-31'},category:{type:'string'}},required:['name','amount']}}},
+  {type:'function',function:{name:'log_expense',description:'Log a one-off EXPENSE/transaction that already happened (not a recurring bill). '
+    +'Call this when they say they spent money on something specific, e.g. "I spent $80 at the grocery store today".',
+    parameters:{type:'object',properties:{merchant:{type:'string'},amount:{type:'number'},category:{type:'string'},date:{type:'string',description:'YYYY-MM-DD, default today'}},required:['merchant','amount']}}},
   {type:'function',function:{name:'create_reminder',description:'Create a real reminder that fires as a real text at the due time, and shows in Command Center before then. '
     +'Use when the HAM asks to be reminded of something, or names a specific future thing to remember. '
     +'If the HAM did not state a real date or timeframe, do not invent one -- omit due_at entirely and a sensible near-future default is used automatically.',
@@ -1796,6 +1811,28 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       return JSON.stringify({ ok:true, empty:true, note:'No budget is set up yet for this person -- no income, expenses, or transactions on record. Say plainly that their budget is not set up yet; do not invent any numbers.' });
     }
     return JSON.stringify(sum);
+  }
+  // ⬡B:core.tool_loop:BUILD:budget_write_organs_the_mind_calls_from_conversation:20260722⬡ The
+  // write half of the budget. When the founder tells A'NU his income or a bill, she decides to
+  // call these and it lands in his real config, instead of being silently dropped. Founder's own
+  // budget, his own HAM: a safe self-write, gated through cancelBeforeEffect like every effect.
+  if (name === 'record_income') {
+    var riCancelled = await cancelBeforeEffect(name, runtime); if (riCancelled) return riCancelled;
+    var riHam = args.ham_uid || hamUid;
+    var riRes = await ledger.addIncomeSource(riHam, { name:args.name, amount:args.amount, frequency:args.frequency, day:args.day, days:args.days, anchorDate:args.anchorDate, category:args.category });
+    return JSON.stringify(riRes);
+  }
+  if (name === 'set_recurring_bill') {
+    var rbCancelled = await cancelBeforeEffect(name, runtime); if (rbCancelled) return rbCancelled;
+    var rbHam = args.ham_uid || hamUid;
+    var rbRes = await ledger.addRecurringBill(rbHam, { name:args.name, amount:args.amount, day:args.day, category:args.category });
+    return JSON.stringify(rbRes);
+  }
+  if (name === 'log_expense') {
+    var leCancelled = await cancelBeforeEffect(name, runtime); if (leCancelled) return leCancelled;
+    var leHam = args.ham_uid || hamUid;
+    var leRes = await ledger.recordTransaction(leHam, { merchant:args.merchant, amount:args.amount, category:args.category || 'Uncategorized', date:args.date });
+    return JSON.stringify({ ok:!!(leRes && leRes.ok), merchant:args.merchant, amount:args.amount, source:leRes && leRes.source });
   }
   if (name === 'get_pending_drafts') {
     // \u2b21B:core.tool.loop:FIX:mediators_drafts_hallucinated_denial:20260708\u2b21
@@ -3941,8 +3978,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           if (_groundMsg&&isNonEmpty(_groundMsg.content)&&!_deflect.test(String(_groundMsg.content))) {
             msg={role:'assistant',content:_groundMsg.content};
           } else {
-            // never ship raw tool JSON; keep words flowing to the council with a plain honest line
-            msg={role:'assistant',content:'Here is what I found for right now: '+String(_forcedResult||'').replace(/[{}\[\]"]/g,' ').replace(/\s+/g,' ').trim().slice(0)};
+            // ⬡B:core.tool_loop:FIX:never_dump_raw_tool_json_at_the_human_wonder_first:20260722⬡ The
+            // founder caught exactly this: asked his budget, he got the raw get_budget_summary object
+            // back ("What I found for right now: hamUid : ... cycleStart : null ..."). The old line
+            // claimed to keep a plain line but actually shipped the raw result with the braces stripped
+            // -- raw organ output handed to a human, the sin wonder-first and the granddaddy law both
+            // forbid. The real, verified tool result is already recorded as verified tool evidence
+            // above, so the outbound council and synthesis can compose the true numbers from it. Here
+            // we hand the council an honest composed lead, never the raw data itself.
+            msg={role:'assistant',content:'I have this person\'s real, current ' + String(_requiredToolName||'data').replace(/^get_/,'').replace(/_/g,' ') + ' pulled and verified for this turn; answer their question directly from it, in plain words, with the specific figures.'};
           }
         } catch(_eForced) {
           _stampStep('forced_tool_direct_execute_failed',

@@ -106,6 +106,56 @@ async function recordIncome(hamUid, inc) {
   return brainWrite(hamUid, 'BUDGET_INCOME', 'budget.income', inc.source.toLowerCase().replace(/[\s\W]+/g,'_').slice(0,30), content, summary, 7);
 }
 
+// ⬡B:agents.budget.ledger:BUILD:the_mind_can_now_SAVE_a_recurring_income_source_from_conversation:20260722⬡
+// The mind held only READ budget tools, so when the founder told A'NU his income she had no
+// organ to save it and it was silently dropped. This is the write half: upsert a recurring
+// INCOME SOURCE into the real config (read-modify-write, supersede via saveConfig), so the
+// projected income the finance advisor reads reflects what he actually said. A source, not a
+// one-off receipt: {name, amount, frequency, day|days|anchorDate, category}. Upsert by name so
+// re-stating a source updates it instead of duplicating.
+async function addIncomeSource(hamUid, source) {
+  if (!source || !source.name || !(source.amount >= 0)) return { ok: false, reason: 'name_and_amount_required' };
+  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 1);
+  var config = {};
+  if (cfgRows.length && cfgRows[0].content) {
+    try { config = typeof cfgRows[0].content === 'string' ? JSON.parse(cfgRows[0].content) : cfgRows[0].content; } catch (e) { config = {}; }
+  }
+  config.incomeSources = Array.isArray(config.incomeSources) ? config.incomeSources : [];
+  var clean = { name: String(source.name).slice(0, 80), amount: parseFloat(source.amount) || 0,
+    frequency: source.frequency || 'monthly' };
+  if (source.day !== undefined) clean.day = source.day;
+  if (Array.isArray(source.days)) clean.days = source.days;
+  if (source.anchorDate) clean.anchorDate = source.anchorDate;
+  if (source.category) clean.category = source.category;
+  if (source.note) clean.note = source.note;
+  var idx = config.incomeSources.findIndex(function (s) { return String(s.name || '').toLowerCase() === clean.name.toLowerCase(); });
+  var action = idx >= 0 ? 'updated' : 'added';
+  if (idx >= 0) config.incomeSources[idx] = Object.assign({}, config.incomeSources[idx], clean);
+  else config.incomeSources.push(clean);
+  var saved = await saveConfig(hamUid, config);
+  return { ok: !!(saved && saved.ok), action: action, source: clean, incomeSourceCount: config.incomeSources.length };
+}
+
+// Same read-modify-write pattern for a recurring BILL, so the mind can save a bill he names.
+async function addRecurringBill(hamUid, bill) {
+  if (!bill || !bill.name || !(bill.amount >= 0)) return { ok: false, reason: 'name_and_amount_required' };
+  var cfgRows = await brainRead(hamUid, ['BUDGET_CONFIG'], null, 1);
+  var config = {};
+  if (cfgRows.length && cfgRows[0].content) {
+    try { config = typeof cfgRows[0].content === 'string' ? JSON.parse(cfgRows[0].content) : cfgRows[0].content; } catch (e) { config = {}; }
+  }
+  config.recurringBills = Array.isArray(config.recurringBills) ? config.recurringBills : [];
+  var clean = { name: String(bill.name).slice(0, 80), amount: parseFloat(bill.amount) || 0,
+    day: bill.day !== undefined ? bill.day : 1, category: bill.category || 'Uncategorized' };
+  if (bill.note) clean.note = bill.note;
+  var idx = config.recurringBills.findIndex(function (b) { return String(b.name || '').toLowerCase() === clean.name.toLowerCase(); });
+  var action = idx >= 0 ? 'updated' : 'added';
+  if (idx >= 0) config.recurringBills[idx] = Object.assign({}, config.recurringBills[idx], clean);
+  else config.recurringBills.push(clean);
+  var saved = await saveConfig(hamUid, config);
+  return { ok: !!(saved && saved.ok), action: action, bill: clean, recurringBillCount: config.recurringBills.length };
+}
+
 // Save or update a BNPL installment plan
 function _bnplKey(platform, merchant) {
   return platform.toLowerCase() + '_' + merchant.toLowerCase().replace(/[\s\W]+/g,'_').slice(0,20);
@@ -673,4 +723,4 @@ async function computeScenario(hamUid, scenarioName, asOfDate) {
   };
 }
 
-module.exports = { recordTransaction, recordIncome, saveBnplPlan, saveConfig, getCycleSummary, getUpcoming, askLedger, resolveIncomeCycle, resolveExpenseCycle, getCycleWindow, getCurrentCycle, projectPaychecksInWindow, voidTransaction, editTransaction, markInstallmentPaid, projectBillsInWindow, saveScenario, listScenarios, computeScenario };
+module.exports = { recordTransaction, recordIncome, addIncomeSource, addRecurringBill, saveBnplPlan, saveConfig, getCycleSummary, getUpcoming, askLedger, resolveIncomeCycle, resolveExpenseCycle, getCycleWindow, getCurrentCycle, projectPaychecksInWindow, voidTransaction, editTransaction, markInstallmentPaid, projectBillsInWindow, saveScenario, listScenarios, computeScenario };
