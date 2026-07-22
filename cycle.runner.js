@@ -21,9 +21,13 @@ const HAM  = process.env.HAM_UID;
 const BANK = process.env.MEMORY_BANK_URL;
 const KEY  = process.env.MEMORY_BANK_KEY;
 
-// How often the autonomous cycle self-wakes. Default 3 minutes, matching the AIR
-// heartbeat cadence already in the brain. Env-tunable; never hardcoded to one value.
-const INTERVAL_MS = parseInt(process.env.AUTONOMOUS_INTERVAL_MS || '180000', 10);
+// How often the autonomous cycle self-wakes. Env-tunable; never hardcoded to one
+// value. ⬡B:cycle.runner:FIX:safe_default_cadence_cost_audit:20260722⬡ The default
+// was 3 minutes (480 full PAI ticks/day); the live service already runs 1 hour via
+// AUTONOMOUS_INTERVAL_MS=3600000, but a wiped or missing env var silently restored
+// the 3-minute burn (audit P0-3/P1-3 configuration-loss hazard). The code default
+// now matches the founder's live cadence, so losing the env var costs nothing.
+const INTERVAL_MS = parseInt(process.env.AUTONOMOUS_INTERVAL_MS || '3600000', 10);
 
 // The autonomous wake prompt. The cook decides for itself whether anything is worth
 // doing this tick; on the autonomous channel the confidence-to-act is set EASIER so
