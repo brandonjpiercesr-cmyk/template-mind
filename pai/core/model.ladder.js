@@ -165,7 +165,8 @@ async function tryOrnith(system, user, opts) {
     // response_format is that surface's compatible JSON-mode request; ordinary
     // deliberations keep their existing request shape.
     if (opts.json) body.response_format = { type: 'json_object' };
-    var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.ORNITH_KEY || process.env.RUNPOD_API_KEY || '') },
+    var ornithKey = process.env.ORNITH_KEY || (/openrouter\.ai/.test(url) ? process.env.OPENROUTER_API_KEY : process.env.RUNPOD_API_KEY) || '';
+    var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + ornithKey },
       body: JSON.stringify(body), signal: requestSignal(opts, Math.min(opts.timeout, 10000)) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
