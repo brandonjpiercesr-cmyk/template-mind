@@ -453,6 +453,18 @@ async function composeDraftViaCycle(HAM, config, d, m, scw) {
   // a failed compose and write NO draft rather than land machinery in his mailbox.
   var _leak = /answer_this_first_for_day_or_schedule|^what i found for right now|world context, as of|recency_instruction/i;
   if (_leak.test(body)) { d.cycleFailed = true; return ''; }
+  // ⬡B:core.inbox_zero:GUARD:no_chatbot_deflection_as_a_reply_body:20260723⬡ 911, caught in the
+  // real Drafts folder: a reply to an inbound contact came back as "I'd be happy to help you
+  // draft a reply... Could you share the content of his email?" -- the compose model deflected into
+  // generic-assistant mode and asked for the very email that was already in front of it, instead of
+  // drafting. That is chatbot scaffolding, never a sendable reply, and it must never land in his
+  // mailbox addressed to a real person. Same law as the fusion-dump guard above: a bad draft does
+  // NOT beat no draft here. If the body is a meta-deflection (offering to help, asking the reader to
+  // supply the email/details it was already given, or a clarifying question back at the sender's own
+  // material), treat it as a failed compose and write NO draft. The root grounding fix rides in
+  // tool.loop (armory delivered through the tool-result channel); this is the suspenders.
+  var _deflect = /\bi'?d be happy to help\b|\bcould you (please )?(share|provide|send|forward|clarify)\b|\bplease (share|provide|send|forward)\b|\bcan you (share|provide|tell me more)\b|\bshare the (content|details|text) of\b|\b(any|more) (relevant )?(details|context|information) (about|on)\b|\bso (that )?i can (help|put together|draft|assist)\b|\blet me know if you\b/i;
+  if (_deflect.test(body)) { d.cycleFailed = true; d.reasoning = '[draft rejected: compose model deflected into a generic-assistant clarifying reply instead of drafting from the email it was handed; no garbage landed] ' + (d.reasoning || ''); return ''; }
   try { body = formatMatrix.stripMarkdown(body); } catch (e) {}
   body = stripDashes(body);                       // belt to the cycle's own WRIT suspenders
   body = withSignature(body, config.signature);   // the Nylas signature the API will not add itself
