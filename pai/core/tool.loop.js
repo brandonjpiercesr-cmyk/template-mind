@@ -2978,6 +2978,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       + 'it and use its concrete facts and numbers directly. Do NOT claim you lack access to anything '
       + 'the user turn provides, and do NOT substitute ambient world or operational context (system '
       + 'health, deploys, provider credit, unrelated alerts) for the real context you were handed.'});
+    // ⬡B:core.tool_loop:FIX:advisor_armory_through_the_tool_result_channel_not_only_the_wall:20260723⬡
+    // Caught live TWICE with the real material sitting right in the user turn plus the anchor above:
+    // a Mediators reply came back "I'd be happy to help... could you share the content of his email?"
+    // (the email was already in front of it), and the finance advisor answered "I don't have your
+    // financial records" (the $7,860 budget was already in front of it). Both are the compose model
+    // deflecting into generic-assistant mode instead of grounding. This file's own repeated, proven
+    // finding (context.fusion 20260710; Wonder Games + Preferences 20260714) is that passive user/
+    // system text is NOT reliably attended, only a TOOL RESULT is. So deliver the SAME curated armory
+    // a second time through that reliable channel: a synthetic completed retrieval whose result IS the
+    // armory, placed AFTER the user turn (a tool call must follow what prompted it, the proven order).
+    // The user turn and the anchor stay; this is an additive attention bridge, not a new query.
+    var _armoryCallId = 'advisor_armory_' + String(identity.request_id || _requestId || 'turn');
+    msgs.push({ role:'assistant', content:null, tool_calls:[{ id:_armoryCallId, type:'function',
+      function:{ name:'find_in_brain', arguments:JSON.stringify({ scope:'advisor_curated_armory' }) } }] });
+    msgs.push({ role:'tool', tool_call_id:_armoryCallId, content:JSON.stringify({
+      provenance:'advisor.curated_armory.this_turn', authoritative:true,
+      note:'The verified material this station was handed for this composition. Compose or answer directly from it. Never ask the reader to supply what is already here, and never deflect into a generic offer to help.',
+      armory:String(message||'') }) });
   }
   var _identityLookupCount = _structuredReachPolicy || _reachIncidentIntake ? 0
     : injectIdentityProvenanceEvidence(msgs, _identityVerifiedEvidence, fcw,
