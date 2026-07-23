@@ -497,6 +497,29 @@ async function judgeAndDraft(packet, config, HAM) {
   return { ok: true, decisions: decisions, via: 'window_cycle', triage_via: res.via || res.model || 'ladder', composed: composed, cycle_failed: cycleFailed };
 }
 
+// ⬡B:core.inbox_zero:GATE:report_counts_must_trace_to_the_real_facts:20260723⬡ Founder-caught
+// live: a GMG report came back "the inbox holds 47 unread messages, 12 high priority, 23 standard,
+// 5 requiring a response, 2 pending approvals" on a pass that reviewed 3 and drafted 0 -- every one
+// of those numbers invented. SHADOW's money gate did not catch it because SHADOW only checks DOLLAR
+// figures; a bare count sails straight through. This is the same law extended to counts: a specific
+// number in a his-facing report that has no basis in the real facts handed to the composer is
+// fabrication. Return true when the report cites a count (>=2, not a year) absent from the facts, so
+// the caller discards it and falls back to the honest deterministic report rather than hand him
+// invented statistics. Conservative by design: 0 and 1 are structural, a four-digit year is skipped,
+// and only integers with no match in the facts trip it.
+function _reportFabricatesCounts(report, factsText) {
+  var factInts = {};
+  (String(factsText || '').match(/\d+/g) || []).forEach(function (n) { factInts[n] = 1; });
+  var reportInts = String(report || '').match(/\d+/g) || [];
+  for (var i = 0; i < reportInts.length; i++) {
+    var n = reportInts[i];
+    if (Number(n) <= 1) continue;               // 0 and 1 are structural, not a claimed statistic
+    if (/^(19|20)\d{2}$/.test(n)) continue;      // a year is not an inbox count
+    if (!factInts[n]) return true;               // a specific count with no basis in the handed facts
+  }
+  return false;
+}
+
 // ── THE VOICE LAYER: HER REPORT ───────────────────────────────────────────────────────
 // The report the advisor gives the principal in the Command Center is written in HER voice,
 // not his: A'NU, JARVIS from Iron Man but a Black woman, a serving butler with spunk and
@@ -544,6 +567,12 @@ async function composeHerReport(decisions, packet, config, HAM, priorLoop, reach
     });
     if (turn && turn.ok && typeof turn.answer === 'string') report = turn.answer;
   } catch (e) {}
+  // Grounding gate: if the composer invented specific counts not in the real facts (the live "47
+  // unread, 12 high priority" fabrication), discard it and fall to the honest deterministic report
+  // below. Truth over a fluent lie: a terser real report beats a polished invented one.
+  if (report && _reportFabricatesCounts(report, facts.join('\n'))) {
+    report = '';
+  }
   // Fail safe: if the organ is down, compose an honest plain report rather than nothing.
   if (!report) {
     report = personal.length
