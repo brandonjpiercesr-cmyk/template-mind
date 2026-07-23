@@ -134,7 +134,12 @@ function getProviderName(opts) {
   var allowFallback = !!(opts && opts.allowFallback);
   if (!allowFallback) return null;
   if (process.env.TOGETHER_API_KEY) return 'together';
-  if (process.env.ANTHROPIC_BACKUP_C2_SONNET5 || process.env.ANTHROPIC_BACKUP_C0C1_HAIKU) return 'anthropic_bleed';
+  // ⬡B:core.model.router:FIX:anthropic_floor_off_unless_explicitly_armed:20260722⬡
+  // COST AUDIT follow-up (founder 911 20260722): 'anthropic_bleed' is the closed-weight floor and
+  // it bled -- an open-weight outage silently fell through to claude-sonnet-4-6, against the house
+  // law that Anthropic is CODA + cook-off ONLY. A key being present must not arm it; require an
+  // explicit ANTHROPIC_BACKUP_FLOOR=on. Off by default -> the outage degrades to null (ok:false).
+  if (process.env.ANTHROPIC_BACKUP_FLOOR === 'on' && (process.env.ANTHROPIC_BACKUP_C2_SONNET5 || process.env.ANTHROPIC_BACKUP_C0C1_HAIKU)) return 'anthropic_bleed';
   // OpenRouter removed from this router entirely, 20260706: CANON holds the
   // provider pattern at HOLD severity for autonomous-capable paths, and no
   // live caller of this router carries a real-user-turn assertion. The
