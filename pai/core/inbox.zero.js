@@ -39,6 +39,12 @@ catch (e) { advisorSCW = { readWorldSCWText: async function () { return { hasScw
 var brainClient  = require('./brain.client');
 var lineage      = require('./lineage.attach');
 var formatMatrix = require('./format.matrix');
+// The reach decision organ (the wonder that decides which way A'NU reaches him). Cold code
+// here never decides to email him; it hands the finished report to this mind, which judges
+// the channel, and only an EMAIL ruling sends. Defensive require so a mirror that carries
+// only part of core/ degrades to no-email (rest on the desk) instead of breaking on load.
+var reachOrgan; try { reachOrgan = require('./reach.WONDER.decision_organ.20260722.js'); }
+catch (e) { reachOrgan = { judgeExit: async function () { return { ok: false, refused: true, reason: 'reach_organ_unavailable' }; } }; }
 
 // The two brains, resolved at call time (legacy aibe_brain vs the new memory bank).
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
@@ -699,6 +705,143 @@ async function saveDraftsToMailbox(HAM, config, decisions, packet, opts) {
   return { saved: saved, results: results, enabled: true, of: personal.length };
 }
 
+// ── THE FOUNDER REPORT EMAIL (C) ──────────────────────────────────────────────────────
+// The founder asked A'NU to actually EMAIL him the inbox-zero report from her own mailbox,
+// so the digest lands in his inbox instead of only resting on the Command Center. This is
+// wonder-first, not a cold send: cold code here never decides to email him. It builds the
+// structured per-email report, hands it to the reach decision organ as a finding, and the
+// ORGAN judges the channel the way A'NU would. Only an EMAIL ruling sends, and even then it
+// rides IMAN.sendFromClaudette, which is itself gated (needs NYLAS_ANU_GRANT + the production
+// key, and REACH_SEND_MODE=LIVE). The desk surface at step 8 already happened, so this is
+// purely additive: when the organ picks a quiet note, or the send config is not live, or the
+// founder address is not set, it rests on the desk (the graceful degrade) and records why.
+// The instant Brandon sets NYLAS_ANU_GRANT and REACH_SEND_MODE=LIVE in his Render env, the
+// next run's report emails him. Identity is env-only (FOUNDER_EMAIL), never a literal.
+function _ymdFromUnix(sec) {
+  var n = Number(sec);
+  if (!isFinite(n) || n <= 0) return 'unknown date';
+  try { return new Date(n * 1000).toISOString().slice(0, 10); } catch (e) { return 'unknown date'; }
+}
+// The original inbound email, cleaned to plain text: prefer the real thread body, fall back to
+// the snippet. Never invents content; if nothing was fetched it says so plainly.
+function _originalEmailText(m) {
+  if (!m) return '(the original message was not available)';
+  var thread = Array.isArray(m.thread) ? m.thread : [];
+  var last = null;
+  for (var i = thread.length - 1; i >= 0; i--) { if (thread[i] && (thread[i].body || thread[i].snippet)) { last = thread[i]; break; } }
+  var raw = last ? (last.body || last.snippet) : m.snippet;
+  var text = String(raw || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, 1400) : '(no body was fetched; only headers were available)';
+}
+// The structured per-email body: one block per owed reply with everything he needs to judge it
+// at a glance, and nothing invented. reasoning and the reply's purpose come straight from what
+// the triage + window cycle actually produced (d.reasoning, d.intent); no assumptions are
+// fabricated when the organ produced none.
+function buildFounderReportBody(report, decisions, packet, config, HAM) {
+  var personal = decisions.filter(function (d) { return d.bucket === 'personal' && d.needsReply && d.draftBody; });
+  var lines = [];
+  lines.push(String(report || '').trim());
+  lines.push('');
+  lines.push('World: ' + config.world_name + '   |   Grant: ' + (config.grant_id || 'not resolved'));
+  lines.push('Unread reviewed: ' + packet.messages.length + '   |   Replies drafted and waiting on your word: ' + personal.length);
+  lines.push('Nothing here was sent. Each draft rests on the Command Center, and in your ' + config.world_name + ' Drafts folder, ready for you to send yourself.');
+  if (!personal.length) {
+    lines.push('');
+    lines.push('No email in this pass was yours to answer, so there is nothing drafted and waiting.');
+    return lines.join('\n');
+  }
+  personal.forEach(function (d, idx) {
+    var m = byId(packet, d.id);
+    lines.push('');
+    lines.push('======================================================================');
+    lines.push('DRAFT ' + (idx + 1) + ' of ' + personal.length);
+    lines.push('Date:      ' + _ymdFromUnix(m ? m.date : 0));
+    lines.push('From:      ' + (m ? (m.from_name ? (m.from_name + ' <' + m.from + '>') : m.from) : '(unknown sender)'));
+    lines.push('Subject:   ' + (m ? (m.subject || '(no subject)') : '(no subject)'));
+    lines.push('Thread ID: ' + (m && m.thread_id ? m.thread_id : '(none)'));
+    lines.push('Grant ID:  ' + (config.grant_id || '(not resolved)'));
+    lines.push('');
+    lines.push('----- their email -----');
+    lines.push(_originalEmailText(m));
+    lines.push('');
+    lines.push('----- the reply I drafted for you -----');
+    lines.push(String(d.draftBody || '').trim());
+    lines.push('');
+    lines.push('----- why I drafted it this way -----');
+    lines.push(String(d.reasoning || 'A genuine, useful reply in your own voice.').trim());
+    if (d.intent && String(d.intent).trim()) {
+      lines.push('');
+      lines.push('----- what this reply owes / what I took it to need -----');
+      lines.push(String(d.intent).trim());
+    }
+  });
+  lines.push('');
+  lines.push('======================================================================');
+  lines.push('Say the word on any of these and it goes out. Nothing moves until you do.');
+  return lines.join('\n');
+}
+async function emailFounderReport(HAM, config, decisions, packet, report, opts) {
+  var personal = decisions.filter(function (d) { return d.bucket === 'personal' && d.needsReply && d.draftBody; });
+  // Substance gate: never route an empty digest through the reach ladder. An empty pass rests
+  // on the desk as usual; there is nothing worth an email in his inbox.
+  var body = buildFounderReportBody(report, decisions, packet, config, HAM);
+  if (!body || !String(body).trim() || (!personal.length && !String(report || '').trim())) {
+    return { emailed: false, reason: 'no_substance_to_report', channel: null };
+  }
+  // Hand the finished report to the reach organ as a finding. Importance mirrors the desk
+  // surface (a real draft-bearing report is an 8, an empty-but-worth-noting pass a 6); a
+  // report is a high-confidence record, not a shaky read, so confidence is high. The organ
+  // decides the channel; EMAIL is only reachable when importance clears the EMAIL band.
+  var importance = personal.length ? 8 : 6;
+  var finding = {
+    summary: 'Inbox Zero report for ' + config.world_name + ': ' + personal.length + ' reply draft(s) waiting on your word.',
+    content: {
+      kind: 'advisor_inbox_zero_report', world: config.world_name, grant_id: config.grant_id || null,
+      drafts_waiting: personal.length, unread_reviewed: packet.messages.length,
+      note: 'A digest A\'NU prepares for the principal himself, the record he asked to receive by email.'
+    },
+    importance: importance, confidence: 0.92
+  };
+  var ruling;
+  try { ruling = await reachOrgan.judgeExit(finding, {}); } catch (e) { ruling = { ok: false, reason: 'reach_organ_threw' }; }
+  var channel = (ruling && ruling.ok && ruling.exit) ? ruling.exit : null;
+  var audit = { emailed: false, channel: channel, reach_source: ruling && ruling.source || null,
+    reach_reason: ruling && (ruling.reasoning || ruling.reason) || null, send_reason: null };
+  // Wonder-first: only an EMAIL ruling sends. Any other channel (a quiet note, a text, a
+  // review) means the report rests where step 8 already put it, the Command Center.
+  if (channel !== 'EMAIL') {
+    audit.reason = 'reach_organ_chose_' + (channel || 'no_channel') + '_report_rests_on_desk';
+    return audit;
+  }
+  var to = String(process.env.FOUNDER_EMAIL || '').trim();   // env-only identity, never a literal
+  if (!to) { audit.reason = 'founder_email_not_set_report_rests_on_desk'; return audit; }
+  var subject = 'Inbox Zero, ' + config.world_name + ': ' + (personal.length ? (personal.length + ' draft' + (personal.length === 1 ? '' : 's') + ' waiting on your word') : 'nothing owes you a reply');
+  var sent = null;
+  try {
+    // sendFromClaudette resolves A'NU's production sender and is itself gated by
+    // REACH_SEND_MODE=LIVE. It returns { ok:false, reason } rather than throwing when the
+    // config is not live, so the pipeline rests on the desk until Brandon flips both envs.
+    sent = await IMAN.sendFromClaudette(to, subject, body, { bodyIsPlaintext: true, hamUid: HAM });
+  } catch (e) { sent = { ok: false, reason: e.message }; }
+  audit.emailed = !!(sent && sent.ok);
+  audit.send_reason = sent && (sent.reason || null);
+  audit.messageId = sent && sent.messageId || null;
+  audit.reason = audit.emailed ? 'emailed_from_claudette' : ('send_not_live_' + (audit.send_reason || 'unknown') + '_report_rests_on_desk');
+  // Stamp what actually happened, sent or degraded, so the loop is auditable either way.
+  try {
+    await writeBead({
+      ham_uid: HAM, agent_global: config.advisor_id, stamp_type: audit.emailed ? 'FOUNDER_REPORT_EMAILED' : 'FOUNDER_REPORT_DESK',
+      acl_stamp: brainClient.buildStamp('inbox_zero.' + config.world_name + '.founder_report', audit.emailed ? 'FOUNDER_REPORT_EMAILED' : 'FOUNDER_REPORT_DESK', ''),
+      source: 'ham_' + String(HAM).toLowerCase() + '.inbox_zero.' + config.world_name + '.founder_report.' + Date.now(),
+      importance: 7,
+      summary: '[INBOX ZERO REPORT] ' + config.world_name + ': ' + (audit.emailed ? ('emailed to the founder, ' + personal.length + ' draft(s)') : ('rested on desk (' + (audit.reason || 'not sent') + ')')),
+      content: JSON.stringify({ world: config.world_name, channel: channel, reach: { source: audit.reach_source, reasoning: audit.reach_reason },
+        emailed: audit.emailed, send_reason: audit.send_reason, drafts_waiting: personal.length, createdAt: new Date().toISOString() }),
+    });
+  } catch (e) {}
+  return audit;
+}
+
 // ── THE MAIN CYCLE ────────────────────────────────────────────────────────────────────
 // entry the cycle calls; exits to LOGFUL and returns a structured result back into the cycle.
 async function runInboxZero(opts) {
@@ -791,6 +934,13 @@ async function runInboxZero(opts) {
   }
   try { await advisorExit.surfaceToDesk(HAM, 'INBOX_ZERO', 'Inbox Zero, ' + world, report, personal.length ? 8 : 6); } catch (e) {}
 
+  // 8a) Email the founder his report from A'NU's own mailbox, wonder-first: the report goes to
+  // the reach decision organ, and only an EMAIL ruling sends (via IMAN.sendFromClaudette, itself
+  // gated by REACH_SEND_MODE=LIVE + the production grant). Until that config is live, or if the
+  // organ chose a quiet note, it rests on the desk (surfaced just above). Never throws into the cycle.
+  var founderReport = { emailed: false, reason: 'not_run' };
+  try { founderReport = await emailFounderReport(HAM, config, decisions, packet, report, opts); } catch (e) { founderReport = { emailed: false, reason: 'threw:' + e.message }; }
+
   // 8b) Founder-test preview send (OFF by default). When enabled, the drafts also go to the
   // founder's own inbox via IMAN's founderTest redirect, never to the real person.
   var preview = await previewSendToFounder(HAM, config, decisions, packet, opts);
@@ -807,6 +957,7 @@ async function runInboxZero(opts) {
     prior_drafts_closed: priorLoop.closed, prior_drafts_dropped: priorLoop.dropped,
     preview_sent_to_founder: preview.enabled ? preview.sent : 0, preview_mode: preview.enabled,
     drafts_saved_to_mailbox: mailboxDrafts.enabled ? mailboxDrafts.saved : 0, mailbox_drafts_mode: mailboxDrafts.enabled,
+    founder_report_emailed: !!(founderReport && founderReport.emailed), founder_report_channel: founderReport && founderReport.channel || null, founder_report_reason: founderReport && founderReport.reason || null,
     organ_ok: judged.ok, organ_via: judged.via || null,
     actions: decisions.map(function (d) { var m = byId(packet, d.id); return { subject: m ? m.subject : d.id, bucket: d.bucket, action: (d.bucket === 'personal' && d.needsReply) ? 'drafted' : 'skipped', why: d.reasoning || '' }; }),
     report: report,
@@ -834,6 +985,7 @@ async function runInboxZero(opts) {
     imb_empty: !!(packet.imb && packet.imb.empty), organ_ok: judged.ok,
     preview_mode: preview.enabled, preview_sent_to_founder: preview.enabled ? preview.sent : 0,
     mailbox_drafts_mode: mailboxDrafts.enabled, drafts_saved_to_mailbox: mailboxDrafts.enabled ? mailboxDrafts.saved : 0,
+    founder_report_emailed: !!(founderReport && founderReport.emailed), founder_report_channel: founderReport && founderReport.channel || null, founder_report_reason: founderReport && founderReport.reason || null,
     report: report, ms: Date.now() - t0,
     note: preview.enabled
       ? 'universal inbox-zero, preview mode: drafts also sent to the founder-test address only, never the real person.'
@@ -921,6 +1073,8 @@ module.exports = {
     gatherEvidence: gatherEvidence,
     judgeAndDraft: judgeAndDraft,
     composeHerReport: composeHerReport,
+    buildFounderReportBody: buildFounderReportBody,
+    emailFounderReport: emailFounderReport,
     advisorGlobalFor: advisorGlobalFor,
     normalizeWorld: normalizeWorld,
   },

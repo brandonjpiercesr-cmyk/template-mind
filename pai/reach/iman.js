@@ -27,9 +27,23 @@ var WORLD_KEY_ENV = {
   'mh_action':  'NYLAS_PRODUCTION_KEY',
 };
 
+// ⬡B:reach.iman:FIX:grant_env_name_both_orders_universal:20260723⬡
+// Founder-caught 20260723: the grant env name drifted between two conventions,
+// NYLAS_<WORLD>_GRANT and NYLAS_GRANT_<WORLD>, so a grant set one way read as
+// "no grant for world" the other, silently disabling Mediators/BDIF/MH Action.
+// Resolve BOTH orders, and derive the world name generically so ANY world works,
+// not only the four seeded in the map (the 847392 universality test). The explicit
+// map stays first for exact back-compat; the generic orders are the fallback.
 function resolveGrant(world) {
-  var envKey = WORLD_GRANT_ENV[world];
-  return envKey ? (process.env[envKey] || null) : null;
+  var W = String(world || '').toUpperCase();
+  var candidates = [];
+  if (WORLD_GRANT_ENV[world]) candidates.push(WORLD_GRANT_ENV[world]);
+  if (W) { candidates.push('NYLAS_' + W + '_GRANT'); candidates.push('NYLAS_GRANT_' + W); }
+  for (var i = 0; i < candidates.length; i++) {
+    var v = process.env[candidates[i]];
+    if (v && String(v).trim()) return String(v).trim();
+  }
+  return null;
 }
 
 function resolveKey(world) {
