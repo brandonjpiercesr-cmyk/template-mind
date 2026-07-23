@@ -197,6 +197,16 @@ async function tryQwen(system, user, opts) {
 // failed, so it changes nothing when they work and gives the cycle a live answer when they do
 // not. Still gated by the one spend door at deliberate() entry, so the ceiling holds.
 async function tryAnthropicBackup(system, user, opts) {
+  // ⬡B:core.model_ladder:FIX:anthropic_floor_off_unless_explicitly_armed:20260722⬡
+  // COST AUDIT follow-up (founder 911 20260722): this "last-resort floor" quietly became a hot
+  // path -- when Together depleted and the open-weight rungs missed, every miss fell through to
+  // claude-sonnet-4-6 and billed Anthropic silently (~$12/day), which also VIOLATES the house law
+  // that Anthropic is CODA + cook-off ONLY (board/gate/provider.gate.js). A key being PRESENT (it
+  // may be needed for the sanctioned cook-off path) must not arm the general-answer floor. Require
+  // an explicit opt-in: ANTHROPIC_BACKUP_FLOOR=on. Off by default -> an open-weight miss returns
+  // null (the cycle surfaces ok:false, the founder's own "ok:false over a hollow reply" doctrine)
+  // instead of paying the most expensive closed model to hide the open-weight outage.
+  if (process.env.ANTHROPIC_BACKUP_FLOOR !== 'on') return null;
   var sonnet = process.env.ANTHROPIC_BACKUP_C2_SONNET5;
   var haiku = process.env.ANTHROPIC_BACKUP_C0C1_HAIKU;
   var key = sonnet || haiku;
@@ -335,7 +345,7 @@ async function deliberate(system, user, options) {
   // The Anthropic backup is always the last rung whenever a key is present, so the cycle has a
   // live floor beneath the open-weight ladder. Appended, never inserted, so it runs only after
   // every higher rung has failed, and only added when it is not already in the configured order.
-  if ((process.env.ANTHROPIC_BACKUP_C2_SONNET5 || process.env.ANTHROPIC_BACKUP_C0C1_HAIKU) && order.indexOf('anthropic') === -1) {
+  if (process.env.ANTHROPIC_BACKUP_FLOOR === 'on' && (process.env.ANTHROPIC_BACKUP_C2_SONNET5 || process.env.ANTHROPIC_BACKUP_C0C1_HAIKU) && order.indexOf('anthropic') === -1) {
     order.push('anthropic');
   }
   // ⬡B:core.model_ladder:BUILD:realtime_voice_judgment_race:20260716⬡
