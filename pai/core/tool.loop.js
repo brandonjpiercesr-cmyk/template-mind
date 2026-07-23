@@ -2921,9 +2921,21 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   }
   var msgs=[{role:'system',content:systemPrompt}];
   if (!_structuredReachPolicy && Array.isArray(priorTurns) && priorTurns.length) {
-    priorTurns.forEach(function(t){
+    // ⬡B:tool.loop:FIX:bound_prior_turns_so_history_cannot_balloon_every_call:20260722⬡
+    // Cost audit follow-up (founder 911 20260722): priorTurns was appended UNBOUNDED, so a long
+    // voice/session history rode into EVERY model call and grew the input tokens without limit --
+    // a measured driver of the 43-56k-token calls, alongside the tool schema. Keep a generous
+    // RECENT window and cap any single runaway turn. The durable context still lives in the memory
+    // bank (~3k tokens, built fresh each turn), so bounding raw transcript history trims cost
+    // without trimming what she actually remembers. Defaults are generous enough that a normal
+    // exchange is untouched; only runaway history is bounded. Both env-tunable.
+    var _ptMax = parseInt(process.env.PAI_PRIOR_TURNS_MAX || '40', 10);
+    var _ptChars = parseInt(process.env.PAI_PRIOR_TURN_CHARS || '12000', 10);
+    var _recentTurns = _ptMax > 0 ? priorTurns.slice(-_ptMax) : priorTurns;
+    _recentTurns.forEach(function(t){
       if (t && (t.role==='user'||t.role==='assistant') && typeof t.content==='string' && t.content.trim()) {
-        msgs.push({role:t.role, content:t.content});
+        var _tc = (_ptChars > 0 && t.content.length > _ptChars) ? t.content.slice(0, _ptChars) : t.content;
+        msgs.push({role:t.role, content:_tc});
       }
     });
   }
