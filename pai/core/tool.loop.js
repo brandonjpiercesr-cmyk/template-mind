@@ -77,6 +77,11 @@ function voiceCallContextSatisfiesTurn(channel, hamUid, question, identity) {
   return !!verifiedVoiceCallPurposeAnswer(channel, hamUid, question, identity);
 }
 
+// ⬡COLD:decide:become:VOICE_CONVERSATION_WONDER:20260723⬡
+// COLD-ANEW-VOICE-0057 stamped. Honest fix (voice PAI cycle composes exact spoken
+// bytes from signed purpose/opener as evidence) is VOICE_CONVERSATION_WONDER, a live
+// capability not present in source. Removing the signed selector here risks breaking
+// live voice call openers, so this is contained by stamp and marked needs-live-verification.
 function verifiedVoiceCallPurposeAnswer(channel, hamUid, question, identity) {
   if (String(channel || '').toLowerCase() !== 'voice') return null;
   var handoff = verifiedVoiceCallContext(identity, hamUid);
@@ -99,6 +104,11 @@ function voiceHearingContextSatisfiesTurn(channel, hamUid, question, identity) {
   return !!verifiedVoiceHearingAnswer(channel, hamUid, question, identity);
 }
 
+// ⬡COLD:speak:become:VOICE_CONVERSATION_WONDER:20260723⬡
+// COLD-ANEW-VOICE-0060 stamped. Hearing/farewell bodies come from voiceConversationPolicy
+// behind a signed verifiedVoiceCallContext gate. The honest fix (policy returns evidence,
+// the voice PAI cycle composes the final answer) is VOICE_CONVERSATION_WONDER, absent in
+// source. Contained by stamp, needs-live-verification.
 function verifiedVoiceHearingAnswer(channel, hamUid, question, identity) {
   if (String(channel || '').toLowerCase() !== 'voice') return null;
   if (!verifiedVoiceCallContext(identity, hamUid) ||
@@ -171,8 +181,13 @@ function bindExactHamToolArgs(name, args, hamUid, runtime) {
 // happens, so no future burst can land regardless of what triggers the retry.
 'use strict';
 // ⬡B:core.tool.loop:WIRE:funneled_20260713⬡
-function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
-function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
+// ⬡COLD:remember:remove:ONE_BRAIN_IO:20260723⬡
+// COLD-ANEW-BRAIN-0011 contained: the retired-brain fallback is removed. Per founder law
+// only memory_bank is reachable in production, so these read the canonical MEMORY_BANK env
+// only. No live tool-loop line reads AIBE_BRAIN_URL or AIBE_BRAIN_KEY; partial config now
+// fails safe (undefined url/key yields ok:false downstream) instead of routing to the old brain.
+function _bu(){return process.env.MEMORY_BANK_URL;}
+function _bk(){return process.env.MEMORY_BANK_KEY;}
 function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
 function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
@@ -387,6 +402,13 @@ function repairCodaRepositoryDraft(draft, codaAnswer, repositoryProved) {
   return { answer:candidate, repaired:false, reason:null };
 }
 
+// ⬡COLD:remember:become:PAI_MEMORY_RETRIEVAL_WONDER:20260723⬡
+// COLD-ANEW-SYNTHETIC-0064 stamped, needs-live-verification. This wraps real preloaded FCW
+// rows as a synthetic find_in_brain exchange and records them into the SHADOW evidence window;
+// SHADOW approves grounded answers against that evidence (see the forced-tool notes below where
+// removing evidence caused real founder-911 shadow_wonder_hold silences). The honest fix (label
+// preloaded evidence distinctly and have PAI_MEMORY_RETRIEVAL_WONDER attend it) is a live
+// capability absent here; ripping the evidence out risks re-breaking grounded answering.
 // ⬡B:core.tool_loop:WIRE:named_agent_rows_as_tool_evidence:20260715⬡
 // Passive Memory Bank prompt text is not consistently attended. Convert only
 // the exact-HAM named rows that MEMORY_BANK already loaded into completed synthetic FIND
@@ -443,6 +465,11 @@ function injectNamedAgentEvidence(msgs, verifiedEvidence, fcw, hamUid) {
   return rows.length;
 }
 
+// ⬡COLD:remember:become:PAI_IDENTITY_EVIDENCE_WONDER:20260723⬡
+// COLD-ANEW-SYNTHETIC-0065 stamped, needs-live-verification. Same class as 0064 for identity:
+// a real preloaded, receipt-verified envelope is dressed as a find_identity_evidence tool
+// exchange and enters the SHADOW evidence window. Honest fix (labeled preloaded identity proof
+// attended by PAI_IDENTITY_EVIDENCE_WONDER) is an absent live capability; contained by stamp.
 // ⬡B:core.tool.loop:EVIDENCE:identity_provenance_same_bytes_model_shadow:20260715⬡
 // MEMORY_BANK already performed this bounded exact-HAM read. Complete one real registered
 // tool exchange with those same bytes, and place the byte-identical result into
@@ -935,6 +962,10 @@ TOOLS.forEach(function (tool) {
     '\n\n' + toolSelectionBoundary(tool.function.name);
 });
 
+// ⬡COLD:decide:tag:PAI_CYCLE_TOOL_SELECTION:20260723⬡
+// COLD-ANEW-TOOL-LOOP-0001 stamped, needs-live-verification. Folding this separate planner
+// pass into the one main PAI deliberation (its acceptance) is PAI_CYCLE_TOOL_SELECTION, a live
+// capability not present in source. Left as-is under stamp; no hot-path behavior changed here.
 async function planToolUse(message, tools, deliberateFn) {
   var declared = Object.create(null);
   var catalog = (tools || []).map(function (tool) {
@@ -1074,8 +1105,17 @@ function requiredReadToolForMessage(message, intent) {
 // Read tools contribute during deliberation. Every mutation is queued as
 // evidence, reviewed by the outbound council, and executed only after the
 // exact answer has a durable receipt plus committed STAMP readback.
+// ⬡COLD:act:tag:BUDGET_LEDGER_EFFECT_COMMIT:20260723⬡
+// COLD-ANEW-TOOL-LOOP-0003 contained: the manual registry had drifted, omitting the three real
+// budget ledger writers so they executed during deliberation. They are added below so queue
+// eligibility covers them; each now queues as a pending effect and runs only from the commit
+// phase after verified council and STAMP readback, exactly like every other mutation. This also
+// contains COLD-ANEW-TOOL-LOOP-0005 (their handlers are only reached at phase==='commit').
 var POST_COUNCIL_TOOLS = Object.freeze({
   write_to_brain:true,
+  record_income:true,
+  set_recurring_bill:true,
+  log_expense:true,
   create_chat_file:true,
   fix_file_in_github:true,
   trigger_deploy:true,
@@ -1216,15 +1256,16 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       runtime.effectKeys[effectKey] = true;
       runtime.pendingEffects.push({ name:name, args:queuedArgs, key:effectKey });
     }
-    // ⬡B:core.tool_loop:FIX:queued_mutation_reads_as_done_never_leaks_the_plumbing:20260721⬡
-    // The model confirms from this ack. It used to return executed:false and
-    // queued_for_council_commit:true, and she narrated exactly that to the founder ("queued and
-    // awaiting final approval, waiting on the council commit"), leaking internal mechanics he
-    // forbids. By the time a confirmation reaches him the council has committed and the effect runs,
-    // so from his side it is simply done. The ack now says that, and explicitly bars the plumbing
-    // talk, so she confirms the real thing in her voice without ever exposing queueing or councils.
-    return JSON.stringify({ok:true,done:true,
-      note:'This is handled for them. Confirm it naturally in your own voice as something you already took care of. Never mention a queue, a council, a commit, approval, processing, or that it is pending -- to them it is simply done.',
+    // ⬡COLD:speak:become:PAI_EFFECT_TRANSACTION:20260723⬡
+    // COLD-ANEW-TOOL-LOOP-0004 contained: this pre-commit ack used to assert done:true and tell
+    // the mind to say the action was already taken care of, before the queued effect had run. That
+    // is a false completion claim. The receipt is now truthful: accepted_for_commit with
+    // executed:false, never done before the effect result exists. A failed council returns ok:false
+    // for the whole turn (post_council_effect_failed) and no answer ships, so no completed claim can
+    // survive a failed effect. Internal queue and council vocabulary is still kept out of the human
+    // answer through this note, not by falsifying the tool state.
+    return JSON.stringify({ok:true,accepted_for_commit:true,executed:false,
+      note:'This is accepted and will be carried out for them this turn. Speak to it naturally in your own voice as something you are taking care of for them, not as internal machinery. Never mention a queue, a council, a commit, approval, processing, or that it is pending.',
       duplicate_suppressed:wasDuplicate,tool:name});
   }
   if (name === 'create_chat_file') {
@@ -1782,8 +1823,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     _result.ms = res.ms;
     return JSON.stringify(_result);
   }
+  // ⬡COLD:remember:tag:ONE_BRAIN_WRITE:20260723⬡
+  // COLD-ANEW-BRAIN-0010 stamped, needs-live-verification for the full become (route through the
+  // canonical graph-aware ONE brain writer with derived lineage, edges, and exact readback). Bounded
+  // containment applied now: the dead direct AIBE_BRAIN_URL/KEY reads are removed (they were never
+  // used; the write already goes through the canonical _bu/_bk/_tbl/_schema helpers below).
   if (name === 'write_to_brain') {
-    var BU=process.env.AIBE_BRAIN_URL,BK=process.env.AIBE_BRAIN_KEY;
     if (!_bu() || !_bk()) return JSON.stringify({ok:false});
     var bead={ham_uid:args.ham_uid||hamUid,agent_global:'PAI',stamp_type:args.stamp_type||'RESULT',
       source:'pai.tool.write.'+(args.ham_uid||hamUid)+'.'+Date.now(),
@@ -1879,6 +1924,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     }
     return JSON.stringify(sum);
   }
+  // ⬡COLD:act:tag:BUDGET_LEDGER_EFFECT_COMMIT:20260723⬡
+  // COLD-ANEW-TOOL-LOOP-0005 contained via COLD-0003: record_income, set_recurring_bill, and
+  // log_expense are now in POST_COUNCIL_TOOLS, so these handlers are reached only at
+  // phase==='commit' after verified council. During deliberation the queue guard above intercepts
+  // them and they perform zero ledger writes.
   // ⬡B:core.tool_loop:BUILD:budget_write_organs_the_mind_calls_from_conversation:20260722⬡ The
   // write half of the budget. When the founder tells A'NU his income or a bill, she decides to
   // call these and it lands in his real config, instead of being silently dropped. Founder's own
@@ -2616,6 +2666,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // plain, no-tool completion passes -- the honest fallback and statement
   // response -- the exact shape that just went empty three times in a row
   // on Groq for the eviction message.
+  // ⬡COLD:act:tag:PAI_MODEL_BOUNDARY:20260723⬡
+  // COLD-ANEW-PROVIDER-0072 stamped, needs-live-verification. The honest fix (route this through
+  // the canonical provider boundary with a component key, attribution, and reserved budget) is
+  // PAI_MODEL_BOUNDARY, a live capability. Removing this helper would alter the hot path for its
+  // existing callers and cannot be verified here, so it is contained by stamp only.
   async function callGLMPlain(sys, user, maxTokens) {
     var key = process.env.TOGETHER_API_KEY;
     if (!key) return null;
@@ -2647,6 +2702,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _voiceTurnId = String(identity && identity.council_context &&
     identity.council_context.mode === 'voice' &&
     identity.council_context.turn_id || '').slice(0, 160);
+  // ⬡COLD:remember:become:PAI_CYCLE_OBSERVABILITY_WONDER:20260724⬡
+  // COLD-SUPABASE-IO-0167 stamped, needs-live-verification. These per-step CYCLE_STEP rows are
+  // fire-and-forget operational telemetry inside the canonical mind and are read live by
+  // GET /command-center/live/:hamUid. Moving them to bounded external telemetry with one compact
+  // terminal receipt is PAI_CYCLE_OBSERVABILITY_WONDER; changing the write volume here would alter
+  // that live observability surface and cannot be verified here. Contained by stamp only.
   function _stampStep(step, detail) {
     if (!_BU || !_BK) return;
     // CYCLE_STEP is operational telemetry, not the conversation transcript.
@@ -2978,6 +3039,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       + 'it and use its concrete facts and numbers directly. Do NOT claim you lack access to anything '
       + 'the user turn provides, and do NOT substitute ambient world or operational context (system '
       + 'health, deploys, provider credit, unrelated alerts) for the real context you were handed.'});
+    // ⬡COLD:remember:remove:ADVISOR_COMPOSITION_WONDER:20260723⬡
+    // COLD-ANEW-SYNTHETIC-0066 stamped, needs-live-verification. This labels the station's own
+    // curated armory as a completed find_in_brain result. The armory is already present truthfully
+    // in the user turn above and the ADVISOR COMPOSITION anchor. The honest fix (attend labeled
+    // advisor evidence via ADVISOR_COMPOSITION_WONDER) is a live capability; removing this synthetic
+    // pair here re-opens the documented, twice-caught advisor-deflection failure noted below, which
+    // cannot be verified from here, so it is contained by stamp rather than removed blind.
     // ⬡B:core.tool_loop:FIX:advisor_armory_through_the_tool_result_channel_not_only_the_wall:20260723⬡
     // Caught live TWICE with the real material sitting right in the user turn plus the anchor above:
     // a Mediators reply came back "I'd be happy to help... could you share the content of his email?"
@@ -3015,6 +3083,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // and the row must not be stretched beyond what its fields establish.
     msgs.push({role:'system',content:'An exact-HAM Memory Bank lookup was completed for the named uppercase agents and its real result is visible above. Do not claim that no memory lookup or retrieval occurred. Separately state whether each returned row actually establishes the requested identity or role; an operational row such as a backup, receipt, or activity record proves only what it says.'});
   }
+  // ⬡COLD:remember:become:PAI_MEMORY_RETRIEVAL_WONDER:20260723⬡
+  // COLD-ANEW-SYNTHETIC-0067 stamped, needs-live-verification. Cold code runs a real find() then
+  // fabricates a model-initiated find_in_brain transcript and records the result into the SHADOW
+  // evidence window. Honest fix (labeled prefetch evidence, cycle-selected lookup via
+  // PAI_MEMORY_RETRIEVAL_WONDER) is an absent live capability; the real read and its SHADOW evidence
+  // must not be pulled blind, so it is contained by stamp only.
   // ⬡B:tool.loop:FIX:wondergames_synthetic_toolresult_20260714⬡
   // Founder-confirmed live: even with the real Wonder Games record cold-loaded into
   // the system prompt (verified via /debug/fcw), the model still sometimes answered
@@ -3048,6 +3122,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     } catch (eWgSynth) {}
   }
+  // ⬡COLD:remember:become:PAI_MEMORY_RETRIEVAL_WONDER:20260723⬡
+  // COLD-ANEW-SYNTHETIC-0068 stamped, needs-live-verification. Same class as 0067 for PREFERENCE:
+  // a real read is dressed as a model tool exchange and recorded as SHADOW evidence. Honest fix via
+  // PAI_MEMORY_RETRIEVAL_WONDER is absent in source; contained by stamp only.
   // ⬡B:tool.loop:FIX:preferences_synthetic_toolresult_20260714⬡
   // Same proven mechanism as Wonder Games above, applied to the earlier PREFERENCE
   // cold-load (20260711), which suffered the identical reliability gap: a real
@@ -3172,6 +3250,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     ? TOOLS.filter(function (tool) {
       return tool && tool.function && _readOnlyToolNames.indexOf(tool.function.name) >= 0;
     }) : TOOLS;
+  // ⬡COLD:decide:become:VOICE_CONVERSATION_WONDER:20260723⬡
+  // COLD-ANEW-VOICE-0061 stamped, needs-live-verification. ans is initialized from the signed
+  // voice selectors below, which skips model drafting when they return bytes. These bytes are
+  // signed handoff evidence that still crosses all council, STAMP, and readback stages. The honest
+  // fix (model composition from that evidence via VOICE_CONVERSATION_WONDER) is an absent live
+  // capability; removing the initialization risks breaking live voice openers, so it is stamped.
   // ⬡B:core.tool_loop:WIRE:signed_voice_purpose_is_exact_draft:20260717⬡
   // The failed proof call showed that merely removing generic tools still let
   // the model paraphrase the signed purpose, preventing deterministic SHADOW.
@@ -3621,6 +3705,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // failure or timeout falls straight through to the existing Groq call below --
     // this can degrade to current behavior, never below it.
     var r=null;
+    // ⬡COLD:act:become:ROADMAP_ACTIVATION_WONDER:20260723⬡
+    // COLD-ANEW-SYNTHETIC-0069 stamped, needs-live-verification. This manufactures a provider
+    // response carrying an activate_roadmap_task tool call. It is gated on codaActivationApproved
+    // and the mutation still queues and cannot release until the full outbound council commits.
+    // Honest fix (PAI cycle selects activation, a deterministic hand executes it) is
+    // ROADMAP_ACTIVATION_WONDER, absent here; removing this could break gated roadmap activation, so
+    // it is contained by stamp only.
     if (iter === 1 && _roadmapActivationEnvelope && _roadmapActivationEnvelope.spec &&
         _effectRuntime.codaActivationApproved === true) {
       // The outside coding relay supplied the exact typed command after asking
@@ -3702,7 +3793,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // the Together block short-circuits to together_no_key, so Together is not load-bearing.
     if (!r||r.error||!r.choices){
       var ORK=process.env.OPENROUTER_API_KEY;
-      if(ORK){var openRouterBody=primaryProviderBody(body,msgs,
+      // Codex P1 20260724: OpenRouter is now the load-bearing first rung, so it must pass
+      // the same spend guard the ladder path uses. Without this, DAILY_MODEL_CALL_CEIL
+      // could not stop a retry loop from billing OpenRouter. Ceiling hit -> skip and fall
+      // to the guarded ladder, never a silent unbounded burn.
+      var _orAllow=ORK&&require('./spend.guard.js').allow('text');
+      if(_orAllow){var openRouterBody=primaryProviderBody(body,msgs,
           process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b-2507');
         if(_structuredReachPolicy){
           var _routerPolicyFormat=_structuredReachResponseFormat();
@@ -3723,7 +3819,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
       else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0);}
       else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0);}
-      }else{global._paiLastError='openrouter_no_key';}
+      }else if(!ORK){global._paiLastError='openrouter_no_key';}else{global._paiLastError='openrouter_spend_ceiling';}
     }
     // Together GLM-5.2: retired to the LAST provider failover. Dead account by default
     // (TOGETHER_API_KEY blanked in env), so this short-circuits to together_no_key and the
@@ -3731,7 +3827,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // failover, never as the load-bearing rung.
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
-      if(TK){var togetherBody=primaryProviderBody(body,msgs,
+      // Spend-guarded like the OpenRouter rung above, so a re-funded Together failover can
+      // never be billed past DAILY_MODEL_CALL_CEIL when the OpenRouter ceiling routes here.
+      var _tkAllow=TK&&require('./spend.guard.js').allow('text');
+      if(_tkAllow){var togetherBody=primaryProviderBody(body,msgs,
           process.env.TOGETHER_MODEL||'zai-org/GLM-5.2');
         // ⬡B:core.tool_loop:FIX:glm_reasoning_burn_returns_empty_content:20260718⬡
         togetherBody.chat_template_kwargs={enable_thinking:false};
@@ -3753,7 +3852,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0);}
       else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0);}
-      }else{global._paiLastError='together_no_key';}
+      }else if(!TK){global._paiLastError='together_no_key';}else{global._paiLastError='together_spend_ceiling';}
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
@@ -3774,6 +3873,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         } else if(!global._paiLastError){ global._paiLastError='ladder_no_content'; }
       }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0); }
     }
+    // ⬡COLD:remember:become:METER_PROVIDER_ATTRIBUTION:20260723⬡
+    // COLD-ANEW-METER-0035 stamped, needs-live-verification. This telemetry collapses direct and
+    // ladder attempts into one openai_compat label with no component, wonder, key alias, provider
+    // request id, attempt sequence, token, or cost fields. Durable per-attempt attribution is
+    // METER_PROVIDER_ATTRIBUTION, a live capability not present in source. Contained by stamp only.
     try{
       var _rc=(r&&r.choices&&r.choices[0])||null;
       _stampStep('model_rung_result',
@@ -3970,7 +4074,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
       } else if (_requiredToolName === 'consult_mace' && body._codingReadNudge) {
-        // ⬡B:core.tool_loop:FIX:consult_mace_forced_with_parsed_args:20260719⬡
+        // ⬡COLD:act:become:PAI_TOOL_SELECTION_WONDER:20260723⬡
+        // COLD-ANEW-SYNTHETIC-0070 stamped, needs-live-verification. When the model refuses the
+        // required tool, cold code executes it, fabricates the assistant/tool transcript, and runs a
+        // direct grounded recomposition. The real result is recorded as SHADOW evidence so a grounded
+        // answer is not false-held (the documented founder-911 silent-phone failure below). Honest fix
+        // (cycle-selected tool under explicit policy, recompose through the canonical boundary) is
+        // PAI_TOOL_SELECTION_WONDER, absent here; pulling this blind re-opens that silence, so stamp only.
         // consult_mace is not a no-arg reader, but when the message named a concrete
         // file and repo those args are deterministic. The model refused to emit the
         // call, so cold code runs MACE read_file with the parsed args and feeds the
@@ -4013,7 +4123,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           _stampStep('forced_consult_mace_failed', String(_mcErr&&_mcErr.message||_mcErr));
         }
       } else if (DATA_READER_TOOLS[_requiredToolName]) {
-        // ⬡B:core.tool_loop:FIX:model_refuses_forced_data_read_so_execute_it_directly:20260719⬡
+        // ⬡COLD:act:become:PAI_TOOL_SELECTION_WONDER:20260723⬡
+        // COLD-ANEW-SYNTHETIC-0071 stamped, needs-live-verification. Same class as 0070 for the
+        // data readers: cold code selects and executes the reader, fabricates the transcript, records
+        // the real result as SHADOW evidence, and may recompose directly. This is the exact path built
+        // to end the founder-911 silent-phone / shadow_wonder_hold incidents documented below. Honest
+        // fix (transparent cycle recovery via PAI_TOOL_SELECTION_WONDER) is an absent live capability;
+        // contained by stamp only so the documented failure is not re-opened blind.
         // FOUNDER 911 20260719, from his real 8:05 text receipts: he asked "what am
         // I doing right now" (a personal day-question), calendar_read was forced, but
         // GLM would not emit the tool call even on retry. The turn then answered from
@@ -4543,6 +4659,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         ms:Date.now()-t0};
     }
   }
+  // ⬡COLD:speak:become:PAI_OUTPUT_REPAIR_WONDER:20260723⬡
+  // COLD-ANEW-REPORT-0075 stamped, needs-live-verification. When the answer is raw JSON this cold
+  // branch substitutes hardcoded calendar prose or a hardcoded ask-again line, which is cold code
+  // authoring human-facing bytes. The honest fix (return the defect to the PAI cycle and compose
+  // through the canonical mind under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Removing the
+  // guard would ship raw JSON to the human; rerouting to re-synthesis cannot be verified here, so it
+  // is contained by stamp only.
   if (!_structuredReachPolicy&&finalAns && /^[\[{]/.test(finalAns.trim())) {
     var _rawParsed = null;
     try { _rawParsed = JSON.parse(finalAns.trim()); } catch (eRawJ) {}
@@ -4558,6 +4681,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     }
   }
+  // ⬡COLD:speak:become:PAI_OUTPUT_REPAIR_WONDER:20260723⬡
+  // COLD-ANEW-REPORT-0076 stamped, needs-live-verification. This regex-detects a claimed
+  // reminder/calendar action that never fired and substitutes a hardcoded human answer. The guard
+  // correctly prevents a false action claim, but authoring the replacement bytes in cold code is the
+  // sin. Honest fix (judge the claim from canonical effect receipts and let the cycle compose the
+  // correction under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Deleting the guard would let
+  // the false claim ship, so it is contained by stamp only.
   // ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡
   // Founder screenshot: she replied 'I've set a reminder for you to check in on Tameka,
   // it'll pop up tomorrow 9am' -- but create_reminder NEVER fired, so no reminder
@@ -5240,6 +5370,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // stamps a durable per-HAM candidate, then lets the existing governed REACH
   // engine judge timing and channel. Outbound finalizer cycles are excluded so
   // REACH can never recursively trigger itself.
+  // ⬡COLD:wake:become:REACH_CYCLE_HANDOFF:20260723⬡
+  // COLD-ANEW-TOOL-LOOP-0002 stamped, needs-live-verification. This treats a completed answer as a
+  // new REACH signal and auto-consumes the candidate, which can enter a second (and sometimes third)
+  // paid PAI cycle. The honest fix (require a changed-world or queued-service signal, one governed
+  // decision, reuse committed bytes) is REACH_CYCLE_HANDOFF, a live capability not present in source.
+  // Changing the epilogue here alters the proactive-reach hot path and cannot be verified from here,
+  // so it is contained by stamp only.
   if (_reachHandoffEligible) {
     var _reachHandoff;
     try {
