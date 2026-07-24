@@ -3694,6 +3694,41 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         } else { global._paiLastError='mind_grok_spend_ceiling'; }
       }catch(eMind){/* fall through to the Together chain below, unchanged */}
     }
+    // ⬡B:core.tool_loop:FIX:openrouter_before_together_together_retired_from_load_bearing:20260724⬡
+    // Codex P1 20260724: OpenRouter is the funded per-key provider; Together is the dead,
+    // bled-out account. The OpenRouter rung now runs BEFORE Together, so the high-volume
+    // final-answer path spends on the live metered key first and only touches Together (if a
+    // stale key is even present) as the last provider failover. With TOGETHER_API_KEY blank
+    // the Together block short-circuits to together_no_key, so Together is not load-bearing.
+    if (!r||r.error||!r.choices){
+      var ORK=process.env.OPENROUTER_API_KEY;
+      if(ORK){var openRouterBody=primaryProviderBody(body,msgs,
+          process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b-2507');
+        if(_structuredReachPolicy){
+          var _routerPolicyFormat=_structuredReachResponseFormat();
+          if(_routerPolicyFormat)openRouterBody.response_format=_routerPolicyFormat;
+          openRouterBody.provider={require_parameters:true};
+        }
+        r=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
+        headers:{Authorization:'Bearer '+ORK,'Content-Type':'application/json'},
+        body:JSON.stringify(openRouterBody),
+        signal:_modelRequestSignal()
+      }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
+      r=_structuredProviderResult(r);
+      if(r&&r.choices&&r.choices.length){
+        var _oMsg=(r.choices[0]&&r.choices[0].message)||{};
+        if(!_oMsg.content&&!((_oMsg.tool_calls||[]).length)){
+          global._paiLastError='openrouter_empty_content_reasoning_burn';r=null;
+        } else { global._paiLastError=null; }
+      }
+      else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0);}
+      else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0);}
+      }else{global._paiLastError='openrouter_no_key';}
+    }
+    // Together GLM-5.2: retired to the LAST provider failover. Dead account by default
+    // (TOGETHER_API_KEY blanked in env), so this short-circuits to together_no_key and the
+    // ladder rung below carries the turn. Kept only so a re-funded Together could serve as a
+    // failover, never as the load-bearing rung.
     if (!r||r.error||!r.choices){
       var TK=process.env.TOGETHER_API_KEY;
       if(TK){var togetherBody=primaryProviderBody(body,msgs,
@@ -3719,42 +3754,6 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       else if(r&&r.error){global._paiLastError='together:'+JSON.stringify(r.error).slice(0);}
       else if(r&&!r.choices){global._paiLastError='together_no_choices:'+JSON.stringify(r).slice(0);}
       }else{global._paiLastError='together_no_key';}
-    }
-    // ⬡B:core.tool_loop:FIX:openrouter_third_tier_20260713⬡
-    // Founder-caught live: Together returned "Credit limit exceeded" on a real
-    // production call, and there was nothing after it -- ans='' and the whole
-    // cycle died, surfacing as ok:false/no_answer at the reach channel. Real,
-    // observed failure mode, not hypothetical. OpenRouter is already a standing
-    // key on this service (doctrine.model_map, un-banned by founder's own word
-    // 20260709), so it is the correct third tier rather than a new dependency.
-    // No tools attached here (matches the Together tier above, which is also
-    // tool-free) since this only ever engages after tool-capable Groq has
-    // already failed on this turn. Same fail-soft discipline: any error here
-    // just falls through to the existing empty-answer path below, unchanged.
-    if (!r||r.error||!r.choices){
-      var ORK=process.env.OPENROUTER_API_KEY;
-      if(ORK){var openRouterBody=primaryProviderBody(body,msgs,
-          process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b-2507');
-        if(_structuredReachPolicy){
-          var _routerPolicyFormat=_structuredReachResponseFormat();
-          if(_routerPolicyFormat)openRouterBody.response_format=_routerPolicyFormat;
-          openRouterBody.provider={require_parameters:true};
-        }
-        r=await fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',
-        headers:{Authorization:'Bearer '+ORK,'Content-Type':'application/json'},
-        body:JSON.stringify(openRouterBody),
-        signal:_modelRequestSignal()
-      }).then(function(x){return x.json();}).catch(function(e){return {error:e.message};});
-      r=_structuredProviderResult(r);
-      if(r&&r.choices&&r.choices.length){
-        var _oMsg=(r.choices[0]&&r.choices[0].message)||{};
-        if(!_oMsg.content&&!((_oMsg.tool_calls||[]).length)){
-          global._paiLastError='openrouter_empty_content_reasoning_burn';r=null;
-        } else { global._paiLastError=null; }
-      }
-      else if(r&&r.error){global._paiLastError='openrouter:'+JSON.stringify(r.error).slice(0);}
-      else if(r&&!r.choices){global._paiLastError='openrouter_no_choices:'+JSON.stringify(r).slice(0);}
-      }else{global._paiLastError='openrouter_no_key';}
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
