@@ -82,7 +82,7 @@ var PROVIDERS = {
       // The groq/together blocks above were cleaned to GLM-5.2 defaults, but when
       // OpenRouter was restored (20260709) this block kept its banned deepseek
       // defaults. DeepSeek is perma-banned and routed through the *permitted*
-      // OpenRouter host, so the host-level provider gate never catches it — a live
+      // OpenRouter host, so the host-level provider gate never catches it -- a live
       // ENV override was the only thing standing between the founder and a banned
       // fallback. Per founder doctrine ("fix what reaches the cap, not the cap"),
       // the wiring itself must never fall back to a banned provider: defaults are
@@ -127,7 +127,30 @@ function seatFallback(tier) {
   return name ? seatResolveFor(seatMap.fallback(name)) : null;
 }
 
+// ⬡COLD:decide:become:PAI_MODEL_ROUTING_WONDER:20260724⬡
+// ⬡B:cathy.shadow.cold_audit:COLD_AUDIT:template_router_key_presence_decider_2db29c44:20260724⬡
+// CATHY.SHADOW cold audit (COLD-TEMPLATE-PROVIDER-0112, verdict become): key PRESENCE was
+// the whole decider -- GROQ_API_KEY present meant Groq selected, generic key presence drove
+// fallback. In this TRUE ZERO template that means an inherited or stray credential could by
+// itself arm a paid provider in a newborn world. Authorization is now SEPARATE from
+// presence: a present-but-unauthorized key stays inert and this legacy chain routes nowhere.
+// Explicit routing policy (PAI_ROUTING_POLICY) authorizes; a born world with real world
+// identity (HAM_UID present, env-only never a literal) is implicitly authorized so the live
+// mind is never broken. A TRUE ZERO template -- no world identity, no policy -- inherits zero
+// paid provider by default. The full become -- resolving from canonical service, Wonder,
+// component, and tier policy -- is owned by PAI_MODEL_ROUTING_WONDER (CODA); the seat map
+// above is that authorized policy path already.
+function routingAuthorized(opts) {
+  if (opts && opts.routingAuthorized) return true;
+  if (process.env.PAI_ROUTING_POLICY) return true;
+  if (process.env.HAM_UID) return true; // a born, provisioned world
+  return false;
+}
+
 function getProviderName(opts) {
+  // A present key is not an authorization. Until this world is authorized, every attached
+  // key stays inert -- no key presence alone can change routing.
+  if (!routingAuthorized(opts)) return null;
   if (process.env.GROQ_API_KEY) return 'groq';
   // Groq is missing. Only fall through to a paid/banned-in-autonomous
   // provider if the caller explicitly authorized it. No implicit escalation.

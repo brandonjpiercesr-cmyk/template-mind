@@ -41,17 +41,62 @@ const WAKE = process.env.AUTONOMOUS_WAKE_PROMPT ||
 let running = false;   // never overlap ticks -- one cook at a time
 let ticks = 0;
 
+// ⬡COLD:wake:become:AUTONOMOUS_CYCLE_WONDER:20260723⬡
+// ⬡B:cathy.shadow.cold_audit:COLD_AUDIT:template_cycle_hourly_self_wake_9ee82216:20260723⬡
+// CATHY.SHADOW cold audit bounded safety (COLD-TEMPLATE-CLOCK-0020/0021): the born-world
+// env check already holds newborn-zero (an unborn template spends nothing), but a wiped or
+// mis-set AUTONOMOUS_INTERVAL_MS could still drive the paid PAI cycle far faster than the
+// founder's one-hour cadence. Two bounded guards close that without stopping the live
+// cadence: a per-window tick ceiling caps how many autonomous wakes can spend in a rolling
+// window, and each tick carries an interval-bucketed idempotency key so a restart maps to
+// the same key and downstream can refuse to repurchase a consumed wake. The full become --
+// waking only from a durable consumed signal or a governed cadence ruling in the ONE brain
+// -- is owned by AUTONOMOUS_CYCLE_WONDER (CODA). The live one-hour cadence sits far under
+// any sane ceiling, so a born, provisioned world is never slowed.
+const TICK_CEILING = parseInt(process.env.AUTONOMOUS_TICK_CEILING || '4', 10);
+const TICK_WINDOW_MS = parseInt(process.env.AUTONOMOUS_TICK_WINDOW_MS || '3600000', 10);
+let _windowStart = Date.now();
+let _windowTicks = 0;
+function tickBudgetOk() {
+  const now = Date.now();
+  if (now - _windowStart >= TICK_WINDOW_MS) { _windowStart = now; _windowTicks = 0; }
+  if (_windowTicks >= TICK_CEILING) return false;
+  _windowTicks++;
+  return true;
+}
+// Interval-bucketed key: two ticks in the same interval bucket (e.g. across a restart)
+// share one key, so a durable consumer can dedupe a repurchased wake. Identity is env-only.
+function cycleKey() {
+  const bucket = Math.floor(Date.now() / (INTERVAL_MS || 3600000));
+  return 'cycle:' + (HAM || 'unborn') + ':' + bucket;
+}
+let _lastWallDigest = null;
+function wallDigest(w) {
+  try { return require('crypto').createHash('sha256').update(JSON.stringify(w)).digest('hex'); }
+  catch (e) { return null; }
+}
+
 async function tick() {
   if (running) { console.log('[cycle.runner] previous tick still running, skipping'); return; }
   if (!HAM || !BANK || !KEY) { console.log('[cycle.runner] unborn: missing world env, idling'); return; }
+  if (!tickBudgetOk()) { console.log('[cycle.runner] tick ceiling reached for window, resting (zero spend)'); return; }
   running = true;
   const started = Date.now();
   ticks++;
   try {
     const { runPAI } = require('./pai/core/tool.loop.js');
+    // ⬡COLD:act:tag:AUTONOMOUS_CYCLE_WONDER:20260723⬡
+    // ⬡B:cathy.shadow.cold_audit:COLD_AUDIT:template_hourly_full_pai_tick_42fe9d78:20260723⬡
+    // CATHY.SHADOW cold audit (COLD-TEMPLATE-CLOCK-0021, verdict tag): the full PAI work
+    // is real WORK -- it just hung off a timer rather than one consumed signal. It now
+    // carries this tick's interval-bucketed cycle key so downstream spend reconciles to one
+    // wake and a restart cannot silently repurchase it; the per-window ceiling above bounds
+    // how often it can pay. Consuming an exact durable signal before this call is owned by
+    // AUTONOMOUS_CYCLE_WONDER (CODA).
     // AUTONOMOUS channel: the cook's confidence threshold favors waking (B4).
+    const _cycleKey = cycleKey();
     const out = await runPAI(HAM, WAKE, 'autonomous',
-      { council_context: { mode: 'autonomous' }, autonomous: true },
+      { council_context: { mode: 'autonomous' }, autonomous: true, cycleKey: _cycleKey, idempotencyKey: _cycleKey },
       [], null);
     const ok = !!(out && out.ok);
     console.log('[cycle.runner] tick ' + ticks + ' ' + (Date.now() - started) + 'ms ok=' +
@@ -63,11 +108,30 @@ async function tick() {
     // has anything worth UPDATING as its version on that wall. This is the general law
     // SPAN demonstrates: every station reads the wall, then updates its own version.
     // SPAN is an organ (it thinks through the ladder); a quiet no-update is valid.
+    // \u2b21COLD:act:tag:SPAN_WONDER:20260723\u2b21
+    // \u2b21B:cathy.shadow.cold_audit:COLD_AUDIT:template_unconditional_span_thought_3fa24872:20260723\u2b21
+    // CATHY.SHADOW cold audit (COLD-TEMPLATE-CLOCK-0022, verdict tag): SPAN's paid
+    // deliberation ran on EVERY tick even when the wall never changed, and a fabricated
+    // fallback wall could trigger it with no real provenance. Bounded safety: SPAN runs only
+    // on a real wall whose mechanical digest changed since the last consumed tick. An
+    // unchanged wall or a missing/fabricated wall costs zero SPAN model calls (ok:false over
+    // hollow provenance). SPAN's own component budget and durable cross-restart digest
+    // consumption are owned by SPAN_WONDER (CODA).
     try {
-      var _wall = (out && out.wall) || (out && out._fcw) || { hamUid: HAM, contributors: {}, question: WAKE };
-      var _sv = await span.run(_wall, HAM);
-      console.log('[cycle.runner] SPAN ' + (_sv.updated ? 'updated version -> ' + (_sv.versionId || '?') : 'kept version') +
-        (_sv.reason ? ' (' + _sv.reason + ')' : ''));
+      var _wall = (out && out.wall) || (out && out._fcw) || null;
+      if (!_wall) {
+        console.log('[cycle.runner] SPAN skipped: no exact wall provenance this tick');
+      } else {
+        var _dg = wallDigest(_wall);
+        if (_dg && _dg === _lastWallDigest) {
+          console.log('[cycle.runner] SPAN skipped: wall digest unchanged (zero spend)');
+        } else {
+          var _sv = await span.run(_wall, HAM);
+          _lastWallDigest = _dg || _lastWallDigest;
+          console.log('[cycle.runner] SPAN ' + (_sv.updated ? 'updated version -> ' + (_sv.versionId || '?') : 'kept version') +
+            (_sv.reason ? ' (' + _sv.reason + ')' : ''));
+        }
+      }
     } catch (e) {
       console.log('[cycle.runner] SPAN error: ' + e.message);
     }
@@ -133,6 +197,15 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, function () {
   console.log('[cycle.runner] up on ' + PORT + ' for HAM ' + (HAM || '(unborn)') +
     ', autonomous cook every ' + INTERVAL_MS + 'ms');
+  // ⬡COLD:wake:become:AUTONOMOUS_CYCLE_WONDER:20260723⬡
+  // ⬡B:cathy.shadow.cold_audit:COLD_AUDIT:template_cycle_hourly_self_wake_9ee82216:20260723⬡
+  // CATHY.SHADOW cold audit (COLD-TEMPLATE-CLOCK-0020, verdict become): a process-owned
+  // clock, not a durable signal, owns when the PAI mind wakes. The founder's LIVE world
+  // relies on this cadence, so the timer stays; every wake it fires now passes through the
+  // born-world env check (newborn-zero held), the per-window tick ceiling, and an
+  // interval-bucketed idempotency key (see tick() above). The full become -- waking only
+  // from a consumed real signal or a governed cadence ruling in the ONE brain, with REST as
+  // a first-class no-work outcome -- is owned by AUTONOMOUS_CYCLE_WONDER (CODA).
   // first tick shortly after boot, then on the interval
   setTimeout(tick, 15000);
   setInterval(tick, INTERVAL_MS);
