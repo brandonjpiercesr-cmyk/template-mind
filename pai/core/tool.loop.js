@@ -3808,6 +3808,19 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       var _orAllow=ORK&&require('./spend.guard.js').allow('text');
       if(_orAllow){var openRouterBody=primaryProviderBody(body,msgs,
           process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b-2507');
+        // ⬡B:core.tool_loop:FIX:openrouter_reasoning_burn_returns_empty_content:20260724⬡
+        // OpenRouter is now the load-bearing FIRST rung, but unlike the Together rung below
+        // it carried no reasoning-off guard. qwen3-235b is a thinking model: it can spend its
+        // whole budget on reasoning tokens and return empty content, which trips the
+        // openrouter_empty_content_reasoning_burn path below and reads to the HAM as an
+        // intermittent no_answer even when the dedicated OR_KEY_MIND_GROK is funded (so it
+        // looks like key contention when it is not). Mirror the Together guard exactly:
+        // chat_template_kwargs is the Qwen-native switch OpenRouter passes through, and
+        // reasoning:{enabled:false} is OpenRouter's unified off-switch. Strictly additive:
+        // providers that ignore these fields are unaffected, the final-answer pass never
+        // needs a visible chain of thought, and any real miss still falls through unchanged.
+        openRouterBody.chat_template_kwargs={enable_thinking:false};
+        openRouterBody.reasoning={enabled:false};
         if(_structuredReachPolicy){
           var _routerPolicyFormat=_structuredReachResponseFormat();
           if(_routerPolicyFormat)openRouterBody.response_format=_routerPolicyFormat;
