@@ -22,7 +22,16 @@
 //                               variant timed out at 90s and was rejected)
 //   - moonshotai/kimi-k3        CODA coding adviser
 //   - qwen/qwen3-coder          deploy/tool seat, clean tool calls
-//   - zai-org/GLM-5.2           C2/C3/CANON/advisors on Together
+//   - z-ai/glm-5.2              C2/C3 failover, CANON, advisors on OpenRouter
+//
+// Founder ruling 20260724: Together is retired from every load-bearing seat (its
+// account bled and ran dry). GLM-5.2 now runs on OpenRouter (slug z-ai/glm-5.2,
+// per-seat key) so the same model quality carries the CANON, advisor, and failover
+// seats through the metered per-key path, never the shared Together wallet. Together
+// stays only as an env-overridable option, wired nowhere by default.
+// SEAT_CODA_MODEL may be set to a cheaper deepseek slug and SEAT_DEPLOY_MODEL to a
+// gemini slug via env once the exact OpenRouter slug is confirmed live (do not bake
+// an unverified slug: a wrong model id fails the seat silently).
 
 function env(key, dflt) {
   var v = process.env[key];
@@ -38,13 +47,13 @@ var SEATS = {
   // high-volume workhorse, and returns clean JSON in ~3.7s (verified live), unlike the
   // MiniMax M2 reasoners which burn the whole budget thinking. GLM-5.2 is the failover.
   c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'minimax/minimax-01',       provider: 'openrouter', keyEnv: 'OR_KEY_C2_ORGAN',    via: 'openrouter', dailyCapUsd: 6,
-                 fallbackModel: 'zai-org/GLM-5.2', fallbackProvider: 'together', fallbackKeyEnv: 'TOGETHER_API_KEY' },
+                 fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_C2_ORGAN' },
   // Founder ruling 20260722: Grok 4.5 is the mind; GLM-5.2 is its failover. Grok is
   // closed-weight (xAI) and founder-lifted from the ban for this seat. Seated on C3
   // (the flagship mind) only, not the high-volume C2 organ, to keep the $2/$6-per-M
   // Grok off the everyday workhorse. verified live 20260722.
   c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', dailyCapUsd: 6,
-                 fallbackModel: 'zai-org/GLM-5.2', fallbackProvider: 'together', fallbackKeyEnv: 'TOGETHER_API_KEY' },
+                 fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK' },
   c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', dailyCapUsd: 2 },
   coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', dailyCapUsd: 8 },
   deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', dailyCapUsd: 4 },
@@ -55,8 +64,8 @@ var SEATS = {
   // miss never leaves a contest ungraded. No RunPod anywhere in this map.
   judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'qwen/qwen3-235b-a22b-2507',provider: 'openrouter', keyEnv: 'OR_KEY_JUDGE_QWEN', via: 'openrouter', dailyCapUsd: 4,
                  fallbackModel: 'moonshotai/kimi-k3', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_CODA_KIMI' },
-  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'zai-org/GLM-5.2',          provider: 'together',   keyEnv: 'TOGETHER_API_KEY',   via: 'together',   dailyCapUsd: null },
-  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'zai-org/GLM-5.2',          provider: 'together',   keyEnv: 'TOGETHER_API_KEY',   via: 'together',   dailyCapUsd: null },
+  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', dailyCapUsd: null },
+  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', dailyCapUsd: null },
   voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', dailyCapUsd: 3 }
 };
 

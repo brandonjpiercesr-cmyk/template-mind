@@ -3734,7 +3734,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if (!r||r.error||!r.choices){
       var ORK=process.env.OPENROUTER_API_KEY;
       if(ORK){var openRouterBody=primaryProviderBody(body,msgs,
-          process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b');
+          process.env.OPENROUTER_MODEL||'qwen/qwen3-235b-a22b-2507');
         if(_structuredReachPolicy){
           var _routerPolicyFormat=_structuredReachResponseFormat();
           if(_routerPolicyFormat)openRouterBody.response_format=_routerPolicyFormat;
