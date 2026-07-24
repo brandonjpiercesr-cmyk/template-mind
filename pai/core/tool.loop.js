@@ -3792,7 +3792,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     // stale key is even present) as the last provider failover. With TOGETHER_API_KEY blank
     // the Together block short-circuits to together_no_key, so Together is not load-bearing.
     if (!r||r.error||!r.choices){
-      var ORK=process.env.OPENROUTER_API_KEY;
+      // ⬡B:core.tool_loop:FIX:final_answer_rung_resolves_live_per_function_key:20260724⬡
+      // Her final-answer synthesis is the load-bearing rung. It must authenticate with a LIVE
+      // key. The shared OPENROUTER_API_KEY is the retired high-volume key a founder may disable
+      // for cost containment; when that happens every answer 401s (and a 401 records zero
+      // usage, so the dashboard shows nothing while she goes silent). Resolve the per-function
+      // mind key first (OR_KEY_MIND_GROK, the c3_mind seat's key), then floor to the shared key
+      // exactly as seat.map resolveKey does. If neither is set, ORK is blank and the rung
+      // reports openrouter_no_key and falls through, same as before.
+      var ORK=process.env.OR_KEY_MIND_GROK||process.env.OPENROUTER_API_KEY;
       // Codex P1 20260724: OpenRouter is now the load-bearing first rung, so it must pass
       // the same spend guard the ladder path uses. Without this, DAILY_MODEL_CALL_CEIL
       // could not stop a retry loop from billing OpenRouter. Ceiling hit -> skip and fall
