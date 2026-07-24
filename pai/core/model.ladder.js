@@ -277,6 +277,14 @@ async function rankedAccepted(factories, opts) {
 // deliberate(system, user, opts) -> { content, model, via } | null
 // THE LADDER, founder's authorized order: GLM 5.2 -> Ornith -> Qwen -> the Groq
 // floor last, only if the open-weight authorized set is unreachable.
+// ⬡COLD:decide:tag:PROVIDER_SPEND_ATTRIBUTION:20260723⬡
+// COLD-ANEW-LADDER-0007 stamped, needs-live-verification. The entry spend guard below consumes one
+// anonymous slot before any provider is attempted, while provider.boundary meters each actual paid
+// fetch again, so accounting is split across two layers with no component or key identity. The
+// honest fix (meter each real attempt exactly once inside a canonical provider client that carries
+// component, wonder, key label, and cost context) is PROVIDER_SPEND_ATTRIBUTION. That client is not
+// present in this file and touching spend.guard is out of this file's scope, so it is contained by
+// stamp only; no hot-path behavior is changed here.
 async function deliberate(system, user, options) {
   var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: 25000, json: false }, options || {});
   // ⬡B:core.model_ladder:LAW:spend_guard_at_the_one_door:20260719⬡ the daily
