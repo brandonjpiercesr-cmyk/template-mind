@@ -4927,8 +4927,30 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       }
     } catch(_eTrk){}
     if(!finalAns) {
-      _stampStep('cycle_end_silent', 'no_answer, iterations='+iter);
-      return {ok:false,reason:'no_answer',ham:hamObj,cycleId:_cycleId,
+      // ⬡B:core.tool_loop:911:no_answer_pointed_at_the_models_while_the_ceiling_was_the_wall:20260725⬡
+      // LIVE 20260725: her gate returned no_answer in under two seconds, five of five, while
+      // model health read every provider UP and all ten seat keys live. Nothing was broken.
+      // The daily call ceiling had been reached, so the ladder returned null instantly, and
+      // the only word the founder saw pointed at the models, which were fine. A different
+      // path said it plainly in the same minute: daily_spend_ceiling_reached_at_boundary.
+      // The truth existed and her own voice did not carry it.
+      //
+      // That mattered more than a wrong word. Her last deploy was mine, she was down, and
+      // reverting was the obvious call. The only thing that stopped a good revert was that
+      // the same code had answered thirty minutes earlier with no deploy in between. A
+      // reason that names the real wall is what makes that judgment cheap instead of lucky.
+      //
+      // The ceiling is a BUDGET decision, not a failure, so it also tells the reader what to
+      // do about it. Nothing here changes what she does; silence is still silence.
+      var _silentReason = 'no_answer';
+      try {
+        var _denial = require('./spend.guard.js').lastDenial(120000);
+        if (_denial) {
+          _silentReason = 'daily_call_ceiling_reached:' + _denial.count + '_of_' + _denial.ceiling;
+        }
+      } catch (eDenial) { /* naming is best effort and never changes the outcome */ }
+      _stampStep('cycle_end_silent', _silentReason + ', iterations='+iter);
+      return {ok:false,reason:_silentReason,ham:hamObj,cycleId:_cycleId,
         tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null};
     }
   }
