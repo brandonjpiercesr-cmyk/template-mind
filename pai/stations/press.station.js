@@ -27,6 +27,33 @@ function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_
 // Cheap external scan. Uses the OpenRouter web plugin through the boundary (never a rogue
 // host). Returns raw candidate headlines; the relevance judgment happens after, in the
 // organ. Fails open (empty) so a scan hiccup yields a quiet tick, never an error.
+// ⬡B:press.scan:SEAT:the_scan_stops_spending_the_shared_wallet_anonymously:20260725⬡
+// FOUNDER 20260725, his words: "Why the fuck are we using a shared key. Remove it. And code
+// everything (run this deep extensive audit) towards the per seat model. Bitch it helps us
+// audit bleeds and switch shit easy! Per key isn't a backup it's a necessary!"
+//
+// One shared OPENROUTER_API_KEY answered 401 that morning and took her whole voice down for
+// hours while ten funded per-seat keys sat alive and untouched. The bigger half of his point
+// is ATTRIBUTION: PRESS scans on a tick, so it is exactly the kind of quiet, repeating spend
+// that a shared wallet hides.
+//
+// PRESS has no seat of its own in pai/core/seat.map.js yet, and that map is byte-identical
+// paired with anew, so a seat is a paired merge on both sides and not this file's to invent.
+// What this file CAN stop doing is spelling the shared key out loud: the seat is named by env
+// (PRESS_SCAN_SEAT) and the one source owns the key name, so the day a press seat exists the
+// switch is one env change. No default seat on purpose, because pointing a background news
+// tick at the mind, CODA, or CANON wallet would let a scan drain the keys that keep her
+// talking. Unnamed resolves the same shared floor it used before, from the one place that
+// floor can later be lifted for every caller at once.
+// A plain require, the same way pai/core/model.router.js takes the one source. No shared-key
+// literal survives anywhere in this file, not even on a degraded path.
+var _seatMap = require('../core/seat.map.js');
+function pressScanKey() {
+  var name = String(process.env.PRESS_SCAN_SEAT || '').trim();
+  var s = name ? _seatMap.seat(name) : null;
+  if (s && s.provider === 'openrouter') return _seatMap.resolveKey(s);
+  return _seatMap.resolveKey({ provider: 'openrouter', keyEnv: '' });
+}
 async function scanExternal(interests) {
   try {
     var q = 'latest news ' + (interests || []).slice(0, 5).join(', ');
@@ -48,7 +75,7 @@ async function scanExternal(interests) {
       if (pb && pb.isBannedChatCall && pb.isBannedChatCall(endpoint)) return []; } catch (e) {}
     var r = await fetch(endpoint, {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + process.env.OPENROUTER_API_KEY, 'Content-Type': 'application/json' },
+      headers: { Authorization: 'Bearer ' + pressScanKey(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
     }).then(function (x) { return x.json(); });
     var txt = (((r.choices || [])[0] || {}).message || {}).content || '';
