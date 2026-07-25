@@ -135,35 +135,14 @@ async function tick() {
     } catch (e) {
       console.log('[cycle.runner] SPAN error: ' + e.message);
     }
-    // ⬡B:cycle.runner:BUILD:autonomous_build_arm_reconnected_drain_each_tick:20260719⬡
-    // WONDER DOCTRINE: reconnect her AUTONOMOUS BUILD ARM. She plans autonomously
-    // (CODA/SPAN queue span.task.BUILD_* beads = her real roadmap), but the
-    // dispatch-to-builder was disconnected: this cycle self-scanned and let SPAN
-    // read the wall, yet never handed a queued build to the coder. SPAN sequenced
-    // the fix (founder governance: SPAN assigns): CODA leads, CANEW builds through
-    // the drain, CANON grades. So each tick, after the cook and SPAN, we force one
-    // drain pass on CANEW: it pulls the next claimed build task from the queue,
-    // builds it (through its game_console / cook-off), CANON grades, it ships. The
-    // drain is idempotent and cheap -- it returns {open:0,drained:0} when the queue
-    // is empty, so a quiet tick costs nothing. This closes the loop the founder
-    // remembers: she writes her own list AND builds it. The founder's direct word
-    // still overrides everything; this only runs the autonomous default.
-    try {
-      var _drainUrl = process.env.CANEW_DRAIN_URL || 'https://canew.onrender.com/canew/drain';
-      var _dr = await fetch(_drainUrl, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: 'cycle.runner.autonomous', ham: HAM }),
-        signal: AbortSignal.timeout(30000)
-      }).then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
-      if (_dr && (_dr.drained || _dr.open)) {
-        console.log('[cycle.runner] build drain: open=' + (_dr.open || 0) + ' drained=' + (_dr.drained || 0));
-      }
-    } catch (eDrain) {
-      console.log('[cycle.runner] build drain error: ' + eDrain.message);
-    }
+    // ⬡B:cycle.runner:SUPERSEDE:template_zero_does_not_dispatch_canew_drain:20260725⬡
+    // Build commissioning is not owned by a template world's hourly mind tick. The
+    // former direct drain request was unauthenticated and could wake a coder with no
+    // accepted work contract. CODA owns intentional build commissioning through its
+    // governed queue and receipts. This runner has no compatibility request path.
     // ⬡B:cycle.runner:BUILD:proactive_sweep_fires_the_department_each_tick:20260719⬡
     // THE MISSING WIRE. The proactive agents (DAWN/HUNCH/BURST/GHOST/PRESS/SAGE) were built
-    // but nothing called them -- shelf-ware. Now, after the cook + SPAN + build drain, the
+    // but nothing called them -- shelf-ware. Now, after the cook and SPAN, the
     // proactive sweep runs the department per each agent's real cadence (each agent self-gates
     // and closes its own loop). Guarded + fails open so it never breaks a tick.
     try {
