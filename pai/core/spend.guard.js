@@ -24,13 +24,29 @@ function pruneOld() {
 
 // Called right before any paid model call. Returns false when the daily ceiling
 // is hit, so the caller skips the spend and stays silent rather than burning.
+// ⬡B:core.spend_guard:911:the_ceiling_stopped_her_and_told_nobody:20260725⬡
+// The ceiling reached is a BUDGET decision, not a failure, and her voice reported it as
+// no_answer, which names nothing and points at the models. The denial is remembered here so
+// the voice path can name the real wall. Decides nothing, blocks nothing new.
+var LAST_DENIAL = null;
+
+function lastDenial(withinMs) {
+  if (!LAST_DENIAL) return null;
+  var window = typeof withinMs === 'number' ? withinMs : 120000;
+  return (Date.now() - LAST_DENIAL.at) <= window ? LAST_DENIAL : null;
+}
+
 function allow(kind) {
   pruneOld();
   var ceil = kind === 'image'
     ? parseInt(process.env.DAILY_IMAGE_CALL_CEIL || '300', 10)
     : DEFAULT_CEIL;
   var count = CALL_LOG.length;
-  if (count >= ceil) return false;
+  if (count >= ceil) {
+    LAST_DENIAL = { at: Date.now(), kind: String(kind || 'text'), count: count, ceiling: ceil,
+      reason: 'daily_call_ceiling_reached' };
+    return false;
+  }
   CALL_LOG.push(Date.now());
   return true;
 }
@@ -71,4 +87,4 @@ async function checkBalances() {
   return low;
 }
 
-module.exports = { allow: allow, usageToday: usageToday, checkBalances: checkBalances };
+module.exports = { lastDenial: lastDenial, allow: allow, usageToday: usageToday, checkBalances: checkBalances };
