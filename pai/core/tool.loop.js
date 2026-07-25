@@ -2041,10 +2041,25 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
   if (name === 'create_reminder') {
     // \u2b21B:core.tool.loop:BUILD:reminder_feature:20260707\u2b21
     // span.task.reminder_feature_command_center. Real reminder, not a stamp
-    // pretending to be one. EANEW's own 3-min cycle (already real, already
-    // running) checks REMINDER beads for due ones and fires them for real
-    // through POST /reach/out, the same real compose-and-send path already
-    // wired for her to reach Brandon on her own.
+    // pretending to be one: it writes a REMINDER bead with a real due_at.
+    // \u2b21B:core.tool.loop:FIX:comment_claimed_a_firing_cycle_that_never_existed:20260725\u2b21
+    // WHAT THIS COMMENT USED TO SAY, and why it was a false success. It read:
+    // "EANEW's own 3-min cycle (already real, already running) checks REMINDER
+    // beads for due ones and fires them for real through POST /reach/out, the
+    // same real compose-and-send path." Every clause of that was wrong.
+    // core/cycle.js has an empty _cycleBody holding only a dead marker line and
+    // zero callers, so no such cycle ever ran; nothing was "already running";
+    // and every reminder ever written here sat in the brain and never fired.
+    // A cold compose-and-send through /reach/out would also be the exact sin
+    // the granddaddy 911 forbids: cold code wearing her voice.
+    // WHAT IS TRUE NOW. core/reach/wake.clock.js NOTICES a REMINDER bead whose
+    // due_at has come, in that person's own zone, and hands that one fact to
+    // core/reach/wake.intake.js, which wakes ONE cycle. Her cycle decides
+    // whether and what to say and is free to say nothing; the REACH council
+    // decides whether it goes; REACH_SEND_MODE gates every send. That clock is
+    // DEFAULT OFF behind WAKE_CLOCK_ENABLED, so a due_at written here fires
+    // only in a world that has armed it. This comment names the flag. It does
+    // not claim a running loop, and no comment here ever should again.
     var BUr=_bu(), BKr=_bk();
     if (!BUr||!BKr) return JSON.stringify({ok:false,reason:'no_brain'});
     var rHam = args.ham_uid || hamUid;
@@ -2059,11 +2074,24 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     var dueAt = args.due_at;
     var parsedDue = dueAt ? new Date(dueAt) : null;
     var isValidFuture = parsedDue && !isNaN(parsedDue.getTime()) && parsedDue.getTime() > Date.now();
+    var defaultedZone = null;
     if (!isValidFuture) {
-      var fallback = new Date();
-      fallback.setDate(fallback.getDate() + 1);
-      fallback.setHours(9, 0, 0, 0);
-      dueAt = fallback.toISOString();
+      // ⬡B:core.tool.loop:FIX:dateless_reminder_defaulted_to_9am_in_server_time:20260725⬡
+      // THE 5AM BUG. This fallback used to build "tomorrow 9am" with
+      // Date.setHours(9,0,0,0), and setHours means nine in the morning IN THE
+      // SERVER'S ZONE. The server runs UTC, so an Eastern person who asked to
+      // be reminded "tomorrow" had 09:00 UTC stored, which is 5:00am where they
+      // actually sleep. It stayed invisible only because nothing read REMINDER
+      // beads for due ones; arm WAKE_CLOCK_ENABLED and that stored instant
+      // really does wake them at five. His law: a HAM has a timezone and it is
+      // never UTC. Resolved now through the one shared resolver, the same door
+      // calendar_read already uses, so 9am means 9am on THEIR wall.
+      var _rDefault = await require('./ham.timezone.js').resolveNextLocalDayAtHour(rHam, 9, {});
+      if (!_rDefault || _rDefault.ok !== true) {
+        return JSON.stringify({ok:false,reason:'reminder_default_time_unresolved'});
+      }
+      defaultedZone = _rDefault.timezone;
+      dueAt = _rDefault.iso;
     }
     // ⬡B:core.tool.loop:FIX:reminder_dedup_no_recreate_loop:20260711⬡
     // The kill-switch incident (03:46): a fired reminder's DELIVERY was being re-read
@@ -2101,7 +2129,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
           source:reminderSource,
           acl_stamp:'\u2b21B:pai.reminder:REMINDER:created:'+ymd()+'\u2b21',
           summary:'[REMINDER] '+String(args.text||'').slice(0),
-          content:JSON.stringify({text:args.text,due_at:dueAt,fired:false,defaultedDate:!isValidFuture,createdAt:new Date().toISOString()}),
+          content:JSON.stringify({text:args.text,due_at:dueAt,fired:false,defaultedDate:!isValidFuture,defaultedZone:defaultedZone,createdAt:new Date().toISOString()}),
           importance:6}), signal:runtime && runtime.abortSignal});
       var reminderRows = reminderWrite.ok
         ? await reminderWrite.json().catch(function(){return null;}) : null;
@@ -2109,7 +2137,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
           reminderRows[0].source !== reminderSource) {
         return JSON.stringify({ok:false,reason:'reminder_write_unverified'});
       }
-      return JSON.stringify({ok:true,text:args.text,due_at:dueAt,note:isValidFuture?undefined:'no real date was given, defaulted to tomorrow 9am'});
+      return JSON.stringify({ok:true,text:args.text,due_at:dueAt,note:isValidFuture?undefined:'no real date was given, defaulted to 9am the next day in '+defaultedZone});
     } catch(e){return JSON.stringify({ok:false,error:e.message});}
   }
   if (name === 'consult_advisor') {
