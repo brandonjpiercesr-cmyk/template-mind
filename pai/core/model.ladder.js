@@ -155,13 +155,15 @@ function openRouterCandidates(seatNames) {
     seen[value] = 1;
     out.push({ key: value, via: label });
   }
-  push(process.env.OPENROUTER_API_KEY, 'openrouter');
+  push(seatMap && seatMap.sanitizeKey ? seatMap.sanitizeKey(process.env.OPENROUTER_API_KEY) : process.env.OPENROUTER_API_KEY, 'openrouter');
   for (var i = 0; i < (seatNames || []).length; i++) {
     var s = null;
     try { s = seatMap && seatMap.SEATS ? seatMap.SEATS[seatNames[i]] : null; } catch (eSeat) { s = null; }
     // Only an OpenRouter seat's key may authenticate to OpenRouter. Never borrow a
     // foreign provider's key, the same law resolveKey() holds in seat.map.js.
-    if (s && s.keyEnv && s.provider === 'openrouter') push(process.env[s.keyEnv], 'openrouter:' + seatNames[i]);
+    // Through the one source's sanitizer, so a key pasted with a stray newline authenticates
+    // instead of throwing an illegal header, the same cure every other seat reader gets.
+    if (s && s.keyEnv && s.provider === 'openrouter') push(seatMap.sanitizeKey(process.env[s.keyEnv]), 'openrouter:' + seatNames[i]);
   }
   return out;
 }
