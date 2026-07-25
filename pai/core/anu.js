@@ -27,8 +27,16 @@ function formatCcwa(output) {
   return output
     .replace(/^#{1,3}\s+/gm, '')
     .replace(/\*\*(.*?)\*\*/g, '$1')
-    .replace(/\u2014/g, ',')   // em dash -> comma (voice law)
-    .replace(/--/g, ',')
+    // \u2b21B:core.anu:FIX:dash_scrub_must_eat_the_space_it_replaces:20260725\u2b21 The voice law
+    // replaced the dash but left the space in front of it, so every scrubbed line reached the
+    // founder as "the connector , still parked" with a floating comma. Caught in her live
+    // reply, not in a test. Two more misses in the same line: the EN dash was not handled here
+    // at all (it IS handled by the sisters, so a scrub depended on which path ran), and the
+    // spaced "--" form left the same orphan space. This is now the exact pattern the sisters
+    // already prove, core/format.matrix.js and core/synthesize.js: consume the surrounding
+    // whitespace and emit one clean ", ". One source, one behaviour, whichever path formats her.
+    .replace(/\s*[\u2014\u2013]\s*/g, ', ')   // em and en dash -> comma (voice law)
+    .replace(/\s*--\s*/g, ', ')
     // \u2b21B:core.anu:FIX:strip_the_courtesy_signoff_the_model_wont_stop_adding:20260721\u2b21 Same class
     // as the em-dash law: the persona forbids a courtesy sign-off, but the model keeps tacking a
     // trailing "Thanks"/"Best"/"Regards" (often on its own line, sometimes with a signature) onto
