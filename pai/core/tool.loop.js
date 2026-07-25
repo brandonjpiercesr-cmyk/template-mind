@@ -2266,7 +2266,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // events, and how named-event guesses earned honest SHADOW holds. Cold code now
       // resolves every event to a human date in the HAM's timezone and flags which are
       // TODAY; the model only phrases what is already true.
-      var _tz = process.env.HAM_TIMEZONE || 'America/New_York';
+      var _tz = await require('./ham.timezone.js').resolveHamTimezone(_calHam);
       var _fmtDate = new Intl.DateTimeFormat('en-US', { timeZone:_tz, weekday:'long', year:'numeric', month:'long', day:'numeric' });
       var _fmtTime = new Intl.DateTimeFormat('en-US', { timeZone:_tz, hour:'numeric', minute:'2-digit' });
       var _todayStr = _fmtDate.format(new Date());
