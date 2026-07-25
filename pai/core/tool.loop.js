@@ -2280,24 +2280,67 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // rule is per-event, not per-calendar: floating dates read in UTC, instants read local.
       var _fmtDateUTC = new Intl.DateTimeFormat('en-US', { timeZone:'UTC', weekday:'long', year:'numeric', month:'long', day:'numeric' });
       var _todayUTCStr = _fmtDateUTC.format(new Date(new Date().toLocaleString('en-US', { timeZone:_tz })));
+      // ⬡B:core.tool.loop:FIX:a_span_he_is_on_is_today_not_upcoming:20260725⬡ THE THIRD AND LAST
+      // READER OF THE SAME CALENDAR, and the one that was still wrong on the glass. Live on
+      // cd5f3aea5, asked what was on his calendar today, she answered "your calendar for today
+      // is clear, no scheduled events, you've got the day open" while he was standing inside a
+      // July 22 to 26 trip. The fused WORLD CONTEXT handed to her was already CORRECT after
+      // anew#1054; the answer was wrong anyway because THIS tool re-derived the classification
+      // and re-derived it with the original bug: it read only ev.at, threw ev.endAt away, and
+      // set is_today by START-DATE EQUALITY. A span that began before today can never equal
+      // today, no matter how deep into it he is, so a trip he was on read as not-today.
+      // /os/calendar fixed exactly this on 20260718 (multi_day_events_keep_their_end) and
+      // core/context.fusion.js mirrored it on 20260725 (anew#1054). THIS IS A FAITHFUL MIRROR
+      // of those two: same end derivation, same is_now, same is_today, same is_past, same
+      // all-day split, so all three readers of this one calendar can never disagree about the
+      // same event. Mirrored rather than shared on purpose, exactly as #1054 reasoned: these
+      // are hot lanes days before the demo, and lifting live logic out of another lane's file
+      // is the clobber this house already paid for once. If the set is ever lifted into one
+      // home, lift ALL THREE together.
+      // The source (/os/calendar) sends endAt on every event and sets it equal to at when the
+      // provider gave no distinct end. So no end is represented honestly as no end, and no
+      // end_date is emitted at all; an end is never invented to fill the hole.
       var _shaped = _realEvents.slice(0,20).map(function(ev){
         var _at = Number(ev.at || ev.start || 0);
+        var _endAt = Number(ev.endAt || ev.end || 0) || _at;
         var _d = _at ? new Date(_at) : null;
         var _dateStr = _d ? (ev.allDay ? _fmtDateUTC.format(_d) : _fmtDate.format(_d)) : null;
         var _cmpToday = ev.allDay ? _todayUTCStr : _todayStr;
-        return { title: ev.title || ev.summary || '', org: ev.org || '', date: _dateStr,
+        // The end, stamped by the same rule as the start: an all-day span is a floating UTC
+        // square, a timed span is a real instant in THIS ham's zone (_tz, resolved above,
+        // never UTC and never a global). An event with no distinct end keeps no end_date.
+        var _hasEnd = !!(_at && _endAt && _endAt !== _at);
+        var _eD = _hasEnd ? new Date(_endAt) : null;
+        var _endDateStr = _eD ? (ev.allDay ? _fmtDateUTC.format(_eD) : _fmtDate.format(_eD)) : null;
+        // SPAN OVERLAP, not start equality. is_now: a multi-day span whose start is on or
+        // before today and whose end is on or after today is HAPPENING NOW, and a thing
+        // happening now IS today's reality.
+        var _startMs = _at, _endMs = _endAt || _at, _nowMs = Date.now();
+        var _isNow = !!(_at) && (_startMs <= _nowMs + 86400000) && (_endMs >= _nowMs - 3600000)
+          && (_endMs - _startMs > 86400000);
+        var _isToday = !!(_dateStr && _dateStr === _cmpToday);
+        if (_isNow) _isToday = true; // a trip covering today IS today, never "upcoming"
+        var _isPast = !_isToday && !_isNow && !!_at && (_endMs < (_nowMs - 86400000));
+        var _ev = { title: ev.title || ev.summary || '', org: ev.org || '', date: _dateStr,
           time: (_d && !ev.allDay) ? _fmtTime.format(_d) : (ev.allDay ? 'all day' : null),
-          is_today: !!(_dateStr && _dateStr === _cmpToday),
-          is_past: !!(_dateStr && _d && !(_dateStr === _cmpToday) && _d.getTime() < Date.now() - 86400000),
+          is_today: _isToday, is_now: _isNow, is_past: _isPast,
           location: ev.location || '' };
+        if (_endDateStr) _ev.end_date = _endDateStr;
+        return _ev;
       });
       var _todayCount = _shaped.filter(function(ev){ return ev.is_today; }).length;
+      // ⬡B:core.tool.loop:FIX:cold_code_reports_the_count_never_the_verdict:20260725⬡ This note
+      // used to end an empty read with "today itself is open" -- cold code asserting a fact
+      // about his day off the back of a partial read, the same false confidence anew#1030
+      // already stripped out of core/context.fusion.js. A read that found nothing on today is
+      // a statement about THE READ, not a verdict on his life. Cold code reports the count;
+      // she decides what it means and says it in her own sentence.
       var _out = {ok:true, ham_uid:_calHam, today_is:_todayStr,
         events_today:_todayCount, events:_shaped,
         note: (_todayCount ? (_todayCount + ' event(s) fall on today, ' + _todayStr + '; every other listed event is another day, never present it as today')
-          : (_realEvents.length ? 'events exist in the window but NONE fall on today, ' + _todayStr + '; today itself is open'
-            : 'the calendar source answered and genuinely has no events in this window'))
-          + ' Every event carries is_today and is_past. NEVER describe an event with is_past true as upcoming or coming up; it already happened. Use each event\'s own date field verbatim and do not compute dates yourself.' };
+          : (_realEvents.length ? 'this read returned ' + _realEvents.length + ' event(s) in the window and none of them fall on today, ' + _todayStr + '; that is a fact about this read and not a verdict on their day, so do not call the day open, clear or free'
+            : 'the calendar source answered and returned no events at all in this window; report that the read came back empty rather than concluding their day is open'))
+          + ' Every event carries is_today, is_now and is_past. NEVER describe an event with is_past true as upcoming or coming up; it already happened. An event with is_today true whose date is an EARLIER day is a span already UNDERWAY: they are on it right now, so never call it upcoming or still ahead of them; is_now true says so outright and end_date, when present, says which day it runs through. Use each event\'s own date field verbatim and do not compute dates yourself.' };
       return JSON.stringify(_out);
     } catch (eCalReal) { return JSON.stringify({ok:false, reason:'calendar_read_failed: '+eCalReal.message}); }
   }
@@ -2968,7 +3011,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // the glass through update_screen; if no screen is live the TOOL says so and she
   // says the screen is not open -- she never again claims she lacks the ability.
   if (!_structuredReachPolicy && !_reachIncidentIntake) {
-    systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if it returns no events, say the day is open, do not fall back to an old find_in_brain stamp to fill the gap.';
+    systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if its read finds nothing on today, say plainly that the read found nothing on today, and do not fall back to an old find_in_brain stamp to fill the gap. A calendar_read event carries is_today, is_now and is_past: an event with is_today true whose date is an EARLIER day is a multi-day span they are already inside, so say they are on it right now and never call it upcoming or still ahead of them.';
     try { systemPrompt += require('./stream/screen.awareness.js')
       .promptAddendum(hamUid, uiPortal); } catch (eScr) {}
   }
