@@ -1,4 +1,5 @@
 // ⬡B:core.spend_guard:LAW:no_provider_burns_silently_again:20260719⬡
+// Entered through the ABAHAM door and serves every paid internal and MESSAGES channel.
 // FOUNDER 911: $65 of Together credit vanished in a day and nobody caught it
 // until he did. Two jobs here. One, a daily spend ceiling so a runaway loop or
 // a retry storm can never drain a balance to zero, it trips a brake instead.
@@ -22,6 +23,9 @@ var MAX_TEXT_CEIL = 10000;
 var MAX_IMAGE_CEIL = 2000;
 var ATTRIBUTION = new AsyncLocalStorage();
 
+// A malformed cost brake is not permission to spend. Undefined uses the safe
+// built-in default; any explicitly supplied non-integer, zero, negative, or
+// implausibly large value fails closed until the environment is corrected.
 function configuredCeil(kind) {
   var name = kind === 'image' ? 'DAILY_IMAGE_CALL_CEIL' : 'DAILY_MODEL_CALL_CEIL';
   var fallback = kind === 'image' ? DEFAULT_IMAGE_CEIL : DEFAULT_TEXT_CEIL;
@@ -39,12 +43,27 @@ function pruneOld() {
   while (CALL_LOG.length && CALL_LOG[0] < cut) CALL_LOG.shift();
 }
 
+// ⬡COLD:decide:tag:PROVIDER_SPEND_ATTRIBUTION:20260723⬡
+// CATHY.SHADOW cold-audit COLD-ANEW-LADDER-0006. The daily model-call ceiling brake. Cold,
+// deterministic accounting (a rolling per-day count vs an env ceiling); it makes no semantic
+// judgment, so it is correctly cold code. Ceilings are env truth, not literals.
 // Called right before any paid model call. Returns false when the daily ceiling
 // is hit, so the caller skips the spend and stays silent rather than burning.
 // ⬡B:core.spend_guard:911:the_ceiling_stopped_her_and_told_nobody:20260725⬡
-// The ceiling reached is a BUDGET decision, not a failure, and her voice reported it as
-// no_answer, which names nothing and points at the models. The denial is remembered here so
-// the voice path can name the real wall. Decides nothing, blocks nothing new.
+// LIVE 20260725: her gate answered no_answer in under two seconds, five times out of five,
+// while GET /anew/model/health read every provider UP and all ten seat keys live. Nothing
+// was broken. The daily call ceiling had been reached, deliberate() returned null instantly,
+// and the word the founder got back was no_answer, which names nothing and points at the
+// models, which were fine.
+//
+// A different path said it plainly in the same minute: the compose seat returned
+// daily_spend_ceiling_reached_at_boundary. So the truth existed and her own voice did not
+// carry it. That is the third masking of the day and it nearly cost a good revert: her last
+// deploy was mine, she was down, and every instinct said roll it back. What stopped it was
+// that the same code had answered thirty minutes earlier with no deploy in between.
+//
+// The denial is recorded here so the voice path can name it instead of guessing. This decides
+// nothing and blocks nothing new; it only remembers WHY it said no.
 var LAST_DENIAL = null;
 var DENIALS_BY_SCOPE = new Map();
 
@@ -99,18 +118,26 @@ function lastDenial(withinMs, attribution) {
 }
 
 function allow(kind, options) {
+  // Text callers consult this before they know which provider rung, if any, will
+  // actually leave the process. That consultation is admission only. The one
+  // provider boundary records the daily slot at real HTTP egress with
+  // {egress:true}. This is global, not CODA-only: otherwise every ordinary text
+  // request is counted once here and a second time at fetch(). Text, audio,
+  // embeddings, image, and video are all recorded only by the provider boundary
+  // at the actual paid submission.
   var egress = !!(options && options.egress === true);
   var attribution = currentAttribution(options && options.attribution || options);
   pruneOld();
   var ceil = configuredCeil(kind);
   if (ceil === null) {
     rememberDenial({ at: Date.now(), kind: String(kind || 'text'), count: CALL_LOG.length,
-      ceiling:null, reason:'daily_call_ceiling_configuration_invalid',
+      ceiling: null, reason: 'daily_call_ceiling_configuration_invalid',
       attribution:attribution });
     return false;
   }
   var count = CALL_LOG.length;
   if (count >= ceil) {
+    // Remember WHY, so her voice can say the ceiling stopped her instead of no_answer.
     rememberDenial({ at: Date.now(), kind: String(kind || 'text'), count: count, ceiling: ceil,
       reason: 'daily_call_ceiling_reached', attribution:attribution });
     return false;
@@ -122,29 +149,41 @@ function allow(kind, options) {
 
 function usageToday() { pruneOld(); return CALL_LOG.length; }
 
+// ⬡B:core.spend_guard:WIRE:the_credit_watchdog_reads_with_a_real_seat_key:20260725⬡
+// Founder order 20260725: the shared OPENROUTER_API_KEY is being removed, so a watchdog
+// that can only read the balance through that one key goes blind the moment it does,
+// which is the same shape as the outage it exists to catch. The read now resolves
+// through core/openrouter.account.key.js (which reads the ONE seat source), so any
+// provisioned per-seat key carries the check, and the warning names WHICH seat key read
+// the account so a low balance is traceable, never anonymous. With only the shared key
+// present this is exactly the old behavior.
+var orAccount = require('./openrouter.account.key.js');
+
 // Read each provider's real remaining balance. Together and OpenRouter both
 // expose it. Returns a list of low/empty providers for the watchdog to stamp.
 async function checkBalances() {
   var low = [];
-  var seatMap = require('./seat.map.js');
-  var OR = seatMap.sanitizeKey(process.env.OR_KEY_ACCOUNT_MONITOR);
+  var OR = orAccount.accountKey();
   // OpenRouter exposes remaining credit directly.
-  if (OR) {
+  if (OR.key) {
     try {
       var r = await fetch('https://openrouter.ai/api/v1/credits',
-        { headers: { Authorization: 'Bearer ' + OR }, signal: AbortSignal.timeout(10000) });
+        { headers: { Authorization: 'Bearer ' + OR.key }, signal: AbortSignal.timeout(10000) });
       if (r.ok) {
         var d = await r.json();
         var remaining = (d.data && (d.data.total_credits - d.data.total_usage)) || 0;
-        if (remaining < 10) low.push({ provider: 'openrouter', remaining: Math.round(remaining * 100) / 100,
-          read_by_seat:'account_monitor' });
+        if (remaining < 10) low.push({ provider: 'openrouter', remaining: Math.round(remaining * 100) / 100, read_by_seat: OR.seat });
       }
     } catch (e) { /* a failed check is not a spend event */ }
   }
+  // Together has no non-spending balance endpoint. Never manufacture a paid
+  // completion as a health probe. Absence of an account read is reported by the
+  // health surface instead of burning a token to ask whether tokens remain.
   return low;
 }
 
 module.exports = { lastDenial: lastDenial, allow: allow, usageToday: usageToday,
-  withAttribution:withAttribution, checkBalances: checkBalances,
+  withAttribution:withAttribution,
+  checkBalances: checkBalances,
   _test:{configuredCeil:configuredCeil,cleanAttribution:cleanAttribution,
     reset:function () { CALL_LOG=[]; LAST_DENIAL=null; DENIALS_BY_SCOPE.clear(); }} };
