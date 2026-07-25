@@ -29,7 +29,8 @@ async function gatherWindow(hamUid, days) {
   try {
     var since = new Date(Date.now() - days*24*3600*1000).toISOString();
     var url = _bu()+'/rest/v1/'+_tbl()+
-      '?select=summary,stamp_type,created_at&created_at=gte.'+since+'&order=id.desc&limit=200';
+      '?select=summary,stamp_type,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '&created_at=gte.'+encodeURIComponent(since)+'&order=id.desc&limit=200';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(12000) }).then(function(x){return x.json();});
     return (Array.isArray(r)?r:[]).map(function(b){return (b.stamp_type||'')+': '+(b.summary||'');});
@@ -43,7 +44,9 @@ async function gatherWindow(hamUid, days) {
 // meaning, judged by the organ through the one voice; cold code fetches the open observations.
 async function openObservations(hamUid) {
   try {
-    var url = _bu()+'/rest/v1/'+_tbl()+'?select=id,summary,content&source=eq.sage.station.observation.'+String(hamUid).toLowerCase()+'&order=id.desc&limit=15';
+    var url = _bu()+'/rest/v1/'+_tbl()+'?select=id,summary,content&ham_uid=eq.'+
+      encodeURIComponent(String(hamUid))+'&source=eq.sage.station.observation.'+
+      encodeURIComponent(String(hamUid).toLowerCase())+'&order=id.desc&limit=15';
     var r = await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(9000)}).then(function(x){return x.json();});
     var open=[];
     for (var i=0;i<(Array.isArray(r)?r:[]).length;i++){
@@ -83,8 +86,9 @@ async function reconcileObservations(hamUid, moment, recentWindow) {
 
 // The organ: reason over the long window for real slow patterns. Returns [] when nothing
 // stands out (silence over noise).
-async function assess(hamUid) {
-  var moment = await nowStation.assembleNow(hamUid);   // consume NOW, no twin
+async function assess(hamUid, options) {
+  options=options||{};
+  var moment = options.moment || await nowStation.assembleNow(hamUid);   // consume NOW, no twin
   var window = await gatherWindow(hamUid, windowDays());
   var reconciled = await reconcileObservations(hamUid, moment, window); // EXIT/RALLY prior cycle
   if (window.length < 8) return { moment: moment, observations: [], reconciled: reconciled }; // too little history
