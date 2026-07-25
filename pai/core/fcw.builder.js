@@ -21,7 +21,7 @@ function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
 function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
 function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
-const { findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = require('./find.js');
+const { findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments } = require('./find.js');
 const identityProvenance = require('./identity.provenance.js');
 
 // A HAM may have several identifier events (device links, OMI links, aliases).
@@ -121,15 +121,36 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // detection (no LLM) pre-loads the real records into the wall so the answer is
   // already present -- the model never has to guess a filter.
   var _isWonderGamesQ = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/.test(_q);
+  // ⬡B:core.fcw.builder:FIX:she_contradicted_what_he_told_her_himself:20260725⬡ FOUNDER-CAUGHT,
+  // demo-critical. He told her his Saturday plan through her own live gate. She received it and
+  // confirmed the specifics back to him, with a committed cycle receipt. Hours later, asked where
+  // things stood, she said his day was open with no meetings locked in. He told her, she agreed,
+  // then she contradicted him. Root cause, verified in the code and not guessed: the capture side
+  // already worked (core/synthesize.js's memory keeper stamps a MEMORY bead with his exact words
+  // every turn a person hands something over) but NOTHING read it back. No wall contributor
+  // queried stamp_type MEMORY, and 'memory.gifted.' had exactly one reference in the entire repo,
+  // the write itself. The gift was captured and buried in the same breath, so by the next cycle
+  // the only thing she still held about his day was a cold calendar read that knew nothing about
+  // it. So the calendar did not override what he told her; what he told her was never on the wall
+  // to be overridden. This is the read-back: always on, in the same parallel allSettled batch as
+  // its five siblings, so it costs no extra latency, no clock and no LLM (C0, a brain FIND). No
+  // env flag, because a capture-and-surface repair on an existing path should simply be correct.
+  // Cold code CAPTURES and SURFACES this evidence and labels what it is. It never decides what
+  // his day means and it never speaks: A'NU reads it and A'NU answers (granddaddy-911).
   var _batch = [
     findIdentity(hamUid),
     findAgentJDs(hamUid),
     findContext(hamUid, 5),
     findRecentResults(hamUid, 5),
     findDoctrine(hamUid, 3),
-    findPersonProfile(hamUid)
+    findPersonProfile(hamUid),
+    // Guarded call: find.js was once replaced wholesale by a 50-line stub (the 8B lobotomy,
+    // core/find.js:8), which turned every finder into undefined and broke every turn on every
+    // channel. A missing finder must degrade this one contributor to unavailable, never throw
+    // the whole wall away.
+    (typeof findStatedCommitments === 'function' ? findStatedCommitments(hamUid, 6) : Promise.resolve(null))
   ];
-  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile'];
+  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'statedPlans'];
   var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1;
   if (_namedAgentGlobals.length) {
     _namedAgentsIdx = _batch.length;
@@ -153,6 +174,14 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var recent = _results[3].status === 'fulfilled' ? _results[3].value : null;
   var doctrine = _results[4].status === 'fulfilled' ? _results[4].value : null;
   var profile = _results[5].status === 'fulfilled' ? _results[5].value : null;
+  // ⬡B:core.fcw.builder:GUARD:a_failed_plans_read_is_not_an_empty_day:20260725⬡ An unavailable
+  // read is not evidence that they told her nothing. Keep the two states apart: a fulfilled read
+  // may represent a genuinely empty set, a rejected one may only report itself unavailable. Cold
+  // code never converts either one into a claim about their day.
+  var _statedOk = _results[6] && _results[6].status === 'fulfilled' && _results[6].value;
+  var _stated = _statedOk ? _results[6].value : null;
+  var _statedRows = (_stated && Array.isArray(_stated.beads)) ? _stated.beads.slice(0, 6) : [];
+  var _statedAvailable = !!_statedOk;
 
   // Build identity summary
   var hamName = 'Unknown';
@@ -349,6 +378,65 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
         return 'WHO THIS IS (know them, speak from this naturally, never recite it as a file):\n' + body.slice(0);
       } catch(e) { return ''; }
     })(),
+    (function(){
+      // ⬡B:core.fcw.builder:WIRE:stated_plans_survive_into_a_later_cycle:20260725⬡
+      // The read-back, rendered. This is the ONLY thing on this wall that carries what the
+      // person said to her in their own words, so it gets its own labeled section instead of
+      // being flattened into RECENT CONTEXT below, where every row is cut to a 100-character
+      // summary. The MINUTES rows that DO reach that section summarize to pure machinery
+      // ("Received message from X. Tools used: none. Responded in 1200ms"), which is why the
+      // conversation record was technically on the wall and still told her nothing.
+      // Each line is dated in honest "they told you N hours ago" terms, the same decay
+      // language context.fusion.js and the find results already use, so she can tell a plan
+      // stated this morning from one stated last month and never assert a stale one as now.
+      // Cold code presents the evidence and its age. It does not rank, resolve, expire, or
+      // interpret it, and it never writes her answer.
+      try {
+        if (!_statedAvailable) {
+          return 'WHAT THEY TOLD YOU: this part of your memory could not be read on this turn, so you '
+            + 'do not know right now whether they have told you anything about their plans. That is an '
+            + 'unavailable read, NOT an empty one. Say plainly that you cannot see it if it matters, and '
+            + 'never treat this silence as proof that their day is empty.';
+        }
+        if (!_statedRows.length) return '';
+        var lines = _statedRows.map(function (b) {
+          var words = '', when = (b && b.created_at) ? String(b.created_at) : '';
+          try {
+            var c = b && b.content;
+            if (typeof c === 'string') c = JSON.parse(c);
+            if (c && typeof c === 'object') {
+              words = String(c.their_words || c.gist || c.words || '');
+              if (c.kept_at) when = String(c.kept_at);
+            }
+          } catch (e) { words = ''; }
+          if (!words) words = String((b && b.summary) || '');
+          words = words.replace(/^\[MEMORY, given to me\]\s*/i, '').trim();
+          if (!words) return '';
+          var age = '';
+          var mins = when ? Math.round((Date.now() - Date.parse(when)) / 60000) : NaN;
+          if (Number.isFinite(mins) && mins >= 0) {
+            age = mins < 90 ? (mins + ' minutes ago')
+              : (mins < 2880 ? (Math.round(mins / 60) + ' hours ago')
+              : (Math.round(mins / 1440) + ' days ago'));
+          }
+          return '- ' + (age ? '(they told you this ' + age + ') ' : '(no timestamp on this one) ') + words;
+        }).filter(function (line) { return !!line; });
+        if (!lines.length) return '';
+        return 'WHAT THEY TOLD YOU DIRECTLY, in their own words, kept at the moment they said it:\n'
+          + lines.join('\n') + '\n'
+          + 'These are things this person SAID TO YOU. They are not calendar entries and most of them '
+          + 'will never appear on any calendar, and they are every bit as real as what is on one. When '
+          + 'they ask about their day, their plans, what is going on, or where things stand, your answer '
+          + 'is the UNION of the calendar and this list, never the calendar alone. NEVER contradict '
+          + 'something they told you themselves, and never call their day open, clear, free, or empty '
+          + 'while anything here still stands: they will know instantly that you lost what they said, '
+          + 'and it is the one thing that breaks trust fastest. Read the age on each line: if one has '
+          + 'already passed, or they have since changed or cancelled it, say that plainly rather than '
+          + 'repeating it as still true. This list is only what got captured, so it is never proof that '
+          + 'nothing ELSE exists either. Do not recite it back as a file. Just know it, the way someone '
+          + 'who was listening would.';
+      } catch (e) { return ''; }
+    })(),
     'Trust tier: ' + hamTier,
     'Channel: ' + (channel || 'unknown'),
     (_capLine ? ('YOUR CAPABILITIES RIGHT NOW: ' + _capLine) : ''),
@@ -447,7 +535,11 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     context: !!(context && context.beads && context.beads.length),
     recent: !!(recent && recent.beads && recent.beads.length),
     doctrine: !!(doctrine && doctrine.beads && doctrine.beads.length),
-    profile: !!(profile && profile.beads && profile.beads.length)
+    profile: !!(profile && profile.beads && profile.beads.length),
+    // The trace that makes THIS failure traceable next time: if she ever again contradicts
+    // something the person told her, this flag says whether what they told her was on the wall
+    // at that moment or not.
+    statedPlans: !!_statedRows.length
   };
   var empties = Object.keys(contributors).filter(function (k) { return !contributors[k]; });
   try {
@@ -484,6 +576,10 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     agents: agentJDs ? agentJDs.beads : [],
     context: allContext,
     named_agent_records: _namedAgentRecords,
+    // ⬡B:core.fcw.builder:WIRE:stated_plans_are_receipts_not_just_prompt_text:20260725⬡
+    // Returned as real rows, not only as prompt prose, so a later cycle, a grader, or a
+    // trace-back can see exactly what she was holding about this person's day.
+    stated_plans: { available: _statedAvailable, count: _statedRows.length, records: _statedRows },
     identity_evidence: _identityEvidence,
     identity_record: ib || null,
     contributors: contributors,
