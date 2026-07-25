@@ -2607,7 +2607,7 @@ async function reachIncidentFence(identity,stage){
   catch(error){return false;}
 }
 
-async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
+async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
   // USE_NEW_WORLD fast path returned before _cycleId existed, before the Memory Bank
@@ -2743,11 +2743,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // span.task.live_pai_cycle_observability -- founder's Life Command Center
   // idea. Real-time step stamps as the cycle actually runs, not just the
   // finished result, read by GET /command-center/live/:hamUid below.
-  var _cycleId = hamUid + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
-  var _requestIdCandidate = identity && (identity.request_id || identity.requestId);
-  var _requestId = typeof _requestIdCandidate === 'string'
-    && /^[A-Za-z0-9._:-]{8,160}$/.test(_requestIdCandidate.trim())
-    ? _requestIdCandidate.trim() : _cycleId + '.request';
+  var _cycleId = spendIdentity.cycle_id;
+  var _requestId = spendIdentity.request_id;
   var _BU=_bu(), _BK=_bk();
   var _voiceSessionId = String(identity && identity.council_context &&
     identity.council_context.mode === 'voice' &&
@@ -5093,6 +5090,21 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     if(_successResult.reach_handoff.degraded)_successResult.degraded=true;
   }
   return _successResult;
+}
+async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
+  var exactHam = String(hamUid || '').trim().toUpperCase();
+  var cycleId = exactHam + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
+  var requestCandidate = identity && (identity.request_id || identity.requestId);
+  var requestId = typeof requestCandidate === 'string'
+    && /^[A-Za-z0-9._:-]{8,160}$/.test(requestCandidate.trim())
+    ? requestCandidate.trim() : cycleId + '.request';
+  var seat = String(channel || '').toLowerCase() === 'voice' ? 'voice_fast' : 'c2_organ';
+  var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
+  return require('./spend.guard.js').withAttribution({ham_uid:exactHam,cycle_id:cycleId,
+    request_id:requestId,seat:seat,component:component},function () {
+      return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
+        {cycle_id:cycleId,request_id:requestId});
+    });
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,

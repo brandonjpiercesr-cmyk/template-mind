@@ -9,12 +9,12 @@
 // (pai/core/), so every world and every chat reads one source. ANYHAM: no
 // identity, no personal fact, no hardcoded HAM here.
 //
-// seat(name) returns { role, model, provider, keyEnv, via, dailyCapUsd }.
+// seat(name) returns { role, model, provider, keyEnv, via }.
 // keyEnv names the PER-FUNCTION OpenRouter key so a bleed traces to the exact
 // seat instead of one shared wallet; two seats on the same model carry two
 // different keyEnv names on purpose. resolveKey(seat) reads that named key and
-// falls back to the shared OPENROUTER_API_KEY so a not-yet-provisioned key
-// never makes the seat silent.
+// nothing else. Missing ownership fails closed instead of spending from a
+// shared wallet or another function's seat.
 //
 // Model picks were verified live against OpenRouter 20260721:
 //   - qwen/qwen3.5-flash-02-23  fast seat, ~3-6s, cheapest
@@ -38,35 +38,55 @@ function env(key, dflt) {
   return (v && String(v).trim()) ? String(v).trim() : dflt;
 }
 
+function envUsd(key, dflt) {
+  var raw = process.env[key];
+  if (raw === undefined || raw === '') return dflt;
+  var text = String(raw).trim();
+  if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,4})?$/.test(text)) return null;
+  var value = Number(text);
+  return Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
+}
+
 // role, default model (env-overridable per seat), transport provider, the
-// per-function named key env, telemetry via label, and a daily USD cap intent.
+// per-function named key env and telemetry via label. Dollar caps are not
+// represented here: OpenRouter usage is observable, but this process cannot
+// atomically enforce a per-key USD limit, so publishing one would be false.
 var SEATS = {
-  c1_cellm:    { role: 'C1 penny gate',        envModel: 'SEAT_C1_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C1_CELLM',    via: 'openrouter', dailyCapUsd: 2 },
+  c1_cellm:    { role: 'C1 penny gate',        envModel: 'SEAT_C1_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C1_CELLM',    via: 'openrouter', capEnv:'SEAT_C1_CELLM_DAILY_CAP_USD', dailyCapUsd:2 },
   // Founder ruling 20260722: use a fresh, never-before-wired model on the everyday
   // organ. MiniMax-01 (instruct, 1M ctx, ~$0.20/$1.10) is strong, cheap enough for the
   // high-volume workhorse, and returns clean JSON in ~3.7s (verified live), unlike the
   // MiniMax M2 reasoners which burn the whole budget thinking. GLM-5.2 is the failover.
-  c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'minimax/minimax-01',       provider: 'openrouter', keyEnv: 'OR_KEY_C2_ORGAN',    via: 'openrouter', dailyCapUsd: 6,
+  c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'minimax/minimax-01',       provider: 'openrouter', keyEnv: 'OR_KEY_C2_ORGAN',    via: 'openrouter', capEnv:'SEAT_C2_ORGAN_DAILY_CAP_USD', dailyCapUsd:6,
                  fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_C2_ORGAN' },
   // Founder ruling 20260722: Grok 4.5 is the mind; GLM-5.2 is its failover. Grok is
   // closed-weight (xAI) and founder-lifted from the ban for this seat. Seated on C3
   // (the flagship mind) only, not the high-volume C2 organ, to keep the $2/$6-per-M
   // Grok off the everyday workhorse. verified live 20260722.
-  c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', dailyCapUsd: 6,
+  c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6,
                  fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK' },
-  c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', dailyCapUsd: 2 },
-  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', dailyCapUsd: 8 },
-  deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', dailyCapUsd: 4 },
+  c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2 },
+  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', capEnv:'SEAT_CODA_DAILY_CAP_USD', dailyCapUsd:8 },
+  deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', capEnv:'SEAT_DEPLOY_TOOL_DAILY_CAP_USD', dailyCapUsd:4 },
   // FOUNDER 911 20260722: Ornith is RETIRED and RunPod is out entirely (the live
   // endpoint was failure-looping: 937 failures, 0 completions, billed GPU). The
   // judge seat moves to its own proven reliability pick: qwen3-235b (2-4s clean
   // strict JSON, verified) on OpenRouter, with Kimi K3 as the failover so a qwen
   // miss never leaves a contest ungraded. No RunPod anywhere in this map.
-  judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'qwen/qwen3-235b-a22b-2507',provider: 'openrouter', keyEnv: 'OR_KEY_JUDGE_QWEN', via: 'openrouter', dailyCapUsd: 4,
-                 fallbackModel: 'moonshotai/kimi-k3', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_CODA_KIMI' },
-  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', dailyCapUsd: null },
-  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', dailyCapUsd: null },
-  voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', dailyCapUsd: 3 }
+  judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'qwen/qwen3-235b-a22b-2507',provider: 'openrouter', keyEnv: 'OR_KEY_JUDGE_QWEN', via: 'openrouter', capEnv:'SEAT_JUDGE_DAILY_CAP_USD', dailyCapUsd:4,
+                 fallbackModel: 'moonshotai/kimi-k3', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_JUDGE_QWEN' },
+  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', capEnv:'SEAT_CANON_DAILY_CAP_USD', dailyCapUsd:2 },
+  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', capEnv:'SEAT_ADVISORS_DAILY_CAP_USD', dailyCapUsd:2 },
+  deliberation:{ role: 'general deliberation ladder',envModel:'SEAT_LADDER_MODEL',model:'z-ai/glm-5.2',             provider:'openrouter', keyEnv:'OR_KEY_MODEL_LADDER',  via:'openrouter', capEnv:'SEAT_DELIBERATION_DAILY_CAP_USD', dailyCapUsd:3 },
+  voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', capEnv:'SEAT_VOICE_FAST_DAILY_CAP_USD', dailyCapUsd:3 },
+  runaway_sweep:{ role:'runaway SHADOW judge', envModel:'RUNAWAY_SWEEP_MODEL', model:'qwen/qwen3.5-flash-02-23', provider:'openrouter',keyEnv:'OR_KEY_RUNAWAY_SWEEP',via:'openrouter', capEnv:'SEAT_RUNAWAY_SWEEP_DAILY_CAP_USD', dailyCapUsd:1 },
+  wonder_games_glm:  { role: 'Wonder Games GLM contestant',  envModel:'WONDER_GAMES_GLM_MODEL',  model:'z-ai/glm-5.2',       provider:'openrouter',keyEnv:'OR_KEY_WONDER_GAMES_GLM', via:'openrouter', capEnv:'SEAT_WONDER_GAMES_GLM_DAILY_CAP_USD', dailyCapUsd:2 },
+  wonder_games_qwen: { role: 'Wonder Games Qwen contestant', envModel:'WONDER_GAMES_QWEN_MODEL', model:'qwen/qwen3-235b-a22b',provider:'openrouter',keyEnv:'OR_KEY_WONDER_GAMES_QWEN',via:'openrouter', capEnv:'SEAT_WONDER_GAMES_QWEN_DAILY_CAP_USD', dailyCapUsd:2 },
+  cookoff_kimi:     { role: 'cook-off Kimi contestant',     envModel: 'COOKOFF_KIMI_MODEL',     model: 'moonshotai/kimi-k3',     provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_KIMI',     via: 'openrouter', capEnv:'SEAT_COOKOFF_KIMI_DAILY_CAP_USD', dailyCapUsd:2 },
+  cookoff_qwen:     { role: 'cook-off Qwen contestant',     envModel: 'COOKOFF_QWEN_MODEL',     model: 'qwen/qwen3-coder',       provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_QWEN',     via: 'openrouter', capEnv:'SEAT_COOKOFF_QWEN_DAILY_CAP_USD', dailyCapUsd:2 },
+  cookoff_glm:      { role: 'cook-off GLM contestant',      envModel: 'COOKOFF_GLM_MODEL',      model: 'z-ai/glm-5.2',           provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GLM',      via: 'openrouter', capEnv:'SEAT_COOKOFF_GLM_DAILY_CAP_USD', dailyCapUsd:2 },
+  cookoff_deepseek: { role: 'cook-off DeepSeek contestant', envModel: 'COOKOFF_DEEPSEEK_MODEL', model: 'deepseek/deepseek-v3.2', provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_DEEPSEEK', via: 'openrouter', capEnv:'SEAT_COOKOFF_DEEPSEEK_DAILY_CAP_USD', dailyCapUsd:2 },
+  cookoff_grok:     { role: 'cook-off Grok contestant',     envModel: 'COOKOFF_GROK_MODEL',     model: 'x-ai/grok-build-0.1',    provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GROK',     via: 'openrouter', capEnv:'SEAT_COOKOFF_GROK_DAILY_CAP_USD', dailyCapUsd:2 }
 };
 
 // Resolve a seat, reading its model fresh from env each call (env truth wins;
@@ -81,7 +101,8 @@ function seat(name) {
     provider: d.provider,
     keyEnv: d.keyEnv,
     via: d.via,
-    dailyCapUsd: d.dailyCapUsd,
+    dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd),
+    capEnv: d.capEnv,
     hasFallback: !!d.fallbackModel
   };
 }
@@ -99,14 +120,14 @@ function fallback(name) {
     provider: d.fallbackProvider,
     keyEnv: d.fallbackKeyEnv,
     via: d.fallbackProvider,
-    dailyCapUsd: d.dailyCapUsd,
+    dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd),
+    capEnv: d.capEnv,
     hasFallback: false
   };
 }
 
-// The API key for a seat: its per-function named key first, then the shared
-// OpenRouter key so an un-provisioned seat is never silent. Together seats
-// resolve their own key env directly.
+// The API key for a seat is exactly its per-function named key. No completion
+// call may borrow a shared provider key or another seat's key.
 // ⬡B:core.seat_map:911:a_key_pasted_with_a_newline_is_not_a_broken_key_it_is_a_broken_paste:20260725⬡
 // FOUND LIVE 20260725: two funded seats, deploy_tool and judge, were refusing every call
 // with an illegal Authorization header. Both keys were PRESENT and correct; each carried a
@@ -134,19 +155,10 @@ function sanitizeKey(raw) {
 
 function resolveKey(s) {
   if (!s) return '';
-  var own = sanitizeKey(process.env[s.keyEnv]);
-  if (own) return own;
-  // A missing named key falls back only to the SAME service's shared key, never a
-  // cross-provider key (a Together seat must never authenticate to OpenRouter). An
-  // OpenRouter seat floors to OPENROUTER_API_KEY; a RunPod seat (the Ornith judge)
-  // floors to RUNPOD_API_KEY so a deployment carrying only RUNPOD_API_KEY still
-  // authenticates the judge instead of going silent (Codex 20260722). Together and
-  // any other provider still return empty rather than borrow a foreign key.
-  if (s.provider === 'openrouter') return sanitizeKey(process.env.OPENROUTER_API_KEY);
-  if (s.provider === 'runpod') return sanitizeKey(process.env.RUNPOD_API_KEY);
-  return '';
+  return sanitizeKey(process.env[s.keyEnv]);
 }
 
 function seatNames() { return Object.keys(SEATS); }
 
-module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey };
+module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
+  _test:{envUsd:envUsd} };
