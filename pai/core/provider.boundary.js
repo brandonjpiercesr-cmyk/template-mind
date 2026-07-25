@@ -46,27 +46,52 @@ var METERED_PAID_HOSTS = [
   'api.together.xyz',
   'openrouter.ai/api',
   'api.runpod.ai',
-  'api.runpod.io'
+  'api.runpod.io',
+  'api.anthropic.com',
+  'api.elevenlabs.io',
+  'api.deepgram.com',
+  'fal.run',
+  'queue.fal.run',
+  'api.replicate.com',
+  'api.simli.ai'
 ];
 
+function requestUrl(value) {
+  if (value && typeof value === 'object' && typeof value.url === 'string') return value.url;
+  return String(value || '');
+}
+
 function isBannedChatCall(url) {
-  var u = String(url || '');
+  var u = requestUrl(url);
   for (var i = 0; i < BANNED_HOSTS.length; i++) {
     if (u.indexOf(BANNED_HOSTS[i]) !== -1) return true;
   }
   return false;
 }
 
-function isMeteredPaidCall(url) {
-  var u = String(url || '');
-  // only meter actual model-spend calls, never a health probe or a balance/models GET
-  var isSpendPath = u.indexOf('chat/completions') !== -1 || u.indexOf('/run') !== -1 ||
-    u.indexOf('/runsync') !== -1 || /\/v1\/messages/.test(u);
-  if (!isSpendPath) return false;
+function paidCallKind(url) {
+  var u = requestUrl(url), kind = null;
+  if (u.indexOf('chat/completions') !== -1 || u.indexOf('/run') !== -1 ||
+      u.indexOf('/runsync') !== -1 || /\/v1\/messages(?:[/?]|$)/.test(u)) kind = 'text';
+  else if (/\/audio\/(?:transcriptions|translations)(?:[/?]|$)/.test(u)) kind = 'audio';
+  else if (/\/v1\/(?:speech-to-text|text-to-dialogue)(?:[/?]|$)/.test(u) ||
+      /\/v1\/text-to-speech\//.test(u) || /\/v1\/listen(?:[/?]|$)/.test(u)) kind = 'audio';
+  else if (/\/embeddings(?:[/?]|$)/.test(u)) kind = 'embedding';
+  else if (/\/images\/generations(?:[/?]|$)/.test(u) ||
+      (/fal\.run\//.test(u) && !/\/requests\//.test(u) &&
+        /(?:flux|recraft|stable-diffusion|sdxl|ideogram)/i.test(u))) kind = 'image';
+  else if ((/fal\.run\//.test(u) && !/\/requests\//.test(u)) ||
+      /api\.replicate\.com\/v1\/models\/[^/]+\/[^/]+\/predictions(?:[/?]|$)/.test(u) ||
+      /api\.simli\.ai\/(?:startAudioToVideoSession|static\/audio)(?:[/?]|$)/.test(u)) kind = 'video';
+  if (!kind) return null;
   for (var i = 0; i < METERED_PAID_HOSTS.length; i++) {
-    if (u.indexOf(METERED_PAID_HOSTS[i]) !== -1) return true;
+    if (u.indexOf(METERED_PAID_HOSTS[i]) !== -1) return kind;
   }
-  return false;
+  return null;
+}
+
+function isMeteredPaidCall(url) {
+  return paidCallKind(url) !== null;
 }
 
 function jsonResponse(obj, status) {
@@ -105,13 +130,18 @@ function install() {
         // Metered paid provider: enforce the daily spend guard before the call leaves,
         // so direct fetches inherit the same brake the ladder has. Not rerouted, not
         // altered -- just gated. A tripped guard returns a 429 the caller treats as a miss.
-        if (isMeteredPaidCall(url)) {
+        var paidKind = paidCallKind(url);
+        if (paidKind) {
           try {
-            var allowed = require('./spend.guard.js').allow('text');
+            var allowed = require('./spend.guard.js').allow(paidKind,{egress:true});
             if (!allowed) {
-              return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary', host: String(url) } }, 429);
+              return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary',
+                host: requestUrl(url) } }, 429);
             }
-          } catch (eGuard) { /* guard unavailable -> fail open, never block a real turn */ }
+          } catch (eGuard) {
+            return jsonResponse({error:{message:'spend_guard_unavailable_at_boundary',
+              reason:'spend_guard_unavailable_at_boundary',host:requestUrl(url)}},503);
+          }
         }
         return realFetch.apply(this, arguments);
       }
@@ -152,4 +182,6 @@ function install() {
   globalThis.__providerBoundaryInstalled = true;
 }
 
-module.exports = { install: install, isBannedChatCall: isBannedChatCall, isMeteredPaidCall: isMeteredPaidCall, BANNED_HOSTS: BANNED_HOSTS, METERED_PAID_HOSTS: METERED_PAID_HOSTS };
+module.exports = { install: install, isBannedChatCall: isBannedChatCall,
+  isMeteredPaidCall: isMeteredPaidCall, paidCallKind:paidCallKind,
+  BANNED_HOSTS: BANNED_HOSTS, METERED_PAID_HOSTS: METERED_PAID_HOSTS };

@@ -65,13 +65,15 @@ test('the advisor web search spends the ADVISORS seat key, so the board bleed ha
   } finally { f.restore(); }
 });
 
-test('an unprovisioned advisors seat is never silent: the one source floors it', async function () {
+test('an unprovisioned advisors seat refuses instead of borrowing the shared wallet', async function () {
   const f = captureFetch(CHAT_OK);
   try {
-    await withEnvAsync(env({ OPENROUTER_API_KEY: 'sk-shared' }), function () {
+    const out = await withEnvAsync(env({ OPENROUTER_API_KEY: 'sk-shared' }), function () {
       return dispatch._test.realSearch('query');
     });
-    assert.equal(f.sent[0].key, 'sk-shared', 'no regression while the seat key is not yet funded');
+    assert.equal(out.ok, false);
+    assert.equal(out.reason, 'no_openrouter_key');
+    assert.equal(f.sent.length, 0, 'the exact advisors seat must be provisioned');
   } finally { f.restore(); }
 });
 
@@ -89,7 +91,7 @@ test('a seat name that resolves to nothing never becomes the key', async functio
   const key = await withEnvAsync(env({ ADVISOR_SEARCH_SEAT: 'not_a_seat', OPENROUTER_API_KEY: 'sk-shared' }), function () {
     return dispatch._test.advisorSearchKey();
   });
-  assert.equal(key, 'sk-shared', 'a typo degrades to the floor');
+  assert.equal(key, '', 'a typo fails closed and borrows no wallet');
   assert.notEqual(key, 'not_a_seat', 'a seat NAME must never be sent as a credential');
 });
 
