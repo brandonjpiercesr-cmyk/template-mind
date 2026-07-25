@@ -127,8 +127,55 @@ async function tryTogetherGLM(system, user, opts) {
     return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: 'together' } : null;
   } catch (e) { return null; }
 }
+// ⬡B:core.model_ladder:911:one_dead_shared_key_silenced_her_whole_mind_while_ten_funded_seat_keys_sat_unused:20260725⬡
+// OUTAGE OF RECORD, 20260725, hours of silence: every OpenRouter rung below read ONE
+// env var, OPENROUTER_API_KEY. That key began answering http_401 on the same morning
+// the Together balance hit zero, so GLM lost both hosts and Qwen (also on the shared
+// key) lost its own. deliberate() returned null on every call, and the founder heard
+// stage_hollow_protocol_answer from her gate. THE BREAK that named it: the compose
+// seat answered with real composed content on the same service in the same minute, on
+// its own per-seat key. TEN funded per-seat keys were alive the whole time and the
+// mind never reached for a single one of them.
+//
+// So the rungs now carry ORDERED key candidates instead of one: the shared key first
+// (nothing changes while it works), then the per-seat keys named by the one source,
+// core/seat.map.js, so the file still hand-maintains no key names of its own. A
+// candidate is abandoned ONLY on a status that means the key itself was refused
+// (401 unauthorized, 402 payment, 403 forbidden, 429 rate limited). Any other failure
+// returns null on the first key exactly as before, so a real model fault still fails
+// fast instead of burning ten wallets on one bad request. With no seat keys present
+// the candidate list is one entry long and this is the old behavior, byte for byte.
+var seatMap = null;
+try { seatMap = require('./seat.map.js'); } catch (eSeatMap) { seatMap = null; }
+
+function openRouterCandidates(seatNames) {
+  var out = [], seen = {};
+  function push(value, label) {
+    if (!value || seen[value]) return;
+    seen[value] = 1;
+    out.push({ key: value, via: label });
+  }
+  push(process.env.OPENROUTER_API_KEY, 'openrouter');
+  for (var i = 0; i < (seatNames || []).length; i++) {
+    var s = null;
+    try { s = seatMap && seatMap.SEATS ? seatMap.SEATS[seatNames[i]] : null; } catch (eSeat) { s = null; }
+    // Only an OpenRouter seat's key may authenticate to OpenRouter. Never borrow a
+    // foreign provider's key, the same law resolveKey() holds in seat.map.js.
+    if (s && s.keyEnv && s.provider === 'openrouter') push(process.env[s.keyEnv], 'openrouter:' + seatNames[i]);
+  }
+  return out;
+}
+
+// A refused KEY, not a refused request. Only these advance to the next candidate.
+function keyWasRefused(status) {
+  return status === 401 || status === 402 || status === 403 || status === 429;
+}
+
 async function tryOpenRouterGLM(system, user, opts) {
-  var key = process.env.OPENROUTER_API_KEY; if (!key) return null;
+  // GLM seats first (CANON and ADVISORS both sit on z-ai/glm-5.2 and are uncapped),
+  // then the two deliberation seats whose own fallback model is glm-5.2.
+  var candidates = openRouterCandidates(['canon', 'advisors', 'c3_mind', 'c2_organ']);
+  if (!candidates.length) return null;
   try {
         // ⬡B:core.model_ladder:911:glm_4.6_was_EIGHT_versions_old_now_5.2:20260718⬡
     // FOUNDER CAUGHT IT 20260718: this rung was hardcoded to z-ai/glm-4.6, EIGHT
@@ -148,11 +195,19 @@ async function tryOpenRouterGLM(system, user, opts) {
     // providers differ in which one they honor.
     body.chat_template_kwargs = { enable_thinking: false };
     body.reasoning = { enabled: false };
-    var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
-    if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: 'openrouter' } : null;
+    for (var ci = 0; ci < candidates.length; ci++) {
+      var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidates[ci].key, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
+      if (!r.ok) {
+        if (keyWasRefused(r.status)) continue;
+        return null;
+      }
+      var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+      // A key that answered is the right key. A thin or non-contract answer is the
+      // MODEL's miss, not the key's, so it falls to the next RUNG, never the next key.
+      return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: candidates[ci].via } : null;
+    }
+    return null;
   } catch (e) { return null; }
 }
 async function tryOrnith(system, user, opts) {
@@ -177,13 +232,23 @@ async function tryOrnith(system, user, opts) {
   } catch (e) { return null; }
 }
 async function tryQwen(system, user, opts) {
-  var key = process.env.OPENROUTER_API_KEY; if (!key) return null;
+  // The JUDGE seat is the exact model this rung asks for; the rest are the other Qwen
+  // seats, cheapest and fastest first, so a refused key never leaves the rung silent.
+  var candidates = openRouterCandidates(['judge', 'voice_fast', 'c1_cellm', 'c4_watch', 'deploy_tool']);
+  if (!candidates.length) return null;
   try {
-    var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature }), signal: requestSignal(opts, opts.timeout) });
-    if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'qwen3-235b', via: 'openrouter' } : null;
+    var body = { model: process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    for (var ci = 0; ci < candidates.length; ci++) {
+      var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidates[ci].key, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
+      if (!r.ok) {
+        if (keyWasRefused(r.status)) continue;
+        return null;
+      }
+      var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+      return hasAcceptedContent(c, opts) ? { content: c, model: 'qwen3-235b', via: candidates[ci].via } : null;
+    }
+    return null;
   } catch (e) { return null; }
 }
 // ⬡B:core.model_ladder:FIX:anthropic_backup_floor_kills_no_answer:20260721⬡
