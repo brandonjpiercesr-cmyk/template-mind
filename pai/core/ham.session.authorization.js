@@ -134,6 +134,29 @@ async function authorizeExactHamRequest(req, expectedHamUid, deps) {
   return { ok:true, hamUid:resolved, kind:session.kind, envelope:envelope };
 }
 
+// ⬡B:core.ham_session_authorization:WIRE:internal_callers_sign_the_same_session:20260725⬡
+// THE INTERNAL LEG OF THE SAME ONE SOURCE. The mind calls its own founder-scoped OS
+// doors over SELF_BASE_URL (alive.arrive, alive.pulse, the screen piece registry, the
+// dawn agent). Those hops leave this process and come back in over the public internet,
+// so they are indistinguishable from a stranger at the door and CANNOT be recognized by
+// origin. Before this, that was the whole reason those doors could not be closed: closing
+// them would have blinded A'NU to the founder's own calendar.
+//
+// So the internal caller proves itself with the SAME signed session a browser carries,
+// minted here from the SAME server-only secret, verified by the SAME verifySessionToken.
+// No second idiom, no shared "internal key", no new environment variable: a server that
+// already holds the signing secret can always mint a token for the HAM it is serving,
+// and a server that does not hold it gets null and is refused like anyone else.
+//
+// Returns null (never a partial or empty header bag) when the secret or the HAM is
+// missing, so a caller that spreads it into a fetch sends nothing rather than sending a
+// header that looks like credentials and is not.
+function internalSessionHeaders(hamUid) {
+  const token = signHamSession(hamUid);
+  if (!token) return null;
+  return { Authorization: 'Bearer ' + token };
+}
+
 function requireHamSession(req, res, expectedHamUid) {
   const authorized = authorizeHamRequest(req, expectedHamUid);
   if (!authorized.ok) {
@@ -190,6 +213,7 @@ module.exports = {
   authorizeSessionRequest,
   authorizeHamRequest,
   authorizeExactHamRequest,
+  internalSessionHeaders,
   requireHamSession,
   requireExactHamSession,
   requireAnyHamSession,
