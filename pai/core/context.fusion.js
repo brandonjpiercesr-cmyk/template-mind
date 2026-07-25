@@ -45,6 +45,12 @@ async function readCalendarNext24h(hamUid) {
   if (!grants.length) return { available: false, events: [] };
   const now = Math.floor(Date.now() / 1000), end = now + 24 * 3600;
   const events = [];
+  // ⬡B:context_fusion:FIX:per_ham_timezone_not_a_global_env:20260725⬡ The calendar dates the
+  // cycle reads must land in THIS ham's own zone, not a single global env for everyone. One
+  // shared resolver (core/ham.timezone.js): founder -> FOUNDER_TZ env, any ham -> their own
+  // stored zone, honest documented default only if truly unknown, never UTC. Resolved once
+  // for the whole read, not re-read per event.
+  const _tz = await require('./ham.timezone.js').resolveHamTimezone(hamUid);
   try {
     await Promise.all(grants.map(async function (gid) {
       try {
@@ -63,7 +69,7 @@ async function readCalendarNext24h(hamUid) {
           // its own timezone math, which is how it reads a passed all-day event as upcoming.
           // Cold code stamps the human date and whether it is genuinely today, same rule as
           // the /os/calendar choke point: all-day is a floating UTC square, timed is a local instant.
-          const _tz = process.env.HAM_TIMEZONE || 'America/New_York';
+          // _tz is this ham's own resolved zone (hoisted above), not a global env.
           const _fL = new Intl.DateTimeFormat('en-US', { timeZone:_tz, weekday:'long', month:'long', day:'numeric' });
           const _fU = new Intl.DateTimeFormat('en-US', { timeZone:'UTC', weekday:'long', month:'long', day:'numeric' });
           const _fT = new Intl.DateTimeFormat('en-US', { timeZone:_tz, hour:'numeric', minute:'2-digit' });
