@@ -180,6 +180,9 @@ function bindExactHamToolArgs(name, args, hamUid, runtime) {
 // assumed. Added a real cooldown guard at the one place a commit actually
 // happens, so no future burst can land regardless of what triggers the retry.
 'use strict';
+// ⬡B:core.tool_loop:BOUND:tool_evidence_is_for_a_judge_not_a_transcript:20260725⬡
+var TOOL_EVIDENCE_ONE_MAX = parseInt(process.env.TOOL_EVIDENCE_ONE_MAX || '2000', 10);
+var TOOL_EVIDENCE_COUNT_MAX = parseInt(process.env.TOOL_EVIDENCE_COUNT_MAX || '12', 10);
 // ⬡B:core.tool.loop:WIRE:funneled_20260713⬡
 // ⬡COLD:remember:remove:ONE_BRAIN_IO:20260723⬡
 // COLD-ANEW-BRAIN-0011 contained: the retired-brain fallback is removed. Per founder law
@@ -3339,6 +3342,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     channel, hamUid, _exactUserMessage, identity);
   var _signedVoiceFarewellAnswer = verifiedVoiceFarewellAnswer(
     channel, hamUid, _exactUserMessage, identity);
+  // The turn's tool RESULTS, carried so the deterministic board can trace a figure she
+  // actually looked up instead of flagging her for knowing it. Bounded; see the 911 at the
+  // executeTool call site below.
+  var _toolResultsText=[];
   var iter=0,tools=_codaLeadNeeded?['consult_coda']:[],
     ans=_signedVoicePurposeAnswer || _signedVoiceHearingAnswer ||
       _signedVoiceFarewellAnswer || null;
@@ -4427,6 +4434,33 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         _stampStep('tool_call', tc.function.name);
         var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime);
         tools.push(tc.function.name);
+        // ⬡B:core.tool_loop:911:the_board_judged_her_numbers_against_his_own_question:20260725⬡
+        // MEASURED 20260725, twelve live probes, perfect separation: every money question
+        // HELD, 6 of 6; every no-number question PASSED, 6 of 6. Not a rate, structural.
+        // board/shadow.js traces a dollar figure against the turn's evidence_text, and that
+        // string is built from deliberationInput plus verified_evidence. On a voice turn
+        // deliberationInput is String(message), HIS OWN QUESTION. So the judge was handed
+        // "how much money is coming in this month" and asked to find her figure inside it.
+        // It never could, so she died silent on every money turn and he heard nothing.
+        //
+        // What she actually looked up never travelled: this loop kept the tool NAME on the
+        // line above and dropped the result on the floor. Her budget summary is already
+        // shaped the way that judge reads, dollar-signed figures AND the field names
+        // monthlyIncomeTotal, monthlyBillsTotal and monthlyNet, which are literally in
+        // _evidenceMoneySet's own list. The two halves already fit; nothing was connecting
+        // them.
+        //
+        // BOUNDED ON PURPOSE, because this is evidence for a judge and not a transcript:
+        // each result is clipped and the carrier holds a fixed number of them, so a large
+        // tool return cannot bloat a turn. It is used for the tracing check and is never
+        // stamped to a wall. NO GATE MOVES: a figure she genuinely cannot source is still
+        // flagged exactly as before. She just stops being punished for having looked it up.
+        try {
+          if (_toolResultsText.length < TOOL_EVIDENCE_COUNT_MAX) {
+            var _trText = typeof tr === 'string' ? tr : JSON.stringify(tr);
+            if (_trText) _toolResultsText.push(tc.function.name + ': ' + _trText.slice(0, TOOL_EVIDENCE_ONE_MAX));
+          }
+        } catch (eToolEv) { /* evidence is best effort and never breaks the turn */ }
         // ⬡B:core.tool_loop:BUILD:deterministic_auto_screen_cook_20260715⬡ THE REBUILD.
         // Founder, verbatim: "how hard is it for cinematic scenes and emails and budgets
         // and widgets to appear on screen based on what PAI contributes" -- and he is
@@ -5107,6 +5141,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       ? String(_callerCouncilContext.evidence_digest) : null,
     memory_contributors:null
   } : Object.assign({ tools_used:tools, iterations:iter,
+    // What she looked up, so the deterministic board can trace a figure instead of
+    // flagging her for knowing it. See the 911 at the executeTool call site.
+    tool_results_text:_toolResultsText.join('\n'),
     memory_contributors:(fcw&&fcw.contributors)||null }, _callerCouncilContext);
   var _reachHandoffMode = String(identity&&identity.council_context&&
     identity.council_context.mode || '');

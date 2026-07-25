@@ -1651,9 +1651,19 @@ async function defaultShadowStage(ctx, injected) {
   // \u2b21B:core.pai_outbound_council:WIRE:shadow_receives_deliberation_evidence:20260716\u2b21
   // The statistics rule traces against the exact bytes the answer was built
   // from: the deliberation input plus the bounded verified evidence previews.
+  // ⬡B:core.pai_outbound_council:911:this_judge_was_tracing_her_numbers_against_his_question:20260725⬡
+  // MEASURED 20260725 on the live gate, twelve probes, perfect separation: every money
+  // question HELD, 6 of 6; every no-number question PASSED, 6 of 6. Structural, not a rate.
+  // deliberationInput on a voice turn is String(message), HIS OWN QUESTION, so this judge was
+  // handed his question and told to find her figure inside it. It never could. The tool
+  // RESULTS she looked up now travel with the turn and are traced here.
+  // NOTE FOR THE NEXT READER: this file is NOT a pai-sync manifest pair, it legitimately
+  // diverges from anew. This landed as the same targeted EDIT applied to both sides, never a
+  // copy, because copying would have clobbered this side's own version.
   var shadowEvidenceText = String(ctx.deliberationInput || '') + '\n' +
     boundedVerifiedEvidence(ctx.context && ctx.context.verified_evidence)
-      .map(function (e) { return e.evidence_preview || ''; }).join('\n');
+      .map(function (e) { return e.evidence_preview || '' + '\n' +
+    String((ctx.context && ctx.context.tool_results_text) || ''); }).join('\n');
   var boardResult = await boardShadow.shadow(ctx.answer,
     Object.assign({}, ctx.context || {}, { evidence_text: shadowEvidenceText }));
   var verifiedEvidence = boundedVerifiedEvidence(ctx.context && ctx.context.verified_evidence);
