@@ -24,6 +24,7 @@
 
 var ladder = require('./model.ladder.js');
 var crypto = require('node:crypto');
+var openrouterSeatSpend = require('./openrouter.seat.spend.js');
 
 var BANNED_HOSTS = [
   'api.groq.com',
@@ -146,6 +147,29 @@ function jsonResponse(obj, status) {
   });
 }
 
+function seatSpendRefusal(result, url) {
+  var status = result && result.status === 429 ? 429 : 503;
+  return jsonResponse({error:{message:result.reason,reason:result.reason,
+    seat:result.seat || null,usage_daily_usd:Number.isFinite(result.usageDailyUsd)
+      ? result.usageDailyUsd : null,daily_cap_usd:Number.isFinite(result.capUsd)
+      ? result.capUsd : null,retry_at:result.retryAt || null,
+    host:requestUrl(url)}},status);
+}
+
+async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch) {
+  try {
+    var allowed = require('./spend.guard.js').allow(paidKind,{egress:true});
+    if (!allowed) {
+      return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary',
+        host: requestUrl(url) } }, 429);
+    }
+  } catch (eGuard) {
+    return jsonResponse({error:{message:'spend_guard_unavailable_at_boundary',
+      reason:'spend_guard_unavailable_at_boundary',host:requestUrl(url)}},503);
+  }
+  return realFetch.apply(fetchThis, fetchArgs);
+}
+
 // Build an OpenAI-shaped chat completion envelope around ladder text, so a caller
 // that reads choices[0].message.content keeps working unchanged.
 function chatEnvelope(text) {
@@ -189,16 +213,14 @@ function install() {
               host:requestUrl(url)
             }},429);
           }
-          try {
-            var allowed = require('./spend.guard.js').allow(paidKind,{egress:true});
-            if (!allowed) {
-              return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary',
-                host: requestUrl(url) } }, 429);
-            }
-          } catch (eGuard) {
-            return jsonResponse({error:{message:'spend_guard_unavailable_at_boundary',
-              reason:'spend_guard_unavailable_at_boundary',host:requestUrl(url)}},503);
-          }
+          var fetchThis = this;
+          var fetchArgs = arguments;
+          var guarded = await openrouterSeatSpend.run(url, init, realFetch,
+            function () {
+              return performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch);
+            });
+          if (guarded.blocked) return seatSpendRefusal(guarded, url);
+          return guarded.response;
         }
         return realFetch.apply(this, arguments);
       }
