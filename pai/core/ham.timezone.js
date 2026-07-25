@@ -102,4 +102,133 @@ function resolveHamTimezoneCached(hamUid) {
   return _envOrDefault(hamUid);
 }
 
-module.exports = { resolveHamTimezone, resolveHamTimezoneCached, isValidZone };
+// ⬡B:core.ham_timezone:FIX:wall_time_resolves_in_their_zone_not_the_servers:20260725⬡
+// THE INVERSE RESOLVER. Everything above answers "which zone is this person in". What
+// follows answers the question that actually bit a real human: "9am tomorrow, for THEM,
+// is what real instant?"
+//
+// THE 5AM BUG THIS EXISTS TO CURE. core/tool.loop.js create_reminder, asked for a
+// reminder with no date, defaulted to "tomorrow 9am" by calling Date.setHours(9,0,0,0).
+// setHours means nine in the morning IN THE SERVER'S ZONE. The server runs UTC, so an
+// Eastern person asking to be reminded "tomorrow" had 09:00 UTC written into their bead,
+// which is 5:00am where they actually sleep. It stayed invisible only because nothing
+// ever read REMINDER beads for due ones; the moment core/reach/wake.clock.js is armed
+// behind WAKE_CLOCK_ENABLED, that stored instant really does wake them at five.
+// Same law as above, applied to the other direction: a HAM has a zone and it is never
+// UTC, so a wall-clock time a person asked for has to be resolved THROUGH their zone
+// before it is ever stored as an instant.
+
+function _pad2(n) { return (n < 10 ? '0' : '') + n; }
+function _pad4(n) { return String(n).padStart(4, '0'); }
+
+// How far THIS zone sits from UTC at THIS instant, in ms. Read out of Intl rather than a
+// hardcoded table, so daylight saving is whatever the zone database actually says on that
+// date, in that zone, this year. Returns null rather than guessing.
+function zoneOffsetMs(tz, atMs) {
+  if (!isValidZone(tz)) return null;
+  var at = Number(atMs);
+  if (!Number.isFinite(at)) return null;
+  try {
+    var parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric',
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      second: '2-digit', hour12: false }).formatToParts(new Date(at));
+    var got = Object.create(null);
+    parts.forEach(function (p) { got[p.type] = p.value; });
+    if (!got.year || !got.month || !got.day || !got.hour || !got.minute || !got.second) return null;
+    var hour = got.hour === '24' ? '00' : got.hour;
+    var asIfUtc = Date.UTC(Number(got.year), Number(got.month) - 1, Number(got.day),
+      Number(hour), Number(got.minute), Number(got.second));
+    if (!Number.isFinite(asIfUtc)) return null;
+    return asIfUtc - at;
+  } catch (e) { return null; }
+}
+
+// Their calendar date right now, on their own wall. Numbers, so a caller can do honest
+// calendar arithmetic on it without re-parsing a string.
+function localDateInZone(tz, atMs) {
+  if (!isValidZone(tz)) return null;
+  var at = Number(atMs);
+  if (!Number.isFinite(at)) return null;
+  try {
+    var parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric',
+      month: '2-digit', day: '2-digit' }).formatToParts(new Date(at));
+    var got = Object.create(null);
+    parts.forEach(function (p) { got[p.type] = p.value; });
+    if (!got.year || !got.month || !got.day) return null;
+    var out = { year: Number(got.year), month: Number(got.month), day: Number(got.day) };
+    return Number.isFinite(out.year) && Number.isFinite(out.month) &&
+      Number.isFinite(out.day) ? out : null;
+  } catch (e) { return null; }
+}
+
+// A wall-clock time THEY would read on their own wall, turned into the real UTC instant.
+// Two passes on purpose: the offset depends on the very instant being solved for, so the
+// first pass guesses with the offset at the naive instant and the second re-resolves at
+// the corrected one. That second pass is what makes a time near a daylight-saving
+// changeover land on the correct side of the shift instead of an hour out.
+// A wall time that does not exist (the skipped hour on a spring-forward day) resolves to
+// the instant the clock jumped to, which is the only real moment that reading can name.
+function wallTimeToUtcMs(tz, wall) {
+  if (!isValidZone(tz) || !wall || typeof wall !== 'object') return null;
+  var y = Number(wall.year), mo = Number(wall.month), d = Number(wall.day);
+  var h = Number(wall.hour == null ? 0 : wall.hour);
+  var mi = Number(wall.minute == null ? 0 : wall.minute);
+  if (![y, mo, d, h, mi].every(function (n) { return Number.isFinite(n); })) return null;
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h < 0 || h > 23 || mi < 0 || mi > 59) return null;
+  var naive = Date.UTC(y, mo - 1, d, h, mi, 0, 0);
+  if (!Number.isFinite(naive)) return null;
+  var off = zoneOffsetMs(tz, naive);
+  if (off === null) return null;
+  var utc = naive - off;
+  var off2 = zoneOffsetMs(tz, utc);
+  if (off2 === null) return null;
+  if (off2 !== off) utc = naive - off2;
+  return Number.isFinite(utc) ? utc : null;
+}
+
+// THE NEXT REAL DAY AT THIS HOUR, on THEIR wall clock. This is the honest version of what
+// create_reminder's dateless fallback always meant: not "9am wherever the server happens
+// to be racked", but "9am the next day where this person actually wakes up".
+// The day step is pure calendar arithmetic on their own local date, never a +24h jump,
+// because a daylight-saving day is 23 or 25 hours long and a +24h jump can skip a date
+// outright near midnight. Steps forward until the instant is genuinely in the future.
+function nextLocalDayAtHourMs(options) {
+  options = options || {};
+  var tz = isValidZone(options.timezone) ? options.timezone : _documentedDefault();
+  if (!isValidZone(tz)) tz = DEFAULT_FALLBACK;
+  var now = Number(options.now == null ? Date.now() : options.now);
+  if (!Number.isFinite(now)) return { ok: false, reason: 'now_invalid' };
+  var hour = Number(options.hour == null ? 9 : options.hour);
+  var minute = Number(options.minute == null ? 0 : options.minute);
+  if (!Number.isFinite(hour) || hour < 0 || hour > 23) return { ok: false, reason: 'hour_invalid' };
+  if (!Number.isFinite(minute) || minute < 0 || minute > 59) return { ok: false, reason: 'minute_invalid' };
+  var today = localDateInZone(tz, now);
+  if (!today) return { ok: false, reason: 'zone_unreadable' };
+  for (var add = 1; add <= 4; add++) {
+    // Calendar step only. Date.UTC normalises month and year rollover for us; the midday
+    // anchor is scaffolding for that arithmetic and never appears in the answer.
+    var stepped = new Date(Date.UTC(today.year, today.month - 1, today.day + add, 12, 0, 0));
+    var y = stepped.getUTCFullYear(), m = stepped.getUTCMonth() + 1, d = stepped.getUTCDate();
+    var atMs = wallTimeToUtcMs(tz, { year: y, month: m, day: d, hour: hour, minute: minute });
+    if (atMs === null || atMs <= now) continue;
+    return { ok: true, atMs: atMs, iso: new Date(atMs).toISOString(), timezone: tz,
+      localDate: _pad4(y) + '-' + _pad2(m) + '-' + _pad2(d),
+      localTime: _pad2(hour) + ':' + _pad2(minute) };
+  }
+  return { ok: false, reason: 'no_future_local_day' };
+}
+
+// The same answer, for a HAM whose zone still has to be resolved. One await, one source:
+// it resolves the zone through resolveHamTimezone above and never re-implements the
+// fallback ladder. Always returns a shaped result; a caller must read ok before atMs.
+async function resolveNextLocalDayAtHour(hamUid, hour, options) {
+  options = options || {};
+  var tz = null;
+  try { tz = await resolveHamTimezone(hamUid); } catch (e) { tz = null; }
+  return nextLocalDayAtHourMs({ timezone: tz, hour: hour,
+    minute: options.minute, now: options.now });
+}
+
+module.exports = { resolveHamTimezone, resolveHamTimezoneCached, isValidZone,
+  zoneOffsetMs, localDateInZone, wallTimeToUtcMs, nextLocalDayAtHourMs,
+  resolveNextLocalDayAtHour };
