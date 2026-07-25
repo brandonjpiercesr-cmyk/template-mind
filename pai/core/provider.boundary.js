@@ -23,6 +23,7 @@
 // are allowed to reach api.anthropic.com directly. Only the banned hosts are trapped.
 
 var ladder = require('./model.ladder.js');
+var crypto = require('node:crypto');
 
 var BANNED_HOSTS = [
   'api.groq.com',
@@ -59,6 +60,49 @@ var METERED_PAID_HOSTS = [
 function requestUrl(value) {
   if (value && typeof value === 'object' && typeof value.url === 'string') return value.url;
   return String(value || '');
+}
+
+function headerValue(init, name) {
+  var headers = init && init.headers;
+  var wanted = String(name || '').toLowerCase();
+  var value = '';
+  if (headers && typeof headers.get === 'function') value = headers.get(name) || '';
+  else if (Array.isArray(headers)) {
+    var row = headers.find(function (pair) {
+      return Array.isArray(pair) && String(pair[0]).toLowerCase() === wanted;
+    });
+    value = row && row[1] || '';
+  } else if (headers && typeof headers === 'object') {
+    var key = Object.keys(headers).find(function (item) {
+      return item.toLowerCase() === wanted;
+    });
+    value = key ? headers[key] : '';
+  }
+  return String(value || '').trim();
+}
+
+function sameCredential(left, right) {
+  var a = Buffer.from(String(left || '').trim());
+  var b = Buffer.from(String(right || '').trim());
+  return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function sharedProviderCredential(url, init, env) {
+  var u = requestUrl(url);
+  var runtime = env || process.env;
+  var provider = '';
+  var envName = '';
+  if (/api\.together\.(?:ai|xyz)/.test(u)) {
+    provider = 'together'; envName = 'TOGETHER_API_KEY';
+  } else if (/api\.runpod\.(?:ai|io)/.test(u)) {
+    provider = 'runpod'; envName = 'RUNPOD_API_KEY';
+  } else if (/api\.anthropic\.com/.test(u)) {
+    provider = 'anthropic'; envName = 'ANTHROPIC_API_KEY';
+  } else return null;
+  var supplied = provider === 'anthropic' ? headerValue(init, 'x-api-key')
+    : headerValue(init, 'authorization').replace(/^Bearer\s+/i, '').trim();
+  return sameCredential(supplied, runtime[envName])
+    ? { provider:provider, env:envName } : null;
 }
 
 function isBannedChatCall(url) {
@@ -132,6 +176,19 @@ function install() {
         // altered -- just gated. A tripped guard returns a 429 the caller treats as a miss.
         var paidKind = paidCallKind(url);
         if (paidKind) {
+          // ⬡COLD:act:remove:PAI_COMPONENT_PROVIDER_WALLETS:20260725⬡
+          // The inherited account-wide Together, RunPod, and Anthropic wallets are
+          // inventory only. A paid caller must present a distinct component credential
+          // so every dollar resolves to one owner and a single caller can be isolated.
+          var sharedCredential = sharedProviderCredential(url, init);
+          if (sharedCredential) {
+            return jsonResponse({error:{
+              message:'anonymous_shared_provider_key_forbidden',
+              reason:'anonymous_shared_provider_key_forbidden',
+              provider:sharedCredential.provider,
+              host:requestUrl(url)
+            }},429);
+          }
           try {
             var allowed = require('./spend.guard.js').allow(paidKind,{egress:true});
             if (!allowed) {
@@ -184,4 +241,5 @@ function install() {
 
 module.exports = { install: install, isBannedChatCall: isBannedChatCall,
   isMeteredPaidCall: isMeteredPaidCall, paidCallKind:paidCallKind,
+  sharedProviderCredential:sharedProviderCredential,
   BANNED_HOSTS: BANNED_HOSTS, METERED_PAID_HOSTS: METERED_PAID_HOSTS };
