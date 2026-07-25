@@ -107,9 +107,34 @@ function fallback(name) {
 // The API key for a seat: its per-function named key first, then the shared
 // OpenRouter key so an un-provisioned seat is never silent. Together seats
 // resolve their own key env directly.
+// ⬡B:core.seat_map:911:a_key_pasted_with_a_newline_is_not_a_broken_key_it_is_a_broken_paste:20260725⬡
+// FOUND LIVE 20260725: two funded seats, deploy_tool and judge, were refusing every call
+// with an illegal Authorization header. Both keys were PRESENT and correct; each carried a
+// stray newline or space from being pasted into the env box. The bleed board called those
+// seats dead and the shared key stayed alive to cover them, all because of invisible
+// whitespace.
+//
+// A founder pasting a key into a web form should never have to know that. Nothing about a
+// trailing newline is a decision, a policy, or a judgment; it is a paste artifact, and cold
+// code is allowed to clean a paste artifact because it decides nothing by doing so. So the
+// ONE SOURCE cleans it once, here, and every seat in every repo inherits the cure.
+//
+// Bounded on purpose: trim surrounding whitespace, and strip one matching pair of wrapping
+// quotes (some env UIs add them). Nothing inside the key is touched, so a key that is
+// genuinely wrong still fails honestly instead of being silently "repaired" into a different
+// wrong key.
+function sanitizeKey(raw) {
+  if (raw == null) return '';
+  var v = String(raw).trim();
+  if (v.length > 1 && ((v[0] === '"' && v[v.length - 1] === '"') || (v[0] === "'" && v[v.length - 1] === "'"))) {
+    v = v.slice(1, -1).trim();
+  }
+  return v;
+}
+
 function resolveKey(s) {
   if (!s) return '';
-  var own = process.env[s.keyEnv];
+  var own = sanitizeKey(process.env[s.keyEnv]);
   if (own) return own;
   // A missing named key falls back only to the SAME service's shared key, never a
   // cross-provider key (a Together seat must never authenticate to OpenRouter). An
@@ -117,11 +142,11 @@ function resolveKey(s) {
   // floors to RUNPOD_API_KEY so a deployment carrying only RUNPOD_API_KEY still
   // authenticates the judge instead of going silent (Codex 20260722). Together and
   // any other provider still return empty rather than borrow a foreign key.
-  if (s.provider === 'openrouter') return process.env.OPENROUTER_API_KEY || '';
-  if (s.provider === 'runpod') return process.env.RUNPOD_API_KEY || '';
+  if (s.provider === 'openrouter') return sanitizeKey(process.env.OPENROUTER_API_KEY);
+  if (s.provider === 'runpod') return sanitizeKey(process.env.RUNPOD_API_KEY);
   return '';
 }
 
 function seatNames() { return Object.keys(SEATS); }
 
-module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames };
+module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey };
