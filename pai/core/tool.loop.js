@@ -4434,27 +4434,26 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         _stampStep('tool_call', tc.function.name);
         var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime);
         tools.push(tc.function.name);
-        // ⬡B:core.tool_loop:911:the_board_judged_her_numbers_against_his_own_question:20260725⬡
+        // ⬡B:core.tool_loop:911:a_tool_the_MODEL_calls_never_became_evidence:20260725⬡
         // MEASURED 20260725, twelve live probes, perfect separation: every money question
-        // HELD, 6 of 6; every no-number question PASSED, 6 of 6. Not a rate, structural.
-        // board/shadow.js traces a dollar figure against the turn's evidence_text, and that
-        // string is built from deliberationInput plus verified_evidence. On a voice turn
-        // deliberationInput is String(message), HIS OWN QUESTION. So the judge was handed
-        // "how much money is coming in this month" and asked to find her figure inside it.
-        // It never could, so she died silent on every money turn and he heard nothing.
+        // HELD, 6 of 6; every no-number question PASSED, 6 of 6. Structural, not a rate.
         //
-        // What she actually looked up never travelled: this loop kept the tool NAME on the
-        // line above and dropped the result on the floor. Her budget summary is already
-        // shaped the way that judge reads, dollar-signed figures AND the field names
-        // monthlyIncomeTotal, monthlyBillsTotal and monthlyNet, which are literally in
-        // _evidenceMoneySet's own list. The two halves already fit; nothing was connecting
-        // them.
+        // THE MECHANISM, traced to the end. _verifiedToolEvidence, which becomes the board's
+        // evidence, is populated in exactly four places: find_in_brain, consult_coda,
+        // consult_mace, and the FORCED data-reader path. It is NOT populated here, where a
+        // tool the MODEL chose to call lands. So cold code force-executing get_budget_summary
+        // produced evidence and her figure traced, while the model calling that same tool
+        // itself produced none and her figure could not. Same tool, same data, two paths, and
+        // only one of them let her speak.
         //
-        // BOUNDED ON PURPOSE, because this is evidence for a judge and not a transcript:
-        // each result is clipped and the carrier holds a fixed number of them, so a large
-        // tool return cannot bloat a turn. It is used for the tracing check and is never
-        // stamped to a wall. NO GATE MOVES: a figure she genuinely cannot source is still
-        // flagged exactly as before. She just stops being punished for having looked it up.
+        // Her budget summary is already shaped the way the board reads: dollar-signed figures
+        // AND the field names monthlyIncomeTotal, monthlyBillsTotal and monthlyNet, which are
+        // literally in _evidenceMoneySet's own list. The halves always fit; nothing carried
+        // the result across.
+        //
+        // This deliberately does NOT push into _verifiedToolEvidence, which is capped at 8
+        // and already shared with memory beads; crowding a bead out to make room would trade
+        // one silence for another. It rides its own bounded carrier instead.
         try {
           if (_toolResultsText.length < TOOL_EVIDENCE_COUNT_MAX) {
             var _trText = typeof tr === 'string' ? tr : JSON.stringify(tr);
