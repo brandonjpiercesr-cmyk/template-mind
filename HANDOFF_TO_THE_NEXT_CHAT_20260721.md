@@ -23,7 +23,7 @@ I am the Claude Code chat the founder calls **Claire/CLAUDETTE**. My assignment:
 ## HARD FACTS THAT WILL SAVE YOU HOURS
 
 - **The company is ENVOLVE. Always ENVOLVE.** Speech-to-text writes "involve" — it is never right. Say it back as ENVOLVE every time.
-- The founder is **Brandon Joshua Pierce Sr.** (middle name Joshua — a doc says Jerome; the doc is wrong).
+- **The founder's identity is env-only, never a literal.** Read it from the `FOUNDER_*` env vars or from the brain via `core/founder_context.js`. It is deliberately not written here. This repo is the mind-template every world inherits, so a real person named in this file is a real person leaked into every stranger's deploy. The line that used to sit here spelled the founder's full legal name out, plus a middle-name correction, and the `no-founder-pii` gate never saw it because the gate did not scan Markdown at all.
 - **A'NU is the face, A'NEW is the mind** — THE BIND, sealed, never merged. The W is silent (Wilmington). "The work creates the wonder."
 - He is a non-coder creative. His spoken word IS the spec. Quote his words; never paraphrase-and-attribute.
 - Brain access: Supabase REST with `Accept-Profile: abacia_core`, table `aibe_brain`. Live gate: `POST https://aibebase.onrender.com/cara/chat` (`ok:false` is honest; a canned string is not).

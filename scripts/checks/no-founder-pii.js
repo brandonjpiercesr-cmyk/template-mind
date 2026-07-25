@@ -50,7 +50,7 @@ function walk(dir, acc) {
     if (ent.name.startsWith('.') && ent.name !== '.github') continue;
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) { if (!SKIP_DIRS.has(ent.name)) walk(full, acc); continue; }
-    if (!/\.(js|cjs|mjs|jsx|ts|json|html)$/.test(ent.name)) continue;
+    if (!/.(js|cjs|mjs|jsx|ts|json|html|md)$/.test(ent.name)) continue;
     acc.push(full);
   }
   return acc;
