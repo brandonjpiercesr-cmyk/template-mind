@@ -78,6 +78,25 @@ async function readCalendarNext24h(hamUid) {
         (((await er.json()).data) || []).forEach(function (e) {
           const when = e.when || {};
           const startTs = when.start_time || when.time || (when.start_date ? Math.floor(new Date(when.start_date + 'T00:00:00').getTime() / 1000) : 0);
+          // ⬡B:context_fusion:FIX:multi_day_events_keep_their_end_here_too:20260725⬡ THE BUG THE
+          // FOUNDER HIT TODAY, live: he is ON a July 22 to 26 trip and this fuse told her "the
+          // CALENDAR has nothing on it for today itself; upcoming days hold: <trip> on Wednesday,
+          // July 22". A trip he is on RIGHT NOW, described as upcoming, dated three days in the
+          // past, with today reported empty. The cause was one missing field: this shape carried
+          // only a START, so is_today was start-date equality, and a span that began before today
+          // can never equal today no matter how far into it he is.
+          // /os/calendar fixed exactly this on 20260718 (multi_day_events_keep_their_end) and its
+          // classification is the proven, reviewed one. THIS IS A FAITHFUL MIRROR of the sibling
+          // implementation in routes/os.api.routes.js (the stampDateClass block): same end
+          // derivation, same is_now, same is_today, same is_past, so the two readers can never
+          // disagree about the same event. It is mirrored rather than shared on purpose: both
+          // files are hot lanes two days before the demo, and extracting live logic out of
+          // another lane's file is the clobber this house already paid for once today. If the
+          // pair is ever lifted into one home, lift BOTH sides together.
+          // A Nylas datespan end_date is the LAST day INCLUSIVE, so the span runs through 23:59.
+          // No end in the payload is represented honestly as no end (endTs === startTs, and no
+          // end_date is emitted at all); an end is never invented to fill the hole.
+          const endTs = when.end_time || (when.end_date ? Math.floor(new Date(when.end_date + 'T23:59:59').getTime() / 1000) : startTs);
           // ⬡B:context_fusion:FIX:human_dates_and_today_flag_for_the_cycle:20260718⬡ the cycle
           // was handed raw ISO ("Myrtle Beach at 2026-07-15T00:00:00.000Z") and left to do
           // its own timezone math, which is how it reads a passed all-day event as upcoming.
@@ -93,10 +112,27 @@ async function readCalendarNext24h(hamUid) {
           const _todayF = _fU.format(new Date(new Date().toLocaleString('en-US', { timeZone:_tz })));
           const _dateStr = _d ? (_allDay ? _fU.format(_d) : _fL.format(_d)) : null;
           var _timeStr = _d ? (_allDay ? 'all day' : _fT.format(_d)) : 'time unknown';
+          // The end, stamped by the same rule as the start: an all-day span is a floating UTC
+          // square, a timed span is a real instant in THIS ham's zone (_tz, resolved once above,
+          // never UTC and never a global). An event with no distinct end keeps no end_date.
+          const _hasEnd = !!(startTs && endTs && endTs !== startTs);
+          const _eD = _hasEnd ? new Date(endTs * 1000) : null;
+          const _endDateStr = _eD ? (_allDay ? _fU.format(_eD) : _fL.format(_eD)) : null;
+          // SPAN OVERLAP, not start equality. Mirrors routes/os.api.routes.js exactly.
+          // is_now: a multi-day span whose start is on or before today and whose end is on or
+          // after today is HAPPENING NOW, and a thing happening now IS today's reality.
+          const _startMs = startTs * 1000, _endMs = (endTs || startTs) * 1000, _nowMs = Date.now();
+          const _isNow = (_startMs <= _nowMs + 86400000) && (_endMs >= _nowMs - 3600000)
+            && (_endMs - _startMs > 86400000);
+          var _isToday = !!(_dateStr && _dateStr === (_allDay ? _todayF : _todayL));
+          if (_isNow) _isToday = true; // a trip covering today IS today, never "upcoming"
+          const _isPast = !_isToday && !_isNow && (_endMs < (_nowMs - 86400000));
           events.push({ title: String(e.title || 'untitled').slice(0, 80),
             start: startTs ? new Date(startTs * 1000).toISOString() : null,
+            end: _hasEnd ? new Date(endTs * 1000).toISOString() : null,
             date: _dateStr || 'date unknown', time: _timeStr,
-            is_today: !!(_dateStr && _dateStr === (_allDay ? _todayF : _todayL)),
+            end_date: _endDateStr,
+            is_today: _isToday, is_now: _isNow, is_past: _isPast,
             allDay: _allDay });
         });
       } catch (eg) { /* one grant failing never blinds the rest */ }
@@ -173,10 +209,23 @@ async function getLatestSummary(hamUid) {
       // that are actually TODAY from later ones so the cycle never calls a future or past
       // day "today". available:false already means unreachable, so wide-open is only ever
       // asserted when the read genuinely succeeded and returned nothing.
+      // ⬡B:context_fusion:FIX:a_span_he_is_on_is_today_not_upcoming:20260725⬡ e.is_today is now
+      // span overlap (stamped above, mirroring /os/calendar), so a trip in progress lands in the
+      // TODAY bucket where it belongs. Two things follow here. An event that has genuinely already
+      // ended is dropped from the upcoming list rather than announced as something still ahead of
+      // them, and a span that is underway carries its own start and end so she is holding the
+      // whole shape of it, not a bare title with a start date three days behind her.
       var _today = (f.calendar.events || []).filter(function (e) { return e.is_today; });
-      var _later = (f.calendar.events || []).filter(function (e) { return !e.is_today; });
+      var _later = (f.calendar.events || []).filter(function (e) { return !e.is_today && !e.is_past; });
       if (_today.length) {
-        var _todayStr = 'calendar TODAY: ' + _today.map(function (e) { return e.title + (e.allDay ? ' (all day)' : ' at ' + (e.time || e.start)); }).join('; ');
+        var _todayStr = 'calendar TODAY: ' + _today.map(function (e) {
+          if (e.is_now && e.end_date) {
+            return e.title + ' (a multi-day span ALREADY UNDERWAY: it started ' + e.date
+              + ' and runs through ' + e.end_date + ', so today falls inside it and they are on it now)';
+          }
+          return e.title + (e.allDay ? ' (all day)' : ' at ' + (e.time || e.start))
+            + (e.end_date && e.end_date !== e.date ? ' (through ' + e.end_date + ')' : '');
+        }).join('; ');
         if (_later.length) { _todayStr += ' | later this window (NOT today): ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; '); }
         parts.push(_todayStr);
       } else if (_later.length) {
