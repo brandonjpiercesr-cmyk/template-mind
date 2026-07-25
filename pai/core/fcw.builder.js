@@ -308,10 +308,26 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   } else {
     try { _anuVoice = require('./persona.js').VOICE; } catch (eVoice) { _anuVoice = "You are A\u2019NU, a warm, sharp butler in the spirit of JARVIS, a Black woman, never Siri. You speak in full natural sentences, you already did the work and lead with what you handled, you never sign off with a courtesy line, you never use em dashes or hollow AI phrases."; }
   }
+  // ⬡B:core.fcw.builder:FIX:she_knows_their_local_time_not_utc:20260725⬡ Founder-caught,
+  // demo-critical: A'NU said "you're up early, 3:17am" reading the SERVER clock (UTC) when he
+  // is Eastern. She had NO grounded sense of the person's now, so her conversational time fell
+  // through to the machine's UTC. His law: "HAMS have time zones and it's never UTC." This is
+  // the primary fix -- every cycle's wall now carries THIS ham's real local time, resolved
+  // through the one shared resolver (founder -> FOUNDER_TZ env, any ham -> their own stored
+  // zone, documented default only if truly unknown, never UTC, never a per-person literal).
+  var _hamTz = 'America/New_York', _hamLocalNow = '';
+  try {
+    _hamTz = await require('./ham.timezone.js').resolveHamTimezone(hamUid);
+    _hamLocalNow = new Intl.DateTimeFormat('en-US', { timeZone: _hamTz,
+      weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date());
+  } catch (eTz) { _hamLocalNow = ''; }
   var systemPrompt = [
     _anuVoice,
     '',
     'HAM CONTEXT:',
+    (_hamLocalNow
+      ? ('THEIR LOCAL TIME RIGHT NOW: ' + _hamLocalNow + ' (their timezone, ' + _hamTz + '). This is THIS person’s own clock, never the server’s and never UTC. Ground any sense of time in it: whether it is morning or night for them, whether they are up early or late, a fitting greeting. Different HAMs live in different zones, so this is theirs specifically.')
+      : ''),
     'Name: ' + hamName,
     (_hamTitle ? ('Address them as "' + _hamTitle + '" when it lands naturally (a greeting, a sign-off, a direct address). This is their title in this context. Use it like a person would, not on every line.') : ''),
     (function(){
