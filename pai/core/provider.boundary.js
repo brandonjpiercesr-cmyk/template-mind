@@ -24,6 +24,7 @@
 
 var ladder = require('./model.ladder.js');
 var crypto = require('node:crypto');
+var openrouterSeatSpend = require('./openrouter.seat.spend.js');
 
 var BANNED_HOSTS = [
   'api.groq.com',
@@ -34,7 +35,8 @@ var BANNED_HOSTS = [
 
 // \u2b21B:core.provider_boundary:FIX:meter_paid_providers_at_the_one_door:20260720\u2b21
 // FOUNDER 911 20260720: the boundary rerouted BANNED hosts through the ladder, but it
-// let direct calls to the three PAID approved providers (Together, OpenRouter, RunPod)
+// let direct calls to the four PAID approved providers (Together, OpenRouter, RunPod,
+// Anthropic)
 // sail straight past, so ~60 files that raw-fetch those hosts NEVER hit the spend guard
 // that lives inside the ladder. That is the structural leak behind a bill that came back
 // no matter how many single files got fixed. These hosts are NOT banned and their calls
@@ -46,15 +48,16 @@ var METERED_PAID_HOSTS = [
   'api.together.ai',
   'api.together.xyz',
   'openrouter.ai/api',
+  'api.anthropic.com',
   'api.runpod.ai',
   'api.runpod.io',
-  'api.anthropic.com',
   'api.elevenlabs.io',
   'api.deepgram.com',
   'fal.run',
   'queue.fal.run',
   'api.replicate.com',
-  'api.simli.ai'
+  'api.simli.ai',
+  'api.liveavatar.com'
 ];
 
 function requestUrl(value) {
@@ -62,47 +65,33 @@ function requestUrl(value) {
   return String(value || '');
 }
 
-function headerValue(init, name) {
-  var headers = init && init.headers;
-  var wanted = String(name || '').toLowerCase();
-  var value = '';
-  if (headers && typeof headers.get === 'function') value = headers.get(name) || '';
-  else if (Array.isArray(headers)) {
-    var row = headers.find(function (pair) {
-      return Array.isArray(pair) && String(pair[0]).toLowerCase() === wanted;
-    });
-    value = row && row[1] || '';
-  } else if (headers && typeof headers === 'object') {
-    var key = Object.keys(headers).find(function (item) {
-      return item.toLowerCase() === wanted;
-    });
-    value = key ? headers[key] : '';
+function headerValue(init,name) {
+  var headers=init&&init.headers,wanted=String(name||'').toLowerCase(),value='';
+  if(headers&&typeof headers.get==='function')value=headers.get(name)||'';
+  else if(Array.isArray(headers)){
+    var row=headers.find(function(pair){return Array.isArray(pair)&&
+      String(pair[0]).toLowerCase()===wanted;});value=row&&row[1]||'';
+  }else if(headers&&typeof headers==='object'){
+    var key=Object.keys(headers).find(function(item){return item.toLowerCase()===wanted;});
+    value=key?headers[key]:'';
   }
-  return String(value || '').trim();
+  return String(value||'').trim();
 }
 
-function sameCredential(left, right) {
-  var a = Buffer.from(String(left || '').trim());
-  var b = Buffer.from(String(right || '').trim());
-  return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
+function sameCredential(left,right){
+  var a=Buffer.from(String(left||'').trim()),b=Buffer.from(String(right||'').trim());
+  return a.length>0&&a.length===b.length&&crypto.timingSafeEqual(a,b);
 }
 
-function sharedProviderCredential(url, init, env) {
-  var u = requestUrl(url);
-  var runtime = env || process.env;
-  var provider = '';
-  var envName = '';
-  if (/api\.together\.(?:ai|xyz)/.test(u)) {
-    provider = 'together'; envName = 'TOGETHER_API_KEY';
-  } else if (/api\.runpod\.(?:ai|io)/.test(u)) {
-    provider = 'runpod'; envName = 'RUNPOD_API_KEY';
-  } else if (/api\.anthropic\.com/.test(u)) {
-    provider = 'anthropic'; envName = 'ANTHROPIC_API_KEY';
-  } else return null;
-  var supplied = provider === 'anthropic' ? headerValue(init, 'x-api-key')
-    : headerValue(init, 'authorization').replace(/^Bearer\s+/i, '').trim();
-  return sameCredential(supplied, runtime[envName])
-    ? { provider:provider, env:envName } : null;
+function sharedProviderCredential(url,init,env){
+  var u=requestUrl(url),runtime=env||process.env,provider='',envName='',supplied='';
+  if(/api\.together\.(?:ai|xyz)/.test(u)){provider='together';envName='TOGETHER_API_KEY';}
+  else if(/api\.runpod\.(?:ai|io)/.test(u)){provider='runpod';envName='RUNPOD_API_KEY';}
+  else if(/api\.anthropic\.com/.test(u)){provider='anthropic';envName='ANTHROPIC_API_KEY';}
+  else return null;
+  supplied=provider==='anthropic'?headerValue(init,'x-api-key'):
+    headerValue(init,'authorization').replace(/^Bearer\s+/i,'').trim();
+  return sameCredential(supplied,runtime[envName])?{provider:provider,env:envName}:null;
 }
 
 function isBannedChatCall(url) {
@@ -114,7 +103,11 @@ function isBannedChatCall(url) {
 }
 
 function paidCallKind(url) {
-  var u = requestUrl(url), kind = null;
+  var u = requestUrl(url);
+  var kind = null;
+  // Meter only actual provider work, never account, model-list, status, or
+  // health reads. Audio transcription and embeddings are paid egress too even
+  // though they do not use a chat-completions path.
   if (u.indexOf('chat/completions') !== -1 || u.indexOf('/run') !== -1 ||
       u.indexOf('/runsync') !== -1 || /\/v1\/messages(?:[/?]|$)/.test(u)) kind = 'text';
   else if (/\/audio\/(?:transcriptions|translations)(?:[/?]|$)/.test(u)) kind = 'audio';
@@ -126,7 +119,8 @@ function paidCallKind(url) {
         /(?:flux|recraft|stable-diffusion|sdxl|ideogram)/i.test(u))) kind = 'image';
   else if ((/fal\.run\//.test(u) && !/\/requests\//.test(u)) ||
       /api\.replicate\.com\/v1\/models\/[^/]+\/[^/]+\/predictions(?:[/?]|$)/.test(u) ||
-      /api\.simli\.ai\/(?:startAudioToVideoSession|static\/audio)(?:[/?]|$)/.test(u)) kind = 'video';
+      /api\.simli\.ai\/(?:startAudioToVideoSession|static\/audio)(?:[/?]|$)/.test(u) ||
+      /api\.liveavatar\.com\/v1\/sessions\/token(?:[/?]|$)/.test(u)) kind = 'video';
   if (!kind) return null;
   for (var i = 0; i < METERED_PAID_HOSTS.length; i++) {
     if (u.indexOf(METERED_PAID_HOSTS[i]) !== -1) return kind;
@@ -146,6 +140,133 @@ function jsonResponse(obj, status) {
   });
 }
 
+function codaAttemptReason(reason) {
+  if (reason === 'paid_provider_attempt_budget_exhausted') {
+    return 'coda_paid_provider_attempt_budget_exhausted';
+  }
+  return 'coda_paid_provider_attempt_budget_invalid';
+}
+
+function codaAttemptRefusal(reason, url) {
+  var mapped = codaAttemptReason(reason);
+  return jsonResponse({ error: { message:mapped, reason:mapped, host:requestUrl(url) } }, 429);
+}
+
+function spendGuardRefusal(url) {
+  return jsonResponse({ error: { message:'spend_guard_unavailable_at_boundary',
+    reason:'spend_guard_unavailable_at_boundary',host:requestUrl(url) } }, 503);
+}
+
+// A cheap preflight keeps a normal N+1 refusal from consuming a daily slot.
+// reserveProviderAttempt remains the authority and revalidates the whole ticket
+// synchronously after the daily guard, immediately before realFetch.
+function obviousScopeRefusal(scope) {
+  if (!scope || typeof scope !== 'object' || !scope.ticket ||
+      !Number.isInteger(scope.ticket.remaining_paid_provider_attempts)) {
+    return 'paid_provider_attempt_budget_invalid';
+  }
+  if (scope.ticket.remaining_paid_provider_attempts <= 0) {
+    return 'paid_provider_attempt_budget_exhausted';
+  }
+  if (scope.count_model_calls === true &&
+      (!Number.isInteger(scope.ticket.remaining_llm_calls) ||
+       scope.ticket.remaining_llm_calls <= 0)) {
+    return 'paid_provider_attempt_budget_exhausted';
+  }
+  return null;
+}
+
+function seatSpendRefusal(result, url) {
+  var status = result && result.status === 429 ? 429 : 503;
+  return jsonResponse({error:{message:result.reason,reason:result.reason,
+    seat:result.seat || null,usage_daily_usd:Number.isFinite(result.usageDailyUsd)
+      ? result.usageDailyUsd : null,daily_cap_usd:Number.isFinite(result.capUsd)
+      ? result.capUsd : null,retry_at:result.retryAt || null,
+    host:requestUrl(url)}},status);
+}
+
+function validProviderBudgetAuthority(value) {
+  return !!(value && typeof value.currentProviderScope === 'function' &&
+    typeof value.reserveProviderAttempt === 'function' &&
+    typeof value.settleProviderAttempt === 'function');
+}
+
+async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
+  providerBudgetAuthority) {
+  var providerScope;
+  if (providerBudgetAuthority != null &&
+      !validProviderBudgetAuthority(providerBudgetAuthority)) {
+    return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
+  }
+  if (providerBudgetAuthority) {
+    try {
+      providerScope = providerBudgetAuthority.currentProviderScope();
+    } catch (eScope) {
+      return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
+    }
+  }
+  if (providerScope) {
+    var earlyRefusal = obviousScopeRefusal(providerScope);
+    if (earlyRefusal) return codaAttemptRefusal(earlyRefusal, url);
+
+    var scopedAllowed;
+    try {
+      scopedAllowed = require('./spend.guard.js').allow(paidKind, {egress:true});
+    } catch (eScopedGuard) {
+      return spendGuardRefusal(url);
+    }
+    if (!scopedAllowed) {
+      return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary',
+        host: requestUrl(url) } }, 429);
+    }
+
+    var reservation;
+    try {
+      reservation = providerBudgetAuthority.reserveProviderAttempt({
+        url:requestUrl(url), purpose:'provider.boundary.egress'
+      });
+    } catch (eReserve) {
+      return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
+    }
+    if (!reservation || reservation.ok !== true || reservation.scoped !== true) {
+      return codaAttemptRefusal(reservation && reservation.reason, url);
+    }
+
+    try {
+      var scopedResponse = await realFetch.apply(fetchThis, fetchArgs);
+      try {
+        providerBudgetAuthority.settleProviderAttempt(reservation, {
+          status_code:scopedResponse && scopedResponse.status,
+          ok:!!(scopedResponse && scopedResponse.ok)
+        });
+      } catch (eSettle) {
+        return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
+      }
+      return scopedResponse;
+    } catch (eScopedFetch) {
+      try {
+        providerBudgetAuthority.settleProviderAttempt(reservation, {
+          ok:false,error:String(eScopedFetch && eScopedFetch.message || eScopedFetch)
+        });
+      } catch (eSettleFailure) {
+        return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
+      }
+      throw eScopedFetch;
+    }
+  }
+
+  try {
+    var allowed = require('./spend.guard.js').allow(paidKind, {egress:true});
+    if (!allowed) {
+      return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary',
+        host: requestUrl(url) } }, 429);
+    }
+  } catch (eGuard) {
+    return spendGuardRefusal(url);
+  }
+  return realFetch.apply(fetchThis, fetchArgs);
+}
+
 // Build an OpenAI-shaped chat completion envelope around ladder text, so a caller
 // that reads choices[0].message.content keeps working unchanged.
 function chatEnvelope(text) {
@@ -163,7 +284,12 @@ function chatEnvelope(text) {
   };
 }
 
-function install() {
+function install(options) {
+  var installOptions=options||{};
+  var providerBudgetAuthority=installOptions.providerBudgetAuthority || null;
+  if(installOptions.denyPaidEgress===true){
+    globalThis.__providerBoundaryDenyPaidEgress=true;
+  }
   if (globalThis.__providerBoundaryInstalled) return;
   var realFetch = globalThis.fetch;
   if (typeof realFetch !== 'function') return;
@@ -174,31 +300,30 @@ function install() {
         // Metered paid provider: enforce the daily spend guard before the call leaves,
         // so direct fetches inherit the same brake the ladder has. Not rerouted, not
         // altered -- just gated. A tripped guard returns a 429 the caller treats as a miss.
+        // ⬡COLD:act:tag:PROVIDER_SPEND_ATTRIBUTION:20260723⬡
+        // CATHY.SHADOW cold-audit COLD-ANEW-LADDER-0008. The outbound-fetch spend boundary: a
+        // metered paid provider call inherits the same daily brake the ladder has before the
+        // bytes leave. Cold gate, not rerouted or altered; a tripped guard is a 429 miss.
         var paidKind = paidCallKind(url);
         if (paidKind) {
-          // ⬡COLD:act:remove:PAI_COMPONENT_PROVIDER_WALLETS:20260725⬡
-          // The inherited account-wide Together, RunPod, and Anthropic wallets are
-          // inventory only. A paid caller must present a distinct component credential
-          // so every dollar resolves to one owner and a single caller can be isolated.
-          var sharedCredential = sharedProviderCredential(url, init);
-          if (sharedCredential) {
-            return jsonResponse({error:{
-              message:'anonymous_shared_provider_key_forbidden',
-              reason:'anonymous_shared_provider_key_forbidden',
-              provider:sharedCredential.provider,
-              host:requestUrl(url)
-            }},429);
+          if(globalThis.__providerBoundaryDenyPaidEgress===true){
+            return jsonResponse({error:{message:'face_paid_provider_egress_forbidden',
+              reason:'face_paid_provider_egress_forbidden',host:requestUrl(url)}},403);
           }
-          try {
-            var allowed = require('./spend.guard.js').allow(paidKind,{egress:true});
-            if (!allowed) {
-              return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary',
-                host: requestUrl(url) } }, 429);
-            }
-          } catch (eGuard) {
-            return jsonResponse({error:{message:'spend_guard_unavailable_at_boundary',
-              reason:'spend_guard_unavailable_at_boundary',host:requestUrl(url)}},503);
-          }
+          var sharedCredential=sharedProviderCredential(url,init);
+          if(sharedCredential)return jsonResponse({error:{
+            message:'anonymous_shared_provider_key_forbidden',
+            reason:'anonymous_shared_provider_key_forbidden',provider:sharedCredential.provider,
+            host:requestUrl(url)}},429);
+          var fetchThis = this;
+          var fetchArgs = arguments;
+          var guarded = await openrouterSeatSpend.run(url, init, realFetch,
+            function () {
+              return performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
+                providerBudgetAuthority);
+            });
+          if (guarded.blocked) return seatSpendRefusal(guarded, url);
+          return guarded.response;
         }
         return realFetch.apply(this, arguments);
       }
@@ -240,6 +365,8 @@ function install() {
 }
 
 module.exports = { install: install, isBannedChatCall: isBannedChatCall,
-  isMeteredPaidCall: isMeteredPaidCall, paidCallKind:paidCallKind,
+  isMeteredPaidCall: isMeteredPaidCall, paidCallKind: paidCallKind,
   sharedProviderCredential:sharedProviderCredential,
+  validProviderBudgetAuthority:validProviderBudgetAuthority,
+  performPaidEgress:performPaidEgress,
   BANNED_HOSTS: BANNED_HOSTS, METERED_PAID_HOSTS: METERED_PAID_HOSTS };

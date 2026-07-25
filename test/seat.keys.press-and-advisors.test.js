@@ -37,6 +37,10 @@ function captureFetch(payload) {
   const sent = [];
   const savedFetch = global.fetch;
   global.fetch = function (url, opts) {
+    if (/openrouter\.ai\/api\/v1\/key(?:[/?]|$)/.test(String(url))) {
+      return Promise.resolve({ ok:true, status:200,
+        json:function () { return Promise.resolve({data:{usage_daily:0}}); } });
+    }
     sent.push({ url: String(url), key: String(((opts && opts.headers) || {}).Authorization || '').replace(/^Bearer /, '') });
     return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(payload); } });
   };
