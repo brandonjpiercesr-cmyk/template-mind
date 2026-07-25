@@ -315,6 +315,15 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // the primary fix -- every cycle's wall now carries THIS ham's real local time, resolved
   // through the one shared resolver (founder -> FOUNDER_TZ env, any ham -> their own stored
   // zone, documented default only if truly unknown, never UTC, never a per-person literal).
+  //
+  // ⬡B:core.fcw.builder:FIX:time_is_for_correctness_not_for_an_opener:20260725⬡ SAME DAY
+  // CORRECTION, founder-caught again. The first version of this block told her to note
+  // "whether they are up early or late, a fitting greeting", and that instruction became a
+  // factory for atmospheric openers ("Good morning, Boss. The house is still, and you're
+  // already up and moving."). He called it a riddle and asked for the point first. She agreed
+  // in her own cycle: "Cut the sky, cut the hour, but don't cut the care." The clock stays,
+  // because reading UTC to an Eastern person was the real bug; the instruction to PERFORM the
+  // hour is gone. Time is for correctness now, never for a greeting.
   var _hamTz = 'America/New_York', _hamLocalNow = '';
   try {
     _hamTz = await require('./ham.timezone.js').resolveHamTimezone(hamUid);
@@ -326,7 +335,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     '',
     'HAM CONTEXT:',
     (_hamLocalNow
-      ? ('THEIR LOCAL TIME RIGHT NOW: ' + _hamLocalNow + ' (their timezone, ' + _hamTz + '). This is THIS person’s own clock, never the server’s and never UTC. Ground any sense of time in it: whether it is morning or night for them, whether they are up early or late, a fitting greeting. Different HAMs live in different zones, so this is theirs specifically.')
+      ? ('THEIR LOCAL TIME RIGHT NOW: ' + _hamLocalNow + ' (their timezone, ' + _hamTz + '). This is THIS person’s own clock, never the server’s and never UTC. Use it for CORRECTNESS, when the hour actually changes the answer: what is due, what is late, what already happened, whether a thing can still be done today. Do NOT open with it, do NOT announce the hour back to them, and do NOT narrate the mood of their day. Different HAMs live in different zones, so this is theirs specifically.')
       : ''),
     'Name: ' + hamName,
     (_hamTitle ? ('Address them as "' + _hamTitle + '" when it lands naturally (a greeting, a sign-off, a direct address). This is their title in this context. Use it like a person would, not on every line.') : ''),
