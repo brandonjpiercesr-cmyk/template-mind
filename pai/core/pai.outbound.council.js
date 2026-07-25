@@ -2179,7 +2179,15 @@ function createDefaultDependencies(overrides) {
     now: overrides.now || defaults.now,
     stages: Object.assign({}, defaults.stages, overrides.stages || {}),
     persistReceipt: overrides.persistReceipt || defaults.persistReceipt,
-    readReceipt: overrides.readReceipt || defaults.readReceipt
+    readReceipt: overrides.readReceipt || defaults.readReceipt,
+    // The heal path (healAnswer) reads deps.modelLadder and deps.env, but this
+    // factory dropped both, so overrides.modelLadder and overrides.env could never
+    // arrive and heal was untestable and unconfigurable by injection. Pass them
+    // through. When unset they stay undefined and healAnswer falls through to
+    // require('./model.ladder.js') and process.env exactly as before, so the
+    // default runtime path is unchanged; only the injection seam is restored.
+    modelLadder: overrides.modelLadder,
+    env: overrides.env
   };
 }
 
