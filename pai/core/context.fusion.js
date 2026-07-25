@@ -35,16 +35,29 @@ async function readCalendarNext24h(hamUid) {
   // -> no cross-world calendar at all. Isolation preserved.
   const FOUNDER = String(process.env.FOUNDER_HAM_UID || '');
   const isFounderPersonal = FOUNDER && String(hamUid || '').toUpperCase() === FOUNDER.toUpperCase();
-  if (!isFounderPersonal) return { available: false, events: [] }; // never merge grants for a non-founder world
+  // ⬡B:context_fusion:GUARD:say_why_the_calendar_is_unavailable:20260725⬡ available:false was
+  // one undifferentiated state covering four different situations: this is not the world that
+  // may merge grants, no key, no grants, and the read actually broke. The reader below has to
+  // treat those differently, because "not configured for this world" is a silence to keep and
+  // "the read failed" is something she has to be able to say out loud. Naming the reason costs
+  // nothing and never widens what may be read.
+  if (!isFounderPersonal) return { available: false, events: [], reason: 'calendar_not_this_world' }; // never merge grants for a non-founder world
   const NY = 'https://api.us.nylas.com/v3/grants/';
   const KEY = process.env.NYLAS_API_KEY;
-  if (!KEY) return { available: false, events: [] };
+  if (!KEY) return { available: false, events: [], reason: 'calendar_unconfigured' };
   const H = { Authorization: 'Bearer ' + KEY, 'Content-Type': 'application/json' };
   const grants = [process.env.NYLAS_PERSONAL_GRANT, process.env.NYLAS_GMG_GRANT, process.env.NYLAS_BDIF_GRANT,
     process.env.NYLAS_MEDIATORS_GRANT, process.env.NYLAS_MH_ACTION_GRANT].filter(Boolean);
-  if (!grants.length) return { available: false, events: [] };
+  if (!grants.length) return { available: false, events: [], reason: 'calendar_no_grants' };
   const now = Math.floor(Date.now() / 1000), end = now + 24 * 3600;
   const events = [];
+  // ⬡B:context_fusion:FIX:every_grant_failing_is_not_an_empty_calendar:20260725⬡ Each grant's
+  // own catch below swallows its failure so one bad grant never blinds the rest, which is right.
+  // But nothing counted the successes, so when EVERY grant failed this function still returned
+  // available:true with an empty event list, and the reader downstream spoke that as a day with
+  // nothing scheduled. A total read failure reported as a wide-open day is exactly the class of
+  // false confidence that made her contradict the founder. Count the reads that actually landed.
+  let grantsRead = 0;
   // ⬡B:context_fusion:FIX:per_ham_timezone_not_a_global_env:20260725⬡ The calendar dates the
   // cycle reads must land in THIS ham's own zone, not a single global env for everyone. One
   // shared resolver (core/ham.timezone.js): founder -> FOUNDER_TZ env, any ham -> their own
@@ -61,6 +74,7 @@ async function readCalendarNext24h(hamUid) {
         if (!primary) return;
         const er = await fetch(NY + gid + '/events?calendar_id=' + encodeURIComponent(primary.id) + '&start=' + now + '&end=' + end + '&limit=15', { headers: H });
         if (!er.ok) return;
+        grantsRead++; // this grant's events genuinely came back; an empty list from here is real
         (((await er.json()).data) || []).forEach(function (e) {
           const when = e.when || {};
           const startTs = when.start_time || when.time || (when.start_date ? Math.floor(new Date(when.start_date + 'T00:00:00').getTime() / 1000) : 0);
@@ -88,8 +102,13 @@ async function readCalendarNext24h(hamUid) {
       } catch (eg) { /* one grant failing never blinds the rest */ }
     }));
     events.sort(function (a, b) { return (a.start || '').localeCompare(b.start || ''); });
-    return { available: true, events: events.slice(0, 12) };
-  } catch (e) { return { available: false, events: [] }; }
+    if (!grantsRead) return { available: false, events: [], reason: 'calendar_read_failed',
+      grants_read: 0, grants_total: grants.length };
+    return { available: true, events: events.slice(0, 12),
+      grants_read: grantsRead, grants_total: grants.length,
+      partial: grantsRead < grants.length };
+  } catch (e) { return { available: false, events: [], reason: 'calendar_read_failed',
+    error: String(e && e.message || e || 'unknown').slice(0, 160) }; }
 }
 
 async function readChannelActivity(hamUid) {
@@ -161,16 +180,67 @@ async function getLatestSummary(hamUid) {
         if (_later.length) { _todayStr += ' | later this window (NOT today): ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; '); }
         parts.push(_todayStr);
       } else if (_later.length) {
-        parts.push('today itself is open; upcoming days hold: ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; ') + ' (never present any of these as today)');
+        parts.push('the CALENDAR has nothing on it for today itself; upcoming days hold: ' + _later.map(function (e) { return e.title + ' on ' + (e.date || e.start); }).join('; ') + ' (never present any of these as today). An empty calendar for today is not the same as an empty day: check what they told you directly before you call today open');
       } else {
-        parts.push('your next 24 hours are wide open with nothing scheduled (this is real, known information, not a lack of it)');
+        // ⬡B:context_fusion:FIX:an_empty_calendar_is_not_a_confident_open_day:20260725⬡ THIS LINE
+        // IS THE ONE HE CAUGHT. It used to read "your next 24 hours are wide open with nothing
+        // scheduled (this is real, known information, not a lack of it)", and it is where "your
+        // day is open, no meetings locked in" came from, hours after he had told her his Saturday
+        // plan himself and she had confirmed it back to him in detail. Cold code took one silent
+        // source, the calendar, DECIDED that its silence meant the day was empty, and handed her
+        // that as settled fact with an instruction to lead with it. That is cold code deciding
+        // meaning, which is not its job. Its job is to carry the evidence and say exactly what
+        // the evidence is. So this now says what actually happened, that the calendar read
+        // succeeded and returned nothing, names its own limits, and leaves the day itself for her
+        // to answer from everything she holds. She may still tell him his day is open when it is.
+        // She may no longer be handed that conclusion by a module that only looked at one place.
+        parts.push('the CALENDAR read succeeded and returned no scheduled events for the next 24 hours. '
+          + 'That is a real, successful read of the CALENDAR, and the calendar is only one source: '
+          + 'anything this person told you directly, in conversation, may never have been put on it. '
+          + 'So this means "nothing is on the calendar", which is NOT the same as "the day is open". '
+          + 'Before you describe their day as open, clear, free, or empty, check what they told you '
+          + 'directly, and if they told you a plan then that plan stands and this empty calendar does '
+          + 'not cancel it. If nothing else is in front of you either, then say the calendar is clear '
+          + 'and say that is what you are going on, rather than declaring the whole day empty');
       }
+    } else if (f.calendar && f.calendar.reason === 'calendar_read_failed') {
+      // ⬡B:context_fusion:FIX:a_failed_read_is_spoken_honestly_not_omitted:20260725⬡ A failed
+      // calendar read used to contribute nothing at all to this summary. Silence is not honest
+      // here: with no line saying otherwise she has nothing to stop her filling the gap
+      // confidently, which is the same failure one branch up wearing a different coat. An
+      // unavailable read is real information and she can say it out loud. The other unavailable
+      // reasons (not this world, unconfigured, no grants) stay silent on purpose: those are
+      // configuration, not a fault, and there is nothing for her to report.
+      parts.push('the CALENDAR READ FAILED on this fuse, so you do not currently know what is on '
+        + 'their calendar. This is an unavailable read, NOT an empty calendar and NOT an open day. '
+        + 'If they ask about their schedule, say plainly that you cannot reach their calendar right '
+        + 'now and answer from what you do hold. Never present this failure as a clear day');
+    }
+    if (f.calendar && f.calendar.available && f.calendar.partial) {
+      parts.push('note: only ' + f.calendar.grants_read + ' of ' + f.calendar.grants_total
+        + ' calendars answered on this fuse, so this view may be incomplete; say so if it matters');
     }
     const chKeys = Object.keys(f.channels || {});
     if (chKeys.length) parts.push('recent conversation lanes (24h): ' + chKeys.map(function (k) { return k + ' x' + f.channels[k]; }).join(', '));
     if (!parts.length) return '';
-    return '\nWORLD CONTEXT, fused as of ' + ageMin + ' minutes ago. You DO currently know this and must answer from it directly. A clear or open calendar is a real answer, never say you lack information about the day when this line tells you the day is open. When asked about the day, schedule, or where the conversation has lived, answer from THIS first, above any memory search, with "as of" language, never as this exact second: ' + parts.join(' | ');
+    // ⬡B:context_fusion:FIX:the_fuse_is_evidence_not_the_verdict_on_their_day:20260725⬡ This
+    // wrapper used to say "answer from THIS first, above any memory search". That single clause
+    // ranked one cold source above everything the person had actually said to her, including the
+    // plan he had given her hours earlier and she had confirmed back to him. It also outranked the
+    // SEARCH FIRST rule the wall spends a paragraph establishing. The fuse stays exactly as
+    // useful as it always was, and it keeps its honest decay language, because a real dated read
+    // beats a guess. What it loses is the authority to end the question. It is evidence now.
+    return '\nWORLD CONTEXT, fused as of ' + ageMin + ' minutes ago. This is real, dated evidence '
+      + 'you genuinely hold, so use it directly and in "as of" terms, never as this exact second, '
+      + 'and never say you have no information about something it plainly tells you. It is EVIDENCE '
+      + 'and not the verdict: it does not outrank what this person told you themselves, and where it '
+      + 'is silent you simply do not know rather than knowing there is nothing. Weigh it together '
+      + 'with what they told you directly, and never turn a silence or an empty read here into a '
+      + 'confident claim about their day: ' + parts.join(' | ');
   } catch (e) { return ''; }
 }
 
-module.exports = { runFuse, getLatestSummary };
+// _test exposes the calendar read for proof only, the same convention core/find.js and
+// core/fcw.builder.js already use. It stays out of the public surface: nothing but runFuse
+// may drive a calendar read, so the EBC founder-world-only firewall above keeps its one door.
+module.exports = { runFuse, getLatestSummary, _test: { readCalendarNext24h } };

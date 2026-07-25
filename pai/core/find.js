@@ -360,5 +360,34 @@ async function findWonderGames(hamUid, limit) {
   ]);
 }
 
-module.exports = { find, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames,
+// ⬡B:core.find:WIRE:findStatedCommitments_20260725⬡
+// WHAT THIS PERSON TOLD HER DIRECTLY, read back. Founder-caught live, demo-critical:
+// he told her his Saturday plan through her own gate, she received it and confirmed the
+// specifics back with a committed cycle receipt, and hours later, asked where things
+// stood, she said his day was open with no meetings locked in. Traced it here: the
+// capture side already works. core/synthesize.js's memory keeper stamps a MEMORY bead
+// (importance 9) carrying their exact words every time a person hands over something to
+// keep. But NOTHING ever read it back. 'memory.gifted.' had exactly one reference in the
+// whole repo, the write, and no wall contributor queried stamp_type MEMORY, so the gift
+// was captured and buried in the same breath. Her only remaining route to it was the
+// model happening to call find_in_brain with the right filter, which is the exact
+// tool-argument-variance failure findPreferences and findWonderGames were both built to
+// cure. Same cure, third time: the wall pre-loads what they told her so it is already in
+// front of her and she never has to guess a filter to remember her own conversation.
+// ONE SOURCE: this reads the bead the keeper already writes. No second store.
+// Fails closed without a ham (the Feb-2026 cross-HAM law, same as findRecentResults),
+// and ham_uid scopes every query, so one person's stated plans can never surface in
+// another person's wall. importance_gte 7 keeps the low-importance MEMORY housekeeping
+// stamps (surface-rotation and dedup markers, importance 2) out of the wall.
+// UNIVERSALITY: keyed by ham_uid, any HAM gets their own. No person, no content hardcoded.
+async function findStatedCommitments(hamUid, limit) {
+  if (!hamUid) return { beads: [] };
+  var n = limit || 6;
+  return find([
+    { source_prefix: 'memory.gifted.', ham_uid: hamUid, limit: n },
+    { stamp_type: 'MEMORY', ham_uid: hamUid, importance_gte: 7, limit: n }
+  ]);
+}
+
+module.exports = { find, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
   _test:{ identityBq:identityBq, identityQueryPath:identityQueryPath } };
