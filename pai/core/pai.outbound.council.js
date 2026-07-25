@@ -212,6 +212,43 @@ function hollowHoldReason(reason) {
   return /hollow_protocol|stage_empty_answer|_empty$/.test(String(reason || ''));
 }
 
+// ⬡B:core.pai_outbound_council:FIX:one_case_insensitive_law_for_the_clean_board_holds:20260725⬡
+// FOUNDER 911 20260719 counted 1154 turns silenced by council holds and built the cure:
+// a reach channel gives ONE real re-run of the cycle when the hold is a bare probabilistic
+// wonder no on a clean board, and stays silent on a genuine deterministic integrity hold.
+// The cure could not reach half its own list, because the list was written in lower case
+// and the producers do not all speak lower case:
+//   WRIT   board/writ/writ.js emits the verdict 'WRIT_HOLD', upper case, and no reason at
+//          all on the hold path, so defaultWritStage carries the verdict through verbatim.
+//          'WRIT_HOLD' never equalled 'writ_hold', so a WRIT hold NEVER got its retry.
+//   QUILL  a genuinely empty answer now arrives as 'stage_empty_answer:content_too_short',
+//          because hollowStageReason renames an empty stage answer and carries the stage's
+//          own cause behind a colon. The bare 'content_too_short' string stopped existing.
+// One law, one place, so a future consumer cannot re-open the same gap: normalise the
+// reason to its lower case machine codes, split on the colon that this file already uses
+// to carry a named cause (stage_empty_answer:x, stage_threw:x, WRIT_HOLD:x), and match any
+// of them against the allowlist. This decides ONLY whether a channel may re-ask the real
+// question once. It never softens a gate, never lets a held answer through, and every
+// reason outside the list (shadow_deterministic_hold, PAM_HOLD, an action-claim hold, a
+// hollow protocol answer) still fails closed to honest silence exactly as before.
+var CLEAN_BOARD_HOLD_REASONS = Object.freeze([
+  'shadow_model_hold',
+  'shadow_wonder_hold',
+  'writ_hold',
+  'content_too_short'
+]);
+
+function isCleanBoardHold(reason) {
+  var raw = String(reason == null ? '' : reason).trim().toLowerCase();
+  if (!raw) return false;
+  var parts = raw.split(':');
+  for (var i = 0; i < parts.length; i++) {
+    var code = parts[i].trim();
+    if (code && CLEAN_BOARD_HOLD_REASONS.indexOf(code) >= 0) return true;
+  }
+  return false;
+}
+
 var HOLLOW_HEAL_GUIDANCE = 'The held attempt returned tool or function call protocol, ' +
   'or returned no words at all, instead of an answer for the person. Do not call a tool. ' +
   'Do not emit a tool_call or function_call block, a JSON envelope, or any protocol ' +
@@ -2029,8 +2066,20 @@ async function healAnswer(answer, reason, stage, input, deps) {
     PAM: 'A judge held this. Repair the specific concern named in the reason while preserving the real answer and its facts.',
     QUILL: 'A quality judge held this. Make it a clean, complete, plain answer; do not pad; keep it exactly as long as the content needs.'
   };
-  var reasonGuidance = hollowHoldReason(reason)
-    ? HOLLOW_HEAL_GUIDANCE : (guidance[stage] || guidance.PAM);
+  // ⬡B:core.pai_outbound_council:BUILD:internal_system_leak_heal_guidance:20260725⬡
+  // WRIT hard-fails on two different things and this healer was only ever told about one
+  // of them. Style is the one it was coached for. The other is the external leak firewall,
+  // which fires when the answer names internal machinery to someone standing outside the
+  // house, and no edit to em dashes removes a word that is simply there. So the repair came
+  // back saying the same forbidden word, the same judge held it again, and the turn died
+  // with a bare 'WRIT_HOLD'. The leak is a vocabulary fact with one correct repair: say the
+  // same true thing in the words an outsider uses. Told that, the mind can fix it. The
+  // organ's own unfixable_leak verdict (a real secret, another world's private data) is
+  // deliberately left on the generic path: that one is not a rewording problem.
+  var reasonGuidance = /internal_system_leak/.test(String(reason || ''))
+    ? 'A leak judge held this because it names internal machinery to someone standing outside the house. Say the same true thing in the words an ordinary person uses, with none of that internal vocabulary in it. Keep every real fact, every number, and every commitment exactly as it stands; only the inside words go. Do not explain that anything was changed.'
+    : (hollowHoldReason(reason)
+      ? HOLLOW_HEAL_GUIDANCE : (guidance[stage] || guidance.PAM));
   var system = 'You repair an answer that a council judge held, so it can pass on resubmission. ' +
     reasonGuidance +
     ' Output ONLY the repaired answer text, nothing else, no preamble, no explanation, no quotes around it.';
@@ -2097,10 +2146,35 @@ async function defaultWritStage(ctx) {
   // raw stripEmoji/removeEmDash here bypassed its coding context and could
   // mutate fenced code or literal CLI flags after WRIT said they were safe.
   var output = result && typeof result.cleaned === 'string' ? result.cleaned : '';
+  // ⬡B:core.pai_outbound_council:FIX:the_writ_hold_reason_names_which_law_broke:20260725⬡
+  // The same disease as the hollow hold fixed above, one stage over. On the hold path
+  // board/writ/writ.js sets no reason at all, so this carried the bare verdict 'WRIT_HOLD'
+  // and that single word was the whole story the healer was given. The healer then reached
+  // for guidance.WRIT, which is style advice (em dashes, emojis, meta commentary, plain
+  // voice), and style is only ONE of the two things WRIT hard-fails on. The other is the
+  // external leak firewall: an answer that names internal machinery to someone outside the
+  // house is held deterministically, and no amount of style repair removes the words, so
+  // the resubmission held on exactly the same fact and the turn died. Verified locally
+  // 20260725: writCheck on an answer containing an internal term returns ok:false,
+  // verdict 'WRIT_HOLD', reason undefined, hardFails [internal_system_leak].
+  // The named cause already sat in hardFails, one field away, and never travelled. Carry
+  // it, in the bounded colon shape this file already uses, so the healer is told the truth
+  // about what to fix. Nothing here decides anything: WRIT still judges, WRIT still holds,
+  // and a repair that still leaks still fails closed to silence.
+  var namedFails = ((result && Array.isArray(result.hardFails)) ? result.hardFails : [])
+    .map(function (f) { return String((f && (f.type || f.reason)) || '').trim().toLowerCase(); })
+    .filter(function (code) { return /^[a-z][a-z0-9_.-]{0,47}$/.test(code); });
+  var uniqueFails = namedFails.filter(function (code, index) {
+    return namedFails.indexOf(code) === index;
+  }).slice(0, 2);
+  var writVerdict = result && (result.reason || result.verdict);
+  var writHeld = !!(result && result.ok !== true);
   return {
     ok: !!(result && result.ok === true && output.trim().length > 0),
     answer: output,
-    reason: result && (result.reason || result.verdict),
+    reason: (writHeld && uniqueFails.length && writVerdict)
+      ? (String(writVerdict) + ':' + uniqueFails.join(':'))
+      : writVerdict,
     evidence: {
       verdict: result && result.verdict,
       hard_fails: (result && result.hardFails) || [],
@@ -3467,6 +3541,8 @@ module.exports = {
   createDeliveryTargetBinding: createDeliveryTargetBinding,
   verifyDeliveryTargetBinding: verifyDeliveryTargetBinding,
   isHumanFacingAnswer: isHumanFacingAnswer,
+  isCleanBoardHold: isCleanBoardHold,
+  CLEAN_BOARD_HOLD_REASONS: CLEAN_BOARD_HOLD_REASONS,
   shouldRunQuill: shouldRunQuill,
   extractNamedContextEvidence: extractNamedContextEvidence,
   namedContextContradictions: namedContextContradictions,

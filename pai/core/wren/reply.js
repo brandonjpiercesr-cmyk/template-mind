@@ -8,7 +8,8 @@
 
 const { runPAI } = require('../tool.loop.js');
 const { synthesize } = require('../synthesize.js');
-const { requireVerifiedCouncilResult, compactCouncilProof } = require('../pai.outbound.council.js');
+const { requireVerifiedCouncilResult, compactCouncilProof,
+  isCleanBoardHold } = require('../pai.outbound.council.js');
 
 var ATM_URL     = process.env.ATMOSPHERE_URL  || 'https://atmosphere-x2oi.onrender.com';
 
@@ -198,8 +199,15 @@ async function handleReply(req) {
   // deterministic integrity flag) gets ONE real re-run of the cycle before going
   // silent. This is not a hollow string; it re-asks the real question. A genuine
   // deterministic hold still goes silent per the hollow-reply rule.
-  var _cleanBoardHold = ['shadow_model_hold','shadow_wonder_hold','writ_hold','content_too_short']
-    .indexOf(String(committed.reason || paiResult.reason || '')) !== -1;
+  // ⬡B:core.wren.reply:FIX:the_cure_could_not_read_its_own_list:20260725⬡
+  // This gate was an exact-match against a lower case list, and two of its four entries
+  // could never match a real reason: WRIT emits 'WRIT_HOLD' in upper case, and an empty
+  // QUILL answer now arrives as 'stage_empty_answer:content_too_short'. So the retry the
+  // 1154-turn count above bought was reachable only on a SHADOW hold. A WRIT hold went
+  // straight to silence, every time, since the day this was written. The law now lives in
+  // one place (core/pai.outbound.council.js isCleanBoardHold) so no second consumer can
+  // re-open the gap by writing the list out again in whatever case it guessed.
+  var _cleanBoardHold = isCleanBoardHold(committed.reason || paiResult.reason || '');
   if (!committed.ok && _cleanBoardHold) {
     var retryPai;
     try {
