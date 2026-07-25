@@ -90,10 +90,26 @@ function extract(answer) {
   // (```json {...}```) instead -- a different, untagged format the extractor never
   // matched, so the entire raw fence rendered as her spoken words. Catching that shape
   // too so a format drift can never leak raw JSON onto the glass again.
-  if (!m) m = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/i);
+  let fenceOnly = false;
+  if (!m) { m = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/i); fenceOnly = true; }
   if (!m) return { answer: text, block: null };
   let block = null;
   try { block = JSON.parse(m[1]); } catch (e) { block = null; }
+  // ⬡B:core.stream.screen_awareness:FIX:non_screen_json_fence_is_her_answer_not_a_block:20260725⬡
+  // FOUNDER-CAUGHT fragment replies ("the right words", "to"): the 20260714 fence
+  // drift catcher treated EVERY fenced {...} as a screen block and spliced it out
+  // of the answer, so a short ruling whose substance lived in a JSON code fence
+  // (routine on the coding/consult channels) lost its whole body and shipped only
+  // the prose fragment around the fence. The explicit [[SCREEN ...]] tag keeps its
+  // hard splice (tagged bytes must never reach eyes, parseable or not), but an
+  // untagged fence is only a screen block when it PARSES and actually carries a
+  // screen-block field; any other fenced JSON is her real answer and stays intact.
+  if (fenceOnly) {
+    const SCREEN_KEYS = ['background', 'preset', 'skywrite', 'voice', 'cards', 'pieces'];
+    const screenShaped = !!block && typeof block === 'object' && !Array.isArray(block) &&
+      SCREEN_KEYS.some(function (key) { return Object.prototype.hasOwnProperty.call(block, key); });
+    if (!screenShaped) return { answer: text, block: null };
+  }
   const cleaned = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).replace(/\s{2,}/g, ' ').trim();
   return { answer: cleaned, block: block };
 }
