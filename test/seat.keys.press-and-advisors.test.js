@@ -5,9 +5,9 @@
 //
 // This is the mind-template every world inherits, so a shared wallet here is a shared wallet
 // in every world. These grade the real behavior that changed: the advisor web search now
-// spends the ADVISORS seat's own key, the PRESS scan resolves its key from the one source
-// instead of naming the shared key, and neither can be tricked into authenticating with a
-// seat NAME or another provider's key. No real provider is ever touched.
+// spends the ADVISORS seat's own key, while the unattended PRESS scan requires a named,
+// provisioned seat and refuses the shared floor. Neither can be tricked into authenticating
+// with a seat NAME or another provider's key. No real provider is ever touched.
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -116,13 +116,14 @@ test('the PRESS scan spends the seat named by PRESS_SCAN_SEAT', async function (
   } finally { f.restore(); }
 });
 
-test('an unnamed PRESS seat keeps exactly the old behavior, from the one source', async function () {
+test('an unnamed PRESS seat refuses the shared wallet and makes no HTTP call', async function () {
   const f = captureFetch(CHAT_OK);
   try {
-    await withEnvAsync(env({ OPENROUTER_API_KEY: 'sk-shared' }), function () {
+    const out = await withEnvAsync(env({ OPENROUTER_API_KEY: 'sk-shared' }), function () {
       return press.scanExternal(['news']);
     });
-    assert.equal(f.sent[0].key, 'sk-shared', 'PRESS has no seat of its own yet, so it floors, and it floors from seat.map.js');
+    assert.deepEqual(out, []);
+    assert.equal(f.sent.length, 0, 'an unattended scanner never borrows the shared wallet');
   } finally { f.restore(); }
 });
 

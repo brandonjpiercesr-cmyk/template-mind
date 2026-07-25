@@ -34,7 +34,8 @@ async function candidateSignals(hamUid) {
   // time-critical signals: urgent-flagged emails, imminent deadlines, emergency beads
   try {
     var url=_bu()+'/rest/v1/'+_tbl()+
-      '?select=summary,created_at&or=(summary.ilike.*urgent*,summary.ilike.*deadline*,summary.ilike.*today*,summary.ilike.*ASAP*,summary.ilike.*emergency*)&order=id.desc&limit=20';
+      '?select=summary,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '&or=(summary.ilike.*urgent*,summary.ilike.*deadline*,summary.ilike.*today*,summary.ilike.*ASAP*,summary.ilike.*emergency*)&order=id.desc&limit=20';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(9000)}).then(function(x){return x.json();});
     return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
   } catch(e){ return []; }
@@ -42,7 +43,8 @@ async function candidateSignals(hamUid) {
 
 async function alreadyAlerted(hamUid) {
   try {
-    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&agent_global=eq.BURST&order=id.desc&limit=20';
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&ham_uid=eq.'+
+      encodeURIComponent(String(hamUid))+'&agent_global=eq.BURST&order=id.desc&limit=20';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(8000)}).then(function(x){return x.json();});
     return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
   } catch(e){ return []; }
@@ -77,8 +79,9 @@ async function fire(hamUid, alert, moment) {
 }
 
 // ENTRANCE: monitoring sources call sweep whenever new context arrives (any time, not a fixed cron)
-async function sweep(hamUid) {
-  var moment=await nowStation.assembleNow(hamUid);
+async function sweep(hamUid, options) {
+  options=options||{};
+  var moment=options.moment||await nowStation.assembleNow(hamUid);
   var candidates=await candidateSignals(hamUid);
   var alerted=await alreadyAlerted(hamUid);
   var alerts=await judgeUrgent(hamUid, moment, candidates, alerted);

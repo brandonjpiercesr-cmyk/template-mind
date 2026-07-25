@@ -34,8 +34,9 @@ function isGraveyardHour(moment) {
 // Silently record the overnight watch: unanswered threads / pending follow-ups are read
 // from the bank (facts already stamped by other agents); GHOST just gathers and holds them
 // for WAKE. Fails open to an empty watch.
-async function monitorOvernight(hamUid) {
-  var moment = await nowStation.assembleNow(hamUid);   // consume NOW, no twin
+async function monitorOvernight(hamUid, options) {
+  options=options||{};
+  var moment = options.moment || await nowStation.assembleNow(hamUid);   // consume NOW, no twin
   if (!isGraveyardHour(moment)) return { moment: moment, graveyard: false, watch: null };
   var pending = await pendingThreads(hamUid);
   var watch = { at: moment.now_iso, pending_count: pending.length, pending: pending.slice(0, 10) };
@@ -47,7 +48,8 @@ async function pendingThreads(hamUid) {
   try {
     // unanswered/pending items other agents already flagged (HINT/SURFACE/pending beads)
     var url = _bu() + '/rest/v1/' + _tbl() +
-      '?select=summary,created_at&or=(stamp_type.eq.HINT,stamp_type.eq.SURFACE,summary.ilike.*pending*,summary.ilike.*unanswered*)' +
+      '?select=summary,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '&or=(stamp_type.eq.HINT,stamp_type.eq.SURFACE,summary.ilike.*pending*,summary.ilike.*unanswered*)' +
       '&order=id.desc&limit=15';
     var r = await fetch(url, { headers: { apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(8000) }).then(function(x){return x.json();});
@@ -73,8 +75,9 @@ async function stampWatch(hamUid, watch, moment) {
 // at the wake hour, and its overnight summary feeds DAWN's alertSummary section. This adds
 // the handoff: at the wake hour GHOST packages its overnight watch as the summary WAKE/DAWN
 // consume. Cold: it is a fact of the clock and a read of what it already recorded.
-async function wakeHandoff(hamUid) {
-  var moment = await nowStation.assembleNow(hamUid);
+async function wakeHandoff(hamUid, options) {
+  options=options||{};
+  var moment = options.moment || await nowStation.assembleNow(hamUid);
   if (moment.hour_24 !== wakeHour()) return { moment: moment, handed_off: false };
   var pending = await pendingThreads(hamUid);
   var summary = { overnight_pending: pending.slice(0, 15), at: moment.now_iso };

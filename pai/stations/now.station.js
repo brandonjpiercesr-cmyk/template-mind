@@ -23,10 +23,10 @@ function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY
 function _tbl(){ return process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain'); }
 function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'); }
 
-// The HAM's timezone. Env-configurable; defaults to America/New_York (the founder's tz,
-// matching the AIR/heartbeat cadence). Never hardcoded to a single value in logic.
-function hamTimezone() {
-  return process.env.HAM_TIMEZONE || process.env.TZ || 'America/New_York';
+// The HAM's timezone comes from the canonical per-HAM resolver. The synchronous form is
+// retained only for relative-expression helpers that cannot await the identity record.
+function hamTimezone(hamUid) {
+  return require('../core/ham.timezone.js').resolveHamTimezoneCached(hamUid);
 }
 
 // Cold: resolve the current moment in the HAM's timezone. No model, no network.
@@ -81,7 +81,7 @@ async function calendarWindow(hamUid) {
 
 // Entrance. Assemble the current-moment context for a HAM. Pure cold plumbing.
 async function assembleNow(hamUid) {
-  var tz = hamTimezone();
+  var tz = await require('../core/ham.timezone.js').resolveHamTimezone(hamUid);
   var moment = resolveMoment(tz);
   var cal = await calendarWindow(hamUid);
   var ctx = {

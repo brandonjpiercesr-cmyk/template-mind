@@ -11,7 +11,16 @@ function extractClaims(content) {
   var sentences = content.split(/[.!?]+(?=\s|$)/).filter(function(s) { return s.trim().length > 10; });
   return sentences.filter(function(s) {
     var lower = s.toLowerCase();
-    return ['is ', 'are ', 'was ', 'were ', 'has ', 'have '].some(function(w) { return lower.indexOf(w) >= 0; });
+    var linking = ['is ', 'are ', 'was ', 'were ', 'has ', 'have '].some(function(w) {
+      return lower.indexOf(w) >= 0;
+    });
+    // A statistical claim does not stop being a claim because it uses an action
+    // verb ("pays $9,999") or a label ("Balance: $9,999"). Inspect the same
+    // three finite shapes regardless of grammar; illustration checks still run
+    // before any flag is emitted.
+    var statistic = /\b\d+%(?!\w)|\$[\d,]+(?:\.\d+)?[kKmM]?|\d+ (?:people|users|companies|years)\b/i
+      .test(s);
+    return linking || statistic;
   });
 }
 
@@ -158,6 +167,100 @@ function financialFabricationFlags(content, evidenceText) {
   return [];
 }
 
+// ⬡B:board.shadow:FIX:count_fabrication_requires_matching_cardinality_evidence:20260724⬡
+// A confident COUNT with no backing is the exact fabrication SHADOW exists to stop:
+// "I found 47 blocks to remove", "3 tests failing", "5 files changed". The stat check
+// above only guarded a tiny closed noun set (people|users|companies|years) AND only
+// inside linking-verb sentences, so a count of ANY other discrete item -- and any count
+// in a found/there-are/changed frame with no linking verb -- was never even extracted as
+// a claim and sailed through as PASS. This adds a COLD cardinality check: a count claim
+// of N discrete items HOLDS unless the evidence relay actually backs N, either by carrying
+// the figure N itself or by enumerating at least N distinct items naming the counted noun.
+// No judgment -- transport and counting only, which is cold code's proper job. The label is
+// shadow_count_unverified so a held count is named honestly. context.sourcedClaims stays the
+// caller-vouched override, exactly as the money and statistics checks above honor it.
+
+// Number words plus digit runs. A "count of discrete items" is an integer >= 2 (a singular
+// "1 file"/"a file" is not a plural cardinality claim, and a decimal like "3.5 files" is a
+// measure, not a discrete count, so both are left alone).
+var _COUNT_NUMBER_WORDS = { two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9,
+  ten:10, eleven:11, twelve:12, thirteen:13, fourteen:14, fifteen:15, sixteen:16, seventeen:17,
+  eighteen:18, nineteen:19, twenty:20, thirty:30, forty:40, fifty:50, sixty:60, seventy:70,
+  eighty:80, ninety:90, hundred:100, thousand:1000 };
+// Duration/measure nouns are spans, not enumerable found-items; "2 years" or "30 minutes"
+// is not a count of discrete verifiable things and must never be held as one.
+var _COUNT_DURATION_NOUNS = /^(seconds?|minutes?|hours?|days?|weeks?|months?|years?|decades?|centuries|century|dollars?|cents?|bucks?|percent|times?|ways?|means|series|kinds?|sorts?)$/i;
+// The four nouns the linking-verb statistics check already owns stay its sole responsibility:
+// one source, no double-flag on the same "12 users".
+var _COUNT_STAT_OWNED = /^(people|users|companies|years)$/i;
+// Nouns that are inherently enumerated claim-items: a number in front of one is a count claim
+// on its own, no framing verb needed.
+var _COUNT_ITEM_NOUNS = /^(tests?|files?|blocks?|errors?|warnings?|bugs?|issues?|records?|rows?|results?|items?|entries|entry|matches|match|occurrences?|instances?|changes?|commits?|functions?|methods?|lines?|tables?|columns?|fields?|endpoints?|routes?|duplicates?|violations?|failures?|steps?|tasks?|dependencies|dependency|packages?|modules?|references?|callers?|imports?|exports?|variables?|classes|class|components?|handlers?|places?|locations?|sections?|paragraphs?|documents?|beads?)$/i;
+// Otherwise a plural noun is a count claim only inside a finding/enumeration frame.
+var _COUNT_ENUM_FRAME = /\b(found|find|finds|identified|identify|identifies|detect(?:ed|s)?|count(?:ed|s)?|list(?:ed|s)?|return(?:ed|s)?|flag(?:ged|s)?|remov(?:ed|es|e)|delet(?:ed|es|e)|chang(?:ed|es|e)|fail(?:ing|ed|s)?|pass(?:ing|ed|es)?|remain(?:ing|ed|s)?|there\s+(?:are|were|is|was))\b/i;
+
+function _countValue(token) {
+  var t = String(token).toLowerCase().replace(/,/g, '');
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+  if (Object.prototype.hasOwnProperty.call(_COUNT_NUMBER_WORDS, t)) return _COUNT_NUMBER_WORDS[t];
+  return null;
+}
+
+function _countSentence(content, index) {
+  var start = 0, end = content.length;
+  for (var a = index; a > 0; a--) { if (/[.!?\n]/.test(content[a - 1])) { start = a; break; } }
+  for (var b = index; b < content.length; b++) { if (/[.!?\n]/.test(content[b])) { end = b; break; } }
+  return content.slice(start, end);
+}
+
+// A count is backed only two honest, cold ways: (a) the evidence relay carries the figure N
+// itself (the relay reported the count), or (b) the relay enumerates at least N distinct
+// lines that name the counted noun (counting the actual items). Neither present -> unverified.
+// With no evidence relay at all, nothing backs the count, so it fails closed and HOLDS.
+function _countBacked(n, token, nounLower, evidenceText) {
+  if (!evidenceText) return false;
+  var digit = String(n);
+  var reNum = new RegExp('(^|[^\\d.,])' + digit + '(?![\\d.,])');
+  if (reNum.test(evidenceText)) return true;
+  if (!/^\d/.test(token) && new RegExp('\\b' + token.toLowerCase() + '\\b', 'i').test(evidenceText)) return true;
+  var stem = nounLower.replace(/(ies|es|s)$/, '');
+  if (stem.length < 3) return false;
+  var lines = String(evidenceText).split(/\r?\n/), hits = 0;
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].trim().length && lines[i].toLowerCase().indexOf(stem) >= 0) hits++;
+  }
+  return hits >= n;
+}
+
+function countFabricationFlags(content, evidenceText) {
+  var out = [], seen = Object.create(null);
+  // Anchor on a NUMBER token only (digit run or number word), never an arbitrary leading
+  // word, so "found three tests" is read as the count "three tests", not swallowed as the
+  // pair "found three". The following token is the candidate counted noun.
+  var re = /(\d[\d,]*|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)\s+([A-Za-z]+)/gi, m;
+  var text = String(content || '');
+  while ((m = re.exec(text)) !== null) {
+    var token = m[1], noun = m[2], value = _countValue(token);
+    if (value === null || value < 2) continue;
+    var prev = text[m.index - 1];
+    if (prev && /[A-Za-z0-9$.]/.test(prev)) continue;           // part of a word, money, or decimal
+    var nounLower = noun.toLowerCase();
+    if (_COUNT_DURATION_NOUNS.test(nounLower) || _COUNT_STAT_OWNED.test(nounLower)) continue;
+    var sentence = _countSentence(text, m.index);
+    if (isExplicitIllustration(sentence)) continue;
+    var isItem = _COUNT_ITEM_NOUNS.test(nounLower);
+    var isPlural = /s$/i.test(nounLower) && nounLower.length >= 4;
+    if (!isItem && !(isPlural && _COUNT_ENUM_FRAME.test(sentence))) continue;
+    var key = value + ':' + nounLower;
+    if (seen[key]) continue;
+    seen[key] = true;
+    if (!_countBacked(value, token, nounLower, evidenceText)) {
+      out.push({ claim: sentence.trim().substring(0, 80), count: value, reason: 'shadow_count_unverified' });
+    }
+  }
+  return out;
+}
+
 async function shadow(content, context) {
   context = context || {};
   var claims = extractClaims(content);
@@ -202,8 +305,9 @@ async function shadow(content, context) {
   // linking-verb claim extractor above. Scoped to financial-evidence turns.
   if (!context.sourcedClaims) {
     flags = flags.concat(financialFabricationFlags(content, evidenceText));
+    flags = flags.concat(countFabricationFlags(content, evidenceText));
   }
   return { ok: true, verdict: flags.length === 0 ? 'PASS' : 'FLAG', content: content, flags: flags, claimsChecked: claims.length };
 }
 
-module.exports = { shadow, extractClaims, isExplicitIllustration };
+module.exports = { shadow, extractClaims, isExplicitIllustration, countFabricationFlags };
