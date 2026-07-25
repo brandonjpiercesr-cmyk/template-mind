@@ -185,6 +185,39 @@ function isHumanFacingAnswer(value) {
   return true;
 }
 
+// ⬡B:core.pai_outbound_council:FIX:name_the_real_hollow_disease_in_the_receipt:20260725⬡
+// One reason string was carrying two different diseases. isHumanFacingAnswer is false
+// both for genuine tool/function protocol bytes AND for an empty or whitespace answer,
+// so a stage whose organ went unavailable and returned NO bytes was reported as though
+// it had emitted tool plumbing. Live receipt 20260725: four turns held with
+// stage_hollow_protocol_answer where nothing had emitted protocol at all, and the
+// stage's own reason (for example meta_commentary_empty) was overwritten before
+// anything durable was written, so the only breadcrumb the founder had named the wrong
+// disease and the trace had to be done by hand. Name them apart and carry the stage's
+// own reason through. BOTH still fail closed; no hollow byte gets through either way.
+function hollowStageReason(answerValue, stageReason) {
+  if (typeof answerValue === 'string' && answerValue.trim()) {
+    return 'stage_hollow_protocol_answer';
+  }
+  // Kept inside the bounded machine-code shape the cycle breadcrumb accepts, so the
+  // named cause survives into the durable COUNCIL_HOLD row instead of being dropped.
+  var named = String(stageReason || '').trim().toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48);
+  return named ? 'stage_empty_answer:' + named : 'stage_empty_answer';
+}
+
+// A hold whose cause is "you emitted plumbing" or "you emitted nothing" is not a style
+// hold, and the healer has to be told which one it is facing.
+function hollowHoldReason(reason) {
+  return /hollow_protocol|stage_empty_answer|_empty$/.test(String(reason || ''));
+}
+
+var HOLLOW_HEAL_GUIDANCE = 'The held attempt returned tool or function call protocol, ' +
+  'or returned no words at all, instead of an answer for the person. Do not call a tool. ' +
+  'Do not emit a tool_call or function_call block, a JSON envelope, or any protocol ' +
+  'wrapper. Write the whole answer out in plain words, complete and self contained, ' +
+  'using only what the answer below already says.';
+
 function hasOwn(value, key) {
   return !!(value && Object.prototype.hasOwnProperty.call(value, key));
 }
@@ -1958,6 +1991,35 @@ async function defaultQuillStage(ctx) {
 // specific gap the judge named (a factual overreach SHADOW flagged, a voice/format
 // issue WRIT flagged, a meta-commentary leak, a PAM concern). It never invents new
 // facts and never pads. Returns the repaired string, or null if it cannot help.
+//
+// ⬡B:core.pai_outbound_council:FIX:the_healer_is_told_the_real_defect_and_given_room:20260725⬡
+// FOUNDER 911 20260725, live receipt: four POST /cara/chat turns held with
+// stage_hollow_protocol_answer on LONG multi-section input while short turns answered
+// fine on the exact same deploy. Tracing it found the single re-heal could never
+// recover a hollow stage, so the turn died at the first fail-closed every time. Three
+// real defects sat on this one call:
+//  1. The healer was handed the STAGE's style guidance even when the hold was "you
+//     returned tool protocol" or "you returned no bytes at all". Nothing in the prompt
+//     told it to stop calling tools or that it had not actually answered, so a model
+//     that emitted plumbing had no reason to do anything different the second time.
+//     This was the worst of the three: on a hollow hold the healer was told to fix
+//     writing style, which is not the defect it was looking at.
+//  2. max_tokens was a flat 1200 and the timeout a flat 12s no matter how long the
+//     answer it must reproduce is. That is genuinely enough for a short or medium
+//     answer, and it silently truncates a long-form one, where the repair must write
+//     thousands of characters back out and shares that same budget with whatever
+//     reasoning residue a thinking rung emits ahead of the answer.
+//  3. One attempt only. A single empty or hollow completion ended the whole turn.
+// Be honest about what this does NOT fix. The proximate cause of those live turns was
+// narrower than any defect here: the ladder returned nothing at all for the general
+// text tier (the whole turn finished in 16.5s, so no model call ran long or timed out),
+// and a heal whose only tool is that same ladder cannot cure a dead ladder by
+// construction. What is fixed here is every case where a mind IS reachable, plus a
+// receipt that finally names which hollow disease happened and why the heal missed.
+// Penny hustle holds: the budget grows only with the real answer and is hard capped,
+// the timeout is capped, and the retry is exactly ONE extra call that runs only after
+// a hollow miss. Nothing here relaxes the gate. A repair that is itself protocol or
+// empty is still rejected and the turn still fails closed. Silence over hollow.
 async function healAnswer(answer, reason, stage, input, deps) {
   var modelLadder = (deps && deps.modelLadder) || require('./model.ladder.js');
   var guidance = {
@@ -1967,25 +2029,55 @@ async function healAnswer(answer, reason, stage, input, deps) {
     PAM: 'A judge held this. Repair the specific concern named in the reason while preserving the real answer and its facts.',
     QUILL: 'A quality judge held this. Make it a clean, complete, plain answer; do not pad; keep it exactly as long as the content needs.'
   };
+  var reasonGuidance = hollowHoldReason(reason)
+    ? HOLLOW_HEAL_GUIDANCE : (guidance[stage] || guidance.PAM);
   var system = 'You repair an answer that a council judge held, so it can pass on resubmission. ' +
-    (guidance[stage] || guidance.PAM) +
+    reasonGuidance +
     ' Output ONLY the repaired answer text, nothing else, no preamble, no explanation, no quotes around it.';
   var user = JSON.stringify({
     the_person_asked: String((input && input.question) || '').slice(0, 1200),
     the_answer_to_repair: String(answer || '').slice(0),
     why_it_was_held: String(reason || '').slice(0, 400)
   });
-  try {
-    var out = await modelLadder.deliberate(system, user, {
-      max_tokens: 1200, temperature: 0.3,
-      timeout: parseInt((deps && deps.env && deps.env.PAI_HEAL_TIMEOUT_MS) || process.env.PAI_HEAL_TIMEOUT_MS || '12000', 10),
-      tightTimeout: true, json: false, signal: input && input.signal
-    });
-    var text = out && out.content ? String(out.content).trim() : '';
-    // strip accidental wrapping quotes/backticks the model sometimes adds
-    text = text.replace(/^["\u2019\u201c\u0060]+|["\u2019\u201d\u0060]+$/g, '').trim();
-    return text && text.length > 1 ? text : null;
-  } catch (e) { return null; }
+  // The repair has to write the WHOLE answer out again, so the budget is sized to the
+  // answer instead of guessed once for every length. The old flat 1200 stays as the
+  // FLOOR, so a short or medium answer asks for exactly what it asked for before and
+  // this costs nothing new on the common path; only a genuinely long-form answer buys
+  // more room, and the ceiling is hard so no input can buy an unbounded generation.
+  var healTokens = Math.min(4000,
+    Math.max(1200, Math.ceil(String(answer || '').length / 3) + 400));
+  var baseHealTimeout = parseInt((deps && deps.env && deps.env.PAI_HEAL_TIMEOUT_MS) ||
+    process.env.PAI_HEAL_TIMEOUT_MS || '12000', 10);
+  if (!Number.isFinite(baseHealTimeout) || baseHealTimeout <= 0) baseHealTimeout = 12000;
+  var healTimeout = Math.min(30000, baseHealTimeout * Math.ceil(healTokens / 1200));
+
+  async function healOnce(systemText) {
+    try {
+      var out = await modelLadder.deliberate(systemText, user, {
+        max_tokens: healTokens, temperature: 0.3,
+        timeout: healTimeout,
+        tightTimeout: true, json: false, signal: input && input.signal
+      });
+      var text = out && out.content ? String(out.content).trim() : '';
+      // strip accidental wrapping quotes/backticks the model sometimes adds
+      text = text.replace(/^["\u2019\u201c\u0060]+|["\u2019\u201d\u0060]+$/g, '').trim();
+      // A repair that is itself tool plumbing, or a bare fragment, is not a repair.
+      // Rejecting it HERE is what lets the one retry fire on the real defect instead of
+      // handing plumbing back to the caller to reject silently.
+      if (!text || text.length <= 1 || !isHumanFacingAnswer(text)) return null;
+      return text;
+    } catch (e) { return null; }
+  }
+
+  var healed = await healOnce(system);
+  if (healed) return healed;
+  if (input && input.signal && input.signal.aborted) return null;
+  // ONE bounded second pass, and only after the first came back hollow or empty. The
+  // instruction is tightened to name exactly what just went wrong, which is the one
+  // thing the old single-shot healer never said out loud.
+  return await healOnce(system +
+    ' Your previous attempt came back empty or came back as protocol instead of prose.' +
+    ' This is the final attempt: reply with the answer text itself and nothing else.');
 }
 
 async function defaultWritStage(ctx) {
@@ -2593,7 +2685,8 @@ async function runOutboundCouncil(input, injected) {
     var humanStageAnswer = isHumanFacingAnswer(normalized.answer);
     var receipt = makeStageReceipt(stage, i, true, true, normalized.ok && humanStageAnswer,
       before, normalized.answer, started, ended,
-      humanStageAnswer ? normalized.reason : 'stage_hollow_protocol_answer', normalized.evidence);
+      humanStageAnswer ? normalized.reason
+        : hollowStageReason(normalized.answer, normalized.reason), normalized.evidence);
     stages.push(receipt);
     if (!normalized.ok || typeof normalized.answer !== 'string' || normalized.answer.trim() === '' ||
         !humanStageAnswer) {
@@ -2606,11 +2699,33 @@ async function runOutboundCouncil(input, injected) {
       // per stage. If the stage still holds the healed answer, only THEN does the turn
       // fail -- a genuine, twice-confirmed integrity problem, not one probabilistic no.
       var _healReason = receipt.reason || 'stage_held';
+      // ⬡B:core.pai_outbound_council:FIX:the_expression_stage_gets_a_repair_too:20260725⬡
+      // ANU_EXPRESSION was the one TRANSFORMING stage with no heal attempt at all, so
+      // an emptied or hollow expression killed the turn on the very first no while
+      // every judge above it got a second look. core/anu.js is a formatter: it strips
+      // markdown headers, bold, and a trailing courtesy sign-off, and it returns empty
+      // bytes with blocked:true for empty input, all of which are exactly the shapes
+      // this fail-closed catches. Re-running a pure formatter on repaired input decides
+      // nothing and changes no verdict, so it belongs in the healable set. STAMP stays
+      // out: it is the durable commit preflight and must never be re-run on other bytes.
       var _healableStage = (stage === 'WRIT' || stage === 'SHADOW' ||
-        stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL');
+        stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL' ||
+        stage === 'ANU_EXPRESSION');
+      // ⬡B:core.pai_outbound_council:FIX:the_receipt_says_why_the_heal_did_not_save_it:20260725⬡
+      // A held receipt looked identical whether the heal never ran, ran and got nothing
+      // back from the ladder, or ran and returned plumbing again. Those are three
+      // different problems with three different owners, and the founder had no way to
+      // tell them apart from the receipt. Name the outcome. Bounded machine codes only,
+      // no answer bytes, no model prose. Failed stage receipts are never committed, so
+      // this is a diagnostic field on an in-process receipt and touches no durable proof.
+      var _healOutcome = !_healableStage ? 'stage_not_healable'
+        : (!isHumanFacingAnswer(before) ? 'heal_input_not_human_facing' : null);
       if (_healableStage && isHumanFacingAnswer(before)) {
         try {
           var _healed = await healAnswer(before, _healReason, stage, input, deps);
+          _healOutcome = !_healed ? 'heal_no_usable_repair'
+            : (_healed === before ? 'heal_returned_the_held_bytes' : null);
+
           if (_healed && typeof _healed === 'string' && _healed.trim() &&
               isHumanFacingAnswer(_healed) && _healed !== before) {
             var _reStarted = nowMs(deps);
@@ -2637,7 +2752,8 @@ async function runOutboundCouncil(input, injected) {
             stages[stages.length - 1] = makeStageReceipt(stage, i, true, true,
               _rePassed, before, _reNorm.answer, started, _reEnded,
               _rePassed ? 'STAGE_HEALED_PASS' :
-                (_reHuman ? (_reNorm.reason || 'stage_held') : 'stage_hollow_protocol_answer'),
+                (_reHuman ? (_reNorm.reason || 'stage_held')
+                  : hollowStageReason(_reNorm.answer, _reNorm.reason)),
               {
                 healed_from: _healReason,
                 healed_input_digest: digestText(_healed),
@@ -2666,13 +2782,31 @@ async function runOutboundCouncil(input, injected) {
               currentAnswer = _reNorm.answer;
               continue; // healed and passed; move to the next stage
             }
-            return failureResult(!_reHuman ? 'stage_hollow_protocol_answer' :
-              (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
+            return failureResult(!_reHuman
+              ? hollowStageReason(_reNorm.answer, _reNorm.reason)
+              : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
           }
-        } catch (_healErr) { /* heal is best-effort; fall through to the honest failure */ }
+        } catch (_healErr) {
+          // heal is best-effort; fall through to the honest failure, but say it threw
+          _healOutcome = 'heal_threw:' + errorReason(_healErr).slice(0, 60);
+        }
       }
+      // Re-stamp the held receipt with the heal outcome. Same stage, same ordinal, same
+      // input and output digests and the same held reason; only the diagnostic evidence
+      // grows, so the receipt chain and the fail-closed verdict are both untouched.
+      stages[stages.length - 1] = makeStageReceipt(stage, i, true, true, false,
+        before, normalized.answer, started, ended, receipt.reason,
+        Object.assign({}, normalized.evidence || {}, {
+          heal_attempted: _healableStage && isHumanFacingAnswer(before),
+          heal_outcome: _healOutcome || 'heal_missed',
+          held_answer_bytes: typeof normalized.answer === 'string'
+            ? Buffer.byteLength(normalized.answer, 'utf8') : null,
+          held_input_bytes: typeof before === 'string'
+            ? Buffer.byteLength(before, 'utf8') : null
+        }));
       return failureResult(!humanStageAnswer
-        ? 'stage_hollow_protocol_answer' : (normalized.reason || 'stage_held'),
+        ? hollowStageReason(normalized.answer, normalized.reason)
+        : (normalized.reason || 'stage_held'),
       stage, stages, input, normalized.answer);
     }
     currentAnswer = normalized.answer;
@@ -2709,12 +2843,14 @@ async function runOutboundCouncil(input, injected) {
       !isHumanFacingAnswer(stampResult.answer)) {
     var heldStamp = makeStageReceipt('STAMP', stampIndex, true, true, false,
       currentAnswer, currentAnswer, stampStarted, stampEnded,
-      !isHumanFacingAnswer(stampResult.answer) ? 'stage_hollow_protocol_answer' :
-        (stampResult.reason || 'stamp_preflight_held'), stampResult.evidence);
+      !isHumanFacingAnswer(stampResult.answer)
+        ? hollowStageReason(stampResult.answer, stampResult.reason)
+        : (stampResult.reason || 'stamp_preflight_held'), stampResult.evidence);
     heldStamp.state = 'HELD';
     stages.push(heldStamp);
     return failureResult(!isHumanFacingAnswer(stampResult.answer)
-      ? 'stage_hollow_protocol_answer' : (stampResult.reason || 'stamp_preflight_held'),
+      ? hollowStageReason(stampResult.answer, stampResult.reason)
+      : (stampResult.reason || 'stamp_preflight_held'),
     'STAMP', stages, input, currentAnswer);
   }
 
