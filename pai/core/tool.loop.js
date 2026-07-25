@@ -5288,22 +5288,66 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         _effectCouncilResult = _calendarPai;
       }
       if (await _turnCancelled(true)) return _turnCancelledResult('before_effect_commit');
-      var _effectRaw = await executeTool(_effect.name, _effectArgs, hamUid, message,
-        Object.assign({ phase:'commit', councilResult:_effectCouncilResult, parentCycleId:_cycleId,
-          parentRequestId:_requestId, userMessage:message,
-          abortSignal:_turnAbortSignal || null, isCancelled:_turnCancelled },
-        { caraContext:identity && identity.council_context || {},
-          codaVerified:_effectRuntime.codaVerified === true,
-          activationDecisionRequired:_effectRuntime.activationDecisionRequired === true,
-          codaActivationApproved:_effectRuntime.codaActivationApproved === true,
-          codaActivationDecision:_effectRuntime.codaActivationDecision,
-          codaDecisionSource:_effectRuntime.codaDecisionSource }));
-      if (await _turnCancelled(true)) return _turnCancelledResult('after_effect_commit');
-      var _effectParsed;
-      try { _effectParsed = JSON.parse(_effectRaw); }
-      catch (eEffectParse) { _effectParsed = { ok:false, reason:'effect_result_invalid' }; }
+      // ⬡B:core.tool_loop:HEAL:bounded_retry_on_transient_effect_commit:20260725⬡
+      // Voice contention self-heal (founder order 20260725). Under brain load a single
+      // queued POST_COUNCIL effect commit can fail once on a transient shape and the
+      // PAI_EFFECT_TRANSACTION ruling (20260723) then fails the whole turn honestly;
+      // sequential recovery minutes later is clean, proving contention, not truth.
+      // Heal: retry the commit at most 2 more times (400ms then 1200ms backoff) ONLY
+      // when the failure shape proves the effect never committed: a thrown
+      // fetch/network style error, a 5xx/429 style rejection, or effect_result_invalid
+      // from an empty body. A result that came back ok:true is committed and is never
+      // re-run, so no effect can double-commit. A deterministic refusal (ok:false with
+      // a real reason such as a council hold or a validation failure) is NEVER
+      // retried: by the honest-receipt law a refusal is an answer, not an outage, and
+      // replaying it would be hammering the gate hoping for a different answer. If the
+      // effect still fails after the bounded retries the transaction ruling holds
+      // unchanged: the turn fails with post_council_effect_failed, and the attempt
+      // count rides in the stamp and side_effects so the receipts show the heal ran.
+      var _effectParsed = null;
+      var _effectAttempts = 0;
+      var _effectCommitDelaysMs = [400, 1200];
+      var _transientEffectFailure = function (thrown, parsed, raw) {
+        if (parsed && parsed.ok === true) return false;
+        if (thrown) return /fetch|network|socket|ECONN|ETIMEDOUT|EPIPE|EAI_AGAIN|abort|time.?out|hang up|429|5\d\d|overloaded|unavailable/i
+          .test(String(thrown && thrown.message || thrown));
+        if (parsed && parsed.reason === 'effect_result_invalid')
+          return !String(raw == null ? '' : raw).trim();
+        var _why = String(parsed && (parsed.reason || parsed.error) || '');
+        return /\b(?:5\d\d|429)\b|rate.?limit|time.?out|timed out|ECONN|ETIMEDOUT|EAI_AGAIN|hang up|fetch failed|network|unavailable|overloaded|too many/i
+          .test(_why);
+      };
+      for (;;) {
+        _effectAttempts++;
+        var _effectThrew = null;
+        try {
+          var _effectRaw = await executeTool(_effect.name, _effectArgs, hamUid, message,
+            Object.assign({ phase:'commit', councilResult:_effectCouncilResult, parentCycleId:_cycleId,
+              parentRequestId:_requestId, userMessage:message,
+              abortSignal:_turnAbortSignal || null, isCancelled:_turnCancelled },
+            { caraContext:identity && identity.council_context || {},
+              codaVerified:_effectRuntime.codaVerified === true,
+              activationDecisionRequired:_effectRuntime.activationDecisionRequired === true,
+              codaActivationApproved:_effectRuntime.codaActivationApproved === true,
+              codaActivationDecision:_effectRuntime.codaActivationDecision,
+              codaDecisionSource:_effectRuntime.codaDecisionSource }));
+        } catch (eEffectCommit) { _effectRaw = null; _effectThrew = eEffectCommit; }
+        if (await _turnCancelled(true)) return _turnCancelledResult('after_effect_commit');
+        if (_effectThrew) {
+          _effectParsed = { ok:false, reason:_effectThrew.message || 'effect_commit_threw' };
+        } else {
+          try { _effectParsed = JSON.parse(_effectRaw); }
+          catch (eEffectParse) { _effectParsed = { ok:false, reason:'effect_result_invalid' }; }
+        }
+        if (_effectParsed && _effectParsed.ok === true) break;
+        var _effectRetryDelay = _effectCommitDelaysMs[_effectAttempts - 1];
+        if (_effectRetryDelay == null
+            || !_transientEffectFailure(_effectThrew, _effectParsed, _effectRaw)) break;
+        await new Promise(function (resolveRetry) { setTimeout(resolveRetry, _effectRetryDelay); });
+        if (await _turnCancelled(true)) return _turnCancelledResult('before_effect_commit');
+      }
       _effectResults.push({ name:_effect.name, ok:!!(_effectParsed&&_effectParsed.ok),
-        result:_effectParsed,
+        result:_effectParsed, attempts:_effectAttempts,
         councilProof:(_needsMessageCouncil || _effect.name === 'calendar_book')
           ? compactCouncilProof(_effectCouncilResult) : null });
     } catch (eEffect) {
@@ -5316,11 +5360,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   if (_failedEffect) {
     _stampStep('post_council_effect_failed', _failedEffect.name + ': '
       + (_failedEffect.reason || _failedEffect.result && (_failedEffect.result.reason
-        || _failedEffect.result.error) || 'unknown'));
+        || _failedEffect.result.error) || 'unknown')
+      + (_failedEffect.attempts ? ' [attempts:' + _failedEffect.attempts + ']' : ''));
     return { ok:false, reason:'post_council_effect_failed', blocked_by:_failedEffect.name,
       ham:hamObj, cycleId:_cycleId, requestId:_requestId,
       councilProof:compactCouncilProof(_council), side_effects:_effectResults.map(function (effectResult) {
         return { name:effectResult.name, ok:effectResult.ok,
+          attempts:effectResult.attempts || null,
           reason:effectResult.reason || effectResult.result && (effectResult.result.reason
             || effectResult.result.error) || null };
       }),
