@@ -225,7 +225,15 @@ async function checkBalances() {
   return low;
 }
 
+// ⬡B:core.spend_guard:WIRE:a_clamped_ceiling_needs_a_real_door_not_a_test_one:20260726⬡
+// ceilDetail shipped behind _test, so the only way to learn that 35000 became 10000 was to
+// import a test hook in production, and in a world without that surface there was no way at
+// all. A clamp nobody can see is the same operational lie as the unreadable ceiling this
+// whole line of work exists to end: the edit looks accepted and then calls stop early. It is
+// a first-class export now, so any world can report what is in force beside what was asked
+// for. Caught by the Codex reviewer on the sister PR.
 module.exports = { lastDenial: lastDenial, allow: allow, usageToday: usageToday,
+  ceilDetail: ceilDetail,
   withAttribution:withAttribution,
   checkBalances: checkBalances,
   _test:{configuredCeil:configuredCeil,ceilDetail:ceilDetail,cleanAttribution:cleanAttribution,
