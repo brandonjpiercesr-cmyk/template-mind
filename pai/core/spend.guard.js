@@ -56,19 +56,24 @@ function ceilDetail(kind) {
   var fallback = kind === 'image' ? DEFAULT_IMAGE_CEIL : DEFAULT_TEXT_CEIL;
   var maximum = kind === 'image' ? MAX_IMAGE_CEIL : MAX_TEXT_CEIL;
   var raw = process.env[name];
-  if (raw === undefined || raw === '') {
+  // Blank, or blank once trimmed, means nobody chose. That is the same thing as unset, and
+  // treating a stray space as a typo would be one more way to go silent over nothing.
+  var text = raw === undefined ? '' : String(raw).trim();
+  if (text === '') {
     return { value: fallback, source: 'built_in_default', requested: null, maximum: maximum };
   }
-  var text = String(raw).trim();
   if (!/^[1-9][0-9]*$/.test(text)) {
     return { value: null, source: 'env', requested: null, maximum: maximum };
   }
+  // Order matters, and the first version had it backwards. A digit run too long to be an
+  // exact JavaScript number is still unambiguously a number ABOVE the maximum, so rejecting
+  // it for imprecision reintroduces the exact mute this change exists to remove. Classify by
+  // SIZE first; the only thing lost by clamping an imprecise value is precision nobody wants,
+  // because the number in force is the maximum either way. Caught by the Codex reviewer.
   var asked = Number(text);
-  if (!Number.isSafeInteger(asked)) {
-    return { value: null, source: 'env', requested: null, maximum: maximum };
-  }
-  if (asked > maximum) {
-    return { value: maximum, source: 'env_clamped', requested: asked, maximum: maximum };
+  if (!Number.isSafeInteger(asked) || asked > maximum) {
+    return { value: maximum, source: 'env_clamped',
+      requested: Number.isSafeInteger(asked) ? asked : null, maximum: maximum };
   }
   return { value: asked, source: 'env', requested: asked, maximum: maximum };
 }
