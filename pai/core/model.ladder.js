@@ -187,11 +187,36 @@ async function tryQwen(system, user, opts) {
     var qwenModel = opts.seat && /^qwen\//i.test(candidate.model) ? candidate.model :
       (process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b');
     var body = { model: qwenModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    if (opts.json) body.response_format = { type: 'json_object' };
+    // ⬡B:core.model_ladder:911:the_last_warm_rung_thought_itself_empty:20260726⬡
+    // FOUND 20260726 while chasing her silence for a full day, and it is the same disease
+    // this file already cured on its sibling rung sixty lines up, on a rung nobody went back
+    // for. Qwen3 is a HYBRID REASONING model and it thinks by default, exactly like GLM-5.2.
+    // Left to think, it spends the whole max_tokens budget on reasoning and returns content
+    // that is EMPTY, hasAcceptedContent correctly rejects it, and this rung answers null.
+    //
+    // Null is not visibly a failure. It is indistinguishable from a rung that is simply
+    // down, so the ladder walks on, and this file's own comment at tryAnthropicBackup
+    // already wrote down what happens next: the open-weight rungs can all be out at once,
+    // deliberate() returns null, "the founder experiences as A'NU going silent."
+    //
+    // That is the state that was live today. Together is out of credits, Ornith is retired,
+    // RunPod is out, and the Anthropic floor is off by default since the cost audit. GLM and
+    // Qwen were the last two warm rungs, and only ONE of them had been told not to think.
+    //
+    // Both passthrough shapes go out because OpenRouter providers differ in which one they
+    // honour, which is the reasoning the GLM rung already carries and the reason it works.
+    body.chat_template_kwargs = { enable_thinking: false };
+    body.reasoning = { enabled: false };
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? {content:c,model:'qwen3-235b',
+    // Its sibling has always run the accepted content through the scrubber and this rung
+    // handed back the raw string. A provider that honours neither passthrough still returns
+    // reasoning residue, so the rung that is most likely to think is the one that most needs
+    // cleaning, and it was the one without it.
+    return hasAcceptedContent(c, opts) ? {content:cleanModelContent(c, opts),model:'qwen3-235b',
       model_slug:qwenModel,via:candidate.via} : null;
   } catch (e) { return null; }
 }
