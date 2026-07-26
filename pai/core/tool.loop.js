@@ -253,7 +253,8 @@ const { triggerDeploy } = require('./tools/render.deploy.js');
 // ⬡B:core.tool_loop:WIRE:consult_coda_uses_canonical_relay_contract:20260715⬡
 const codingRelay = require('./coding.relay.contract.js');
 const { notifyHam, resolvePhone:resolveNotifyPhone } = require('./tools/notify.ham.js');
-const { runOutboundCouncil, requireVerifiedCouncilResult, requireVerifiedCouncilDelivery,
+const { runOutboundCouncil, runPreWriteCouncil, requireVerifiedCouncilResult,
+  requireVerifiedCouncilDelivery,
   compactCouncilProof, canonicalizeDeliveryTarget,
   extractNamedContextEvidence, namedContextContradictions,
   currentAssistantPreferenceRequest, preferenceJudgmentFindings,
@@ -2638,6 +2639,26 @@ async function reachIncidentFence(identity,stage){
   catch(error){return false;}
 }
 
+// ⬡B:core.tool_loop:CARRY:pre_write_relationship_facts:20260726⬡
+// COLD CARRIER for the pre-write briefing. It assembles the runtime-resolved
+// relationship facts the two brief organs ask for as `relationship` and decides
+// nothing: who this reader is by their resolved world and tier, and what the
+// caller declared about this turn. Every value here comes from the ABAHAM door's
+// own resolution at runtime, never a literal and never a default person.
+function _preWriteRelationshipContext(hamObj, identity) {
+  var facts = [];
+  var ham = hamObj || {};
+  if (ham.name) facts.push('reader name: ' + String(ham.name).slice(0, 80));
+  if (ham.world) facts.push('their world: ' + String(ham.world).slice(0, 80));
+  if (ham.tier !== undefined && ham.tier !== null) facts.push('trust tier: ' + String(ham.tier).slice(0, 20));
+  var context = (identity && identity.council_context) || {};
+  if (context.mode) facts.push('turn mode: ' + String(context.mode).slice(0, 60));
+  if (identity && identity.outbound_finalize === true) {
+    facts.push('this is a composition turn for outbound delivery, not an answer to a question asked in the room');
+  }
+  return facts.join('\n');
+}
+
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
@@ -2789,7 +2810,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // GET /command-center/live/:hamUid. Moving them to bounded external telemetry with one compact
   // terminal receipt is PAI_CYCLE_OBSERVABILITY_WONDER; changing the write volume here would alter
   // that live observability surface and cannot be verified here. Contained by stamp only.
+  // ⬡B:core.tool_loop:WIRE:the_founder_watches_the_cycle_run:20260726⬡
+  // The override is not a shortcut, it is a way to WATCH. On an override turn the same
+  // step stamps that already go to CYCLE_STEP are also kept in process so the founder's
+  // own door can hand him the trail with the answer. Off by default and empty on every
+  // ordinary turn, so no portal ever sees engine-room vocabulary it was not asked for.
+  var _founderOverride = (identity && identity.council_context
+    && identity.council_context.founder_override) || null;
+  var _watchTrail = _founderOverride && _founderOverride.watch === true ? [] : null;
   function _stampStep(step, detail) {
+    if (_watchTrail && _watchTrail.length < 200) {
+      _watchTrail.push({ step: step, detail: detail == null ? null : String(detail).slice(0, 200),
+        at_ms: Date.now() - t0 });
+    }
     if (!_BU || !_BK) return;
     // CYCLE_STEP is operational telemetry, not the conversation transcript.
     // Voice joins on the stable signed session id; exact user/answer bytes stay
@@ -3151,7 +3184,33 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // The finalizer re-entry is always an outbound_finalize turn, so excluding it makes the
   // initial coding turn consult CODA once and the compose/finalize turn skip it. One
   // coding request now yields one coding cycle, not a chain.
-  var _codaLeadNeeded = !!(identity && identity.council_context
+  // ⬡B:core.tool_loop:WIRE:the_at_summons_actually_reaches_the_summoned_lane:20260726⬡
+  // FOUNDER OVERRIDE, the summons half. The door (routes/cara.routes.js, core/wren/reply.js)
+  // resolved his @name against the real wonder registry and his real advisor roster and put
+  // the directive here. This is where it becomes a real consultation instead of a label:
+  //  - @coda arms the SAME server-executed consult_coda lead the coding mode already uses,
+  //    so CODA is genuinely read before deliberation and A'NU relays what CODA returned.
+  //  - every other resolved lane is named to the mind, which reaches it through that lane's
+  //    real tool (consult_advisor, consult_mace, and the rest) inside this same loop.
+  // NOTHING is bypassed. The summons only points; the mind still deliberates, the seven
+  // post-write judges still rule, and the nine-row commit still has to pass. This is the
+  // founder's own condition on his own key.
+  var _summonedOrgan = _founderOverride && _founderOverride.kind === 'summon'
+    && _founderOverride.resolved === true ? _founderOverride.organ : null;
+  var _summonedCoda = !!(_summonedOrgan &&
+    String(_summonedOrgan.id || '').toLowerCase() === 'station.coda' &&
+    identity && identity.outbound_finalize !== true);
+  if (_founderOverride) {
+    // Lazy and fail-safe: a world that has not inherited the override organ yet still runs
+    // the turn, it simply gets no override brief. The key never takes a cycle down.
+    var _overrideBlock = '';
+    try { _overrideBlock = require('./founder.override.js')
+      .overrideContextBlock(_founderOverride); } catch (eOverrideBlock) { _overrideBlock = ''; }
+    if (_overrideBlock) msgs.push({ role:'system', content:_overrideBlock });
+    _stampStep('founder_override_read',
+      _founderOverride.token + ':' + (_founderOverride.resolved ? 'resolved' : 'unresolved'));
+  }
+  var _codaLeadNeeded = _summonedCoda || !!(identity && identity.council_context
     && identity.council_context.mode === 'coding'
     && identity.outbound_finalize !== true);
   var _codaEvidenceRelayAnswer = '';
@@ -3267,6 +3326,44 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   if (_signedVoiceFarewellAnswer) {
     _stampStep('signed_voice_farewell_acknowledgement_selected', 'exact_turn_transcript');
+  }
+  // ⬡B:core.tool_loop:WIRE:the_pre_write_side_of_the_council_runs_before_the_writer:20260726⬡
+  // FOUNDER LAW: the output agents "run BEFORE the writing occurs, and they run AFTER."
+  // Only the AFTER side existed. The two pre-write organs (board/meta/reader.brief.js,
+  // board/writ/voice.brief.js) had ZERO callers in six repos since 20260724. This is the
+  // one seam where a writer's context window is complete and no word has been drafted yet,
+  // so this is where the briefing belongs. The briefing is a CONTEXT BLOCK for the writer,
+  // never an answer and never a judgment: the seven post-write judges below still rule on
+  // whatever gets composed, unchanged.
+  // Scoped by what is actually being written, so penny hustle holds:
+  //  - a structured reach-policy or incident-intake turn writes machine JSON for a server,
+  //    not prose for a human, so there is no reader and no voice to brief.
+  //  - a signed-voice turn already HAS its exact bytes selected above (ans is set), so no
+  //    drafting happens on this turn at all and a briefing would buy nothing.
+  // Never throws and never blocks: an unreachable mind returns ok:false and composition
+  // proceeds byte for byte as it did before this wire. Silence over a hollow brief.
+  var _preWriteBriefing = null;
+  if (!ans && !_structuredReachPolicy && !_reachIncidentIntake) {
+    try {
+      _preWriteBriefing = await runPreWriteCouncil({
+        hamUid: hamUid,
+        channel: String(channel || ''),
+        inbound: _exactUserMessage,
+        assignment: String(message || ''),
+        relationship: _preWriteRelationshipContext(hamObj, identity)
+      });
+    } catch (ePreWrite) {
+      _preWriteBriefing = { ok:false, reason:'pre_write_threw:' + ePreWrite.message,
+        contextBlock:'', passes:[] };
+    }
+    if (_preWriteBriefing && _preWriteBriefing.ok && _preWriteBriefing.contextBlock) {
+      msgs.push({ role:'system', content:_preWriteBriefing.contextBlock });
+      _stampStep('pre_write_briefing_injected',
+        _preWriteBriefing.passes.map(function (p) { return p.stage + ':' + (p.ok ? 'ok' : 'held'); }).join(','));
+    } else if (_preWriteBriefing) {
+      _stampStep('pre_write_briefing_unavailable',
+        String(_preWriteBriefing.reason || 'unknown').slice(0, 80));
+    }
   }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{},
     cycleId:_cycleId,requestId:_requestId };
@@ -5077,6 +5174,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     fcw_contributors:(fcw&&fcw.contributors)||null,
     fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
     fcw_contributors_total:(fcw&&fcw.contributorsTotal)||0,
+    // ⬡B:core.tool_loop:EXIT:the_watched_cycle_hands_back_its_own_trail:20260726⬡
+    // Null on every ordinary turn. On a founder override turn it carries the step trail
+    // and the seven council stage verdicts, so "watch the cycle run" is a real thing he
+    // receives and not a promise. The bytes are step names and machine reasons only.
+    cycle_watch:_watchTrail ? { override:_founderOverride, cycle_id:_cycleId,
+      steps:_watchTrail,
+      council_stages:((_council&&_council.stages)||[]).map(function(stageReceipt){
+        return { stage:stageReceipt.stage, ok:stageReceipt.ok,
+          reason:stageReceipt.reason||null, ms:stageReceipt.ms };
+      }),
+      ms:Date.now()-t0 } : null,
     _dbg:global._paiLastError||null};
   // Internal-only exact binding for synthesis re-verification. Non-enumerable so
   // a route cannot leak the armed deliberation prompt by serializing this result.

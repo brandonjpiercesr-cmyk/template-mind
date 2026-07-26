@@ -103,16 +103,32 @@ function seat(name) {
     via: d.via,
     dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd),
     capEnv: d.capEnv,
-    hasFallback: !!d.fallbackModel
+    // Honest to the same rule as fallback() below: a fallback that resolves to the
+    // primary's own model is not a fallback, so this seat reports that it has none.
+    hasFallback: !!(d.fallbackModel &&
+      env(d.envModel + '_FALLBACK', d.fallbackModel) !== env(d.envModel, d.model))
   };
 }
 
 // The failover seat for a primary that carries one (Grok mind -> GLM-5.2, Ornith
 // judge -> qwen3-235b). Returns null when the seat has no fallback, so a caller
 // tries the primary, and only on empty/failure resolves fallback() and retries.
+//
+// ⬡B:core.seat_map:FIX:a_fallback_that_equals_the_primary_is_not_a_fallback:20260726⬡
+// Found 20260726 while answering "KIMI is the judge of the shareholders report, but KIMI is
+// only the judge FAILOVER." That part is pure config: SEAT_JUDGE_MODEL seats the primary and
+// SEAT_JUDGE_MODEL_FALLBACK seats the failover, so the founder action is a straight swap of
+// two env values, no code change. But swapping only the FIRST one is a real trap this file
+// had: SEAT_JUDGE_MODEL=moonshotai/kimi-k3 leaves the baked fallback at moonshotai/kimi-k3
+// too, and the "failover" then retries the identical model on the identical key, which is not
+// a failover, it is the same call twice at twice the price. Same trap on every seat that
+// carries a fallback. Comparing two resolved model slugs is a fact, not a judgment, so cold
+// code may state it: when they are the same string, this seat has no failover and says so,
+// and the caller stops after one honest attempt instead of paying for a phantom second one.
 function fallback(name) {
   var d = SEATS[name];
   if (!d || !d.fallbackModel) return null;
+  if (env(d.envModel + '_FALLBACK', d.fallbackModel) === env(d.envModel, d.model)) return null;
   return {
     seat: name + '.fallback',
     role: d.role + ' (fallback)',
