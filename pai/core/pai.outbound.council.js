@@ -2354,7 +2354,7 @@ async function healAnswer(answer, reason, stage, input, deps) {
   var modelLadder = (deps && deps.modelLadder) || require('./model.ladder.js');
   var guidance = {
     SHADOW: 'A factual-integrity judge held this. Remove or soften only the specific unsupported claim; keep everything the bound evidence supports. Do not add new facts.',
-    WRIT: 'A voice/format judge held this. Fix the writing (no em dashes, no emojis, no meta-commentary, plain human voice) while keeping the exact meaning and every real fact.',
+    WRIT: 'A voice/format judge held this. Fix the writing (no em dashes, no emojis, no meta-commentary) while keeping the exact meaning and every real fact, and say it in YOUR voice, the one above, not a generic clean one.',
     META_COMMENTARY: 'A privacy judge held this for leaking internal machinery. Rewrite so it speaks only to the person, with no mention of tools, systems, prompts, or internal steps.',
     PAM: 'A judge held this. Repair the specific concern named in the reason while preserving the real answer and its facts.',
     QUILL: 'A quality judge held this. Make it a clean, complete, plain answer; do not pad; keep it exactly as long as the content needs.'
@@ -2400,9 +2400,37 @@ async function healAnswer(answer, reason, stage, input, deps) {
       : (hollowHoldReason(reason) ? HOLLOW_HEAL_GUIDANCE
         : (boundarySpeechGuidance ? boundarySpeechGuidance.instruction
           : (guidance[stage] || guidance.PAM))));
-  var system = 'You repair an answer that a council judge held, so it can pass on resubmission. ' +
+  // ⬡B:core.pai_outbound_council:FIX:a_healed_answer_is_still_her:20260726⬡
+  // THE PERSONA HOLE, closed. This system prompt carried no persona at all, so the
+  // healer rebuilt her words as a model that had never been told who she is, and the
+  // only thing downstream of it is ANU_EXPRESSION, which is pure channel formatting
+  // (markdown strip, dash to comma, sign off strip) and touches no persona either.
+  // The result: every turn a judge held came back voiceless. Those are exactly the
+  // turns where her voice matters most, because the common holds are voice holds, an
+  // em dash, a courtesy sign off, a hollow phrase, a meta leak. She was being flattened
+  // at precisely the seam built to protect her.
+  // Now the repair is composed AS her, through the one composition door in
+  // core/persona.js, carrying the living voice: the floor plus the lines she grew
+  // about herself, minus anything the founder reversed. Cold code transports the
+  // voice here and bounds the call; it authors none of it. Best effort with the
+  // floor as the fallback, because a heal is on a person's clock and must never wait
+  // on the brain.
+  var _persona = require('./persona.js');
+  var _voice = _persona.VOICE;
+  try {
+    var _living = await _persona.livingVoice(input && input.hamUid);
+    if (_living && _living.voice) _voice = _living.voice;
+  } catch (eVoice) { /* the floor still speaks */ }
+  // The situation sentence stays verbatim. Two council fixtures identify a heal call
+  // by it, and more to the point it is the true statement of what happened: one of her
+  // own judges held her words before they reached the person. What changed is that she
+  // is the one saying them again, so it now rides behind her voice instead of standing
+  // alone in front of a model that was never told who she is.
+  var system = _voice + '\n\n' +
+    'You repair an answer that a council judge held, so it can pass on resubmission. ' +
     reasonGuidance +
-    ' Output ONLY the repaired answer text, nothing else, no preamble, no explanation, no quotes around it.';
+    ' Keep it yours: the same warmth and the same person talking, never a sanded down neutral rewrite. ' +
+    'Output ONLY the repaired answer text, nothing else, no preamble, no explanation, no quotes around it.';
   var user = JSON.stringify({
     the_person_asked: String((input && input.question) || '').slice(0, 1200),
     the_answer_to_repair: String(answer || '').slice(0),
