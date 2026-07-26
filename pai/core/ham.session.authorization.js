@@ -202,10 +202,36 @@ function requireAnyHamSession(req, res) {
   return authorized;
 }
 
+// ⬡B:core.ham_session_authorization:FIX:the_door_was_wide_and_every_room_was_narrow:20260726⬡
+// WHY THIS EXISTS. HAM_PATTERN above is the one shape a world ID has in this estate, and it
+// allows a dot and a colon: BDIF.ADVISOR is a real world. Thirteen page builders did not ask
+// for that shape. Each carried its own private line, some spelled esc(), some spelled inline,
+// all of them the same: String(x).replace(/[^A-Za-z0-9_-]/g,'').toUpperCase(). That line does
+// not reject a world it fails to recognize. It EDITS it. BDIF.ADVISOR was proven at the door,
+// handed to the page, and quietly rewritten to BDIFADVISOR before it was baked into the
+// markup, so every fetch the page then made asked the engine about a world that does not
+// exist and got nothing back. The person saw an empty room and no error, because from cold
+// code's point of view nothing had failed.
+//
+// WHAT THIS IS FOR. A page builder interpolates a world ID into HTML text and into a
+// double-quoted JS string literal, so it does need a guarantee about the characters. It gets
+// one here, from the canon shape rather than from a private guess: HAM_PATTERN admits only
+// A-Z, 0-9, dot, underscore, colon and hyphen. None of those can close a string literal, open
+// a tag, or start an entity, so a value that PASSES is safe to interpolate as-is.
+//
+// The difference that matters is what happens to a value that does not pass. This refuses it
+// and returns null. It never returns a repaired one. Editing an identity until it fits is how
+// one person's world silently became a different address, and a room is allowed to say it did
+// not recognize somebody; it is not allowed to quietly decide they are somebody else.
+function worldIdForPage(value) {
+  return normalizeHamUid(value);
+}
+
 module.exports = {
   COOKIE_NAME,
   signingSecret,
   normalizeHamUid,
+  worldIdForPage,
   signHamSession,
   verifySessionToken,
   sessionTokenFromRequest,
