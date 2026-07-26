@@ -940,7 +940,16 @@ function toolSelectionBoundary(name) {
     email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
     contact_send: 'USE WHEN: the person explicitly authorizes this exact text to this exact resolved third party. DO NOT USE WHEN: they mention a person, ask for contact details, brainstorm wording, or have not authorized the exact send.',
     notify_ham: 'USE WHEN: an authorized system workflow must send a real status text to the HAM. DO NOT USE WHEN: answering the HAM in the current conversation is sufficient, or for third-party messaging.',
-    write_to_brain: 'USE WHEN: the current workflow explicitly requires a durable exact-HAM bead. DO NOT USE WHEN: reading memory, answering conversationally, or saving unsupported inferences as facts.',
+    // ⬡B:core.tool_loop:FIX:the_boundary_told_the_capture_path_to_stand_down:20260726⬡
+    // This line used to read "DO NOT USE WHEN: reading memory, ANSWERING CONVERSATIONALLY, or
+    // saving unsupported inferences as facts", while the Memory Bank prompt in the same turn
+    // told her to use write_to_brain immediately whenever a person hands something over. Every
+    // gift arrives in a conversational turn, so the routing policy was standing the stated
+    // replacement down in exactly the case it existed for, and the contradiction is a real part
+    // of why keeping what he told her was a coin flip. Capture no longer depends on this tool
+    // at all (core/memory.keeper.js runs on the write side of every committed turn), so the
+    // boundary can now say the honest thing: use it to mark a real gift, not to keep a log.
+    write_to_brain: 'USE WHEN: the person hands you something to keep (a decision, a plan, a rename, a fact about their life, a moment they asked you to hold), or the current workflow explicitly requires a durable exact-HAM bead. DO NOT USE WHEN: reading memory, recording the conversation itself (the cycle already keeps every turn without you), or saving unsupported inferences as facts.',
     trigger_deploy: 'USE WHEN: a verified code fix is committed and the person or owned workflow requires that exact Render service deployed. DO NOT USE WHEN: diagnosing, planning, reading logs, or before a commit is verified.',
     fix_file_in_github: 'USE WHEN: the exact repository file, complete replacement content, and authorized repair are known. DO NOT USE WHEN: only diagnosis, planning, partial content, or a read-only review was requested.'
   };
@@ -4741,6 +4750,45 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
   }
   var _stampProof = _committedCouncil.stamp_proof;
+  // ⬡B:core.tool.loop:WIRE:the_memory_keeper_on_the_one_common_exit:20260726⬡
+  // FOUNDER, loudest complaint, verified twice before this line was written: "I still don't
+  // think she really memorizes and has memory." He was right, and the reason was mechanical.
+  // Her memory READ one string and WROTE another. core/find.js findContext queries source
+  // prefix 'pai.minutes.'; the ONLY writer of it was routes/stream.routes.js, the browser
+  // stream, so a text, a phone call, and every non-stream /cara/chat turn wrote nothing any
+  // wall contributor later read. And the MEMORY bead findStatedCommitments queries had NO
+  // writer at all after the 20260725 removal of the detached synthesize keeper, so whether
+  // she kept what he told her was a coin flip on the model electing to call write_to_brain.
+  //
+  // THIS IS THE ONE COMMON EXIT. Every channel, text, voice, portal, stream, API and the
+  // public finalizer, enters runPAI and leaves through this function. The keeper is bolted
+  // to nothing: it hangs on the single door all of them pass through, so no channel can ever
+  // again be the one that forgot. Placed AFTER the council receipt and STAMP readback and
+  // INSIDE the cycle's own spend attribution, which is exactly what the 20260725 removal
+  // required: no detached model call, no detached brain write, nothing escaping the cycle.
+  // It is started here so its bounded mind call overlaps the post-council effects, and it is
+  // settled at the exit below. It never changes the answer and it can never fail the turn.
+  var _memoryKeeperRun = null;
+  if (_reachHandoffEligible && !_structuredReachPolicy && !_reachIncidentIntake && !_blockedFallback) {
+    try {
+      _memoryKeeperRun = require('./memory.keeper.js').keepTurn({
+        hamUid: hamUid, channel: channel,
+        question: _exactUserMessage, answer: finalAns,
+        cycleId: _cycleId, requestId: _requestId,
+        receiptSource: _councilReceipt && _councilReceipt.persistence
+          && _councilReceipt.persistence.final_source || null,
+        toolsUsed: tools.map(function (tu) { return tu && (tu.name || tu.tool) || 'unknown'; }),
+        turnMs: Date.now() - t0,
+        abortSignal: _turnAbortSignal || null
+      }).catch(function (eKeep) {
+        return { ok:false, reason:'memory_keeper_threw',
+          error:String(eKeep && eKeep.message || eKeep || 'unknown').slice(0, 160) };
+      });
+    } catch (eKeeperStart) {
+      _memoryKeeperRun = Promise.resolve({ ok:false, reason:'memory_keeper_unreachable',
+        error:String(eKeeperStart && eKeeperStart.message || eKeeperStart).slice(0, 160) });
+    }
+  }
   // ⬡B:core.tool.loop:COMMIT:queued_mutations_after_stamp:20260715⬡
   // Mutating tool calls participated in deliberation as a durable pending
   // effect plan. Release them only now. External human messages receive their
@@ -5017,6 +5065,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   } catch (eTrkDone) {}
   if (await _turnCancelled(true)) return _turnCancelledResult('before_release');
+  // ⬡B:core.tool.loop:EXIT:the_memory_keepers_receipt_is_part_of_the_turn:20260726⬡
+  // Settle the keeper started right after the committed council. It is AWAITED, not fired and
+  // forgotten: a memory the cycle never confirmed is exactly the "system reporting success it
+  // has not earned" this codebase already named as its own disease (index.js:329). Its receipt
+  // rides on the result so a trace-back can see what was kept, what was ruled a gift, and what
+  // failed, on the same turn. A keeper failure is reported, never fatal.
+  var _memoryKeeper = null;
+  if (_memoryKeeperRun) {
+    try { _memoryKeeper = await _memoryKeeperRun; }
+    catch (eKeeperSettle) { _memoryKeeper = { ok:false, reason:'memory_keeper_settle_failed' }; }
+  }
   var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
     requestId:_requestId,request_id:_requestId,councilReceipt:_councilReceipt,council_receipt:_councilReceipt,
     stampProof:_stampProof,stamp_proof:_stampProof,
@@ -5024,6 +5083,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     fcw_contributors:(fcw&&fcw.contributors)||null,
     fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
     fcw_contributors_total:(fcw&&fcw.contributorsTotal)||0,
+    memory_keeper:_memoryKeeper,
     _dbg:global._paiLastError||null};
   // Internal-only exact binding for synthesis re-verification. Non-enumerable so
   // a route cannot leak the armed deliberation prompt by serializing this result.
