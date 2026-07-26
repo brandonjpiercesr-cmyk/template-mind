@@ -31,13 +31,26 @@ var outputGuard = require('./model.output.guard.js');
 // One shared function, used everywhere this codebase strips a reasoning trace, so a
 // second reasoning-shaped model never needs this fixed a fourth time.
 //
-// Known, stated limit: if a model's REAL final answer itself begins with the literal
-// four characters `<think>` (discussing the tag as its very first words) and never
-// closes it, this cannot tell that apart from genuine unterminated reasoning, because
-// nothing in the text says which one it is. That is a real ambiguity in a text-only
-// heuristic, not something a regex can resolve; the honest fix would be a provider
-// that separates reasoning from content in its own response shape, which is a
-// platform-level fact this file does not control.
+// Known, stated limit, WIDENED 20260726 by a fourth Codex pass: this is not only an
+// UNTERMINATED-tag problem. A real final answer that legitimately opens with a
+// PROPERLY CLOSED literal example, `<think>example</think>That is what the tag looks
+// like.`, is byte-for-byte the same shape as a real reasoning envelope followed by a
+// real answer. `cleanModelContent('<think>example</think>', opts)` returns '', and the
+// leading example in the longer case is silently deleted, keeping only the sentence
+// after it. Verified directly, not assumed: `stripReasoningTrace` cannot tell these
+// two intents apart, closed or unterminated, because nothing in the text says which
+// one it is. That is not a bug this file can regex its way out of; the honest fix is
+// a provider that separates reasoning from content in its own response shape, a
+// platform-level fact this file does not control. THE ACCEPTED TRADEOFF, stated rather
+// than silently made: this ladder's actual callers are a life-assistant deliberation
+// cycle (advisors, budget, calendar, the recovery and exhaustion synthesis passes in
+// core/tool.loop.js), not a coding assistant that teaches markup syntax. A real answer
+// that needs to open with the literal string "<think>" as its own content is a realistic
+// possibility this file accepts as a known, rare cost, against the alternative of
+// leaving real reasoning residue unstripped in the common case, which is the defect
+// this whole file exists to prevent. If a caller of this ladder ever needs to compose
+// answers ABOUT think-tag markup as ordinary content, that caller needs a different
+// contract than plain-text scrubbing, not a smarter regex here.
 function stripReasoningTrace(content) {
   var text = content;
   text = text.replace(/^\s*(?:<think>[\s\S]*?<\/think>\s*)+/i, '');
