@@ -18,16 +18,28 @@ var outputGuard = require('./model.output.guard.js');
 // verdict falls through to the next authorized provider. If none returns one
 // strict JSON object, deliberate() still returns null and the caller fails closed.
 function hasAcceptedContent(content, opts) {
-  if (typeof content !== 'string' || !content.trim()) return false;
-  if (outputGuard.containsCjk(content)) return false;
+  if (typeof content !== 'string') return false;
+  // ⬡B:core.model_ladder:911:plain_mode_accepted_pure_reasoning_residue:20260726⬡
+  // FOUND 20260726 by an external review of #1163, verified by hand against this
+  // file. The think-block strip below used to run ONLY when opts.json === true,
+  // so a PLAIN mode call (exactly what the recovery and exhaustion synthesis
+  // passes in core/tool.loop.js use) accepted any non-empty string as a real
+  // answer, including one that was ENTIRELY a reasoning trace with no answer in
+  // it at all. A reasoning model that burns its whole token budget inside
+  // <think> and never reaches a real answer would have had that empty-of-
+  // substance trace accepted as her reply. The only thing that counts as an
+  // answer is what remains once the trace is stripped, in every mode, so the
+  // strip runs first and the emptiness check runs on what is left.
+  var stripped = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  if (!stripped) return false;
+  if (outputGuard.containsCjk(stripped)) return false;
   if (!opts || opts.json !== true) return true;
   // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
   // GLM-5.2 and other reasoning models can wrap the real JSON in a thinking
   // trace or leading blank lines. Strip think blocks and grab the outermost
   // JSON object before judging, so a good answer with residue is accepted
   // instead of silently falling the whole turn to a cold RunPod pod.
-  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  var text = stripped.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   if (text[0] !== '{') {
     var s = text.indexOf('{'); var e = text.lastIndexOf('}');
     if (s !== -1 && e > s) text = text.slice(s, e + 1);
@@ -43,9 +55,20 @@ function hasAcceptedContent(content, opts) {
 
 function cleanModelContent(content, opts) {
   if (typeof content !== 'string') return content;
-  if (!opts || opts.json !== true) return content;
-  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  // ⬡B:core.model_ladder:911:plain_mode_never_scrubbed_the_reasoning_trace:20260726⬡
+  // FOUND 20260726, same review as the hasAcceptedContent fix above. This scrub
+  // used to run ONLY when opts.json === true. Every plain-text call in this
+  // codebase, which is what the recovery and exhaustion synthesis passes in
+  // core/tool.loop.js actually use, passed straight through unscrubbed, so a
+  // reasoning model's <think> block could ride along into a real human-facing
+  // reply. There is no mode where leaving a raw reasoning trace in an answer is
+  // correct, so the strip is unconditional. Only the JSON-specific code-fence
+  // and outer-brace extraction stay gated on json mode: running brace
+  // extraction on a legitimate plain-English answer that happens to mention a
+  // brace would corrupt it, which is not a risk json mode carries.
+  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  if (!opts || opts.json !== true) return text;
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   if (text[0] !== '{') {
     var s = text.indexOf('{'); var e = text.lastIndexOf('}');
     if (s !== -1 && e > s) text = text.slice(s, e + 1);
@@ -417,4 +440,4 @@ async function transcribe(audio, opts) {
 }
 
 module.exports = { deliberate: deliberate, transcribe: transcribe,
-  _test: { hasAcceptedContent: hasAcceptedContent } };
+  _test: { hasAcceptedContent: hasAcceptedContent, cleanModelContent: cleanModelContent } };
