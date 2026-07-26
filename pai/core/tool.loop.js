@@ -337,6 +337,80 @@ var MAX = 20;
 var FIX_COOLDOWN_MS = 60000;
 var _lastFixAttempt = {};
 
+// ⬡B:core.tool_loop:911:a_refused_code_search_reported_itself_as_a_successful_empty_one:20260726⬡
+// MEASURED LIVE 20260726, and it is the best explanation anybody has for her silence.
+//
+// read_own_code called the GitHub API and never once looked at the HTTP status. A rate
+// limited GitHub answers 403 with a perfectly valid JSON body that carries `message` and
+// no `items`, so `.then(x => x.json())` succeeded, the `Array.isArray(sres.items)` test
+// was simply false, nothing threw, and the tool fell through to its no-results line:
+//
+//   {ok:true, found:false, note:'Searched the real code and found nothing relevant to
+//    this. Say plainly this was not found, do not guess.'}
+//
+// ok:TRUE. The tool told her the search ran and the code is not there. That is a hollow
+// reply wearing a success, which is the one thing the standing law names by name, and it
+// is worse than a thrown error because it is CONFIDENT. Told a search succeeded and found
+// nothing, the honest next move is to search differently, so she does, and that costs
+// three more requests into the same exhausted quota, which guarantees the next answer is
+// the same lie. That is a loop that spins without converging until iter hits MAX and
+// lands on exhaustion_honest_limit, which is exactly the sentence sitting on her wall.
+//
+// The receipts, all first hand: two arrivals fired 20 minutes apart, 16:26 and 16:46, both
+// terminal. The GitHub API refusing this account's writes with `rate limit already
+// exceeded` across the same window. This tool firing one search PER REPOSITORY, three by
+// default, plus up to five content reads, on every call, against the code search endpoint
+// that carries one of the tightest limits GitHub publishes.
+//
+// So two things change and they are separate. Every call now reads its status, and a
+// refusal is reported as a refusal. And once GitHub has said quota, this remembers it
+// until the reset it was handed, because a tool that keeps calling an exhausted quota is
+// both spending her iterations and deepening the very refusal it is failing on.
+//
+// This is a HOLD, never a cache of an answer. It stores no code and no result, only the
+// fact that the door said no and the moment it said it would open again.
+var _ghHold = { until: 0, reason: null, status: 0 };
+var GH_HOLD_MAX_MS = 3600000;
+var GH_HOLD_MIN_MS = 1000;
+
+// GitHub hands the reset back in two different shapes and neither is trustworthy on its
+// face: x-ratelimit-reset is epoch SECONDS, retry-after is a delay in seconds, and both
+// arrive as text from off this machine. Read the shape first, then bound it. An unreadable
+// header is not a reason to hold forever, so it falls back to a short hold rather than the
+// ceiling, and a header promising an hour and a half is clamped to the ceiling rather than
+// believed.
+function _ghHoldMsFrom(headers) {
+  var get = function (k) { try { return headers && headers.get ? headers.get(k) : null; } catch (e) { return null; } };
+  var retryAfter = Number(String(get('retry-after') || '').trim());
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(GH_HOLD_MAX_MS, Math.max(GH_HOLD_MIN_MS, retryAfter * 1000));
+  }
+  var reset = Number(String(get('x-ratelimit-reset') || '').trim());
+  if (Number.isFinite(reset) && reset > 0) {
+    var ms = (reset * 1000) - Date.now();
+    if (ms > 0) return Math.min(GH_HOLD_MAX_MS, Math.max(GH_HOLD_MIN_MS, ms));
+  }
+  return 60000;
+}
+
+// A 403 from GitHub is quota OR permission, and the two are different facts to her: one
+// clears by itself and one never will. The remaining count is the only thing that tells
+// them apart, so it is read rather than assumed, and an unclear 403 is named unclear.
+function _ghRefusal(response) {
+  var status = (response && response.status) || 0;
+  if (status === 429) return { kind: 'rate_limited', status: status };
+  if (status === 403) {
+    var remaining = null;
+    try { remaining = response.headers && response.headers.get ? response.headers.get('x-ratelimit-remaining') : null; }
+    catch (e) { remaining = null; }
+    if (String(remaining).trim() === '0') return { kind: 'rate_limited', status: status };
+    return { kind: 'refused', status: status };
+  }
+  if (status === 401) return { kind: 'credential_rejected', status: status };
+  if (status >= 500) return { kind: 'github_unavailable', status: status };
+  return { kind: 'refused', status: status };
+}
+
 // ⬡B:core.tool_loop:FIX:explicit_repository_paths_reach_coda:20260715⬡
 // A founder-directed code review named the exact files CODA needed to inspect, but
 // the consult step saw the words CODA/SPAN and replaced every file path with those
@@ -1282,6 +1356,31 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!ghToken) return JSON.stringify({ok:false,note:'No real code-read access configured right now.'});
       var query = String(args.query || '').trim();
       if (!query) return JSON.stringify({ok:false,note:'no query given'});
+      // The hold, checked before a single request leaves. Answering here costs nothing and
+      // spends no quota, and it hands back a fact she can say out loud instead of a silence
+      // she would try to search her way out of.
+      if (_ghHold.until > Date.now()) {
+        return JSON.stringify({ok:false, reason:_ghHold.reason || 'code_search_unavailable',
+          status:_ghHold.status || null,
+          seconds_until_retry: Math.ceil((_ghHold.until - Date.now()) / 1000),
+          note:'The code reader is held off because GitHub refused the last request. This did NOT search and it did NOT find nothing. Say the code could not be read right now and why. Do not rephrase and search again, the answer will be the same until the hold clears.'});
+      }
+      // Every refusal this call collects, so an empty result can prove which empty it is.
+      var ghRefusals = [];
+      // A hold that only ever gets armed is a mute button with no release. Any GitHub call
+      // that answers normally proves the door is open again, and that is the honest moment
+      // to drop the hold rather than waiting out a reset time that was only ever an
+      // estimate handed over by the other side.
+      var noteOpen = function () { if (_ghHold.until) _ghHold = { until: 0, reason: null, status: 0 }; };
+      var noteRefusal = function (response) {
+        var refusal = _ghRefusal(response);
+        ghRefusals.push(refusal);
+        if (refusal.kind === 'rate_limited') {
+          _ghHold = { until: Date.now() + _ghHoldMsFrom(response && response.headers),
+            reason: 'code_search_rate_limited', status: refusal.status };
+        }
+        return refusal;
+      };
       // Real, read-only. Scoped to the canonical mind, experience face, and builder.
       var repos = String(process.env.ANEW_OWN_CODE_REPOS
         || 'brandonjpiercesr-cmyk/anew,brandonjpiercesr-cmyk/eanew,brandonjpiercesr-cmyk/canew')
@@ -1309,8 +1408,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
               + '/contents/' + explicitPath + '?ref=main', {
               headers: {'Authorization':'token '+ghToken, 'Accept':'application/vnd.github.v3.raw'}
             });
-            if (pathProbe.ok) found.push({repo:repos[pathRepoIndex],path:explicitPath});
-          } catch (ePathProbe) {}
+            // A 404 here is the real answer to an exact path lookup: that file is not in
+            // this repository. Every other failure is the door, not the file, and the two
+            // must never wear the same face.
+            if (pathProbe.ok) { noteOpen(); found.push({repo:repos[pathRepoIndex],path:explicitPath}); }
+            else if (pathProbe.status !== 404) noteRefusal(pathProbe);
+          } catch (ePathProbe) { ghRefusals.push({ kind:'unreachable', status:0 }); }
         }
         // An exact path is an authoritative lookup request. If it does not exist in
         // the scoped repositories, report that miss instead of fuzzy-searching into a
@@ -1335,9 +1438,15 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!anchorResolved) for (var i=0;i<repos.length;i++) {
         try {
           var sq = encodeURIComponent(query) + '+repo:' + repos[i];
-          var sres = await fetch('https://api.github.com/search/code?q=' + sq, {
+          // THE LINE THE WHOLE 911 TURNS ON. This used to go straight to .json(). A refused
+          // GitHub returns a body that parses perfectly and carries no items, so the parse
+          // succeeded, the items test was false, and a refusal became an empty shelf.
+          var sresponse = await fetch('https://api.github.com/search/code?q=' + sq, {
             headers: {'Authorization':'token '+ghToken, 'Accept':'application/vnd.github.v3+json'}
-          }).then(function(x){return x.json();});
+          });
+          if (!sresponse.ok) { noteRefusal(sresponse); if (_ghHold.until > Date.now()) break; continue; }
+          noteOpen();
+          var sres = await sresponse.json();
           // \u2b21B:core.tool.loop:FIX:top2_cutoff_dropped_the_right_file:20260710\u2b21
           // Real, live incident, founder-caught: asked whether/how the command center
           // clears out old items. GitHub's real search DID find the right file
@@ -1358,13 +1467,30 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (qLower.trim() === 'canew') found.sort(function (a, b) {
         return (b.repo.endsWith('/canew') ? 1 : 0) - (a.repo.endsWith('/canew') ? 1 : 0);
       });
+      // NOTHING FOUND IS TWO DIFFERENT FACTS AND THEY USED TO SHARE ONE SENTENCE. An empty
+      // shelf after a search that actually ran is real evidence and she should say so
+      // plainly. An empty shelf because the door never opened is not evidence of anything,
+      // and reporting it as ok:true is what taught her to keep trying.
+      if (!found.length && ghRefusals.length) {
+        var worst = ghRefusals.filter(function (r) { return r.kind === 'rate_limited'; })[0] || ghRefusals[0];
+        return JSON.stringify({ok:false, reason:'code_search_' + worst.kind, status:worst.status || null,
+          refused_calls: ghRefusals.length,
+          seconds_until_retry: _ghHold.until > Date.now() ? Math.ceil((_ghHold.until - Date.now()) / 1000) : null,
+          note:'The code reader could NOT run. This is not a finding that the code is absent. Say the code could not be read right now and name why. Do not guess at what the code says and do not rephrase and search again.'});
+      }
       if (!found.length) return JSON.stringify({ok:true,found:false,note:'Searched the real code and found nothing relevant to this. Say plainly this was not found, do not guess.'});
       var snippets = [];
       for (var k=0;k<Math.min(found.length,5);k++) {
         try {
-          var raw = await fetch('https://api.github.com/repos/'+found[k].repo+'/contents/'+found[k].path+'?ref=main', {
+          // Same unchecked shape as the search above, one layer down. A refused read here
+          // returns an error body as TEXT, so rawStr became a JSON error message that the
+          // excerpt window then sliced up and handed over as if it were her own source.
+          var rawResponse = await fetch('https://api.github.com/repos/'+found[k].repo+'/contents/'+found[k].path+'?ref=main', {
             headers: {'Authorization':'token '+ghToken, 'Accept':'application/vnd.github.v3.raw'}
-          }).then(function(x){return x.text();});
+          });
+          if (!rawResponse.ok) { noteRefusal(rawResponse); continue; }
+          noteOpen();
+          var raw = await rawResponse.text();
           var rawStr = String(raw);
           // \u2b21B:core.tool.loop:FIX:top_of_file_slice_missed_the_real_answer:20260710\u2b21
           // Real, live incident, second half of the same founder-caught bug: even after
@@ -1409,11 +1535,27 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // fix: actually extract every real number that appears in what was read and hand
       // it back as a concrete, explicit list -- a real anchor to check against, not
       // just a rule to remember.
+      // Files were located and then not one of them could be opened. That is the door
+      // again, not an answer, and returning found:true with an empty file list would be
+      // the same lie one layer down.
+      if (!snippets.length) {
+        var worstRead = ghRefusals.filter(function (r) { return r.kind === 'rate_limited'; })[0] || ghRefusals[0];
+        return JSON.stringify({ok:false, reason:'code_read_' + ((worstRead && worstRead.kind) || 'unavailable'),
+          status:(worstRead && worstRead.status) || null,
+          located_files: found.slice(0, 5).map(function (f) { return f.repo + '/' + f.path; }),
+          seconds_until_retry: _ghHold.until > Date.now() ? Math.ceil((_ghHold.until - Date.now()) / 1000) : null,
+          note:'These files were located but NOT read. Nothing here is evidence about what they contain. Name the files and say they could not be opened right now. Do not describe what is in them.'});
+      }
+      // A PARTIAL read is still real evidence, and it is also not the whole shelf. Say
+      // which is which rather than letting a quiet truncation read as completeness.
+      var readRefusals = ghRefusals.length;
       var allExcerpts = snippets.map(function(s){return s.excerpt;}).join(' ');
       var realNumbers = (allExcerpts.match(/\b\d+\b/g) || []);
       var uniqueNumbers = realNumbers.filter(function(n,idx){return realNumbers.indexOf(n)===idx;}).slice(0,20);
       return JSON.stringify({ok:true,found:true,files:snippets,
         realNumbersFoundInThisCode: uniqueNumbers,
+        partial: readRefusals > 0 ? { calls_refused: readRefusals,
+          note:'Some of this search was refused, so what is above is part of the shelf and not all of it. It is safe to use and it is not safe to call complete. Do not conclude that anything is absent.' } : null,
         rule:'Real, researched requirement (mechanical citation verification, the proven fix for this exact failure mode): '
           +'each file above is shown with real line numbers. For every specific claim -- what a value is, how a mechanism works, '
           +'any number -- you must be able to point to the literal line number in the excerpt above that says so. If you cannot '
@@ -5155,7 +5297,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         {cycle_id:cycleId,request_id:requestId});
     });
 }
-module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
+// The hold is deliberate in-process state that must survive across calls inside one
+// cycle, which is exactly why a test cannot clear it by making a successful call: the
+// hold short circuits before any request leaves. So the reset is an explicit, named seam
+// rather than a test reaching into module internals or ordering itself around the clock.
+function _ghHoldResetForTests() { _ghHold = { until: 0, reason: null, status: 0 }; }
+function _ghHoldStateForTests() { return { until:_ghHold.until, reason:_ghHold.reason, status:_ghHold.status }; }
+
+module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
