@@ -12,22 +12,82 @@
 
 var outputGuard = require('./model.output.guard.js');
 
+// ⬡B:core.model_ladder:911:an_unanchored_strip_can_eat_a_real_answer:20260726⬡
+// FOUND 20260726 by a third Codex pass, verified by hand: the two fixes below this
+// comment were each correct on their own and dangerous together. An UNANCHORED
+// `<think>...` strip removes that shape ANYWHERE it appears, so a real, human-facing
+// answer that legitimately discusses or demonstrates `<think>` markup (explaining the
+// tag, showing an example) would have had that real content silently deleted, or
+// everything after it truncated if the example itself had no closing tag nearby.
+//
+// The fix is to ANCHOR: a real reasoning envelope from these providers is always a
+// LEADING block, written before the real answer begins, never something a model
+// inserts in the middle of prose it has already started writing. So this only ever
+// strips from the start of the string: every leading, closed `<think>...</think>`
+// block in sequence, then a leading, still-open `<think>` with no closer (the token-
+// exhaustion case) to the end of what remains. A `<think>` occurring anywhere past the
+// start of the real answer is left untouched, because it is content, not reasoning.
+//
+// One shared function, used everywhere this codebase strips a reasoning trace, so a
+// second reasoning-shaped model never needs this fixed a fourth time.
+//
+// Known, stated limit, WIDENED 20260726 by a fourth Codex pass: this is not only an
+// UNTERMINATED-tag problem. A real final answer that legitimately opens with a
+// PROPERLY CLOSED literal example, `<think>example</think>That is what the tag looks
+// like.`, is byte-for-byte the same shape as a real reasoning envelope followed by a
+// real answer. `cleanModelContent('<think>example</think>', opts)` returns '', and the
+// leading example in the longer case is silently deleted, keeping only the sentence
+// after it. Verified directly, not assumed: `stripReasoningTrace` cannot tell these
+// two intents apart, closed or unterminated, because nothing in the text says which
+// one it is. That is not a bug this file can regex its way out of; the honest fix is
+// a provider that separates reasoning from content in its own response shape, a
+// platform-level fact this file does not control. THE ACCEPTED TRADEOFF, stated rather
+// than silently made: this ladder's actual callers are a life-assistant deliberation
+// cycle (advisors, budget, calendar, the recovery and exhaustion synthesis passes in
+// core/tool.loop.js), not a coding assistant that teaches markup syntax. A real answer
+// that needs to open with the literal string "<think>" as its own content is a realistic
+// possibility this file accepts as a known, rare cost, against the alternative of
+// leaving real reasoning residue unstripped in the common case, which is the defect
+// this whole file exists to prevent. If a caller of this ladder ever needs to compose
+// answers ABOUT think-tag markup as ordinary content, that caller needs a different
+// contract than plain-text scrubbing, not a smarter regex here.
+function stripReasoningTrace(content) {
+  var text = content;
+  text = text.replace(/^\s*(?:<think>[\s\S]*?<\/think>\s*)+/i, '');
+  text = text.replace(/^\s*<think>[\s\S]*$/i, '');
+  return text.trim();
+}
+
 // ⬡B:core.model.ladder:GUARD:json_contract_falls_through_provider_ladder:20260715⬡
 // A provider returning non-empty prose is not a successful JSON deliberation.
 // Validate the requested wire contract at each provider boundary so a malformed
 // verdict falls through to the next authorized provider. If none returns one
 // strict JSON object, deliberate() still returns null and the caller fails closed.
 function hasAcceptedContent(content, opts) {
-  if (typeof content !== 'string' || !content.trim()) return false;
-  if (outputGuard.containsCjk(content)) return false;
+  if (typeof content !== 'string') return false;
+  // ⬡B:core.model_ladder:911:plain_mode_accepted_pure_reasoning_residue:20260726⬡
+  // FOUND 20260726 by an external review of #1163, verified by hand against this
+  // file. The think-block strip below used to run ONLY when opts.json === true,
+  // so a PLAIN mode call (exactly what the recovery and exhaustion synthesis
+  // passes in core/tool.loop.js use) accepted any non-empty string as a real
+  // answer, including one that was ENTIRELY a reasoning trace with no answer in
+  // it at all. A reasoning model that burns its whole token budget inside
+  // <think> and never reaches a real answer would have had that empty-of-
+  // substance trace accepted as her reply. The only thing that counts as an
+  // answer is what remains once the trace is stripped, in every mode, so the
+  // strip runs first and the emptiness check runs on what is left. Uses
+  // stripReasoningTrace so an unterminated <think> (token exhaustion mid
+  // reasoning, no closing tag ever written) is caught the same way.
+  var stripped = stripReasoningTrace(content);
+  if (!stripped) return false;
+  if (outputGuard.containsCjk(stripped)) return false;
   if (!opts || opts.json !== true) return true;
   // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
   // GLM-5.2 and other reasoning models can wrap the real JSON in a thinking
   // trace or leading blank lines. Strip think blocks and grab the outermost
   // JSON object before judging, so a good answer with residue is accepted
   // instead of silently falling the whole turn to a cold RunPod pod.
-  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  var text = stripped.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   if (text[0] !== '{') {
     var s = text.indexOf('{'); var e = text.lastIndexOf('}');
     if (s !== -1 && e > s) text = text.slice(s, e + 1);
@@ -43,9 +103,21 @@ function hasAcceptedContent(content, opts) {
 
 function cleanModelContent(content, opts) {
   if (typeof content !== 'string') return content;
-  if (!opts || opts.json !== true) return content;
-  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  // ⬡B:core.model_ladder:911:plain_mode_never_scrubbed_the_reasoning_trace:20260726⬡
+  // FOUND 20260726, same review as the hasAcceptedContent fix above. This scrub
+  // used to run ONLY when opts.json === true. Every plain-text call in this
+  // codebase, which is what the recovery and exhaustion synthesis passes in
+  // core/tool.loop.js actually use, passed straight through unscrubbed, so a
+  // reasoning model's <think> block could ride along into a real human-facing
+  // reply. There is no mode where leaving a raw reasoning trace in an answer is
+  // correct, so the strip is unconditional. Only the JSON-specific code-fence
+  // and outer-brace extraction stay gated on json mode: running brace
+  // extraction on a legitimate plain-English answer that happens to mention a
+  // brace would corrupt it, which is not a risk json mode carries. Uses
+  // stripReasoningTrace so an unterminated <think> is caught the same way.
+  var text = stripReasoningTrace(content);
+  if (!opts || opts.json !== true) return text;
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   if (text[0] !== '{') {
     var s = text.indexOf('{'); var e = text.lastIndexOf('}');
     if (s !== -1 && e > s) text = text.slice(s, e + 1);
@@ -177,7 +249,15 @@ async function tryOrnith(system, user, opts) {
     // ⬡B:core.model_ladder:AMEND:ornith_via_reflects_real_host_not_hardcoded_runpod:20260721⬡
     // Ornith moved off RunPod to a managed API; the via label is env-driven so cost
     // telemetry (METER) names the true host instead of a hardcoded, now-wrong 'runpod'.
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
+    // ⬡B:core.model_ladder:911:ornith_accepted_but_never_scrubbed:20260726⬡
+    // FOUND 20260726, a third Codex pass. Every sibling rung in this file scrubs
+    // the content it accepts; this one alone returned the raw string. Checking
+    // CJK on the STRIPPED content (the fix above) means a response with CJK
+    // reasoning residue followed by a clean English answer is now correctly
+    // accepted rather than falling through, but returning it raw would have
+    // handed that CJK reasoning trace straight to a human. Scrubbed like every
+    // other rung, not a new behaviour, a missed one.
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
   } catch (e) { return null; }
 }
 async function tryQwen(system, user, opts) {
@@ -417,4 +497,4 @@ async function transcribe(audio, opts) {
 }
 
 module.exports = { deliberate: deliberate, transcribe: transcribe,
-  _test: { hasAcceptedContent: hasAcceptedContent } };
+  _test: { hasAcceptedContent: hasAcceptedContent, cleanModelContent: cleanModelContent } };
