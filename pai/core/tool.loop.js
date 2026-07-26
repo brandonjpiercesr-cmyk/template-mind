@@ -757,7 +757,7 @@ var TOOLS = [
     properties:{repo:{type:'string'},path:{type:'string'},content:{type:'string'},reason:{type:'string'}}}}},
   {type:'function',function:{name:'trigger_deploy',description:'Trigger a Render deploy after fixing a file.',
     parameters:{type:'object',required:['service_id'],properties:{service_id:{type:'string'}}}}},
-  {type:'function',function:{name:'notify_ham',description:'Text a HAM via iMessage. Use to reach Brandon when something is fixed or needs attention.',
+  {type:'function',function:{name:'notify_ham',description:'Text a HAM via iMessage. Use to reach the HAM named in ham_uid when something is fixed or needs attention.',
     parameters:{type:'object',required:['ham_uid','message'],properties:{ham_uid:{type:'string'},message:{type:'string'}}}}},
   {type:'function',function:{name:'get_budget_upcoming',description:'Get the HAM\'s real upcoming Buy Now Pay Later payments (Zip, Afterpay, Klarna, Sezzle) with exact due dates and amounts. '
     +'Use for any question about what money is due soon, what is coming up, or pay-later balances.',
