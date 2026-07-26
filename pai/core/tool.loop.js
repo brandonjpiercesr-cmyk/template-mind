@@ -921,12 +921,12 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','question'],properties:{
       ham_uid:{type:'string'},question:{type:'string',description:'The founder coding request only, without repeating the server-built BCW.'}
     }}}},
-  {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, and acceptance checks so CANEW cannot create orphan or out-of-scope code.',
+  {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, and acceptance checks so PAI cannot create orphan or out-of-scope code.',
     parameters:{type:'object',required:['roadmap_source','repository','task','allowed_paths','acceptance'],properties:{
       roadmap_source:{type:'string',description:'Exact source of an existing ROADMAP bead.'},
       repository:{type:'string',description:'Exact owner/repository that owns the roadmap work.'},
       task:{type:'string',description:'One bounded implementation task selected by CODA.'},
-      allowed_paths:{type:'array',items:{type:'string'},description:'Exact repository paths CANEW may author.'},
+      allowed_paths:{type:'array',items:{type:'string'},description:'Exact repository paths PAI may author.'},
       acceptance:{type:'array',items:{type:'string'},description:'Concrete checks Cathy and CANON will audit.'},
       importance:{type:'number'},max_iterations:{type:'number'},max_llm_calls:{type:'number'}
     }}}}
@@ -4546,9 +4546,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         finalAns = 'I have some information for you but need to verify your access. Reply with your passcode.';
       }
     } catch (ePrepPam) {}
+    // ⬡B:core.tool_loop:FIX:identity_scrub_is_universal_not_a_persona_option:20260726⬡
+    // FOUNDER 20260726: "why am I seeing EANEW everywhere?" THIS LINE IS WHY, on the chat
+    // path. persona.js says it in its own source, out loud: "identity scrubbing is universal,
+    // it is not a per-persona choice." But the only caller ran it behind `if (_personaChoice)`,
+    // and a world with no persona set is the DEFAULT, so on the default world the dead-name
+    // scrub never ran at all, on any answer, ever. This is the mind-template, so every world
+    // inherited the defect at birth. The scrub now always runs. The persona choice is still
+    // read and still carried, because it is real context for the receipts, it just no longer
+    // decides whether her own name reaches him correctly.
     try {
-      var _personaChoice = identity && identity.persona || hamObj && hamObj.persona;
-      if (_personaChoice) finalAns = require('./persona.js').applyPersona(finalAns,
+      var _personaChoice = identity && identity.persona || hamObj && hamObj.persona || null;
+      finalAns = require('./persona.js').applyPersona(finalAns,
         { hamUid:hamUid,persona:_personaChoice,contributions:{} });
     } catch (ePrepPersona) {}
     if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns)) {
