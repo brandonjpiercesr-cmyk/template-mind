@@ -127,16 +127,20 @@ var HER_FORMS = ['I do not have that yet', 'Let me check', 'Would you like me to
 function guidanceFor(holdReason, stage, deps) {
   var gate = maySpeak(holdReason, stage, deps);
   if (!gate.may) return null;
+  // Only `instruction` is ever read by a caller (core/wren/reply.js reads `.instruction` and
+  // nothing else), so that is the only field returned. The old `reason_for_the_mind` and `stage`
+  // fields named wiring that does not exist: no consumer read them, yet their names told the next
+  // coder the machine reason and stage were handed downstream. They were dead and their names lied,
+  // so they are gone. The machine reason still reaches the mind only as maySpeak context, never in
+  // any field, which is TRIPWIRE 1 (no composed content, no reason echoed at a human).
   return {
-    reason_for_the_mind: String(holdReason).slice(0, 120),
-    stage: String(stage || '').slice(0, 40),
     instruction:
       'Your answer was held because you reached past what you can stand behind. Do not try ' +
       'again to answer the question. Instead say, in your own voice and in one or two ' +
       'sentences, what you cannot stand behind and what you would need in order to. Keep every ' +
       'bit of your warmth. Her forms: "' + HER_FORMS.join('", "') + '". ' +
       'Never name the internal hold, the stage, or any machine reason; those are plumbing and ' +
-      'he is not debugging you. Never restate the claim that was held, even to disown it. ' +
+      'the person is not debugging you. Never restate the claim that was held, even to disown it. ' +
       'If you cannot say the boundary honestly in your own words, say nothing at all.',
     // The last line above is the floor, restated here so no caller can drop it: silence is
     // still allowed and is still correct when honesty is not available.
