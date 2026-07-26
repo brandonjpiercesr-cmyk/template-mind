@@ -762,7 +762,8 @@ var TOOLS = [
   {type:'function',function:{name:'log_expense',description:'Log a one-off EXPENSE/transaction that already happened (not a recurring bill). '
     +'Call this when they say they spent money on something specific, e.g. "I spent $80 at the grocery store today".',
     parameters:{type:'object',properties:{merchant:{type:'string'},amount:{type:'number'},category:{type:'string'},date:{type:'string',description:'YYYY-MM-DD, default today'}},required:['merchant','amount']}}},
-  {type:'function',function:{name:'create_reminder',description:'Create a real reminder that fires as a real text at the due time, and shows in Command Center before then. '
+  {type:'function',function:{name:'create_reminder',description:'Store a real reminder in the brain with a real due time, and show it in Command Center. '
+    +'It does NOT text them at the due time unless this world has the wake clock armed and reach sending live, so never promise a text or an alert will arrive: say you have it written down and that you will bring it up. '
     +'Use when the HAM asks to be reminded of something, or names a specific future thing to remember. '
     +'If the HAM did not state a real date or timeframe, do not invent one -- omit due_at entirely and a sensible near-future default is used automatically.',
     parameters:{type:'object',required:['ham_uid','text'],
