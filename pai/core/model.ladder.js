@@ -12,6 +12,26 @@
 
 var outputGuard = require('./model.output.guard.js');
 
+// ⬡B:core.model_ladder:911:an_unterminated_think_block_stripped_nothing:20260726⬡
+// FOUND 20260726 by a second Codex pass on the fix above, verified by hand: a
+// PAIRED-tag regex only ever removes a `<think>` block that actually closed. The
+// scenario the fix above exists for is a reasoning model exhausting its whole
+// token budget INSIDE a think block, which is exactly the case where the model
+// never gets to write `</think>` at all. `<think>weighing options until token
+// limit` (no closing tag, no answer) survived the paired-tag strip completely
+// unchanged, so the very failure mode this PR targets was the one case it did
+// not catch. An opening `<think>` with no terminator means every token that
+// followed was still reasoning, not an answer, so it is discarded to the end
+// of the string. One shared function, used everywhere this codebase strips a
+// reasoning trace, so a second reasoning-shaped model never needs this fixed
+// twice more.
+function stripReasoningTrace(content) {
+  return content
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think>[\s\S]*$/gi, '')
+    .trim();
+}
+
 // ⬡B:core.model.ladder:GUARD:json_contract_falls_through_provider_ladder:20260715⬡
 // A provider returning non-empty prose is not a successful JSON deliberation.
 // Validate the requested wire contract at each provider boundary so a malformed
@@ -29,8 +49,10 @@ function hasAcceptedContent(content, opts) {
   // <think> and never reaches a real answer would have had that empty-of-
   // substance trace accepted as her reply. The only thing that counts as an
   // answer is what remains once the trace is stripped, in every mode, so the
-  // strip runs first and the emptiness check runs on what is left.
-  var stripped = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // strip runs first and the emptiness check runs on what is left. Uses
+  // stripReasoningTrace so an unterminated <think> (token exhaustion mid
+  // reasoning, no closing tag ever written) is caught the same way.
+  var stripped = stripReasoningTrace(content);
   if (!stripped) return false;
   if (outputGuard.containsCjk(stripped)) return false;
   if (!opts || opts.json !== true) return true;
@@ -65,8 +87,9 @@ function cleanModelContent(content, opts) {
   // correct, so the strip is unconditional. Only the JSON-specific code-fence
   // and outer-brace extraction stay gated on json mode: running brace
   // extraction on a legitimate plain-English answer that happens to mention a
-  // brace would corrupt it, which is not a risk json mode carries.
-  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // brace would corrupt it, which is not a risk json mode carries. Uses
+  // stripReasoningTrace so an unterminated <think> is caught the same way.
+  var text = stripReasoningTrace(content);
   if (!opts || opts.json !== true) return text;
   text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   if (text[0] !== '{') {
@@ -200,7 +223,15 @@ async function tryOrnith(system, user, opts) {
     // ⬡B:core.model_ladder:AMEND:ornith_via_reflects_real_host_not_hardcoded_runpod:20260721⬡
     // Ornith moved off RunPod to a managed API; the via label is env-driven so cost
     // telemetry (METER) names the true host instead of a hardcoded, now-wrong 'runpod'.
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
+    // ⬡B:core.model_ladder:911:ornith_accepted_but_never_scrubbed:20260726⬡
+    // FOUND 20260726, a third Codex pass. Every sibling rung in this file scrubs
+    // the content it accepts; this one alone returned the raw string. Checking
+    // CJK on the STRIPPED content (the fix above) means a response with CJK
+    // reasoning residue followed by a clean English answer is now correctly
+    // accepted rather than falling through, but returning it raw would have
+    // handed that CJK reasoning trace straight to a human. Scrubbed like every
+    // other rung, not a new behaviour, a missed one.
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
   } catch (e) { return null; }
 }
 async function tryQwen(system, user, opts) {
