@@ -35,17 +35,46 @@ var ATTRIBUTION = new AsyncLocalStorage();
 // itself, so nothing that is configured correctly today changes. Anything else
 // fails closed and records WHY, because a named refusal is fixed in thirty seconds
 // and an uncounted burn is not fixed at all.
-function configuredCeil(kind) {
+// ⬡B:core.spend_guard:911:too_big_is_a_choice_and_refusing_it_muted_her:20260726⬡
+// LIVE 20260726, and this one is mine. The validation above shipped, the founder raised the
+// ceiling from his phone, and the value that landed was a plain run of digits larger than the
+// maximum. The rule said refuse, so she went from answering one sentence a restart to
+// answering NOTHING, and the cause was the safety check, not the budget.
+//
+// The distinction the first version missed: an UNREADABLE value and an OVERSIZED one are not
+// the same fault. '2,000' and 'two thousand' are typos; nobody can tell what was meant, so
+// refusing is the only honest move. A run of digits above the cap is not a typo, it is an
+// intention that overshot, and the meaning is never in doubt: MORE. Refusing it silences her
+// to protect a budget that was being RAISED, which is the guard doing the exact harm it was
+// built to prevent.
+//
+// So oversized CLAMPS to the maximum and keeps her alive. The brake still exists, at a number
+// this system chose, and the surface says out loud what was asked for and what is in force so
+// nobody thinks their edit took when it was trimmed. Unreadable still fails closed.
+function ceilDetail(kind) {
   var name = kind === 'image' ? 'DAILY_IMAGE_CALL_CEIL' : 'DAILY_MODEL_CALL_CEIL';
   var fallback = kind === 'image' ? DEFAULT_IMAGE_CEIL : DEFAULT_TEXT_CEIL;
   var maximum = kind === 'image' ? MAX_IMAGE_CEIL : MAX_TEXT_CEIL;
   var raw = process.env[name];
-  if (raw === undefined || raw === '') return fallback;
-  if (!/^[1-9][0-9]*$/.test(String(raw).trim())) return null;
-  var parsed = Number(String(raw).trim());
-  if (!Number.isSafeInteger(parsed) || parsed > maximum) return null;
-  return parsed;
+  if (raw === undefined || raw === '') {
+    return { value: fallback, source: 'built_in_default', requested: null, maximum: maximum };
+  }
+  var text = String(raw).trim();
+  if (!/^[1-9][0-9]*$/.test(text)) {
+    return { value: null, source: 'env', requested: null, maximum: maximum };
+  }
+  var asked = Number(text);
+  if (!Number.isSafeInteger(asked)) {
+    return { value: null, source: 'env', requested: null, maximum: maximum };
+  }
+  if (asked > maximum) {
+    return { value: maximum, source: 'env_clamped', requested: asked, maximum: maximum };
+  }
+  return { value: asked, source: 'env', requested: asked, maximum: maximum };
 }
+
+// One derivation, one place. This is the number the brake actually enforces.
+function configuredCeil(kind) { return ceilDetail(kind).value; }
 
 function pruneOld() {
   var cut = Date.now() - DAY_MS;
@@ -194,5 +223,5 @@ async function checkBalances() {
 module.exports = { lastDenial: lastDenial, allow: allow, usageToday: usageToday,
   withAttribution:withAttribution,
   checkBalances: checkBalances,
-  _test:{configuredCeil:configuredCeil,cleanAttribution:cleanAttribution,
+  _test:{configuredCeil:configuredCeil,ceilDetail:ceilDetail,cleanAttribution:cleanAttribution,
     reset:function () { CALL_LOG=[]; LAST_DENIAL=null; DENIALS_BY_SCOPE.clear(); }} };
