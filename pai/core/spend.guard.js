@@ -23,9 +23,18 @@ var MAX_TEXT_CEIL = 10000;
 var MAX_IMAGE_CEIL = 2000;
 var ATTRIBUTION = new AsyncLocalStorage();
 
-// A malformed cost brake is not permission to spend. Undefined uses the safe
-// built-in default; any explicitly supplied non-integer, zero, negative, or
-// implausibly large value fails closed until the environment is corrected.
+// ⬡B:core.spend_guard:FIX:a_malformed_brake_is_not_permission_to_spend:20260725⬡
+// This was two bare parseInt calls, and both of its failure shapes were silent.
+// parseInt('2,000') is 2, so a thousands separator turns a raised ceiling into a
+// tighter one and the only symptom is her going quiet sooner. parseInt('two
+// thousand') is NaN, and count >= NaN is false forever, so the brake that exists
+// because $65 of credit vanished in a day stops existing, silently, with no
+// denial to read afterward. The founder is being asked to set this value from a
+// phone; a typo must not be able to do either of those things without saying so.
+// Unset or empty still means the built-in default, and a plain number still means
+// itself, so nothing that is configured correctly today changes. Anything else
+// fails closed and records WHY, because a named refusal is fixed in thirty seconds
+// and an uncounted burn is not fixed at all.
 function configuredCeil(kind) {
   var name = kind === 'image' ? 'DAILY_IMAGE_CALL_CEIL' : 'DAILY_MODEL_CALL_CEIL';
   var fallback = kind === 'image' ? DEFAULT_IMAGE_CEIL : DEFAULT_TEXT_CEIL;
@@ -33,7 +42,7 @@ function configuredCeil(kind) {
   var raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
   if (!/^[1-9][0-9]*$/.test(String(raw).trim())) return null;
-  var parsed = Number(raw);
+  var parsed = Number(String(raw).trim());
   if (!Number.isSafeInteger(parsed) || parsed > maximum) return null;
   return parsed;
 }
