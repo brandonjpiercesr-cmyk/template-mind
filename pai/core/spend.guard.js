@@ -35,17 +35,51 @@ var ATTRIBUTION = new AsyncLocalStorage();
 // itself, so nothing that is configured correctly today changes. Anything else
 // fails closed and records WHY, because a named refusal is fixed in thirty seconds
 // and an uncounted burn is not fixed at all.
-function configuredCeil(kind) {
+// ⬡B:core.spend_guard:911:too_big_is_a_choice_and_refusing_it_muted_her:20260726⬡
+// LIVE 20260726, and this one is mine. The validation above shipped, the founder raised the
+// ceiling from his phone, and the value that landed was a plain run of digits larger than the
+// maximum. The rule said refuse, so she went from answering one sentence a restart to
+// answering NOTHING, and the cause was the safety check, not the budget.
+//
+// The distinction the first version missed: an UNREADABLE value and an OVERSIZED one are not
+// the same fault. '2,000' and 'two thousand' are typos; nobody can tell what was meant, so
+// refusing is the only honest move. A run of digits above the cap is not a typo, it is an
+// intention that overshot, and the meaning is never in doubt: MORE. Refusing it silences her
+// to protect a budget that was being RAISED, which is the guard doing the exact harm it was
+// built to prevent.
+//
+// So oversized CLAMPS to the maximum and keeps her alive. The brake still exists, at a number
+// this system chose, and the surface says out loud what was asked for and what is in force so
+// nobody thinks their edit took when it was trimmed. Unreadable still fails closed.
+function ceilDetail(kind) {
   var name = kind === 'image' ? 'DAILY_IMAGE_CALL_CEIL' : 'DAILY_MODEL_CALL_CEIL';
   var fallback = kind === 'image' ? DEFAULT_IMAGE_CEIL : DEFAULT_TEXT_CEIL;
   var maximum = kind === 'image' ? MAX_IMAGE_CEIL : MAX_TEXT_CEIL;
   var raw = process.env[name];
-  if (raw === undefined || raw === '') return fallback;
-  if (!/^[1-9][0-9]*$/.test(String(raw).trim())) return null;
-  var parsed = Number(String(raw).trim());
-  if (!Number.isSafeInteger(parsed) || parsed > maximum) return null;
-  return parsed;
+  // Blank, or blank once trimmed, means nobody chose. That is the same thing as unset, and
+  // treating a stray space as a typo would be one more way to go silent over nothing.
+  var text = raw === undefined ? '' : String(raw).trim();
+  if (text === '') {
+    return { value: fallback, source: 'built_in_default', requested: null, maximum: maximum };
+  }
+  if (!/^[1-9][0-9]*$/.test(text)) {
+    return { value: null, source: 'env', requested: null, maximum: maximum };
+  }
+  // Order matters, and the first version had it backwards. A digit run too long to be an
+  // exact JavaScript number is still unambiguously a number ABOVE the maximum, so rejecting
+  // it for imprecision reintroduces the exact mute this change exists to remove. Classify by
+  // SIZE first; the only thing lost by clamping an imprecise value is precision nobody wants,
+  // because the number in force is the maximum either way. Caught by the Codex reviewer.
+  var asked = Number(text);
+  if (!Number.isSafeInteger(asked) || asked > maximum) {
+    return { value: maximum, source: 'env_clamped',
+      requested: Number.isSafeInteger(asked) ? asked : null, maximum: maximum };
+  }
+  return { value: asked, source: 'env', requested: asked, maximum: maximum };
 }
+
+// One derivation, one place. This is the number the brake actually enforces.
+function configuredCeil(kind) { return ceilDetail(kind).value; }
 
 function pruneOld() {
   var cut = Date.now() - DAY_MS;
@@ -191,8 +225,16 @@ async function checkBalances() {
   return low;
 }
 
+// ⬡B:core.spend_guard:WIRE:a_clamped_ceiling_needs_a_real_door_not_a_test_one:20260726⬡
+// ceilDetail shipped behind _test, so the only way to learn that 35000 became 10000 was to
+// import a test hook in production, and in a world without that surface there was no way at
+// all. A clamp nobody can see is the same operational lie as the unreadable ceiling this
+// whole line of work exists to end: the edit looks accepted and then calls stop early. It is
+// a first-class export now, so any world can report what is in force beside what was asked
+// for. Caught by the Codex reviewer on the sister PR.
 module.exports = { lastDenial: lastDenial, allow: allow, usageToday: usageToday,
+  ceilDetail: ceilDetail,
   withAttribution:withAttribution,
   checkBalances: checkBalances,
-  _test:{configuredCeil:configuredCeil,cleanAttribution:cleanAttribution,
+  _test:{configuredCeil:configuredCeil,ceilDetail:ceilDetail,cleanAttribution:cleanAttribution,
     reset:function () { CALL_LOG=[]; LAST_DENIAL=null; DENIALS_BY_SCOPE.clear(); }} };
