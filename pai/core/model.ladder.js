@@ -12,24 +12,37 @@
 
 var outputGuard = require('./model.output.guard.js');
 
-// ⬡B:core.model_ladder:911:an_unterminated_think_block_stripped_nothing:20260726⬡
-// FOUND 20260726 by a second Codex pass on the fix above, verified by hand: a
-// PAIRED-tag regex only ever removes a `<think>` block that actually closed. The
-// scenario the fix above exists for is a reasoning model exhausting its whole
-// token budget INSIDE a think block, which is exactly the case where the model
-// never gets to write `</think>` at all. `<think>weighing options until token
-// limit` (no closing tag, no answer) survived the paired-tag strip completely
-// unchanged, so the very failure mode this PR targets was the one case it did
-// not catch. An opening `<think>` with no terminator means every token that
-// followed was still reasoning, not an answer, so it is discarded to the end
-// of the string. One shared function, used everywhere this codebase strips a
-// reasoning trace, so a second reasoning-shaped model never needs this fixed
-// twice more.
+// ⬡B:core.model_ladder:911:an_unanchored_strip_can_eat_a_real_answer:20260726⬡
+// FOUND 20260726 by a third Codex pass, verified by hand: the two fixes below this
+// comment were each correct on their own and dangerous together. An UNANCHORED
+// `<think>...` strip removes that shape ANYWHERE it appears, so a real, human-facing
+// answer that legitimately discusses or demonstrates `<think>` markup (explaining the
+// tag, showing an example) would have had that real content silently deleted, or
+// everything after it truncated if the example itself had no closing tag nearby.
+//
+// The fix is to ANCHOR: a real reasoning envelope from these providers is always a
+// LEADING block, written before the real answer begins, never something a model
+// inserts in the middle of prose it has already started writing. So this only ever
+// strips from the start of the string: every leading, closed `<think>...</think>`
+// block in sequence, then a leading, still-open `<think>` with no closer (the token-
+// exhaustion case) to the end of what remains. A `<think>` occurring anywhere past the
+// start of the real answer is left untouched, because it is content, not reasoning.
+//
+// One shared function, used everywhere this codebase strips a reasoning trace, so a
+// second reasoning-shaped model never needs this fixed a fourth time.
+//
+// Known, stated limit: if a model's REAL final answer itself begins with the literal
+// four characters `<think>` (discussing the tag as its very first words) and never
+// closes it, this cannot tell that apart from genuine unterminated reasoning, because
+// nothing in the text says which one it is. That is a real ambiguity in a text-only
+// heuristic, not something a regex can resolve; the honest fix would be a provider
+// that separates reasoning from content in its own response shape, which is a
+// platform-level fact this file does not control.
 function stripReasoningTrace(content) {
-  return content
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<think>[\s\S]*$/gi, '')
-    .trim();
+  var text = content;
+  text = text.replace(/^\s*(?:<think>[\s\S]*?<\/think>\s*)+/i, '');
+  text = text.replace(/^\s*<think>[\s\S]*$/i, '');
+  return text.trim();
 }
 
 // ⬡B:core.model.ladder:GUARD:json_contract_falls_through_provider_ladder:20260715⬡
