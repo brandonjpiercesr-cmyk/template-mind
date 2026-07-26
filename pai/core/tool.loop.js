@@ -2210,9 +2210,26 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // ⬡B:core.tool_loop:FIX:ham_mismatch_guard_matches_find_in_brain:20260722⬡
       if (args && args.ham_uid && String(args.ham_uid).toUpperCase() !== String(hamUid||'').toUpperCase()) return JSON.stringify({ ok:false, reason:'ham_uid_mismatch', bound_ham_uid:String(hamUid||'').toUpperCase() });
       var _ibUid = String(hamUid || '');
-      var _ir = await fetch(_ibSelf + '/os/email/' + encodeURIComponent(_ibUid))
+      // ⬡B:core.tool_loop:WIRE:the_inbox_tool_proves_itself_to_the_mail_door:20260726⬡
+      // /os/email closed on 20260726: it used to check WHICH ham was being asked for and
+      // never WHO WAS ASKING, so it answered an anonymous caller with the whole merged
+      // inbox. This hop leaves the process over SELF_BASE_URL and comes back in over the
+      // public internet, so it is indistinguishable from a stranger at that door and cannot
+      // be recognized by origin. It proves itself the way a browser does, with a token minted
+      // from the server-only signing secret by the one signer this estate already uses.
+      // Without this line the gate would have taken the inbox away from HER, which is the
+      // whole reason the door could not simply be closed a day earlier.
+      var _ibHdrs = require('./ham.session.authorization.js').internalSessionHeaders(_ibUid);
+      var _ir = await fetch(_ibSelf + '/os/email/' + encodeURIComponent(_ibUid), _ibHdrs ? { headers:_ibHdrs } : undefined)
         .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
       if (!_ir) return JSON.stringify({ ok:false, error:'inbox unreachable, do not guess' });
+      // A REFUSED READ IS NOT AN EMPTY INBOX. The door keeps its shape when it withholds
+      // (ok:true, emails:[]) and names the reason in `why`. Falling through would produce
+      // count:0 and the note "Inbox is clear, nothing unread", which is a statement of fact
+      // about his mail built out of a failure to prove identity. This file already refuses
+      // to turn an unreachable calendar into an open day; a withheld inbox gets the same
+      // treatment, and ok:false says so instead of guessing.
+      if (_ir.why) return JSON.stringify({ ok:false, reason:String(_ir.why), error:'the inbox door withheld this read, do not guess, say the inbox cannot be read right now' });
       var _msgs = (_ir.emails || []);
       var _unreadOnly = !(args && args.unread_only === false);
       if (_unreadOnly) _msgs = _msgs.filter(function(m){ return m.unread; });
@@ -2234,6 +2251,17 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // founder-gated, Nylas-backed, verified live with his 20 real events). No parallel
     // implementation, no new exposure -- reuses the existing gate.
     try {
+      // ⬡B:core.tool_loop:GUARD:the_calendar_tool_may_only_ask_for_its_own_bound_ham:20260726⬡
+      // args.ham_uid is MODEL SUPPLIED. Before this, calendar_read accepted whatever the model
+      // named and read that ham's day. That was already wrong, and the line below that signs a
+      // session for _calHam would have made it much worse: a cycle bound to one world could
+      // name the founder's uid and have the server mint a proof for it, turning a redacted
+      // read into the whole calendar with join links and participant addresses, in somebody
+      // else's world. The signature must never be minted for a ham the cycle is not bound to.
+      // This is the same guard inbox_read has carried since 20260722, in the same words, and
+      // it is what keeps this file's internal_leg verdict in tests/no.public.url.mints.a.
+      // session.test.js literally true: the identity at the point of signing is the bound one.
+      if (args && args.ham_uid && String(args.ham_uid).toUpperCase() !== String(hamUid||'').toUpperCase()) return JSON.stringify({ ok:false, reason:'ham_uid_mismatch', bound_ham_uid:String(hamUid||'').toUpperCase() });
       var _calHam = args.ham_uid || hamUid;
       if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
       var _selfBase = process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
@@ -2247,9 +2275,23 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // unreachable so the answer says "I cannot reach your calendar right now" instead
       // of "your day is open."
       var _cr = null;
+      // ⬡B:core.tool_loop:WIRE:her_calendar_tool_finally_carries_the_proof:20260726⬡
+      // THIS CLOSES OUTSTANDING ITEM 8 (docs/FOUNDER_ACTIONS_OUTSTANDING.md). When
+      // /os/calendar was gated on 20260725, every internal caller was wired except this one,
+      // because this file is byte paired with template-mind under pai-sync-check and a one
+      // sided edit fails CI. The consequence was written down and accepted as temporary: she
+      // could still see the whole day but could no longer read a meeting's join link. Both
+      // sides land together in this change, so the deferral is over.
+      //
+      // It is no longer optional. As of 20260726 the calendar door also withholds the event
+      // TITLE from an unproven caller, because a title is the content of a calendar entry and
+      // not the shape of a day. Without this header she would read a day of blank titles and
+      // narrate it as an open one, which is exactly the lie the 20260725 note refused to ship.
+      // The gate and the proof land in the same commit on purpose.
+      var _calHdrs = require('./ham.session.authorization.js').internalSessionHeaders(_calHam);
       for (var _calTry = 0; _calTry < 2 && !_cr; _calTry++) {
         if (_calTry) await new Promise(function(rs){setTimeout(rs,4000);});
-        _cr = await fetch(_selfBase + '/os/calendar/' + _calHam).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+        _cr = await fetch(_selfBase + '/os/calendar/' + _calHam, _calHdrs ? { headers:_calHdrs } : undefined).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
       }
       if (!_cr) return JSON.stringify({ok:false, ham_uid:_calHam, reason:'calendar_source_unreachable', note:'the calendar source did not respond; this is NOT an empty day, say the calendar cannot be reached right now'});
       var _realEvents = _cr.events || [];
