@@ -855,7 +855,8 @@ var TOOLS = [
     +'Call this when they say they spent money on something specific, e.g. "I spent $80 at the grocery store today".',
     parameters:{type:'object',properties:{merchant:{type:'string'},amount:{type:'number'},category:{type:'string'},date:{type:'string',description:'YYYY-MM-DD, default today'}},required:['merchant','amount']}}},
   {type:'function',function:{name:'create_reminder',description:'Store a real reminder in the brain with a real due time, and show it in Command Center. '
-    +'It does NOT text them at the due time unless this world has the wake clock armed and reach sending live, so never promise a text or an alert will arrive: say you have it written down and that you will bring it up. '
+    +'It does NOT text them or alert them at the due time unless this world has the wake clock armed and reach sending live, so never promise a text or an alert will arrive. '
+    +'You can also raise it yourself next time you are talking with them, but that is one occasional aside and not a guarantee it will come up, so tell them you have it written down and that it is in their Command Center rather than promising you will remind them. '
     +'Use when the HAM asks to be reminded of something, or names a specific future thing to remember. '
     +'If the HAM did not state a real date or timeframe, do not invent one -- omit due_at entirely and a sensible near-future default is used automatically.',
     parameters:{type:'object',required:['ham_uid','text'],

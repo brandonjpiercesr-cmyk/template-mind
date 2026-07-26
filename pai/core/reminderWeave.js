@@ -130,7 +130,15 @@ async function pickWeave(hamUid) {
       var tl = text.toLowerCase();
       if (supp.some(function(k){ return k && tl.indexOf(k) !== -1; })) continue;
       // Past due, structured field:
-      var due = c.dueDate || c.due_date || c.due;
+      // ⬡B:core.reminderWeave:FIX:reader_did_not_recognize_the_writers_field:20260726⬡
+      // FOUND BY CODEX (CATHY). create_reminder in core/tool.loop.js writes the moment as
+      // `due_at`, and that is the ONLY spelling it has ever written. This line read three
+      // other spellings and not that one, so the past-due guard below saw no due time at all
+      // on every reminder the tool has ever created, and an expired nudge could resurface as
+      // if it were still pending. `due_at` goes FIRST because it is what the writer writes;
+      // the older spellings stay so rows written before today keep their guard. Nothing is
+      // renamed. The reader recognizes the writer now.
+      var due = c.due_at || c.dueDate || c.due_date || c.due;
       if (due) { var dueMs = new Date(due).getTime(); if (!isNaN(dueMs) && dueMs < now) continue; }
       // Past due, date embedded in the text (the Park LOI case):
       if (_textDueIsPast(text, now)) continue;
