@@ -1747,6 +1747,38 @@ function identityEvidenceReceiptContradictions(ctx) {
 // Deterministic factual grounding receives only bytes whose producer can prove
 // their origin. The user question, tool arguments, caller context, failures,
 // recommendations, effect plans, and free-form receipt strings are excluded.
+// ⬡B:core.pai_outbound_council:FIX:she_deliberated_from_it_so_the_board_may_trace_it:20260726⬡
+// D1 on the open ledger, the money silence, oldest live complaint. The board traced her
+// figures only against read-classified tool results and memory rows, while the transcript
+// she actually deliberated FROM also carried non-read tool results (a consult reply quoting
+// real figures, an effect result naming an amount). Same turn, same authentic bytes, and the
+// board was never shown them, so a figure she faithfully relayed held as invented.
+//
+// The requireRead wall existed for one real reason: a non-read tool can echo its own ARGS,
+// and args are model-authored bytes, so an invented figure could launder itself through a
+// tool call's echo. That wall stays: before a non-read result may ground anything, every
+// numeric token in it whose value also appears in the model-authored args is masked out.
+// Model-authored bytes still ground nothing. Only what the tool itself said grounds.
+function maskModelAuthoredFigures(resultText, argsText) {
+  var reNum = /\$?\s?\d[\d,]*(?:\.\d+)?\s*[kKmM]?/g;
+  function normalize(token) {
+    var str = String(token);
+    var mult = /\d\s*[kK]\s*$/.test(str) ? 1000 : (/\d\s*[mM]\s*$/.test(str) ? 1000000 : 1);
+    var n = parseFloat(str.replace(/[$,\s]/g, '').replace(/[kKmM]$/, ''));
+    return isFinite(n) ? Math.round(n * mult) : null;
+  }
+  var authored = Object.create(null);
+  var m;
+  while ((m = reNum.exec(String(argsText || ''))) !== null) {
+    var v = normalize(m[0]);
+    if (v !== null) authored[v] = true;
+  }
+  return String(resultText || '').replace(reNum, function (token) {
+    var value = normalize(token);
+    return value !== null && authored[value] ? '(figure_from_model_args)' : token;
+  });
+}
+
 function verifiedFactEvidenceText(ctx) {
   var items = ctx && ctx.context && Array.isArray(ctx.context.verified_evidence)
     ? ctx.context.verified_evidence : [];
@@ -1758,8 +1790,17 @@ function verifiedFactEvidenceText(ctx) {
       hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId
     }, { requireRead:true });
     var authenticMemory = paiToolEvidence.verifyMemory(item, { hamUid:ctx.hamUid });
-    if (!authenticRead && !authenticMemory) continue;
-    var result = paiToolEvidence.truncateUtf8(item.result || '', remaining);
+    // An authentic executed result that is not read-classified still entered the
+    // transcript the mind deliberated from; it grounds only after args masking.
+    var authenticExecution = !authenticRead && !authenticMemory &&
+      paiToolEvidence.verify(item, {
+        hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId
+      });
+    if (!authenticRead && !authenticMemory && !authenticExecution) continue;
+    var contributed = authenticExecution
+      ? maskModelAuthoredFigures(item.result || '', item.args || '')
+      : (item.result || '');
+    var result = paiToolEvidence.truncateUtf8(contributed, remaining);
     if (!result) continue;
     parts.push(result);
     remaining -= Buffer.byteLength(result, 'utf8');
@@ -1816,6 +1857,38 @@ async function defaultShadowStage(ctx, injected) {
         return { reason: actionClaimHold.REASON, claim: found.claim, verb: found.verb };
       })
     : [];
+  // ⬡B:core.pai_outbound_council:WIRE:three_source_reach_joins_the_shadow_board:20260726⬡
+  // Open ledger D5 sister item (ledger B4): core/three.source.reach.js was built, tested,
+  // and wired into nothing, wiring debt in the exact shape AGENTS.md warns about. Her own
+  // rule joins the deterministic SHADOW findings here, DOUBLE-gated: the module's own
+  // THREE_SOURCE_REACH switch, and THREE_SOURCE_REACH_WIRED which is OFF at birth because
+  // arming it changes what every channel holds and that flip belongs to the founder, not a
+  // lane. Unarmed, this block resolves to an empty list and the stage is byte-for-byte what
+  // it was. The require is lazy and fail-closed so a world without the module runs exactly
+  // as before. Sources handed to detect are the three she named: his voice (the question)
+  // and the same authentic evidence text the board already traces against (live pulls and
+  // stamps); the module itself never edits a byte of answer text.
+  var threeSourceFlags = [];
+  var threeSourceWiredRaw = String(((injected.env || process.env) || {}).THREE_SOURCE_REACH_WIRED
+    == null ? '' : ((injected.env || process.env) || {}).THREE_SOURCE_REACH_WIRED).trim().toLowerCase();
+  var threeSourceWired = threeSourceWiredRaw === '1' || threeSourceWiredRaw === 'true' ||
+    threeSourceWiredRaw === 'on';
+  if (threeSourceWired && !structuredPolicy) {
+    try {
+      var threeSourceReach = injected.threeSourceReach || require('./three.source.reach.js');
+      if (threeSourceReach.enabled(injected.env || process.env)) {
+        var threeSourceFinding = threeSourceReach.detect(ctx.answer, {
+          user_message: ctx.question,
+          evidence: shadowEvidenceText
+        });
+        if (threeSourceFinding && threeSourceFinding.reaching) {
+          threeSourceFlags = threeSourceFinding.claims.map(function (found) {
+            return { reason: threeSourceReach.REASON, claim: found.excerpt, kind: found.kind };
+          });
+        }
+      }
+    } catch (eThreeSourceReach) { threeSourceFlags = []; }
+  }
   var provenanceLedger = ctx.context && ctx.context.identity_provenance;
   var provenanceCheck = identityProvenance.validateDraft(ctx.answer, provenanceLedger);
   var provenanceFlags = provenanceCheck.findings || [];
@@ -1830,7 +1903,7 @@ async function defaultShadowStage(ctx, injected) {
   // deterministic findings; only non-contradicted absence phrasing stays advisory.
   var deterministicFindings = ((boardResult && boardResult.flags) || [])
     .concat(namedContextFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
-      identityReceiptFlags, memoryAbsenceFlags, actionClaimFlags);
+      identityReceiptFlags, memoryAbsenceFlags, actionClaimFlags, threeSourceFlags);
   var advisoryMemoryAbsence = memoryAbsenceFlags;
   // ⬡B:core.pai_outbound_council:911:a_forty_percent_hold_rate_that_names_no_family_cannot_be_fixed:20260725⬡
   // MEASURED 20260725, four days before the demo: ten real conversational questions to her
@@ -1856,8 +1929,8 @@ async function defaultShadowStage(ctx, injected) {
     if (relayRoleFlags.length) fired.push('relay_role');
     if (provenanceFlags.length) fired.push('provenance');
     if (identityReceiptFlags.length) fired.push('identity_receipt');
-    // actionClaimFlags is deliberately absent: it already owns its own named reason above,
-    // and naming it twice would put one disease under two names.
+    // actionClaimFlags and threeSourceFlags are deliberately absent: each already owns its
+    // own named reason, and naming one twice would put one disease under two names.
     return fired;
   }
   function deterministicHoldReason() {
@@ -1868,7 +1941,7 @@ async function defaultShadowStage(ctx, injected) {
     ((boardResult && boardResult.flags) || []).length === 0 &&
     namedContextFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
     provenanceFlags.length === 0 && identityReceiptFlags.length === 0 &&
-    actionClaimFlags.length === 0);
+    actionClaimFlags.length === 0 && threeSourceFlags.length === 0);
   // ⬡COLD:decide:become:VOICE_SHADOW_WONDER:20260723⬡
   // CATHY.SHADOW cold-audit COLD-ANEW-VOICE-0062. Computes whether SHADOW may take a deterministic
   // voice PASS (exact signed handoff bytes, closed fact-free greeting, exact hearing/farewell
@@ -2092,7 +2165,8 @@ async function defaultShadowStage(ctx, injected) {
       // The unreceipted action claim hold carries its own named reason so the
       // heal-and-resubmit path tells the mind exactly what to rewrite honestly
       // (intention speech or plain admission), per the 20260725 law.
-      (!boardPassed ? (actionClaimFlags.length ? actionClaimHold.REASON : deterministicHoldReason()) :
+      (!boardPassed ? (actionClaimFlags.length ? actionClaimHold.REASON :
+        (threeSourceFlags.length ? 'reached_past_three_sources' : deterministicHoldReason())) :
         (wonderUnavailableCleanPass ? 'SHADOW_PASS_WONDER_UNAVAILABLE_CLEAN_BOARD' :
           (modelPassed ? (reviewParsed ? 'SHADOW_PASS_WONDER_FINAL_REVIEW' : 'SHADOW_PASS') :
             (shadowFailOpenCleanBoard ? 'SHADOW_PASS_CLEAN_BOARD_NO_QUOTABLE_CLAIM' :
@@ -2107,7 +2181,7 @@ async function defaultShadowStage(ctx, injected) {
               'shadow_model_hold')))))),
     evidence: {
       deterministic: {
-        verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length || actionClaimFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
+        verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length || actionClaimFlags.length || threeSourceFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
         flags: deterministicFindings,
         claims_checked: (boardResult && boardResult.claimsChecked) || 0
       },
@@ -2296,11 +2370,36 @@ async function healAnswer(answer, reason, stage, input, deps) {
   // this. The organ's own unfixable_leak verdict (a real secret, another world's private
   // data) is deliberately left on the generic path: that one is not a rewording problem
   // and must keep failing closed.
+  // ⬡B:core.pai_outbound_council:WIRE:boundary_speech_reaches_the_mind_at_the_heal_seam:20260726⬡
+  // Open ledger D5, wiring debt: core/boundary.speech.js was built, tested, OFF behind
+  // BOUNDARY_SPEECH, and required by nothing on this path. This is the one seam where the
+  // council's own hold reason (deterministicHoldReason and its SHADOW sisters) reaches the
+  // mind for a rewrite, so it is where the armed module's guidance is handed over. Scoped to
+  // the SHADOW stage only: a WRIT, QUILL, or META hold is a craft repair that usually
+  // succeeds, and turning a fixable style hold into boundary speech would lose a real
+  // answer. Every named cure above this line keeps precedence (one disease, one cure), and
+  // boundary.speech's own maySpeak exclusions run again inside guidanceFor. OFF at birth:
+  // with BOUNDARY_SPEECH unset this resolves to null and the selection below is byte for
+  // byte what it was. The require is lazy and fail-closed so a world without the module
+  // heals exactly as before. The healed boundary sentence is composed by the MIND and still
+  // resubmits through the same judge; cold code authors nothing.
+  var boundarySpeechGuidance = null;
+  if (stage === 'SHADOW') {
+    try {
+      var boundarySpeech = require('./boundary.speech.js');
+      if (boundarySpeech.enabled((deps && deps.env) || process.env)) {
+        boundarySpeechGuidance = boundarySpeech.guidanceFor(String(reason || ''), stage,
+          { namedCauseIn: namedCauseIn, terminalHoldCause: terminalHoldCause });
+      }
+    } catch (eBoundarySpeech) { boundarySpeechGuidance = null; }
+  }
   var reasonGuidance = /action_claim_unreceipted/.test(String(reason || ''))
     ? 'A receipts judge held this because it claims a past-tense action (sent, checked, booked, deployed, confirmed) that no tool trace or banked receipt of this turn supports. Rewrite every such claim into one of the two honest forms: intention speech ("I will check that this wake and report what I find") or plain admission ("I have not done that yet"). Never state an action as already done, never invent a receipt, and keep everything the evidence actually supports.'
     : (/internal_system_leak/.test(String(reason || ''))
       ? 'A leak judge held this because it names internal machinery to someone standing outside the house. Say the same true thing in the words an ordinary person uses, with none of that internal vocabulary in it. Keep every real fact, every number, and every commitment exactly as it stands; only the inside words go. Do not explain that anything was changed.'
-      : (hollowHoldReason(reason) ? HOLLOW_HEAL_GUIDANCE : (guidance[stage] || guidance.PAM)));
+      : (hollowHoldReason(reason) ? HOLLOW_HEAL_GUIDANCE
+        : (boundarySpeechGuidance ? boundarySpeechGuidance.instruction
+          : (guidance[stage] || guidance.PAM))));
   var system = 'You repair an answer that a council judge held, so it can pass on resubmission. ' +
     reasonGuidance +
     ' Output ONLY the repaired answer text, nothing else, no preamble, no explanation, no quotes around it.';
@@ -3827,6 +3926,7 @@ module.exports = {
     identityEvidenceReceiptContradictions:identityEvidenceReceiptContradictions,
     verifiedFactEvidenceText:verifiedFactEvidenceText,
     shadowEvidenceMaxBytes:shadowEvidenceMaxBytes,
-    defaultShadowStage: defaultShadowStage
+    defaultShadowStage: defaultShadowStage,
+    healAnswer: healAnswer
   }
 };

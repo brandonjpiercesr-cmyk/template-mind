@@ -94,6 +94,16 @@ function _evidenceMoneySet(str) {
   // commas but stops before a trailing delimiter comma. Founder A2, 20260722.
   var reField = /"(?:amount|installmentamount|projectedincometotal|projectedbillstotal|projectedtotal|netprojected|monthlyincometotal|monthlybillstotal|monthlynet|annualincometotal|annualbillstotal|annualnet|totalincome|totalexpenses|net|livingmoney|balance|monthlytotal)"\s*:\s*"?(\d(?:[\d,]*\d)?(?:\.\d+)?)"?/gi;
   while ((m = reField.exec(s)) !== null) { var v2 = _moneyToInt(m[1]); if (v2 !== null) set[v2] = true; }
+  // ⬡B:board.shadow:FIX:prose_money_in_real_evidence_finally_traces:20260726⬡
+  // D1 on the open ledger. PR #1065 pinned this exact shape as THE REMAINING GAP: a real
+  // receipt saying "rent 1450 due on the first" carries the true number in prose, no dollar
+  // sign, no JSON field, so the board could not see it and held her for quoting her own
+  // evidence. The cure stays COLD and deliberately narrow so the Codex P1 date hole stays
+  // closed: only a number sitting directly beside an explicit money noun enters the set
+  // ("rent 1450", "income of 5200", "balance: 300"). "due" is intentionally NOT a money
+  // noun, so "due on the 15th" grounds nothing and a fabricated $15 still holds.
+  var reNounMoney = /\b(?:income|rent|bills?|net|pay|payments?|paid|owes?|owed|costs?|price|budget|deposit|balance|spent|spending|charges?|salary|paycheck|totals?|amount|fees?|loan|debt|refund|invoice)\b[ \t]*(?:of|is|was|at|[:=])?[ \t]*\$?(\d[\d,]*(?:\.\d+)?)\b/gi;
+  while ((m = reNounMoney.exec(s)) !== null) { var v3 = _moneyToInt(m[1]); if (v3 !== null) set[v3] = true; }
   return set;
 }
 
