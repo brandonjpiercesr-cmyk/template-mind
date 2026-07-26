@@ -5158,6 +5158,42 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   return _successResult;
 }
+// ⬡B:core.tool_loop:911:grandmother_track_and_trace_stamps_from_the_one_real_exit:20260726⬡
+// GRANDMOTHER 911, the founder's number one: "I need her to always be able to track
+// and trace what she did, what she responded to, what cycle ran, where she had room
+// for improvement, what the next steps are, and WHICH WONDER IS NOW OWNING THIS."
+// The six-field ledger and its reader were both built and both live; nothing wrote
+// to them, so /onespot/trail returned cards:[] forever. runPAI is the ONE common
+// exit of the real turn (the module's only export, the single door every caller and
+// every channel passes through, named by core/wonders/registry.js as the wiring for
+// station.pai and gate.ham.active_channel), so the ledger hangs here, once, instead
+// of being bolted onto four call sites. Fire and forget after the turn has already
+// returned: fully guarded, off the critical path, so a ledger failure can never
+// delay, degrade, or throw into a turn. Refused turns are stamped too, because
+// "where she had room for improvement" is worth the most on the turns that failed.
+// Kill switch: GRANDMOTHER_LEDGER=off.
+function _stampGrandmotherLedger(hamUid, message, channel, identity, result) {
+  try {
+    if (String(process.env.GRANDMOTHER_LEDGER || 'on').toLowerCase() === 'off') return;
+    var _turnLedger = require('../logful/turn.ledger.js');
+    var _question = (identity && typeof identity.user_message === 'string'
+      && identity.user_message.trim()) ? identity.user_message : String(message || '');
+    setImmediate(function () {
+      Promise.resolve(_turnLedger.stampCompletedTurn({
+        hamUid: hamUid, channel: channel, question: _question,
+        agent: 'ANEW', result: result
+      })).then(function (r) {
+        if (!r || r.ok !== true) {
+          console.warn('[GRANDMOTHER] ledger not filed:', (r && r.reason) || 'unknown');
+        }
+      }).catch(function (e) {
+        console.warn('[GRANDMOTHER] ledger threw:', e && e.message);
+      });
+    });
+  } catch (eLedgerWire) {
+    console.warn('[GRANDMOTHER] ledger unreachable:', eLedgerWire && eLedgerWire.message);
+  }
+}
 async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
   var exactHam = String(hamUid || '').trim().toUpperCase();
   var cycleId = exactHam + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
@@ -5167,11 +5203,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     ? requestCandidate.trim() : cycleId + '.request';
   var seat = String(channel || '').toLowerCase() === 'voice' ? 'voice_fast' : 'c2_organ';
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
-  return require('./spend.guard.js').withAttribution({ham_uid:exactHam,cycle_id:cycleId,
-    request_id:requestId,seat:seat,component:component},function () {
-      return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
-        {cycle_id:cycleId,request_id:requestId});
-    });
+  var result;
+  try {
+    result = await require('./spend.guard.js').withAttribution({ham_uid:exactHam,
+      cycle_id:cycleId,request_id:requestId,seat:seat,component:component},function () {
+        return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
+          {cycle_id:cycleId,request_id:requestId});
+      });
+  } catch (eTurn) {
+    // A thrown turn is still a turn she took, and it is the one most worth tracing.
+    // Stamp the honest failure, then rethrow exactly as before: no caller sees a
+    // changed contract because the ledger exists.
+    _stampGrandmotherLedger(hamUid, message, channel, identity,
+      {ok:false, reason:'pai_threw: ' + (eTurn && eTurn.message), cycleId:cycleId,
+        requestId:requestId});
+    throw eTurn;
+  }
+  _stampGrandmotherLedger(hamUid, message, channel, identity, result);
+  return result;
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
