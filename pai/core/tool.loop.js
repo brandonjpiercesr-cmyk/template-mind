@@ -3749,8 +3749,26 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // Premium C3 synthesis remains an explicit opt-in and can only run on a
     // pure human-answer pass. The ordinary load-bearing path is C2, and neither
     // path borrows a shared key or falls through to Together.
-    var _providerSeat = !body.tools&&!_structuredReachPolicy&&
-      process.env.MIND_GROK_FINAL_ANSWER==='on' ? 'c3_mind' : _paiSeatName();
+    // ⬡B:core.tool_loop:FIX:the_funded_mind_seat_has_a_switch_he_can_actually_use:20260726⬡
+    // The audit found the C3 mind seat (core/seat.map.js c3_mind, Grok 4.5, founder ruling
+    // 20260722) with no production caller. The truer finding: it HAS exactly one caller, this
+    // line, behind MIND_GROK_FINAL_ANSWER, a single all-or-nothing flag that is dark. And the
+    // seat's $6 is a daily CAP, not a charge: an idle seat bills nothing, so there is no bleed
+    // to stop, only a ruling that never took effect.
+    // Why the flag stayed dark is legible from the line itself: 'on' routes EVERY non-tool
+    // human-answer pass on EVERY channel to the flagship, which is a real cost decision he
+    // could not take in one step. So the switch now accepts what it always should have: a
+    // comma list of the channels he wants the mind on (MIND_GROK_FINAL_ANSWER=cara,voice),
+    // with 'on' and 'all' keeping the old every-channel meaning byte for byte and anything
+    // unset keeping C2 exactly as before. WHICH turns deserve the mind stays HIS judgment,
+    // stated in env; cold code only reads the list he wrote. No threshold, no guess.
+    var _mindSwitch = String(process.env.MIND_GROK_FINAL_ANSWER || '').trim().toLowerCase();
+    var _mindChannel = String(channel || '').toLowerCase();
+    var _mindArmed = _mindSwitch === 'on' || _mindSwitch === 'all'
+      || (_mindSwitch !== '' && _mindSwitch.split(',')
+        .map(function (name) { return name.trim(); }).indexOf(_mindChannel) >= 0);
+    var _providerSeat = !body.tools&&!_structuredReachPolicy&&_mindArmed
+      ? 'c3_mind' : _paiSeatName();
     if (_structuredReachPolicy) {
       body.messages=msgs;
       delete body.tools;
