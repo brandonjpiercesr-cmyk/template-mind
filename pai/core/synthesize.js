@@ -48,15 +48,36 @@ function sigil(hamUid, channel, text, ms) {
   return { stamp: stamp, ham_uid: hamUid, channel: channel, ms: ms, ts: ts };
 }
 
-// PAM gate — tier-based content control
-// T10 = founder, gets everything. Lower tiers get filtered if content is sensitive.
+// ⬡B:core.synthesize:FIX:the_ladder_was_inverted_and_this_comment_still_pointed_the_old_way:20260726⬡
+// PAM gate, TRUST TIER, not the people ladder. This function has always operated on
+// identity.trust_level, the 0-to-10 confidence-in-the-channel scale where 10 is the fully
+// resolved owner and 0 is an unknown caller. The sentence that used to sit here said
+// "T10 = founder, gets everything", which reads as if it were describing the PEOPLE ladder.
+// It is not, and the people ladder was INVERTED by the founder's 20260724 doctrine: T0 is
+// the founder and holds everything, T1 is the highest circle, T2 is ENVOLVE only with no
+// external-org connection, and each tier inherits everything beneath it. LOWER NUMBER,
+// MORE PRIVILEGE. Anyone reading the old sentence and writing a comparison against it
+// produced a gate pointing exactly the wrong way, which on the people ladder means showing
+// the founder's most private tier to the widest audience.
+//
+// So the two axes are named apart, permanently:
+//   TRUST TIER   here, 0..10, HIGHER is more resolved. How sure are we who is on this channel.
+//   PEOPLE TIER  core/privacy/people.tier.js, T0..T4, LOWER is more privileged. Who is
+//                allowed to see this content. That is the ladder the doctrine inverted, and
+//                it is enforced structurally at the query, never by a regex over an answer.
+//
+// This regex is a deterministic backstop over an already-composed answer on a low-trust
+// channel, and that is all it has ever been. It is NOT the privacy gate and must never be
+// mistaken for one: judgment about whether content may travel to a person belongs to a mind
+// (board/pam/pam.js pamRelease) and to the query filter, both of which fail closed.
 function pamGate(text, trustTier) {
   var tier = parseInt(trustTier) || 0;
-  // Below T5: no financial details, no personal data summaries
+  // Below trust 5 the channel has not established who is speaking: no financial details,
+  // no personal data summaries, regardless of what the answer says about itself.
   if (tier < 5) {
     var sensitive = /\$[0-9,]+|bank|account|ssn|social security/gi;
     if (sensitive.test(text)) {
-      return { ok: false, gated: true, reason: 'sensitive_content_below_t5' };
+      return { ok: false, gated: true, reason: 'sensitive_content_below_trust5' };
     }
   }
   return { ok: true, gated: false, text: text };

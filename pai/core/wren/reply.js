@@ -168,14 +168,38 @@ async function handleReply(req) {
       pai_proof: compactCouncilProof(clearPai) };
   }
 
+  // ⬡B:core.wren.reply:WIRE:the_live_connection_weave_finally_has_a_caller:20260726⬡
+  // core/reminderWeave.js was built 20260709 for exactly this seam, in the founder's own
+  // words: "maybe on whatever connection gets a live connection to the ham... she's like,
+  // remember you got that?" Its suppression twin (stop_mentioning, so he can say STOP)
+  // was wired into the cycle as a tool on 20260713 and has worked since. The surfacing
+  // half, weaveLine(), had ZERO callers in every repo from the day it was written, so he
+  // had a working brake on a feature with no engine: he could stop a nudge he never got.
+  //
+  // WHERE IT ENTERS, AND WHY IT MUST BE HERE AND NOT LOWER. The guard further down states
+  // the law plainly: "A reminder or any other addition must enter before the outbound
+  // council. WREN delivers only the exact answer that the durable PAI receipt approved."
+  // So the weave is a line of the DELIBERATION INPUT, not a string appended to her answer.
+  // She decides whether it fits and says it in her own words, or leaves it out entirely;
+  // cold code never writes a syllable the person reads. The council then judges the whole
+  // reply, weave included, and the receipt binds these exact bytes.
+  // Fail-open: a brain hiccup in the weave lookup costs the aside, never the reply.
+  var reminderWeave = require('../reminderWeave.js');
+  var weave = { line: '', source: null };
+  try {
+    var picked = await reminderWeave.weaveLine(hamUid, 'blooio');
+    if (picked && picked.line) weave = picked;
+  } catch (eWeave) { weave = { line: '', source: null }; }
+  var replyDeliberation = weave.line ? (text + '\n\n' + weave.line) : text;
+
   // Run full PAI cycle, MEMORY_BANK → FIND → tool loop → synthesis → SIGIL → SHADOW → PAM
   var replyIdentity = Object.assign({}, resolved, { user_message: text,
     council_context: Object.assign({ mode: 'default',
       delivery_target: { kind:'phone', value:sender } }, resolved.council_context || {}) });
-  var paiResult = await runPAI(hamUid, text, 'blooio', replyIdentity);
+  var paiResult = await runPAI(hamUid, replyDeliberation, 'blooio', replyIdentity);
   var committed = requireVerifiedCouncilResult(paiResult, { hamUid: hamUid,
     requestId: paiResult.requestId || paiResult.request_id, cycleId: paiResult.cycleId,
-    question: text, deliberationInput: text, answer: paiResult.answer });
+    question: text, deliberationInput: replyDeliberation, answer: paiResult.answer });
   // ⬡B:core.wren.reply:FIX:one_retry_on_a_flaky_shadow_hold_before_going_silent:20260718⬡
   // Founder-caught 20260718 with screenshots: A'NU answered a text at 7:40pm, then
   // went silent at 7:41pm on the very next question and stayed silent. The door was
@@ -211,7 +235,9 @@ async function handleReply(req) {
   if (!committed.ok && _cleanBoardHold) {
     var retryPai;
     try {
-      retryPai = await runPAI(hamUid, text, 'blooio', replyIdentity);
+      // The retry re-asks the SAME question, which includes the same weave line, so the
+      // aside is not silently dropped by an unlucky hold and re-offered on the next text.
+      retryPai = await runPAI(hamUid, replyDeliberation, 'blooio', replyIdentity);
     } catch (retryError) {
       retryPai = { ok:false, reason:'pai_retry_threw' };
     }
@@ -220,7 +246,7 @@ async function handleReply(req) {
     }
     var retryCommitted = requireVerifiedCouncilResult(retryPai, { hamUid: hamUid,
       requestId: retryPai.requestId || retryPai.request_id, cycleId: retryPai.cycleId,
-      question: text, deliberationInput: text, answer: retryPai.answer });
+      question: text, deliberationInput: replyDeliberation, answer: retryPai.answer });
     // The retry is the replacement attempt, never a second candidate riding
     // beside the first. Its success or failure is therefore authoritative for
     // the one remaining delivery decision below.
@@ -267,11 +293,18 @@ async function handleReply(req) {
     return { ok: false, reason: sendResult && sendResult.reason || 'text_delivery_failed',
       ham_uid: hamUid, pai_proof: compactCouncilProof(paiResult) };
   }
+  // EXIT + NOTE for the weave, and only now. The cooldown starts when the message really
+  // reached the person, never when it was merely offered to the cycle, so an aside she
+  // decided against or a send that failed does not burn the window it never used.
+  if (weave.source) {
+    Promise.resolve(reminderWeave.markWeaved(weave.source, 'blooio')).catch(function () {});
+  }
 
   return {
     ok: true,
     ham_uid: hamUid,
     recorded: true,
+    weave_offered: !!weave.source,
     sent: true,
     ms: synth.ms,
     fcw_ms: synth.fcw_ms,

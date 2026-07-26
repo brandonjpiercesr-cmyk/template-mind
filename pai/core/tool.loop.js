@@ -780,8 +780,16 @@ var TOOLS = [
   {type:'function',function:{name:'log_expense',description:'Log a one-off EXPENSE/transaction that already happened (not a recurring bill). '
     +'Call this when they say they spent money on something specific, e.g. "I spent $80 at the grocery store today".',
     parameters:{type:'object',properties:{merchant:{type:'string'},amount:{type:'number'},category:{type:'string'},date:{type:'string',description:'YYYY-MM-DD, default today'}},required:['merchant','amount']}}},
-  {type:'function',function:{name:'create_reminder',description:'Create a real reminder that fires as a real text at the due time, and shows in Command Center before then. '
+  // \u2b21B:core.tool.loop:FIX:the_tool_description_promised_a_text_the_path_could_not_send:20260726\u2b21
+  // This description USED TO SAY the reminder "fires as a real text at the due time".
+  // It does not, and never did on its own. Firing needs a wake clock that is DEFAULT OFF
+  // (WAKE_CLOCK_ENABLED); armed, that clock wakes a CYCLE rather than sending a text; and
+  // any send is still gated by REACH_SEND_MODE. Telling the model otherwise made her
+  // promise a human a text she had no path to send, which is the same hollow-reply sin as
+  // any other unearned confirmation. It now says exactly what is true.
+  {type:'function',function:{name:'create_reminder',description:'Record a real reminder for the HAM: stored against a real due time resolved in THEIR timezone, and visible in Command Center. '
     +'Use when the HAM asks to be reminded of something, or names a specific future thing to remember. '
+    +'Do NOT promise them a text, a call, or a notification at that moment. Whether anything reaches them when it comes due is decided later by a full cycle and by the reach gate, never by this tool. Tell them you have it written down and what it is set for. '
     +'If the HAM did not state a real date or timeframe, do not invent one -- omit due_at entirely and a sensible near-future default is used automatically.',
     parameters:{type:'object',required:['ham_uid','text'],
     properties:{ham_uid:{type:'string'},text:{type:'string',description:'the reminder text, in plain words'},
@@ -940,16 +948,7 @@ function toolSelectionBoundary(name) {
     email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
     contact_send: 'USE WHEN: the person explicitly authorizes this exact text to this exact resolved third party. DO NOT USE WHEN: they mention a person, ask for contact details, brainstorm wording, or have not authorized the exact send.',
     notify_ham: 'USE WHEN: an authorized system workflow must send a real status text to the HAM. DO NOT USE WHEN: answering the HAM in the current conversation is sufficient, or for third-party messaging.',
-    // ⬡B:core.tool_loop:FIX:the_boundary_told_the_capture_path_to_stand_down:20260726⬡
-    // This line used to read "DO NOT USE WHEN: reading memory, ANSWERING CONVERSATIONALLY, or
-    // saving unsupported inferences as facts", while the Memory Bank prompt in the same turn
-    // told her to use write_to_brain immediately whenever a person hands something over. Every
-    // gift arrives in a conversational turn, so the routing policy was standing the stated
-    // replacement down in exactly the case it existed for, and the contradiction is a real part
-    // of why keeping what he told her was a coin flip. Capture no longer depends on this tool
-    // at all (core/memory.keeper.js runs on the write side of every committed turn), so the
-    // boundary can now say the honest thing: use it to mark a real gift, not to keep a log.
-    write_to_brain: 'USE WHEN: the person hands you something to keep (a decision, a plan, a rename, a fact about their life, a moment they asked you to hold), or the current workflow explicitly requires a durable exact-HAM bead. DO NOT USE WHEN: reading memory, recording the conversation itself (the cycle already keeps every turn without you), or saving unsupported inferences as facts.',
+    write_to_brain: 'USE WHEN: the current workflow explicitly requires a durable exact-HAM bead. DO NOT USE WHEN: reading memory, answering conversationally, or saving unsupported inferences as facts.',
     trigger_deploy: 'USE WHEN: a verified code fix is committed and the person or owned workflow requires that exact Render service deployed. DO NOT USE WHEN: diagnosing, planning, reading logs, or before a commit is verified.',
     fix_file_in_github: 'USE WHEN: the exact repository file, complete replacement content, and authorized repair are known. DO NOT USE WHEN: only diagnosis, planning, partial content, or a read-only review was requested.'
   };
@@ -1619,6 +1618,17 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         bound_ham_uid:_boundFindHam});
     }
     q.ham_uid=_unknownInboxRead ? 'unknown' : _boundFindHam;
+    // ⬡B:core.tool_loop:GUARD:a_world_reads_beneath_its_own_people_tier:20260726⬡
+    // The founder's inverted people ladder, enforced in the query rather than after it.
+    // ham_uid binding already stops one person's beads reaching another person; this stops
+    // the OTHER leak, the one that matters when four personalised worlds are open in one
+    // room: a world reading its own shared doctrine corpus and pulling a T0 fact out of it.
+    // The founder's own world resolves to T0 and is filtered by nothing, so every existing
+    // founder turn is byte-for-byte unchanged. A born world carries the people_tier BIRTH
+    // stamped on it. A reader whose tier cannot be resolved is not silently promoted to T0:
+    // resolveViewerTier returns unresolved, no structural filter is claimed for it, and
+    // board/pam/pam.js pamRelease treats it as the least privileged reader and fails closed.
+    if (runtime && runtime.viewerTier != null) q.viewer_tier = runtime.viewerTier;
     var res=await find([q]);
     // ⬡B:core.tool_loop:FIX:model_reliability_not_the_query_mechanics:20260708⬡
     // Real, live incident, confirmed by direct testing: the underlying query
@@ -2067,8 +2077,9 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         var _ex = await _dq.json();
         var reminderReadCancelled = await cancelBeforeEffect(name, runtime);
         if (reminderReadCancelled) return reminderReadCancelled;
+        var _rContract = require('./reminder.contract.js');
         var _dup = (Array.isArray(_ex) ? _ex : []).find(function (b) {
-          try { var c = JSON.parse(b.content || '{}'); return !c.fired && String(c.text || '').trim().toLowerCase().slice(0) === _rt; } catch (e) { return false; }
+          try { var c = JSON.parse(b.content || '{}'); return !_rContract.isClosed(c) && String(c.text || '').trim().toLowerCase().slice(0) === _rt; } catch (e) { return false; }
         });
         if (_dup) {
           return JSON.stringify({ ok: true, duplicate: true, text: args.text, note: 'a reminder with this text is already pending; not creating a duplicate' });
@@ -2079,6 +2090,17 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var reminderSource = 'pai.reminder.'+rHam+'.'+Date.now();
       var reminderWriteCancelled = await cancelBeforeEffect(name, runtime);
       if (reminderWriteCancelled) return reminderWriteCancelled;
+      // \u2b21B:core.tool.loop:FIX:one_due_field_through_the_reminder_contract:20260726\u2b21
+      // This was one of THREE writers that each invented a name for the due time
+      // (due_at here, `when` in routes/reminder.routes.js, fireAt in
+      // core/selfReminders.js). The shape is now built in exactly one place,
+      // core/reminder.contract.js, so a fourth spelling cannot be invented and every
+      // reader knows what it is reading. Strict on write, tolerant on read.
+      var _rBuilt = require('./reminder.contract.js').buildReminderContent({
+        text: args.text, dueAt: dueAt, audience: 'ham',
+        extra: { defaultedDate: !isValidFuture, defaultedZone: defaultedZone,
+          createdAt: new Date().toISOString() } });
+      if (!_rBuilt.ok) return JSON.stringify({ok:false,reason:_rBuilt.reason});
       var reminderWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
         headers:{apikey:BKr,Authorization:'Bearer '+BKr,'Accept-Profile':_schema(),
           'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=representation'},
@@ -2086,7 +2108,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
           source:reminderSource,
           acl_stamp:'\u2b21B:pai.reminder:REMINDER:created:'+ymd()+'\u2b21',
           summary:'[REMINDER] '+String(args.text||'').slice(0),
-          content:JSON.stringify({text:args.text,due_at:dueAt,fired:false,defaultedDate:!isValidFuture,defaultedZone:defaultedZone,createdAt:new Date().toISOString()}),
+          content:JSON.stringify(_rBuilt.content),
           importance:6}), signal:runtime && runtime.abortSignal});
       var reminderRows = reminderWrite.ok
         ? await reminderWrite.json().catch(function(){return null;}) : null;
@@ -3254,6 +3276,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // "composing external output, not answering the founder's own day question", so gates keyed on
   // it cover all advisor channels present and future without enumerating channel names.
   _effectRuntime.outboundFinalize = !!(identity && identity.outbound_finalize);
+  // ⬡B:core.tool_loop:WIRE:the_reading_world_carries_its_people_tier_into_every_brain_read:20260726⬡
+  // Resolved ONCE, here, where identity is genuinely in scope, and carried on the runtime
+  // so find_in_brain cannot read the bank without it. Founder world -> T0 -> no filter, so
+  // every existing founder turn is unchanged. A born world -> the people_tier BIRTH stamped
+  // on it -> the database enforces its ceiling. Unresolved -> left null on purpose: no
+  // structural claim is made for a reader we cannot place, and PAM's release gate treats
+  // that same reader as the least privileged one alive. See core/privacy/people.tier.js.
+  try {
+    var _viewerTier = require('./privacy/people.tier.js')
+      .resolveViewerTier(identity, hamUid);
+    _effectRuntime.viewerTier = _viewerTier.tier;
+    _effectRuntime.viewerTierSource = _viewerTier.source;
+  } catch (eViewerTier) { _effectRuntime.viewerTier = null; }
   _effectRuntime.exactHamReads = _effectRuntime.channel === 'voice' &&
     !!verifiedVoiceCallContext(identity, hamUid);
   _effectRuntime.abortSignal = _turnAbortSignal || null;
@@ -4750,45 +4785,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
   }
   var _stampProof = _committedCouncil.stamp_proof;
-  // ⬡B:core.tool.loop:WIRE:the_memory_keeper_on_the_one_common_exit:20260726⬡
-  // FOUNDER, loudest complaint, verified twice before this line was written: "I still don't
-  // think she really memorizes and has memory." He was right, and the reason was mechanical.
-  // Her memory READ one string and WROTE another. core/find.js findContext queries source
-  // prefix 'pai.minutes.'; the ONLY writer of it was routes/stream.routes.js, the browser
-  // stream, so a text, a phone call, and every non-stream /cara/chat turn wrote nothing any
-  // wall contributor later read. And the MEMORY bead findStatedCommitments queries had NO
-  // writer at all after the 20260725 removal of the detached synthesize keeper, so whether
-  // she kept what he told her was a coin flip on the model electing to call write_to_brain.
-  //
-  // THIS IS THE ONE COMMON EXIT. Every channel, text, voice, portal, stream, API and the
-  // public finalizer, enters runPAI and leaves through this function. The keeper is bolted
-  // to nothing: it hangs on the single door all of them pass through, so no channel can ever
-  // again be the one that forgot. Placed AFTER the council receipt and STAMP readback and
-  // INSIDE the cycle's own spend attribution, which is exactly what the 20260725 removal
-  // required: no detached model call, no detached brain write, nothing escaping the cycle.
-  // It is started here so its bounded mind call overlaps the post-council effects, and it is
-  // settled at the exit below. It never changes the answer and it can never fail the turn.
-  var _memoryKeeperRun = null;
-  if (_reachHandoffEligible && !_structuredReachPolicy && !_reachIncidentIntake && !_blockedFallback) {
-    try {
-      _memoryKeeperRun = require('./memory.keeper.js').keepTurn({
-        hamUid: hamUid, channel: channel,
-        question: _exactUserMessage, answer: finalAns,
-        cycleId: _cycleId, requestId: _requestId,
-        receiptSource: _councilReceipt && _councilReceipt.persistence
-          && _councilReceipt.persistence.final_source || null,
-        toolsUsed: tools.map(function (tu) { return tu && (tu.name || tu.tool) || 'unknown'; }),
-        turnMs: Date.now() - t0,
-        abortSignal: _turnAbortSignal || null
-      }).catch(function (eKeep) {
-        return { ok:false, reason:'memory_keeper_threw',
-          error:String(eKeep && eKeep.message || eKeep || 'unknown').slice(0, 160) };
-      });
-    } catch (eKeeperStart) {
-      _memoryKeeperRun = Promise.resolve({ ok:false, reason:'memory_keeper_unreachable',
-        error:String(eKeeperStart && eKeeperStart.message || eKeeperStart).slice(0, 160) });
-    }
-  }
   // ⬡B:core.tool.loop:COMMIT:queued_mutations_after_stamp:20260715⬡
   // Mutating tool calls participated in deliberation as a durable pending
   // effect plan. Release them only now. External human messages receive their
@@ -5065,17 +5061,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   } catch (eTrkDone) {}
   if (await _turnCancelled(true)) return _turnCancelledResult('before_release');
-  // ⬡B:core.tool.loop:EXIT:the_memory_keepers_receipt_is_part_of_the_turn:20260726⬡
-  // Settle the keeper started right after the committed council. It is AWAITED, not fired and
-  // forgotten: a memory the cycle never confirmed is exactly the "system reporting success it
-  // has not earned" this codebase already named as its own disease (index.js:329). Its receipt
-  // rides on the result so a trace-back can see what was kept, what was ruled a gift, and what
-  // failed, on the same turn. A keeper failure is reported, never fatal.
-  var _memoryKeeper = null;
-  if (_memoryKeeperRun) {
-    try { _memoryKeeper = await _memoryKeeperRun; }
-    catch (eKeeperSettle) { _memoryKeeper = { ok:false, reason:'memory_keeper_settle_failed' }; }
-  }
   var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
     requestId:_requestId,request_id:_requestId,councilReceipt:_councilReceipt,council_receipt:_councilReceipt,
     stampProof:_stampProof,stamp_proof:_stampProof,
@@ -5083,7 +5068,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     fcw_contributors:(fcw&&fcw.contributors)||null,
     fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
     fcw_contributors_total:(fcw&&fcw.contributorsTotal)||0,
-    memory_keeper:_memoryKeeper,
     _dbg:global._paiLastError||null};
   // Internal-only exact binding for synthesis re-verification. Non-enumerable so
   // a route cannot leak the armed deliberation prompt by serializing this result.
@@ -5158,42 +5142,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   return _successResult;
 }
-// ⬡B:core.tool_loop:911:grandmother_track_and_trace_stamps_from_the_one_real_exit:20260726⬡
-// GRANDMOTHER 911, the founder's number one: "I need her to always be able to track
-// and trace what she did, what she responded to, what cycle ran, where she had room
-// for improvement, what the next steps are, and WHICH WONDER IS NOW OWNING THIS."
-// The six-field ledger and its reader were both built and both live; nothing wrote
-// to them, so /onespot/trail returned cards:[] forever. runPAI is the ONE common
-// exit of the real turn (the module's only export, the single door every caller and
-// every channel passes through, named by core/wonders/registry.js as the wiring for
-// station.pai and gate.ham.active_channel), so the ledger hangs here, once, instead
-// of being bolted onto four call sites. Fire and forget after the turn has already
-// returned: fully guarded, off the critical path, so a ledger failure can never
-// delay, degrade, or throw into a turn. Refused turns are stamped too, because
-// "where she had room for improvement" is worth the most on the turns that failed.
-// Kill switch: GRANDMOTHER_LEDGER=off.
-function _stampGrandmotherLedger(hamUid, message, channel, identity, result) {
-  try {
-    if (String(process.env.GRANDMOTHER_LEDGER || 'on').toLowerCase() === 'off') return;
-    var _turnLedger = require('../logful/turn.ledger.js');
-    var _question = (identity && typeof identity.user_message === 'string'
-      && identity.user_message.trim()) ? identity.user_message : String(message || '');
-    setImmediate(function () {
-      Promise.resolve(_turnLedger.stampCompletedTurn({
-        hamUid: hamUid, channel: channel, question: _question,
-        agent: 'ANEW', result: result
-      })).then(function (r) {
-        if (!r || r.ok !== true) {
-          console.warn('[GRANDMOTHER] ledger not filed:', (r && r.reason) || 'unknown');
-        }
-      }).catch(function (e) {
-        console.warn('[GRANDMOTHER] ledger threw:', e && e.message);
-      });
-    });
-  } catch (eLedgerWire) {
-    console.warn('[GRANDMOTHER] ledger unreachable:', eLedgerWire && eLedgerWire.message);
-  }
-}
 async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
   var exactHam = String(hamUid || '').trim().toUpperCase();
   var cycleId = exactHam + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
@@ -5203,24 +5151,11 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     ? requestCandidate.trim() : cycleId + '.request';
   var seat = String(channel || '').toLowerCase() === 'voice' ? 'voice_fast' : 'c2_organ';
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
-  var result;
-  try {
-    result = await require('./spend.guard.js').withAttribution({ham_uid:exactHam,
-      cycle_id:cycleId,request_id:requestId,seat:seat,component:component},function () {
-        return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
-          {cycle_id:cycleId,request_id:requestId});
-      });
-  } catch (eTurn) {
-    // A thrown turn is still a turn she took, and it is the one most worth tracing.
-    // Stamp the honest failure, then rethrow exactly as before: no caller sees a
-    // changed contract because the ledger exists.
-    _stampGrandmotherLedger(hamUid, message, channel, identity,
-      {ok:false, reason:'pai_threw: ' + (eTurn && eTurn.message), cycleId:cycleId,
-        requestId:requestId});
-    throw eTurn;
-  }
-  _stampGrandmotherLedger(hamUid, message, channel, identity, result);
-  return result;
+  return require('./spend.guard.js').withAttribution({ham_uid:exactHam,cycle_id:cycleId,
+    request_id:requestId,seat:seat,component:component},function () {
+      return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
+        {cycle_id:cycleId,request_id:requestId});
+    });
 }
 module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,

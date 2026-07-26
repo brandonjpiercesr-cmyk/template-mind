@@ -19,12 +19,14 @@
 // the real answer on a channel the HAM already opened. It never originates a message.
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+// ⬡B:core.reminderWeave:FIX:table_and_schema_derive_from_the_selected_bank:20260726⬡
+// Live-preferring URL, dead-literal table and schema: on any world that sets only
+// MEMORY_BANK_URL/KEY this module read weaves out of a table its project does not have,
+// so nothing ever wove and nothing ever said why. Derived from the same signal now.
+function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
-
-var BU = process.env.AIBE_BRAIN_URL;
-var BK = process.env.AIBE_BRAIN_KEY;
+var contract = require('./reminder.contract.js');
 var WEAVE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 // ⬡B:core.reminderWeave:FIX:global_weave_cooldown:20260713⬡
 // A live-connection aside is meant to be occasional. Per-reminder cooldown alone let a
@@ -120,8 +122,8 @@ async function pickWeave(hamUid) {
     if (lastAny && (now - lastAny) < GLOBAL_WEAVE_COOLDOWN_MS) return null;
     for (var i = 0; i < rows.length; i++) {
       var c; try { c = JSON.parse(rows[i].content || '{}'); } catch (e) { continue; }
-      if (c.audience === 'self') continue;                 // her business, not chatter
-      if (c.completed || c.fired) continue;                // already handled
+      if (contract.audienceOf(c) === 'self') continue;      // her business, not chatter
+      if (contract.isClosed(c)) continue;                  // already handled
       if (String(rows[i].source).indexOf('.fired.') !== -1) continue; // fire-log
       if (c.lastWeavedAt && (now - new Date(c.lastWeavedAt).getTime()) < WEAVE_COOLDOWN_MS) continue;
       var text = c.text || '';
@@ -129,9 +131,15 @@ async function pickWeave(hamUid) {
       // Suppression: the HAM told her to stop mentioning this. Never surface it again.
       var tl = text.toLowerCase();
       if (supp.some(function(k){ return k && tl.indexOf(k) !== -1; })) continue;
-      // Past due, structured field:
-      var due = c.dueDate || c.due_date || c.due;
-      if (due) { var dueMs = new Date(due).getTime(); if (!isNaN(dueMs) && dueMs < now) continue; }
+      // ⬡B:core.reminderWeave:FIX:the_past_due_guard_could_not_see_the_real_due_field:20260726⬡
+      // This guard read dueDate, due_date and due, and did NOT read due_at, which is the
+      // field the cycle tool has always written and the only field the firing side reads.
+      // So the one date that actually exists on a real reminder was invisible here, and a
+      // reminder that expired days ago was still eligible to be woven into a live text.
+      // That is the exact Park LOI complaint again, from a second hole in the same guard.
+      // It now reads through the one contract, so every spelling, past and present, counts.
+      var dueRead = contract.readDueAt(c);
+      if (dueRead.ok && dueRead.ms < now) continue;
       // Past due, date embedded in the text (the Park LOI case):
       if (_textDueIsPast(text, now)) continue;
       return { source: rows[i].source, text: text, priority: c.priority || 5 };
@@ -184,14 +192,24 @@ async function markWeaved(source, channel) {
 // One-call helper for channels: returns a system-prompt line instructing a natural,
 // non-derailing aside, or '' when nothing should weave. The channel appends this to
 // its synthesis prompt; it never replaces the real answer.
+// ⬡B:core.reminderWeave:FIX:the_weave_instruction_named_the_exact_phrase_the_leak_gate_cuts:20260726⬡
+// This helper told the model to write the aside as "oh and real quick, remember: ...".
+// core/synthesize.js treats that exact phrase as a STAMP_LEAK and cuts the reply from
+// the first occurrence onward, because a reminder once bled out of context in those
+// words. So even with a caller wired, following this instruction truncated her answer
+// and flagged it. The instruction now forbids that phrase outright and asks for her own
+// words, which is what a natural aside was always supposed to be.
 async function weaveLine(hamUid, channel) {
   var pick = await pickWeave(hamUid);
   if (!pick) return { line: '', source: null };
   return {
     line: 'LIVE-CONNECTION REMINDER (weave rule: answer their actual message FIRST and fully; then, only if it fits '
-      + 'naturally, add ONE short friendly aside like "oh and real quick, remember: ..." about this, never more than one '
-      + 'sentence, never derailing): ' + pick.text,
-    source: pick.source
+      + 'naturally, add ONE short friendly aside in your own words about this, never more than one sentence, never '
+      + 'derailing, and never the words "oh and real quick, remember"; if it does not fit, leave it out entirely and '
+      + 'say nothing about it): ' + pick.text,
+    source: pick.source,
+    text: pick.text,
+    channel: channel || 'unknown'
   };
 }
 
