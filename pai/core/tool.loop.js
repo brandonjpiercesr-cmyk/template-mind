@@ -3565,6 +3565,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _repeatRun = 0;                      // CONSECUTIVE iterations that asked nothing new
   var _closingReason = null;               // set once, by cold code, to end the turn
   var _closingPassRan = false;
+  var _toolTextRejectedOnce = false;       // one corrective pass per turn, never two
   while (!ans) {
     // COLD CODE MAY END THE TURN. IT MAY NOT ANSWER IT. When either backstop fires she
     // gets one more pass, tools removed, with an explicit instruction to answer the whole
@@ -4416,7 +4417,51 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // it went out as the literal answer, to a real inbox. This is a hollow
     // reply wearing a costume, not a real answer -- same rule as no answer
     // at all: silence over sending garbage to a human.
-    if (/^<[a-z_]+>\s*\{.*\}\s*<\/[a-z_]+>$/is.test(ans)) { ans = ''; }
+    // ⬡B:core.tool_loop:BUILD:the_guard_stays_and_she_gets_told_and_gets_one_way_out:20260726⬡
+    // THE GUARD ABOVE IS CORRECT AND STAYS. It exists because a malformed tool call once
+    // went out as a real answer to a real inbox. The defect is that rejecting it was
+    // SILENT and had NO RECOVERY: `ans` was blanked and the turn fell out of the loop with
+    // nothing, and she was never told what was wrong with what she wrote, so she had no
+    // way to learn from it inside the turn.
+    //
+    // MEASURED ON MAIN, not reasoned: with the model emitting real tool calls on passes
+    // one to three and this text shape on pass four, main runs FOUR provider passes and
+    // hands back "I hit my working limit on this turn." Four, not twenty. The counter is
+    // not what delivers that sentence. What delivers it is an empty draft meeting a
+    // recovery that could not run (see _exhaustionSynthesisUsed). Worth stating plainly
+    // because it means this line and the `iter<=3` cap made a spin UNRECOVERABLE; they
+    // did not make it endless. The loop always did exit here.
+    //
+    // So: keep the guard, keep the honesty, give her a way out. One corrective pass per
+    // turn, and only one, with the rejected bytes deliberately ABSENT from the history
+    // (the same rule the structured-policy repair already follows: a rejected draft must
+    // never anchor its own retry). The conditions on the next pass are therefore NOT
+    // identical, which is exactly what makes this safe rather than a runaway: the
+    // transcript now carries a fact it did not carry before, her tools are on the table
+    // for the whole run, and if she writes tool syntax a second time this falls through
+    // to the unchanged break.
+    if (/^<[a-z_]+>\s*\{.*\}\s*<\/[a-z_]+>$/is.test(ans)) {
+      ans = '';
+      var _toolsNextPass = !_closingReason && !_closingPassRan && iter < _iterCeiling &&
+        (_toolWindow <= 0 || (iter + 1) <= _toolWindow);
+      _stampStep('unexecuted_tool_call_text_rejected', 'iter=' + iter +
+        ' corrective_pass=' + (_toolTextRejectedOnce ? 'already_used' :
+          (_closingPassRan ? 'not_on_the_closing_pass' : 'opening')) +
+        ' tools_next=' + (_toolsNextPass ? 'yes' : 'no'));
+      if (!_toolTextRejectedOnce && !_closingPassRan) {
+        _toolTextRejectedOnce = true;
+        msgs.push({role:'system',content:
+          'Your last message wrote a tool call as plain text instead of emitting a real '
+          + 'one. Nothing ran. Text shaped like a tool call is never executed and is never '
+          + 'shown to anyone, so it was discarded rather than sent. '
+          + (_toolsNextPass
+            ? 'Your tools are on the table right now, so emit a real tool call if you still need one. '
+            : 'No tools are available to you on this turn. ')
+          + 'Otherwise answer the whole request in your own words, from what you have '
+          + 'already gathered. Do not write tool syntax in your reply.'});
+        continue;
+      }
+    }
     // ⬡B:core.tool.loop:WIRE:diagnostic_no_tool_visibility:20260704⬡
     // CLAIR wiring, licensed and diagnostic only, not the fix itself. A
     // founder-voice task asked for exactly this and gave up twice with no
