@@ -17,5 +17,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+      # The guard's own tripwire runs FIRST. On 20260726 the guard printed a clean bill of health
+      # over a real legal name because it had no name detector at all, so a passing scan is only
+      # worth what the detectors behind it are worth. If the detectors regress, this fails here
+      # rather than months later in somebody else's inherited world.
+      - name: Prove the guard can still see what its law forbids
+        run: node --test tests/no.founder.pii.sees.a.name.test.js
       - name: Scan for hardcoded founder identity (must be zero)
         run: node scripts/checks/no-founder-pii.js .
