@@ -6,6 +6,28 @@ const crypto = require('node:crypto');
 
 const COOKIE_NAME = 'anu_ham';
 const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
+// ⬡B:core.ham_session_authorization:FIX:uppercasing_before_checking_let_case_folding_invent_a_world:20260726⬡
+// The SAME shape of the world ID pattern, but written to be tested against the input BEFORE
+// it is uppercased, which is the whole point of its existing.
+//
+// normalizeHamUid used to uppercase first and test second. toUpperCase() is Unicode case
+// folding, not an ASCII operation, and several characters EXPAND or change under it:
+//   'ß'  -> 'SS'      so worldIdForPage('ß')  returned the real world ID SS
+//   'ßß' -> 'SSSS'    so two of them returned SSSS
+//   'ﬁx' -> 'FIX'     so a ligature returned FIX
+// Every one of those passed HAM_PATTERN afterwards, because by then they WERE plain ASCII.
+// So the canon written to stop one person's world being silently renamed into another's was
+// itself renaming worlds, by the exact mechanism it exists to refuse, and the value it
+// invented was a legal ID that another person may actually hold. Worse than the page bug it
+// replaced: the old strip-then-uppercase produced an empty string here and refused.
+//
+// This is not only a page concern. normalizeHamUid is what signHamSession and
+// verifySessionToken normalize through, so the fold sat on the session path too.
+//
+// Checking the raw input first closes it: a character that is not already one of the canon's
+// own characters, in either case, never reaches toUpperCase() and never gets the chance to
+// become one. Found by external review (Codex, anew#1171).
+const HAM_INPUT_PATTERN = /^[A-Za-z0-9._:-]{2,160}$/;
 const MAC_PATTERN = /^[a-f0-9]{64}$/;
 
 // Preserve the signed-session key order already used by advisor.face.routes.
@@ -16,7 +38,11 @@ function signingSecret() {
 }
 
 function normalizeHamUid(value) {
-  const hamUid = String(value || '').trim().toUpperCase();
+  // The input is judged as it arrived. Only something already made of the canon's characters
+  // is allowed to be case folded, so folding can never manufacture an ID that was not typed.
+  const raw = String(value || '').trim();
+  if (!HAM_INPUT_PATTERN.test(raw)) return null;
+  const hamUid = raw.toUpperCase();
   return HAM_PATTERN.test(hamUid) ? hamUid : null;
 }
 
