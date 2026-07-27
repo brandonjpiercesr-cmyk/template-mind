@@ -239,7 +239,9 @@ async function alreadyRepliedOnThread(world, threadId, sinceEpochSeconds) {
 // ⬡B:reach.iman:FIX:plaintext_body_renders_as_html_so_the_signature_mashed_into_one_line:20260722⬡
 // Founder-caught: the composed reply and its signature carry real newlines, but Nylas /drafts treats
 // the `body` field as HTML, so every newline collapsed to a space and the whole sign-off rendered as
-// one mashed line ("Thanks, Brandon Brandon Pierce Sr. brandon@... | +1..."). Callers that hand us a
+// one mashed line: the sign-off, the sender's name, the address and the number all ran together on
+// a single row instead of stacking. The example is described rather than quoted, because quoting a
+// real signature would bake that person into every inherited world. Callers that hand us a
 // PLAINTEXT body ask for bodyIsPlaintext:true; we HTML-escape it and turn newlines into <br> so the
 // draft renders with the line breaks the writer intended. Callers already sending HTML are untouched.
 function _plaintextToHtml(s) {

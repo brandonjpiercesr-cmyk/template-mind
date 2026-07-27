@@ -1,10 +1,50 @@
 // ⬡B:core.tool.loop:MODULE:pai_executor:20260630⬡
-var MAX_TOKENS = parseInt(process.env.PAI_MAX_TOKENS || '8000', 10); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
+// ⬡B:core.tool_loop:LAW:shape_first_then_bound:20260726⬡
+// SHAPE FIRST, THEN BOUND. A bound applied to garbage is not a bound.
+//
+// `Math.max(FLOOR, parseInt(process.env.X))` looks bounded and is not, and this file
+// shipped that exact shape on line 25 of itself: parseInt answers NaN for anything
+// non-numeric, EVERY comparison NaN touches is false, so Math.max hands the NaN straight
+// back out and `max_tokens: NaN` goes to the provider. Its sister, `Number(env || 20000)`,
+// silently sliced every MACE file read to the empty string and reported not truncated.
+// Neither failure says anything anywhere; it is invisible until a bill arrives or a voice
+// goes quiet. So a number a human typed becomes a bound in ONE place in this file.
+//
+// The RULE's source of record is `core/veer/env.num.js` (readNum/envInt), written after
+// the same defect was found six times in one branch. It is still unmerged on the VEER
+// lane (PR #1111) and scopes itself to the VEER tree by its own docstring. This file is a
+// byte-identical pai-sync pair with template-mind's `pai/core/tool.loop.js`, so requiring
+// it across that boundary would mint a new synced module, a new manifest pair, and a new
+// directory in the mind template two days before launch. That trade is not worth it
+// today. The order and the negative-is-garbage split below are the same rule; collapsing
+// the two into one module once #1111 lands is named debt, carried in the PR.
+function _boundEnvInt(name, fallback, lo, hi) {
+  var raw = process.env[name];
+  var text = raw === undefined || raw === null ? '' : String(raw).trim();
+  if (text === '') return fallback;
+  // Number, not parseInt: parseInt('5 turns') is 5, which silently accepts a value its
+  // author did not mean. Number('') is 0, already handled above.
+  var n = Number(text);
+  // Catches NaN, Infinity, 3.5 and 1e30 in one test. Every one of those is garbage here.
+  if (!Number.isSafeInteger(n)) return fallback;
+  // NEGATIVE IS GARBAGE, NOT AN OUT OF RANGE INTENT. `999999` for a ceiling is a real
+  // ceiling expressed too enthusiastically, so clamping honours what the operator meant.
+  // `-5` is not a ceiling at all; clamping it to the floor would invent an intent nobody
+  // had. Garbage falls back to the documented default, same as 'abc'.
+  if (n < 0) return fallback;
+  // A non-negative value below the floor IS a real intent, just too eager, so the floor
+  // is the honest answer rather than a default they did not ask for.
+  if (n < lo) return lo;
+  if (n > hi) return hi;
+  return n;
+}
+var MAX_TOKENS = _boundEnvInt('PAI_MAX_TOKENS', 8000, 1, 1000000); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
 // ⬡B:core.tool.loop:FOUNDER_LAW:no_length_ceiling_on_her_voice:20260722⬡ Founder law, verbatim
 // intent ("remove all length ceilings everywhere"): her composed answers are NEVER truncated. This
 // hard floor holds on every channel and no lower Render env value can hold her under it; a per-channel
 // env may only RAISE it. Being cut off mid-thought is the one thing that uncrowns a living mind.
-var ANSWER_FLOOR = parseInt(process.env.PAI_ANSWER_FLOOR || '8000', 10);
+var ANSWER_FLOOR = _boundEnvInt('PAI_ANSWER_FLOOR', 8000, 1, 1000000);
+var _crypto = require('crypto');
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
@@ -18,12 +58,17 @@ var wonderGamesClient = require('./wonder.games.client.js');
 // cap via PAI_MAX_TOKENS_<CHANNEL>; absent that, the global cap holds.
 function tokenCapFor(channel) {
   var c = String(channel || '').toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  var v = parseInt(process.env['PAI_MAX_TOKENS_' + c] || '', 10);
+  // ⬡B:core.tool_loop:FIX:the_channel_cap_was_the_anti_pattern_itself:20260726⬡ This line
+  // WAS `Math.max(v || 0, MAX_TOKENS, ANSWER_FLOOR)` over a parseInt. A typo'd
+  // PAI_MAX_TOKENS made MAX_TOKENS NaN, Math.max returned NaN, and `max_tokens: NaN` went
+  // to the provider. The founder law below promises a floor her voice can never fall
+  // under; a NaN floor is not a floor. Shape first, then bound, so the promise is real.
+  var v = _boundEnvInt('PAI_MAX_TOKENS_' + c, 0, 0, 1000000);
   // FOUNDER LAW 20260722: every channel gets at least ANSWER_FLOOR, generalizing the old
   // PORTAL-only minimum so no surface, and no lower Render env value, can hold her under it.
   // Coding handoffs, the daily knock, and her long answers all run past the old 3000 cap; a
   // per-channel env (PAI_MAX_TOKENS_<CHANNEL>) may only RAISE the ceiling, never lower it.
-  return Math.max(v || 0, MAX_TOKENS, ANSWER_FLOOR);
+  return Math.max(v, MAX_TOKENS, ANSWER_FLOOR);
 }
 
 function shouldIncludeWorldContext(channel, identity, hamUid, question) {
@@ -330,13 +375,167 @@ var DATA_READER_TOOLS = {
   // never from nothing and never from the calendar.
   read_lane_board: function(m){ return {}; }
 };
-var MAX = 20;
+// ⬡B:core.tool_loop:FOUNDER_LAW:her_thinking_is_not_capped_at_a_literal:20260726⬡
+// FOUNDER DIRECT, 20260726, verbatim: "FIX ALL GAPS! AND STOP CAPPING SHIT LIKE 20 = max!!"
+//
+// `var MAX = 20` ended her turn on a counter and handed the founder a canned sentence,
+// and that sentence is what greeted him at his own door on three measured cycles. Its
+// sister literal was worse: `if (iter<=3) body.tools=...` removed EVERY tool from her
+// after three iterations, so from iteration four on she could not ask for evidence at
+// all, and the loop kept buying provider passes from a mind it had silently disarmed.
+// Both were cold code deciding she was finished thinking, which is the standing law
+// inverted. Neither is a literal any more.
+//
+// THE CEILING IS NOT WHAT ENDS A TURN NOW. The progress stop is (search
+// no_new_evidence below). A counter is a runaway backstop and nothing else, and it is
+// only safe to raise it BECAUSE something better ends the turn first.
+//
+// 72 is derived, not round. She holds 41 registered tools (TOOLS below). The honest
+// worst case for a genuinely productive turn is one full sweep of her armory plus a
+// second, differently argued pass over the readers among them, and then a pass to
+// speak: 41 + 30 + 1. The progress stop lets that shape run only as long as every
+// single pass keeps producing a (tool, args, result) triple she has never seen this
+// turn, so 72 is reachable only by 72 consecutive passes of real, new evidence. That is
+// a runaway that never happens, which is exactly what a backstop should be.
+// Floor 4 keeps the closing pass off iteration one, where the forced first read lives.
+function _iterationCeiling() { return _boundEnvInt('PAI_MAX_ITERATIONS', 72, 4, 500); }
+// TOOLS FOR THE WHOLE RUN, not for three turns. 0 is the default and it means every
+// iteration carries them: she can ask for evidence at iteration forty exactly as she
+// could at iteration one. A positive value restores a window for an operator who wants
+// one, but nothing in the code chooses one for her.
+function _toolIterationWindow() { return _boundEnvInt('PAI_TOOL_ITERATIONS', 0, 0, 500); }
+// THE PROGRESS STOP has TWO thresholds, because one signal is exact and one is robust,
+// and neither alone is honest. Both are defended at the detector itself, below. Both
+// floors are 2, so a single repeat, which is exactly what a legitimate retry after a
+// transient error looks like, can never fire either one.
+//
+// STRONG, exact: consecutive iterations that asked nothing new AND received no bytes this
+// turn has not already seen. Three.
+function _noNewEvidenceLimit() { return _boundEnvInt('PAI_NO_NEW_EVIDENCE_LIMIT', 3, 2, 50); }
+// WEAK, robust: consecutive iterations that asked nothing new, whatever came back. This
+// exists because the strong signal has a real hole and pretending otherwise would be the
+// hollow-success sin in a guard. find_in_brain returns `ms`, its own elapsed time, and
+// every bead carries "stamped X ago". So a genuine spin through that tool returns bytes
+// that DIFFER on every pass while containing not one new fact, and the strong signal
+// never fires. Asking the identical question over and over is still arithmetic cold code
+// can count, so it counts that too, on double the rope: six consecutive passes in which
+// she issued only calls she had already issued this turn.
+function _repeatQuestionLimit() { return _boundEnvInt('PAI_REPEAT_QUESTION_LIMIT', 6, 2, 100); }
+
+// ⬡B:core.tool_loop:BUILD:no_new_evidence_is_arithmetic_the_answer_is_hers:20260726⬡
+// THE DOCTRINAL LINE, and everything below respects it: cold code MAY detect that no new
+// evidence arrived. Cold code may NEVER decide what the answer is. Detecting a repeat is
+// arithmetic. Composing the reply is hers. So the only thing this machinery is allowed to
+// do on firing is hand her one more turn to speak with everything already gathered.
+function _stableJson(value) {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(_stableJson).join(',') + ']';
+  return '{' + Object.keys(value).sort().map(function (k) {
+    return JSON.stringify(k) + ':' + _stableJson(value[k]);
+  }).join(',') + '}';
+}
+// THE QUESTION she asked, with no answer in it: name plus canonical arguments. Two calls
+// with the same key are the same question asked twice, whatever came back.
+function _callKey(name, args) {
+  return _crypto.createHash('sha256').update(
+    _stableJson([String(name || ''), args === undefined ? null : args])
+  ).digest('hex').slice(0, 32);
+}
+// One triple, one key. The NAME alone is not enough (the same reader with different
+// arguments is progress) and the ARGS alone are not enough (the same read returning a
+// changed world is progress). Name plus canonical args plus the exact result bytes is
+// the only thing that means "this iteration added nothing the transcript did not hold".
+function _evidenceKey(name, args, result) {
+  // Hashed over a canonical ARRAY, not a concatenation: JSON quoting makes the boundaries
+  // unambiguous, so no argument value can ever impersonate a delimiter and collide two
+  // genuinely different calls into one key. A false collision would read as a repeat that
+  // never happened, and that is the one error this detector must not make.
+  return _crypto.createHash('sha256').update(_stableJson(
+    [String(name || ''), args === undefined ? null : args,
+      String(result === undefined || result === null ? '' : result)]
+  )).digest('hex').slice(0, 32);
+}
 
 // Cooldown state: one real fix commit per file path per window, in-process.
 // Resets on deploy/restart -- that is acceptable, since the failure this
 // guards against is a tight intra-process retry loop, not a cross-restart one.
 var FIX_COOLDOWN_MS = 60000;
 var _lastFixAttempt = {};
+
+// ⬡B:core.tool_loop:911:a_refused_code_search_reported_itself_as_a_successful_empty_one:20260726⬡
+// MEASURED LIVE 20260726, and it is the best explanation anybody has for her silence.
+//
+// read_own_code called the GitHub API and never once looked at the HTTP status. A rate
+// limited GitHub answers 403 with a perfectly valid JSON body that carries `message` and
+// no `items`, so `.then(x => x.json())` succeeded, the `Array.isArray(sres.items)` test
+// was simply false, nothing threw, and the tool fell through to its no-results line:
+//
+//   {ok:true, found:false, note:'Searched the real code and found nothing relevant to
+//    this. Say plainly this was not found, do not guess.'}
+//
+// ok:TRUE. The tool told her the search ran and the code is not there. That is a hollow
+// reply wearing a success, which is the one thing the standing law names by name, and it
+// is worse than a thrown error because it is CONFIDENT. Told a search succeeded and found
+// nothing, the honest next move is to search differently, so she does, and that costs
+// three more requests into the same exhausted quota, which guarantees the next answer is
+// the same lie. That is a loop that spins without converging until iter hits MAX and
+// lands on exhaustion_honest_limit, which is exactly the sentence sitting on her wall.
+//
+// The receipts, all first hand: two arrivals fired 20 minutes apart, 16:26 and 16:46, both
+// terminal. The GitHub API refusing this account's writes with `rate limit already
+// exceeded` across the same window. This tool firing one search PER REPOSITORY, three by
+// default, plus up to five content reads, on every call, against the code search endpoint
+// that carries one of the tightest limits GitHub publishes.
+//
+// So two things change and they are separate. Every call now reads its status, and a
+// refusal is reported as a refusal. And once GitHub has said quota, this remembers it
+// until the reset it was handed, because a tool that keeps calling an exhausted quota is
+// both spending her iterations and deepening the very refusal it is failing on.
+//
+// This is a HOLD, never a cache of an answer. It stores no code and no result, only the
+// fact that the door said no and the moment it said it would open again.
+var _ghHold = { until: 0, reason: null, status: 0 };
+var GH_HOLD_MAX_MS = 3600000;
+var GH_HOLD_MIN_MS = 1000;
+
+// GitHub hands the reset back in two different shapes and neither is trustworthy on its
+// face: x-ratelimit-reset is epoch SECONDS, retry-after is a delay in seconds, and both
+// arrive as text from off this machine. Read the shape first, then bound it. An unreadable
+// header is not a reason to hold forever, so it falls back to a short hold rather than the
+// ceiling, and a header promising an hour and a half is clamped to the ceiling rather than
+// believed.
+function _ghHoldMsFrom(headers) {
+  var get = function (k) { try { return headers && headers.get ? headers.get(k) : null; } catch (e) { return null; } };
+  var retryAfter = Number(String(get('retry-after') || '').trim());
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(GH_HOLD_MAX_MS, Math.max(GH_HOLD_MIN_MS, retryAfter * 1000));
+  }
+  var reset = Number(String(get('x-ratelimit-reset') || '').trim());
+  if (Number.isFinite(reset) && reset > 0) {
+    var ms = (reset * 1000) - Date.now();
+    if (ms > 0) return Math.min(GH_HOLD_MAX_MS, Math.max(GH_HOLD_MIN_MS, ms));
+  }
+  return 60000;
+}
+
+// A 403 from GitHub is quota OR permission, and the two are different facts to her: one
+// clears by itself and one never will. The remaining count is the only thing that tells
+// them apart, so it is read rather than assumed, and an unclear 403 is named unclear.
+function _ghRefusal(response) {
+  var status = (response && response.status) || 0;
+  if (status === 429) return { kind: 'rate_limited', status: status };
+  if (status === 403) {
+    var remaining = null;
+    try { remaining = response.headers && response.headers.get ? response.headers.get('x-ratelimit-remaining') : null; }
+    catch (e) { remaining = null; }
+    if (String(remaining).trim() === '0') return { kind: 'rate_limited', status: status };
+    return { kind: 'refused', status: status };
+  }
+  if (status === 401) return { kind: 'credential_rejected', status: status };
+  if (status >= 500) return { kind: 'github_unavailable', status: status };
+  return { kind: 'refused', status: status };
+}
 
 // ⬡B:core.tool_loop:FIX:explicit_repository_paths_reach_coda:20260715⬡
 // A founder-directed code review named the exact files CODA needed to inspect, but
@@ -758,7 +957,7 @@ var TOOLS = [
     properties:{repo:{type:'string'},path:{type:'string'},content:{type:'string'},reason:{type:'string'}}}}},
   {type:'function',function:{name:'trigger_deploy',description:'Trigger a Render deploy after fixing a file.',
     parameters:{type:'object',required:['service_id'],properties:{service_id:{type:'string'}}}}},
-  {type:'function',function:{name:'notify_ham',description:'Text a HAM via iMessage. Use to reach Brandon when something is fixed or needs attention.',
+  {type:'function',function:{name:'notify_ham',description:'Text a HAM via iMessage. Use to reach the HAM named in ham_uid when something is fixed or needs attention.',
     parameters:{type:'object',required:['ham_uid','message'],properties:{ham_uid:{type:'string'},message:{type:'string'}}}}},
   {type:'function',function:{name:'get_budget_upcoming',description:'Get the HAM\'s real upcoming Buy Now Pay Later payments (Zip, Afterpay, Klarna, Sezzle) with exact due dates and amounts. '
     +'Use for any question about what money is due soon, what is coming up, or pay-later balances.',
@@ -781,14 +980,9 @@ var TOOLS = [
   {type:'function',function:{name:'log_expense',description:'Log a one-off EXPENSE/transaction that already happened (not a recurring bill). '
     +'Call this when they say they spent money on something specific, e.g. "I spent $80 at the grocery store today".',
     parameters:{type:'object',properties:{merchant:{type:'string'},amount:{type:'number'},category:{type:'string'},date:{type:'string',description:'YYYY-MM-DD, default today'}},required:['merchant','amount']}}},
-  // ⬡B:core.tool.loop:FIX:the_tool_description_promised_a_text_the_path_could_not_send:20260726⬡
-  // This description USED TO SAY the reminder "fires as a real text at the due time".
-  // It does not, and never did on its own. Firing needs a wake clock that is DEFAULT OFF
-  // (WAKE_CLOCK_ENABLED); armed, that clock wakes a CYCLE rather than sending a text; and
-  // any send is still gated by REACH_SEND_MODE. Telling the model otherwise made her
-  // promise a human a text she had no path to send, which is the same hollow-reply sin as
-  // any other unearned confirmation. It now says exactly what is true.
-  {type:'function',function:{name:'create_reminder',description:'Record a real reminder for the HAM: stored against a real due time resolved in THEIR timezone, and visible in Command Center. '
+  {type:'function',function:{name:'create_reminder',description:'Store a real reminder in the brain with a real due time, and show it in Command Center. '
+    +'It does NOT text them or alert them at the due time unless this world has the wake clock armed and reach sending live, so never promise a text or an alert will arrive. '
+    +'You can also raise it yourself next time you are talking with them, but that is one occasional aside and not a guarantee it will come up, so tell them you have it written down and that it is in their Command Center rather than promising you will remind them. '
     +'Use when the HAM asks to be reminded of something, or names a specific future thing to remember. '
     +'Do NOT promise them a text, a call, or a notification at that moment. Whether anything reaches them when it comes due is decided later by a full cycle and by the reach gate, never by this tool. Tell them you have it written down and what it is set for. '
     +'If the HAM did not state a real date or timeframe, do not invent one -- omit due_at entirely and a sensible near-future default is used automatically.',
@@ -1155,9 +1349,16 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,count:_m.count,
           entries:(_m.entries||[]).slice(0)});
       }
+      var _maceReadChars = _boundEnvInt('MACE_READ_CHARS', 20000, 1000, 20000000);
       return JSON.stringify({ok:true,via:'MACE',repo:_m.repo,path:_m.path,sha:_m.sha,size:_m.size,
-        content:String(_m.content_text||'').slice(0, Number(process.env.MACE_READ_CHARS||20000)),
-        truncated: String(_m.content_text||'').length > Number(process.env.MACE_READ_CHARS||20000),
+        // ⬡B:core.tool_loop:FIX:a_typo_here_blanked_every_file_she_read_and_said_it_was_whole:20260726⬡
+        // Both lines were `Number(process.env.MACE_READ_CHARS||20000)`. A non-numeric value
+        // is NaN, `slice(0, NaN)` is the EMPTY STRING, and `length > NaN` is false. So a
+        // typo'd env handed her an empty file and told her, in the same object, that it was
+        // not truncated. She would then answer about code she was never shown, confidently,
+        // which is the same hollow-success shape as the refused search of #1157.
+        content:String(_m.content_text||'').slice(0, _maceReadChars),
+        truncated: String(_m.content_text||'').length > _maceReadChars,
         note:'Read by MACE, the CODING department lead. If you are checking a fix, read the twin in the other repo before you call it done.'});
     } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e),via:'MACE'}); }
   }
@@ -1300,6 +1501,31 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!ghToken) return JSON.stringify({ok:false,note:'No real code-read access configured right now.'});
       var query = String(args.query || '').trim();
       if (!query) return JSON.stringify({ok:false,note:'no query given'});
+      // The hold, checked before a single request leaves. Answering here costs nothing and
+      // spends no quota, and it hands back a fact she can say out loud instead of a silence
+      // she would try to search her way out of.
+      if (_ghHold.until > Date.now()) {
+        return JSON.stringify({ok:false, reason:_ghHold.reason || 'code_search_unavailable',
+          status:_ghHold.status || null,
+          seconds_until_retry: Math.ceil((_ghHold.until - Date.now()) / 1000),
+          note:'The code reader is held off because GitHub refused the last request. This did NOT search and it did NOT find nothing. Say the code could not be read right now and why. Do not rephrase and search again, the answer will be the same until the hold clears.'});
+      }
+      // Every refusal this call collects, so an empty result can prove which empty it is.
+      var ghRefusals = [];
+      // A hold that only ever gets armed is a mute button with no release. Any GitHub call
+      // that answers normally proves the door is open again, and that is the honest moment
+      // to drop the hold rather than waiting out a reset time that was only ever an
+      // estimate handed over by the other side.
+      var noteOpen = function () { if (_ghHold.until) _ghHold = { until: 0, reason: null, status: 0 }; };
+      var noteRefusal = function (response) {
+        var refusal = _ghRefusal(response);
+        ghRefusals.push(refusal);
+        if (refusal.kind === 'rate_limited') {
+          _ghHold = { until: Date.now() + _ghHoldMsFrom(response && response.headers),
+            reason: 'code_search_rate_limited', status: refusal.status };
+        }
+        return refusal;
+      };
       // Real, read-only. Scoped to the canonical mind, experience face, and builder.
       var repos = String(process.env.ANEW_OWN_CODE_REPOS
         || 'brandonjpiercesr-cmyk/anew,brandonjpiercesr-cmyk/eanew,brandonjpiercesr-cmyk/canew')
@@ -1327,8 +1553,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
               + '/contents/' + explicitPath + '?ref=main', {
               headers: {'Authorization':'token '+ghToken, 'Accept':'application/vnd.github.v3.raw'}
             });
-            if (pathProbe.ok) found.push({repo:repos[pathRepoIndex],path:explicitPath});
-          } catch (ePathProbe) {}
+            // A 404 here is the real answer to an exact path lookup: that file is not in
+            // this repository. Every other failure is the door, not the file, and the two
+            // must never wear the same face.
+            if (pathProbe.ok) { noteOpen(); found.push({repo:repos[pathRepoIndex],path:explicitPath}); }
+            else if (pathProbe.status !== 404) noteRefusal(pathProbe);
+          } catch (ePathProbe) { ghRefusals.push({ kind:'unreachable', status:0 }); }
         }
         // An exact path is an authoritative lookup request. If it does not exist in
         // the scoped repositories, report that miss instead of fuzzy-searching into a
@@ -1353,9 +1583,15 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (!anchorResolved) for (var i=0;i<repos.length;i++) {
         try {
           var sq = encodeURIComponent(query) + '+repo:' + repos[i];
-          var sres = await fetch('https://api.github.com/search/code?q=' + sq, {
+          // THE LINE THE WHOLE 911 TURNS ON. This used to go straight to .json(). A refused
+          // GitHub returns a body that parses perfectly and carries no items, so the parse
+          // succeeded, the items test was false, and a refusal became an empty shelf.
+          var sresponse = await fetch('https://api.github.com/search/code?q=' + sq, {
             headers: {'Authorization':'token '+ghToken, 'Accept':'application/vnd.github.v3+json'}
-          }).then(function(x){return x.json();});
+          });
+          if (!sresponse.ok) { noteRefusal(sresponse); if (_ghHold.until > Date.now()) break; continue; }
+          noteOpen();
+          var sres = await sresponse.json();
           // \u2b21B:core.tool.loop:FIX:top2_cutoff_dropped_the_right_file:20260710\u2b21
           // Real, live incident, founder-caught: asked whether/how the command center
           // clears out old items. GitHub's real search DID find the right file
@@ -1376,13 +1612,30 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       if (qLower.trim() === 'canew') found.sort(function (a, b) {
         return (b.repo.endsWith('/canew') ? 1 : 0) - (a.repo.endsWith('/canew') ? 1 : 0);
       });
+      // NOTHING FOUND IS TWO DIFFERENT FACTS AND THEY USED TO SHARE ONE SENTENCE. An empty
+      // shelf after a search that actually ran is real evidence and she should say so
+      // plainly. An empty shelf because the door never opened is not evidence of anything,
+      // and reporting it as ok:true is what taught her to keep trying.
+      if (!found.length && ghRefusals.length) {
+        var worst = ghRefusals.filter(function (r) { return r.kind === 'rate_limited'; })[0] || ghRefusals[0];
+        return JSON.stringify({ok:false, reason:'code_search_' + worst.kind, status:worst.status || null,
+          refused_calls: ghRefusals.length,
+          seconds_until_retry: _ghHold.until > Date.now() ? Math.ceil((_ghHold.until - Date.now()) / 1000) : null,
+          note:'The code reader could NOT run. This is not a finding that the code is absent. Say the code could not be read right now and name why. Do not guess at what the code says and do not rephrase and search again.'});
+      }
       if (!found.length) return JSON.stringify({ok:true,found:false,note:'Searched the real code and found nothing relevant to this. Say plainly this was not found, do not guess.'});
       var snippets = [];
       for (var k=0;k<Math.min(found.length,5);k++) {
         try {
-          var raw = await fetch('https://api.github.com/repos/'+found[k].repo+'/contents/'+found[k].path+'?ref=main', {
+          // Same unchecked shape as the search above, one layer down. A refused read here
+          // returns an error body as TEXT, so rawStr became a JSON error message that the
+          // excerpt window then sliced up and handed over as if it were her own source.
+          var rawResponse = await fetch('https://api.github.com/repos/'+found[k].repo+'/contents/'+found[k].path+'?ref=main', {
             headers: {'Authorization':'token '+ghToken, 'Accept':'application/vnd.github.v3.raw'}
-          }).then(function(x){return x.text();});
+          });
+          if (!rawResponse.ok) { noteRefusal(rawResponse); continue; }
+          noteOpen();
+          var raw = await rawResponse.text();
           var rawStr = String(raw);
           // \u2b21B:core.tool.loop:FIX:top_of_file_slice_missed_the_real_answer:20260710\u2b21
           // Real, live incident, second half of the same founder-caught bug: even after
@@ -1427,11 +1680,27 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // fix: actually extract every real number that appears in what was read and hand
       // it back as a concrete, explicit list -- a real anchor to check against, not
       // just a rule to remember.
+      // Files were located and then not one of them could be opened. That is the door
+      // again, not an answer, and returning found:true with an empty file list would be
+      // the same lie one layer down.
+      if (!snippets.length) {
+        var worstRead = ghRefusals.filter(function (r) { return r.kind === 'rate_limited'; })[0] || ghRefusals[0];
+        return JSON.stringify({ok:false, reason:'code_read_' + ((worstRead && worstRead.kind) || 'unavailable'),
+          status:(worstRead && worstRead.status) || null,
+          located_files: found.slice(0, 5).map(function (f) { return f.repo + '/' + f.path; }),
+          seconds_until_retry: _ghHold.until > Date.now() ? Math.ceil((_ghHold.until - Date.now()) / 1000) : null,
+          note:'These files were located but NOT read. Nothing here is evidence about what they contain. Name the files and say they could not be opened right now. Do not describe what is in them.'});
+      }
+      // A PARTIAL read is still real evidence, and it is also not the whole shelf. Say
+      // which is which rather than letting a quiet truncation read as completeness.
+      var readRefusals = ghRefusals.length;
       var allExcerpts = snippets.map(function(s){return s.excerpt;}).join(' ');
       var realNumbers = (allExcerpts.match(/\b\d+\b/g) || []);
       var uniqueNumbers = realNumbers.filter(function(n,idx){return realNumbers.indexOf(n)===idx;}).slice(0,20);
       return JSON.stringify({ok:true,found:true,files:snippets,
         realNumbersFoundInThisCode: uniqueNumbers,
+        partial: readRefusals > 0 ? { calls_refused: readRefusals,
+          note:'Some of this search was refused, so what is above is part of the shelf and not all of it. It is safe to use and it is not safe to call complete. Do not conclude that anything is absent.' } : null,
         rule:'Real, researched requirement (mechanical citation verification, the proven fix for this exact failure mode): '
           +'each file above is shown with real line numbers. For every specific claim -- what a value is, how a mechanism works, '
           +'any number -- you must be able to point to the literal line number in the excerpt above that says so. If you cannot '
@@ -2251,9 +2520,26 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // ⬡B:core.tool_loop:FIX:ham_mismatch_guard_matches_find_in_brain:20260722⬡
       if (args && args.ham_uid && String(args.ham_uid).toUpperCase() !== String(hamUid||'').toUpperCase()) return JSON.stringify({ ok:false, reason:'ham_uid_mismatch', bound_ham_uid:String(hamUid||'').toUpperCase() });
       var _ibUid = String(hamUid || '');
-      var _ir = await fetch(_ibSelf + '/os/email/' + encodeURIComponent(_ibUid))
+      // ⬡B:core.tool_loop:WIRE:the_inbox_tool_proves_itself_to_the_mail_door:20260726⬡
+      // /os/email closed on 20260726: it used to check WHICH ham was being asked for and
+      // never WHO WAS ASKING, so it answered an anonymous caller with the whole merged
+      // inbox. This hop leaves the process over SELF_BASE_URL and comes back in over the
+      // public internet, so it is indistinguishable from a stranger at that door and cannot
+      // be recognized by origin. It proves itself the way a browser does, with a token minted
+      // from the server-only signing secret by the one signer this estate already uses.
+      // Without this line the gate would have taken the inbox away from HER, which is the
+      // whole reason the door could not simply be closed a day earlier.
+      var _ibHdrs = require('./ham.session.authorization.js').internalSessionHeaders(_ibUid);
+      var _ir = await fetch(_ibSelf + '/os/email/' + encodeURIComponent(_ibUid), _ibHdrs ? { headers:_ibHdrs } : undefined)
         .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
       if (!_ir) return JSON.stringify({ ok:false, error:'inbox unreachable, do not guess' });
+      // A REFUSED READ IS NOT AN EMPTY INBOX. The door keeps its shape when it withholds
+      // (ok:true, emails:[]) and names the reason in `why`. Falling through would produce
+      // count:0 and the note "Inbox is clear, nothing unread", which is a statement of fact
+      // about his mail built out of a failure to prove identity. This file already refuses
+      // to turn an unreachable calendar into an open day; a withheld inbox gets the same
+      // treatment, and ok:false says so instead of guessing.
+      if (_ir.why) return JSON.stringify({ ok:false, reason:String(_ir.why), error:'the inbox door withheld this read, do not guess, say the inbox cannot be read right now' });
       var _msgs = (_ir.emails || []);
       var _unreadOnly = !(args && args.unread_only === false);
       if (_unreadOnly) _msgs = _msgs.filter(function(m){ return m.unread; });
@@ -2275,6 +2561,17 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // founder-gated, Nylas-backed, verified live with his 20 real events). No parallel
     // implementation, no new exposure -- reuses the existing gate.
     try {
+      // ⬡B:core.tool_loop:GUARD:the_calendar_tool_may_only_ask_for_its_own_bound_ham:20260726⬡
+      // args.ham_uid is MODEL SUPPLIED. Before this, calendar_read accepted whatever the model
+      // named and read that ham's day. That was already wrong, and the line below that signs a
+      // session for _calHam would have made it much worse: a cycle bound to one world could
+      // name the founder's uid and have the server mint a proof for it, turning a redacted
+      // read into the whole calendar with join links and participant addresses, in somebody
+      // else's world. The signature must never be minted for a ham the cycle is not bound to.
+      // This is the same guard inbox_read has carried since 20260722, in the same words, and
+      // it is what keeps this file's internal_leg verdict in tests/no.public.url.mints.a.
+      // session.test.js literally true: the identity at the point of signing is the bound one.
+      if (args && args.ham_uid && String(args.ham_uid).toUpperCase() !== String(hamUid||'').toUpperCase()) return JSON.stringify({ ok:false, reason:'ham_uid_mismatch', bound_ham_uid:String(hamUid||'').toUpperCase() });
       var _calHam = args.ham_uid || hamUid;
       if (!_calHam) return JSON.stringify({ok:false,reason:'no_ham_uid'});
       var _selfBase = process.env.SELF_BASE_URL || 'https://aibebase.onrender.com';
@@ -2288,9 +2585,23 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       // unreachable so the answer says "I cannot reach your calendar right now" instead
       // of "your day is open."
       var _cr = null;
+      // ⬡B:core.tool_loop:WIRE:her_calendar_tool_finally_carries_the_proof:20260726⬡
+      // THIS CLOSES OUTSTANDING ITEM 8 (docs/FOUNDER_ACTIONS_OUTSTANDING.md). When
+      // /os/calendar was gated on 20260725, every internal caller was wired except this one,
+      // because this file is byte paired with template-mind under pai-sync-check and a one
+      // sided edit fails CI. The consequence was written down and accepted as temporary: she
+      // could still see the whole day but could no longer read a meeting's join link. Both
+      // sides land together in this change, so the deferral is over.
+      //
+      // It is no longer optional. As of 20260726 the calendar door also withholds the event
+      // TITLE from an unproven caller, because a title is the content of a calendar entry and
+      // not the shape of a day. Without this header she would read a day of blank titles and
+      // narrate it as an open one, which is exactly the lie the 20260725 note refused to ship.
+      // The gate and the proof land in the same commit on purpose.
+      var _calHdrs = require('./ham.session.authorization.js').internalSessionHeaders(_calHam);
       for (var _calTry = 0; _calTry < 2 && !_cr; _calTry++) {
         if (_calTry) await new Promise(function(rs){setTimeout(rs,4000);});
-        _cr = await fetch(_selfBase + '/os/calendar/' + _calHam).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+        _cr = await fetch(_selfBase + '/os/calendar/' + _calHam, _calHdrs ? { headers:_calHdrs } : undefined).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
       }
       if (!_cr) return JSON.stringify({ok:false, ham_uid:_calHam, reason:'calendar_source_unreachable', note:'the calendar source did not respond; this is NOT an empty day, say the calendar cannot be reached right now'});
       var _realEvents = _cr.events || [];
@@ -3111,8 +3422,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // bank (~3k tokens, built fresh each turn), so bounding raw transcript history trims cost
     // without trimming what she actually remembers. Defaults are generous enough that a normal
     // exchange is untouched; only runaway history is bounded. Both env-tunable.
-    var _ptMax = parseInt(process.env.PAI_PRIOR_TURNS_MAX || '40', 10);
-    var _ptChars = parseInt(process.env.PAI_PRIOR_TURN_CHARS || '12000', 10);
+    // ⬡B:core.tool_loop:FIX:a_typo_in_the_history_bound_removed_the_bound:20260726⬡ Both were
+    // parseInt. A non-numeric value gave NaN, `NaN > 0` is false, and the code fell to the
+    // UNBOUNDED branch: every prior turn, at full length, into every request. The bound
+    // whose whole job is cost containment was removed by the typo meant to tune it, and
+    // nothing said so. 0 still means deliberately unbounded; garbage now means the default.
+    var _ptMax = _boundEnvInt('PAI_PRIOR_TURNS_MAX', 40, 0, 100000);
+    var _ptChars = _boundEnvInt('PAI_PRIOR_TURN_CHARS', 12000, 0, 10000000);
     var _recentTurns = _ptMax > 0 ? priorTurns.slice(-_ptMax) : priorTurns;
     _recentTurns.forEach(function(t){
       if (t && (t.role==='user'||t.role==='assistant') && typeof t.content==='string' && t.content.trim()) {
@@ -3424,7 +3740,38 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (_roadmapActivationEnvelope && _effectRuntime.codaVerified === true) {
     _roadmapActivationNeeded = _effectRuntime.codaActivationApproved === true;
   }
-  while (iter<MAX && !ans) {
+  // ⬡B:core.tool_loop:BUILD:the_progress_stop_and_the_closing_pass:20260726⬡
+  // She should stop because she is not getting anywhere, never because a counter ran out.
+  var _iterCeiling = _iterationCeiling();
+  var _toolWindow = _toolIterationWindow();
+  var _barrenLimit = _noNewEvidenceLimit();
+  var _repeatLimit = _repeatQuestionLimit();
+  var _seenEvidence = Object.create(null); // every (tool, args, result) triple this turn
+  var _seenCalls = Object.create(null);    // every (tool, args) question asked this turn
+  var _barrenRun = 0;                      // CONSECUTIVE iterations that added nothing new
+  var _repeatRun = 0;                      // CONSECUTIVE iterations that asked nothing new
+  var _closingReason = null;               // set once, by cold code, to end the turn
+  var _closingPassRan = false;
+  var _toolTextRejectedOnce = false;       // one corrective pass per turn, never two
+  while (!ans) {
+    // COLD CODE MAY END THE TURN. IT MAY NOT ANSWER IT. When either backstop fires she
+    // gets one more pass, tools removed, with an explicit instruction to answer the whole
+    // ask from what she already gathered. So hitting a ceiling is never the first time she
+    // is asked to speak, and the honest working-limit line further down is what is left
+    // only if she is handed the floor and still says nothing.
+    if (_closingReason && _closingPassRan) break;
+    if (!_closingReason && iter >= _iterCeiling - 1) _closingReason = 'iteration_ceiling';
+    if (_closingReason && !_closingPassRan) {
+      _closingPassRan = true;
+      _stampStep('closing_pass_opened', _closingReason + ' iter=' + iter +
+        ' ceiling=' + _iterCeiling + ' tools_used=' + tools.length);
+      msgs.push({role:'system',content:
+        'This is the last pass of this turn. Answer the whole request now, completely, in '
+        + 'your own words, from the evidence already gathered above. Do not call any tool. '
+        + 'Do not ask them to narrow it down, repeat it, or pick one piece. If one part is '
+        + 'genuinely unsupported by what you gathered, answer every other part fully and '
+        + 'name that one gap in a short clause.'});
+    }
     if (await _turnCancelled(true)) return _turnCancelledResult('before_model');
     iter++;
     // The exact named seat owns model selection for this turn. Tool choice and
@@ -3443,7 +3790,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // a growing system prompt stays worth watching, not a closed case.
     var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),
       temperature:_structuredReachPolicy?0:_reachIncidentIntake?0.1:0.3};
-    if (iter<=3) body.tools=_turnToolDefinitions;
+    // ⬡B:core.tool_loop:FOUNDER_LAW:she_holds_her_tools_for_the_whole_run:20260726⬡
+    // WAS `if (iter<=3)`. From iteration four on she held nothing, so she could not ask
+    // for evidence, and the loop went on paying for passes from a disarmed mind. Default
+    // window 0 means every iteration carries them. The closing pass is the one deliberate
+    // exception: that pass exists so she can SPEAK from what she gathered, so nothing is
+    // on the table to reach for.
+    if (!_closingPassRan && (_toolWindow <= 0 || iter <= _toolWindow)) {
+      body.tools=_turnToolDefinitions;
+    }
     var _routedToolIntent = null;
     var _routedRequiresLiveTool = false;
     var _routedRequiredReadTool = null;
@@ -4046,6 +4401,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }
       msgs.push({role:'assistant',content:msg.content||null,tool_calls:msg.tool_calls});
       var _budgetGroundNeeded = false, _budgetSummaryRaw = null;
+      // Reset per iteration. Set the moment ONE call in this iteration asks something new,
+      // or brings back something new. One is enough: a batch that re-reads two things and
+      // learns a third has learned something.
+      var _iterationAddedEvidence = false;
+      var _iterationAskedNew = false;
       for (var i=0;i<msg.tool_calls.length;i++){
         if (await _turnCancelled()) return _turnCancelledResult('before_tool');
         var tc=msg.tool_calls[i],targs={};
@@ -4059,6 +4419,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         _stampStep('tool_call', tc.function.name);
         var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime);
         tools.push(tc.function.name);
+        // THE PROGRESS STOP, measuring half. Pure arithmetic over what was asked and what
+        // actually came back. Nothing here reads meaning; it only counts repeats.
+        var _askKey = _callKey(tc.function.name, targs);
+        if (!_seenCalls[_askKey]) { _seenCalls[_askKey] = true; _iterationAskedNew = true; }
+        var _evKey = _evidenceKey(tc.function.name, targs, tr);
+        if (!_seenEvidence[_evKey]) { _seenEvidence[_evKey] = true; _iterationAddedEvidence = true; }
         // ⬡B:core.tool_loop:911:a_tool_the_MODEL_calls_never_became_evidence:20260725⬡
         // MEASURED 20260725, twelve live probes, perfect separation: every money question
         // HELD, 6 of 6; every no-number question PASSED, 6 of 6. Structural, not a rate.
@@ -4186,6 +4552,63 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           + 'Do NOT state any percentage or ratio, and do NOT state a dollar figure you compute yourself; for what is left over, use monthly net or annual net, never your own arithmetic. '
           + 'NEVER say their budget is not set up, or that they have no income or no bills, when the result shows projectedIncome, incomeSources, or recurringBills. Only if the result is genuinely empty (empty:true) do you say the budget is not set up yet.' });
       }
+      // ⬡B:core.tool_loop:BUILD:the_progress_stop_deciding_half:20260726⬡
+      // THIS is what ends a turn now, not a counter. An iteration whose every call
+      // produced a triple already in this turn added NOTHING to the transcript except a
+      // second copy of what was already in it. That is a mechanical fact about bytes, and
+      // cold code is allowed to notice it. It stays a fact and never becomes a judgment:
+      // all it does is open the closing pass, where SHE answers.
+      //
+      // THE FAILURE MODES IT MUST NOT HIT, and why the threshold is 3:
+      //  - A legitimate retry after a transient error. The refused GitHub search of
+      //    #1157 is the exact shape: same query, same refusal bytes, tried again. That
+      //    costs ONE barren iteration. Three lets her retry twice and still not trip.
+      //  - The same tool with DIFFERENT arguments is progress. Different args, different
+      //    key, counter resets to zero. Searching differently is never punished.
+      //  - A tool that legitimately returns the same result twice. One barren iteration,
+      //    well inside budget, and any one new call anywhere in the batch clears it.
+      //  - An A, B, A, B alternation still converges here without a second rule, because
+      //    the repeat of A and the repeat of B are each barren and they are consecutive.
+      //  - THREE DIFFERENT searches that all come back with the same 'nothing found' body
+      //    are NOT barren, and the ARGUMENTS being part of the triple is what guarantees
+      //    that: a new question with an old answer is still a new triple. Asking three
+      //    genuinely different questions is work even when every answer is empty, and
+      //    cutting that off would be cold code judging her investigation.
+      // What it CANNOT be is good work: three passes in a row in which every single call
+      // was one she had already made this turn AND returned bytes already sitting in the
+      // transcript. Three is also the retry budget this file already settled on twice (the
+      // length-continuation stitch, the forced-tool-choice retry), so it is the number
+      // already in use here, not a new one invented for this.
+      if (_iterationAddedEvidence) { _barrenRun = 0; }
+      else {
+        _barrenRun++;
+        _stampStep('no_new_evidence_iteration',
+          'run=' + _barrenRun + '/' + _barrenLimit + ' iter=' + iter +
+          ' calls=' + msg.tool_calls.length);
+        if (_barrenRun >= _barrenLimit && !_closingReason) {
+          _closingReason = 'no_new_evidence';
+          _stampStep('progress_stop', 'no_new_evidence after ' + _barrenRun +
+            ' consecutive barren iterations, iter=' + iter);
+        }
+      }
+      // THE WEAK SIGNAL, and the reason it exists is a hole in the strong one that would
+      // be dishonest to leave unnamed. find_in_brain returns its own elapsed `ms` and
+      // every bead it returns is labelled "stamped X ago", so a real spin through that
+      // tool comes back with DIFFERENT bytes on every pass carrying not one new fact, and
+      // the strong signal above never fires on it. Asking the identical question over and
+      // over is still countable. Double the rope, because the signal is coarser: six
+      // consecutive passes issuing only calls already issued this turn. A genuine poll of
+      // a changing world (watching a deploy log) is the one honest thing this can cut
+      // short, and what it cuts it to is her speaking with six reads in hand.
+      if (_iterationAskedNew) { _repeatRun = 0; }
+      else {
+        _repeatRun++;
+        if (_repeatRun >= _repeatLimit && !_closingReason) {
+          _closingReason = 'no_new_question';
+          _stampStep('progress_stop', 'no_new_question after ' + _repeatRun +
+            ' consecutive iterations asking nothing new, iter=' + iter);
+        }
+      }
       continue;
     }
     ans=(msg.content||'').trim();
@@ -4199,7 +4622,51 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // it went out as the literal answer, to a real inbox. This is a hollow
     // reply wearing a costume, not a real answer -- same rule as no answer
     // at all: silence over sending garbage to a human.
-    if (/^<[a-z_]+>\s*\{.*\}\s*<\/[a-z_]+>$/is.test(ans)) { ans = ''; }
+    // ⬡B:core.tool_loop:BUILD:the_guard_stays_and_she_gets_told_and_gets_one_way_out:20260726⬡
+    // THE GUARD ABOVE IS CORRECT AND STAYS. It exists because a malformed tool call once
+    // went out as a real answer to a real inbox. The defect is that rejecting it was
+    // SILENT and had NO RECOVERY: `ans` was blanked and the turn fell out of the loop with
+    // nothing, and she was never told what was wrong with what she wrote, so she had no
+    // way to learn from it inside the turn.
+    //
+    // MEASURED ON MAIN, not reasoned: with the model emitting real tool calls on passes
+    // one to three and this text shape on pass four, main runs FOUR provider passes and
+    // hands back "I hit my working limit on this turn." Four, not twenty. The counter is
+    // not what delivers that sentence. What delivers it is an empty draft meeting a
+    // recovery that could not run (see _exhaustionSynthesisUsed). Worth stating plainly
+    // because it means this line and the `iter<=3` cap made a spin UNRECOVERABLE; they
+    // did not make it endless. The loop always did exit here.
+    //
+    // So: keep the guard, keep the honesty, give her a way out. One corrective pass per
+    // turn, and only one, with the rejected bytes deliberately ABSENT from the history
+    // (the same rule the structured-policy repair already follows: a rejected draft must
+    // never anchor its own retry). The conditions on the next pass are therefore NOT
+    // identical, which is exactly what makes this safe rather than a runaway: the
+    // transcript now carries a fact it did not carry before, her tools are on the table
+    // for the whole run, and if she writes tool syntax a second time this falls through
+    // to the unchanged break.
+    if (/^<[a-z_]+>\s*\{.*\}\s*<\/[a-z_]+>$/is.test(ans)) {
+      ans = '';
+      var _toolsNextPass = !_closingReason && !_closingPassRan && iter < _iterCeiling &&
+        (_toolWindow <= 0 || (iter + 1) <= _toolWindow);
+      _stampStep('unexecuted_tool_call_text_rejected', 'iter=' + iter +
+        ' corrective_pass=' + (_toolTextRejectedOnce ? 'already_used' :
+          (_closingPassRan ? 'not_on_the_closing_pass' : 'opening')) +
+        ' tools_next=' + (_toolsNextPass ? 'yes' : 'no'));
+      if (!_toolTextRejectedOnce && !_closingPassRan) {
+        _toolTextRejectedOnce = true;
+        msgs.push({role:'system',content:
+          'Your last message wrote a tool call as plain text instead of emitting a real '
+          + 'one. Nothing ran. Text shaped like a tool call is never executed and is never '
+          + 'shown to anyone, so it was discarded rather than sent. '
+          + (_toolsNextPass
+            ? 'Your tools are on the table right now, so emit a real tool call if you still need one. '
+            : 'No tools are available to you on this turn. ')
+          + 'Otherwise answer the whole request in your own words, from what you have '
+          + 'already gathered. Do not write tool syntax in your reply.'});
+        continue;
+      }
+    }
     // ⬡B:core.tool.loop:WIRE:diagnostic_no_tool_visibility:20260704⬡
     // CLAIR wiring, licensed and diagnostic only, not the fix itself. A
     // founder-voice task asked for exactly this and gave up twice with no
@@ -4230,6 +4697,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (await _turnCancelled()) return _turnCancelledResult('after_deliberation');
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
   var _preCouncilHumanRepairUsed = false;
+  // ⬡B:core.tool_loop:FIX:the_forced_synthesis_could_not_run_on_the_path_it_was_written_for:20260726⬡
+  // MEASURED BY READING, not guessed, and it is why the founder met a canned sentence.
+  // exhaustion_forced_synthesis is the good recovery: full token cap, "answer the whole
+  // ask, do not narrow". It was gated on `!_preCouncilHumanRepairUsed`. But the recovery
+  // ABOVE it, the 380-token _synth over gathered evidence, sets that same flag the moment
+  // any tool ran this turn, and an exhausted turn is by definition a turn where tools ran.
+  // So on the exact path it was written for, the forced synthesis was UNREACHABLE, and a
+  // turn whose 380-token attempt came back empty fell straight to exhaustion_honest_limit,
+  // which is the sentence measured on her wall at 16:26, 16:46 and 17:00. One flag was
+  // doing two jobs: bounding repair spend, and bounding the last word before silence. It
+  // gets its own budget now, one attempt, on the one path that otherwise ships a canned
+  // line to a human.
+  var _exhaustionSynthesisUsed = false;
   async function _completeBoundHistoryOnLadder(history, maxTokens, temperature, jsonMode) {
     if (await _turnCancelled(true)) return '';
     try {
@@ -4495,7 +4975,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       var _wasAction = _trk.looksLikeActionRequest(message);
       await _trk.stampTrack({ hamUid: hamUid, status: 'BLOCKED', kind: 'request',
         request: String(message||''), channel: channel, cycleId: _cycleId, tools_used: tools,
-        reason: 'cycle produced no answer after ' + iter + ' iterations; likely missing a tool for part of the ask' });
+        reason: 'cycle produced no answer after ' + iter + ' iterations, closed by ' +
+          String(_closingReason || 'no_draft') + ', closing pass ' +
+          (_closingPassRan ? 'ran' : 'never opened') +
+          '; likely missing a tool for part of the ask' });
       if (await _turnCancelled()) return _turnCancelledResult('after_tracker_recovery');
       if (_wasAction && ['blooio','text','sms','voice','iman','email','portal','omi','ccwa','cara'].indexOf(channel) !== -1) {
         // ⬡B:core.tool_loop:FIX:exhaustion_synthesizes_never_begs_a_narrower_ask:20260721⬡
@@ -4521,7 +5004,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           }).join(String.fromCharCode(10));
         } catch(_eTail){ _forcedTail = ''; }
         var _forced = '';
-        if (!_preCouncilHumanRepairUsed) {
+        if (!_exhaustionSynthesisUsed) {
+          _exhaustionSynthesisUsed = true;
           _preCouncilHumanRepairUsed = true;
           try {
             _forced = await _completeBoundHistoryOnLadder([
@@ -4535,10 +5019,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         if (await _turnCancelled(true)) return _turnCancelledResult('after_exhaustion_synthesis');
         if (_forced && String(_forced).trim()) {
           finalAns = String(_forced).trim();
-          _stampStep('exhaustion_forced_synthesis', 'len=' + finalAns.length + ' iter=' + iter);
+          _stampStep('exhaustion_forced_synthesis', 'len=' + finalAns.length + ' iter=' + iter +
+            ' closed_by=' + String(_closingReason || 'no_draft'));
         } else {
           finalAns = 'I hit my working limit on this turn. I have logged your full request so nothing is lost, and I am not asking you to narrow it down.';
-          _stampStep('exhaustion_honest_limit', 'synthesis_empty iter=' + iter);
+          // NAME THE REAL WALL. This sentence was on her wall three times in one afternoon
+          // and the stamp beside it said only "synthesis_empty", which told the founder
+          // nothing about whether she ran out of room, stopped converging, or was never
+          // asked. Reaching this line now means her closing pass, the 380-token evidence
+          // synthesis AND the full-cap forced synthesis all came back with nothing.
+          _stampStep('exhaustion_honest_limit', 'synthesis_empty iter=' + iter +
+            ' closed_by=' + String(_closingReason || 'no_draft') +
+            ' tools_used=' + tools.length + ' closing_pass=' + (_closingPassRan ? 'ran' : 'never'));
         }
         _blockedFallback = true;
       }
@@ -5400,7 +5892,14 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   _stampGrandmotherLedger(hamUid, message, channel, identity, result);
   return result;
 }
-module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
+// The hold is deliberate in-process state that must survive across calls inside one
+// cycle, which is exactly why a test cannot clear it by making a successful call: the
+// hold short circuits before any request leaves. So the reset is an explicit, named seam
+// rather than a test reaching into module internals or ordering itself around the clock.
+function _ghHoldResetForTests() { _ghHold = { until: 0, reason: null, status: 0 }; }
+function _ghHoldStateForTests() { return { until:_ghHold.until, reason:_ghHold.reason, status:_ghHold.status }; }
+
+module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
   primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
@@ -5411,4 +5910,8 @@ module.exports={runPAI,_test:{executeTool,parseRoadmapActivationSpec,injectNamed
   verifiedVoiceHearingAnswer,voiceFarewellContextSatisfiesTurn,
   verifiedVoiceFarewellAnswer,voiceConversationalNoGenericLookup,
   bindExactHamToolArgs,structuredReachPolicyMode,reachIncidentIntakeMode,
-  reachIncidentFence}};
+  reachIncidentFence,
+  // ⬡B:core.tool_loop:WIRE:the_bounds_and_the_progress_stop_are_testable:20260726⬡ A guard
+  // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
+  _boundEnvInt,_stableJson,_evidenceKey,_callKey,
+  _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit}};

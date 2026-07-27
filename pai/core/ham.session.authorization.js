@@ -6,6 +6,28 @@ const crypto = require('node:crypto');
 
 const COOKIE_NAME = 'anu_ham';
 const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
+// ⬡B:core.ham_session_authorization:FIX:uppercasing_before_checking_let_case_folding_invent_a_world:20260726⬡
+// The SAME shape of the world ID pattern, but written to be tested against the input BEFORE
+// it is uppercased, which is the whole point of its existing.
+//
+// normalizeHamUid used to uppercase first and test second. toUpperCase() is Unicode case
+// folding, not an ASCII operation, and several characters EXPAND or change under it:
+//   'ß'  -> 'SS'      so worldIdForPage('ß')  returned the real world ID SS
+//   'ßß' -> 'SSSS'    so two of them returned SSSS
+//   'ﬁx' -> 'FIX'     so a ligature returned FIX
+// Every one of those passed HAM_PATTERN afterwards, because by then they WERE plain ASCII.
+// So the canon written to stop one person's world being silently renamed into another's was
+// itself renaming worlds, by the exact mechanism it exists to refuse, and the value it
+// invented was a legal ID that another person may actually hold. Worse than the page bug it
+// replaced: the old strip-then-uppercase produced an empty string here and refused.
+//
+// This is not only a page concern. normalizeHamUid is what signHamSession and
+// verifySessionToken normalize through, so the fold sat on the session path too.
+//
+// Checking the raw input first closes it: a character that is not already one of the canon's
+// own characters, in either case, never reaches toUpperCase() and never gets the chance to
+// become one. Found by external review (Codex, anew#1171).
+const HAM_INPUT_PATTERN = /^[A-Za-z0-9._:-]{2,160}$/;
 const MAC_PATTERN = /^[a-f0-9]{64}$/;
 
 // Preserve the signed-session key order already used by advisor.face.routes.
@@ -16,7 +38,11 @@ function signingSecret() {
 }
 
 function normalizeHamUid(value) {
-  const hamUid = String(value || '').trim().toUpperCase();
+  // The input is judged as it arrived. Only something already made of the canon's characters
+  // is allowed to be case folded, so folding can never manufacture an ID that was not typed.
+  const raw = String(value || '').trim();
+  if (!HAM_INPUT_PATTERN.test(raw)) return null;
+  const hamUid = raw.toUpperCase();
   return HAM_PATTERN.test(hamUid) ? hamUid : null;
 }
 
@@ -202,10 +228,36 @@ function requireAnyHamSession(req, res) {
   return authorized;
 }
 
+// ⬡B:core.ham_session_authorization:FIX:the_door_was_wide_and_every_room_was_narrow:20260726⬡
+// WHY THIS EXISTS. HAM_PATTERN above is the one shape a world ID has in this estate, and it
+// allows a dot and a colon: BDIF.ADVISOR is a real world. Thirteen page builders did not ask
+// for that shape. Each carried its own private line, some spelled esc(), some spelled inline,
+// all of them the same: String(x).replace(/[^A-Za-z0-9_-]/g,'').toUpperCase(). That line does
+// not reject a world it fails to recognize. It EDITS it. BDIF.ADVISOR was proven at the door,
+// handed to the page, and quietly rewritten to BDIFADVISOR before it was baked into the
+// markup, so every fetch the page then made asked the engine about a world that does not
+// exist and got nothing back. The person saw an empty room and no error, because from cold
+// code's point of view nothing had failed.
+//
+// WHAT THIS IS FOR. A page builder interpolates a world ID into HTML text and into a
+// double-quoted JS string literal, so it does need a guarantee about the characters. It gets
+// one here, from the canon shape rather than from a private guess: HAM_PATTERN admits only
+// A-Z, 0-9, dot, underscore, colon and hyphen. None of those can close a string literal, open
+// a tag, or start an entity, so a value that PASSES is safe to interpolate as-is.
+//
+// The difference that matters is what happens to a value that does not pass. This refuses it
+// and returns null. It never returns a repaired one. Editing an identity until it fits is how
+// one person's world silently became a different address, and a room is allowed to say it did
+// not recognize somebody; it is not allowed to quietly decide they are somebody else.
+function worldIdForPage(value) {
+  return normalizeHamUid(value);
+}
+
 module.exports = {
   COOKIE_NAME,
   signingSecret,
   normalizeHamUid,
+  worldIdForPage,
   signHamSession,
   verifySessionToken,
   sessionTokenFromRequest,
