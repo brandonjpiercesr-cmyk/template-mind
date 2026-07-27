@@ -41,6 +41,39 @@ function shadowAudit(text) {
   return { violations: violations, clean: clean.trim(), passed: violations.length === 0 };
 }
 
+// ⬡B:core.synthesize:FIX:no_secret_literal_scrubber_existed_anywhere_on_the_reply_path:20260727⬡
+// CATHY.SHADOW cold-audit, live 20260727, on POST /cara/consult (routes/cara.routes.js's own
+// "THE BLIND SPOT" comment already named this exactly: mode 'internal' only turns off WRIT's
+// INTERNAL_SYSTEM_TERMS check so she may name her own machinery to a coder; nothing in cold
+// code has ever scanned her answer text for a real credential shape before it ships in a JSON
+// response). Detection only, never mutation: this never rewrites or strips a byte of her
+// composed answer (core/synthesize.js's own council-mutation guard above forbids that). It
+// answers one question -- does this text contain something shaped like a live secret -- so a
+// caller (a route, not this module) can refuse to send the reply at all rather than launder it.
+// Patterns are known real credential shapes seen leaked in THIS codebase's own audit history
+// (Supabase/Nylas JWTs, ElevenLabs sk_, GitHub gh*_, AWS AKIA, Google AIza, Slack xox*-, Render
+// rnd_, Nylas nyk_v0_, OpenAI/Anthropic sk-) plus a bare three-segment JWT shape, not a generic
+// hex/base64 scan, because a generic scan would fail-closed on ordinary content like a commit
+// SHA or a bead ID and this door would go silent on harmless answers. A miss here is not a
+// promise of safety: it is a backstop, not the privacy or identity gate.
+var SECRET_LITERAL_PATTERNS = [
+  /\bsk-[A-Za-z0-9]{20,}\b/,
+  /\bsk_[a-f0-9]{16,}\b/i,
+  /\bgh[oprsu]_[A-Za-z0-9]{20,}\b/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\bAIza[0-9A-Za-z_-]{30,}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
+  /\brnd_[A-Za-z0-9]{20,}\b/,
+  /\bnyk_v0_[A-Za-z0-9]{10,}\b/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/
+];
+
+function secretLiteralScan(text) {
+  var s = typeof text === 'string' ? text : '';
+  var found = SECRET_LITERAL_PATTERNS.some(function (re) { return re.test(s); });
+  return { found: found };
+}
+
 // SIGIL — stamps every response with source tracing
 function sigil(hamUid, channel, text, ms) {
   var ts = Date.now();
@@ -179,4 +212,4 @@ async function synthesize(paiResult, question, channel) {
 // Synthesis is a pure, post-council projection. Memory gifts are decided inside the
 // full PAI cycle and committed through the governed write_to_brain effect only after
 // council receipt and STAMP readback. No detached model or brain write may escape here.
-module.exports = { synthesize, shadowAudit, sigil, pamGate };
+module.exports = { synthesize, shadowAudit, sigil, pamGate, secretLiteralScan };
