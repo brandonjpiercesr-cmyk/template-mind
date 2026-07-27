@@ -980,7 +980,15 @@ var TOOLS = [
   {type:'function',function:{name:'log_expense',description:'Log a one-off EXPENSE/transaction that already happened (not a recurring bill). '
     +'Call this when they say they spent money on something specific, e.g. "I spent $80 at the grocery store today".',
     parameters:{type:'object',properties:{merchant:{type:'string'},amount:{type:'number'},category:{type:'string'},date:{type:'string',description:'YYYY-MM-DD, default today'}},required:['merchant','amount']}}},
-  {type:'function',function:{name:'create_reminder',description:'Store a real reminder in the brain with a real due time, and show it in Command Center. '
+  // ⬡B:core.tool.loop:FIX:the_tool_description_promised_a_text_the_path_could_not_send:20260726⬡
+  // This description USED TO SAY the reminder "fires as a real text at the due time".
+  // It does not, and never did on its own. Firing needs a wake clock that is DEFAULT OFF
+  // (WAKE_CLOCK_ENABLED); armed, that clock wakes a CYCLE rather than sending a text; and
+  // any send is still gated by REACH_SEND_MODE. Telling the model otherwise made her
+  // promise a human a text she had no path to send, which is the same hollow-reply sin as
+  // any other unearned confirmation. It now says exactly what is true, and names the two
+  // conditions by name so the model cannot read "stored" as "will arrive".
+  {type:'function',function:{name:'create_reminder',description:'Store a real reminder in the brain with a real due time resolved in THEIR timezone, and show it in Command Center. '
     +'It does NOT text them or alert them at the due time unless this world has the wake clock armed and reach sending live, so never promise a text or an alert will arrive. '
     +'You can also raise it yourself next time you are talking with them, but that is one occasional aside and not a guarantee it will come up, so tell them you have it written down and that it is in their Command Center rather than promising you will remind them. '
     +'Use when the HAM asks to be reminded of something, or names a specific future thing to remember. '
