@@ -51,7 +51,8 @@ function buildSystemPrompt() {
     'Some things always reach him right away, and those you must flag as call worthy: anything about the safety or wellbeing of his children, anything legal with a real deadline running, anything not routine from his partner Eric, anything that touches the ownership of the company or the AI entity, and anything where he would be angry to find out you knew and did not tell him. When any of these is true set call_worthy true, and choose the strongest channel the allowed set permits.',
     'When the finding is low confidence and the allowed set is a review channel, choose the review channel: it is better to have a second look than to reach on a shaky read.',
     'THE TONE LAW: never open with the machinery. Never say an agent did a task or a process ran. Say the thing that happened in the world, the way someone who actually knows him would say it. He is not a system admin reading alerts, he is a man with a family and a company he built and work he cares about.',
-    'Choose ONLY from the allowed channels given to you. Reply with ONLY one JSON object, no prose, no fences: {"exit":"<one of the allowed channels>","call_worthy":<boolean>,"world_line":"<the one human line to open with, full and plain, never the machinery, never a terse fragment>","reasoning":"<internal why>"}'
+    'One more judgment, separate from the channel: a live screen he is actually looking at is its own surface. Set live_screen true only when this finding is worth appearing in front of him while he is sitting there, and false when it is a record he can find later. A quiet note is already that screen, so this only matters when you chose a channel other than COMMAND_CENTER. A cold list used to make this call for you; it is yours now, and false is a perfectly good answer.',
+    'Choose ONLY from the allowed channels given to you. Reply with ONLY one JSON object, no prose, no fences: {"exit":"<one of the allowed channels>","call_worthy":<boolean>,"live_screen":<boolean>,"world_line":"<the one human line to open with, full and plain, never the machinery, never a terse fragment>","reasoning":"<internal why>"}'
   ].join(' ');
 }
 
@@ -87,9 +88,19 @@ async function judgeExit(finding, opts) {
   // return the refusal untouched. The wall stays the wall.
   if (!cold.ok) return { ok: false, refused: true, reason: cold.reason, source: 'floor' };
 
-  var floorOut = { ok: true, exit: cold.exit, region: cold.region, call_worthy: false,
-    world_line: stripDashes(f.summary), reasoning: 'Cold bounded pick; mind unavailable.',
-    source: 'floor', cold_exit: cold.exit };
+  // ⬡B:core.reach.wonder:GUARD:the_floor_records_it_never_reaches:20260726⬡
+  // SUPERSEDES a floor that returned cold.exit and the raw bead summary on five separate
+  // paths: no deliberate function, a throw, an empty reply, unparseable JSON, and a pick
+  // outside the region. On every one of them the mind said nothing, and cold code handed
+  // back a REACHING channel (importance 9 and up is TEXT) plus a line to say. A threshold
+  // read is not a decision to interrupt a person, and a bead summary is not her voice.
+  // The floor now does the one thing a floor is for: it keeps the decision from being
+  // undecided, as pure record. LOGFUL reaches nobody. The cold pick and the region it came
+  // from are both kept on the decision so nothing is lost and the fall is auditable.
+  var floorOut = { ok: true, exit: 'LOGFUL', region: cold.region, call_worthy: false,
+    live_screen: false,
+    world_line: null, reasoning: 'No mind answered; recorded only, nothing reached.',
+    source: 'floor', cold_exit: cold.exit, floored_from: cold.exit };
 
   var deliberate = (options && typeof options.deliberate === 'function') ? options.deliberate : ladder.deliberate;
   if (typeof deliberate !== 'function') return floorOut;
@@ -131,6 +142,10 @@ async function judgeExit(finding, opts) {
     exit: pick,
     region: cold.region,
     call_worthy: parsed.call_worthy === true,
+    // ⬡B:core.reach.wonder:BUILD:the_live_screen_is_the_minds_call_too:20260726⬡
+    // core/reach/screen.consumer.js used to decide this with a three-element array. It is
+    // one more field of this one ruling now, so the screen has a decider instead of a list.
+    live_screen: parsed.live_screen === true,
     world_line: line,
     reasoning: safeStr(parsed.reasoning).slice(0, 300) || 'Judged by A’NU’s reach ruling.',
     source: 'llm',

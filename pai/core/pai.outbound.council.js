@@ -25,6 +25,24 @@ var STAGE_ORDER = Object.freeze([
   'STAMP'
 ]);
 
+// ⬡B:core.pai_outbound_council:WIRE:the_council_has_a_pre_write_side_too:20260726⬡
+// FOUNDER LAW, verbatim: the output agents "run BEFORE the writing occurs, and they
+// run AFTER. It's a little bit of both." STAGE_ORDER above is the AFTER side: seven
+// judges on an already composed draft. This is the BEFORE side, and until now it did
+// not exist as a caller anywhere. board/meta/reader.brief.js and board/writ/voice.brief.js
+// were built on 20260724 for exactly this seam and had zero callers in six repos.
+// Two passes, in the run of show order those two files declare: the META_COMMENTARY
+// organ briefs the writer on who reads this and what must never be recapped, then the
+// WRIT organ briefs the writer on the voice so the draft is BORN in voice instead of
+// being sanded into it by the post-write judge. The reader brief's own context block
+// rides into the voice pass as relationship context, so the second pass sees the first.
+// This composes nothing and judges nothing: it returns a context block the caller stamps
+// into the writer's window. The seven post-write stages are untouched and still rule.
+var PRE_WRITE_ORDER = Object.freeze([
+  'META_COMMENTARY_BRIEF',
+  'WRIT_BRIEF'
+]);
+
 var REQUIRED_EDGE_TYPES = Object.freeze([
   'CAUSED_BY',
   'PRODUCED_BY',
@@ -3040,6 +3058,81 @@ function exactRowId(row) {
 }
 
 // ⬡B:core.pai_outbound_council:PROCESS:ordered_fail_closed_cycle:20260715⬡
+// ⬡B:core.pai_outbound_council:WIRE:pre_write_briefing_entry:20260726⬡
+// Entrance: runPreWriteCouncil({ hamUid, channel, inbound, assignment, relationship }).
+// Exit: { ok, contextBlock, passes, briefs } handed to the WRITER, never to a human
+// (Granddaddy 911: a work feeds the wonder, it never speaks). Never throws: a pre-write
+// pass that cannot reach a mind returns ok:false with an empty context block and the
+// composition proceeds exactly as it did before this wire existed. Silence over hollow:
+// cold code fabricates no brief here, it only carries the two organs' own text.
+async function runPreWriteCouncil(input, injected) {
+  input = input || {};
+  var deps = injected || {};
+  var hamUid = input.hamUid || 'SYSTEM';
+  var channel = String(input.channel || '');
+  var inbound = String(input.inbound || '');
+  var assignment = String(input.assignment || '');
+  var relationship = String(input.relationship || '');
+  if (!inbound && !assignment) {
+    return { ok: false, reason: 'no_inbound_or_assignment', contextBlock: '',
+      passes: [], briefs: { reader: null, voice: null } };
+  }
+  var passes = [];
+  var blocks = [];
+  var readerOut = null;
+  var voiceOut = null;
+
+  var readerStart = Date.now();
+  try {
+    var readerMod = deps.readerBrief
+      ? { readerBrief: deps.readerBrief } : require('../board/meta/reader.brief.js');
+    readerOut = await readerMod.readerBrief({
+      inbound: inbound, assignment: assignment, channel: channel,
+      hamUid: hamUid, relationship: relationship });
+  } catch (eReader) {
+    readerOut = { ok: false, reason: 'reader_brief_threw:' + errorReason(eReader) };
+  }
+  passes.push({ stage: PRE_WRITE_ORDER[0], ok: !!(readerOut && readerOut.ok),
+    reason: (readerOut && readerOut.reason) || (readerOut && readerOut.ok ? 'READER_BRIEF_PASS' : 'reader_brief_missing'),
+    ms: Math.max(0, Date.now() - readerStart) });
+  if (readerOut && readerOut.ok && isNonEmpty(readerOut.contextBlock)) {
+    blocks.push(readerOut.contextBlock);
+  }
+
+  // The first pass rides into the second: the voice brief is written knowing who
+  // this reader is, which is exactly the order the two organs declare.
+  var voiceRelationship = blocks.length
+    ? (relationship ? relationship + '\n' + blocks[0] : blocks[0]) : relationship;
+  var voiceStart = Date.now();
+  try {
+    var voiceMod = deps.voiceBrief
+      ? { voiceBrief: deps.voiceBrief } : require('../board/writ/voice.brief.js');
+    voiceOut = await voiceMod.voiceBrief({
+      channel: channel, assignment: assignment || inbound,
+      hamUid: hamUid, relationship: voiceRelationship });
+  } catch (eVoice) {
+    voiceOut = { ok: false, reason: 'voice_brief_threw:' + errorReason(eVoice) };
+  }
+  passes.push({ stage: PRE_WRITE_ORDER[1], ok: !!(voiceOut && voiceOut.ok),
+    reason: (voiceOut && voiceOut.reason) || (voiceOut && voiceOut.ok ? 'VOICE_BRIEF_PASS' : 'voice_brief_missing'),
+    ms: Math.max(0, Date.now() - voiceStart) });
+  if (voiceOut && voiceOut.ok && isNonEmpty(voiceOut.contextBlock)) {
+    blocks.push(voiceOut.contextBlock);
+  }
+
+  var contextBlock = blocks.join('\n\n');
+  return {
+    ok: blocks.length > 0,
+    reason: blocks.length > 0 ? 'PRE_WRITE_BRIEFED' : 'pre_write_briefs_unavailable',
+    contextBlock: contextBlock,
+    passes: passes,
+    briefs: {
+      reader: (readerOut && readerOut.ok) ? readerOut.brief : null,
+      voice: (voiceOut && voiceOut.ok) ? voiceOut.brief : null
+    }
+  };
+}
+
 async function runOutboundCouncil(input, injected) {
   var inputError = validateInput(input);
   if (inputError) return { ok: false, reason: inputError, blocked_by: 'INPUT', stages: [] };
@@ -3881,6 +3974,8 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
 
 module.exports = {
   STAGE_ORDER: STAGE_ORDER,
+  PRE_WRITE_ORDER: PRE_WRITE_ORDER,
+  runPreWriteCouncil: runPreWriteCouncil,
   RECEIPT_SCHEMA: RECEIPT_SCHEMA,
   REQUEST_SCHEMA: REQUEST_SCHEMA,
   STAMP_PROOF_SCHEMA: STAMP_PROOF_SCHEMA,
