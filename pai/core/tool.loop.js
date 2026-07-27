@@ -1120,6 +1120,26 @@ var TOOLS = [
     parameters:{type:'object',required:['query'],properties:{
       query:{type:'string',description:'Plain-language description of the real feature or behavior to look up, e.g. "command center timestamp display" or "how reminders get marked done".'}
     }}}},
+  // ⬡B:core.tool_loop:TOOL:look_at_page_is_her_eyes_not_a_verdict:20260727⬡ THE EYES.
+  // Founder 20260727: "If she can look at her own stuff after she gets done working on it,
+  // and she can install a browser, we need to do that." read_own_code reads the SOURCE; this
+  // reads the RENDERED PAGE, which is the only thing that proves a surface actually works.
+  // The organ (core/browser.eyes.js) measures and refuses. It never concludes. Whether the
+  // page is right is HERS to say from the facts it hands back.
+  {type:'function',function:{name:'look_at_page',description:'OPEN A REAL BROWSER ON A REAL URL AND SEE WHAT IS ACTUALLY THERE. '
+    +'This is not a fetch and it is not the source code: it is a real headless Chromium that runs the page\'s JavaScript, so it returns what a person would actually see. '
+    +'Returns FACTS ONLY: the HTTP status, the URL it ended on after redirects, the redirect chain, the page title, the visible text, every console error, every uncaught page error, every network request that failed, and a stored screenshot with a short-lived signed URL. '
+    +'It reports; it never judges. There is no verdict field, no pass, no fail, no severity. Read the facts and say what they mean yourself. '
+    +'USE IT to verify your own work after a deploy instead of assuming a page is fine, to see what a person is actually looking at when they report something broken, to check a page at a phone width by passing width 390 and height 844, or to read an error a log did not capture because it only ever happened in the browser. '
+    +'IT REFUSES, by design, and a refusal comes back with a named reason: only http and https, never a URL carrying a username or password, never a private, loopback, link-local, carrier-grade-NAT, multicast or reserved address, never a cloud metadata endpoint, and never an internal hostname. The same refusal is applied again to every request the page itself makes, so a public page cannot redirect or fetch its way somewhere private. '
+    +'If it comes back browser_eyes_disabled the organ is not armed on this service; say that plainly rather than guessing what the page looks like.',
+    parameters:{type:'object',required:['url'],properties:{
+      url:{type:'string',description:'The full public http or https URL to look at.'},
+      width:{type:'number',description:'Viewport width in pixels, 320 to 2560. Defaults to 1280. Use 390 to see it as a phone.'},
+      height:{type:'number',description:'Viewport height in pixels, 320 to 2560. Defaults to 800. Use 844 with width 390 for a phone.'},
+      full_page:{type:'boolean',description:'True to capture the whole scrollable page instead of just the visible viewport.'},
+      reason:{type:'string',description:'Why this page is being looked at, in your own words. It is kept on the receipt.'}
+    }}}},
   {type:'function',function:{name:'consult_coda',description:codingRelay.line() + ' This read-and-deliberate step reuses read_own_code, then gives CODA repository, BCW, SPAN, roadmap, founder, and department evidence. CODA decides the canonical handoff; A\u2019NU relays it. It does not write build code, create a parallel queue, commit, or deploy.',
     parameters:{type:'object',required:['ham_uid','question'],properties:{
       ham_uid:{type:'string'},question:{type:'string',description:'The founder coding request only, without repeating the server-built BCW.'}
@@ -1184,7 +1204,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   memory:['find_in_brain','find_identity_evidence'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','find_in_brain',
     'read_lane_board','read_render_logs','get_recent_builds','read_own_code','consult_coda',
-    'activate_roadmap_task','fix_file_in_github','trigger_deploy'],
+    'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
   screen:['update_screen','save_layout','edit_layout','set_background'],
   general:[]
 });
@@ -1224,6 +1244,17 @@ function routeToolIntent(message) {
       || (/\b(skyscrapers?|fireworks?|beach|mountains?|lake|future[ _]?city|aurora)\b/.test(text)
         && /\b(behind everything|behind (all|my|the)|up behind|as (my|the) (background|wallpaper|backdrop|scene|screen)|on (my|the) screen)\b/.test(text)))
     return 'screen';
+  // ⬡B:core.tool_loop:WIRE:a_turn_that_names_a_page_puts_the_eyes_on_the_table:20260727⬡
+  // AVAILABILITY, never a decision. The eyes live in the 'code' bucket beside read_own_code,
+  // and without this line a turn like "look at my arrival page" routes to 'general', which
+  // carries zero tools, so the organ would have been unreachable by the most natural way
+  // anybody would ever ask for it. This makes the tool PRESENT. It does not call it, it does
+  // not force it, and it does not decide that a page needs looking at: she does, the same way
+  // the surface-intent comment below says a word list may never decide a scene. Placed after
+  // every other intent so email, budget, schedule and screen turns still win their own words.
+  if (/\b(look at|looking at|open|screenshot|screen shot|render|check|view|see|inspect)\b/.test(text)
+      && (/https?:\/\//.test(text) || /\b(page|site|website|url|portal|surface)\b/.test(text)))
+    return 'code';
   if (/\b(my|our|stored|brain|memory|bead|previous|recent|most recent|most recently|recently|last)\b/.test(text) &&
       /\b(decision|preference|history|result|failure|flagged|built|build|did we|identity|who is)\b/.test(text)) return 'memory';
   if (/\b(code|repo|repository|deploy|builds?|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
@@ -2440,6 +2471,35 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       return JSON.stringify({ok:true,advisor:_station,brief:String(_brief).slice(0)});
     } catch(eCons){ return JSON.stringify({ok:false,error:eCons.message}); }
   }
+  // ⬡B:core.tool_loop:WIRE:the_eyes_are_a_read_tool_and_nothing_more:20260727⬡
+  // Delegates whole to core/browser.eyes.js. Every refusal, every bound, every byte of the
+  // SSRF guard and every receipt lives in that one organ, so this handler holds no policy of
+  // its own to drift out of sync. The require is lazy and guarded because a world that
+  // inherits this engine may not carry the organ or the playwright driver yet, and a missing
+  // capability must be a NAMED reason she can say out loud, never a boot failure.
+  if (name === 'look_at_page') {
+    try {
+      var _eyes = null;
+      try { _eyes = require('./browser.eyes.js'); }
+      catch (eEyesLoad) {
+        return JSON.stringify({ ok:false, reason:'browser_eyes_not_installed',
+          note:'The browser organ is not present on this service. Say the page could not be looked at and why. Do not describe the page.' });
+      }
+      var _eyesUrl = String((args && args.url) || '').trim();
+      if (!_eyesUrl) return JSON.stringify({ ok:false, reason:'url_required' });
+      var _seen = await _eyes.observe({
+        url: _eyesUrl,
+        hamUid: hamUid,
+        width: args && args.width,
+        height: args && args.height,
+        full_page: !!(args && args.full_page),
+        reason: args && args.reason
+      });
+      return JSON.stringify(_seen);
+    } catch (eEyes) {
+      return JSON.stringify({ ok:false, reason:'browser_eyes_failed', detail:String(eEyes && eEyes.message || eEyes).slice(0, 300) });
+    }
+  }
   if (name === 'weather_check') {
     // ⬡B:core.tool.loop:BUILD:weather_is_a_general_capability_not_an_orphan:20260718⬡
     // Founder caught that weather was wired only into the arrival, orphaned. Weather is
@@ -3088,6 +3148,52 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var key = seatMap.resolveKey(seat);
     return key ? { seat:seat, key:key } : null;
   }
+  // ⬡B:core.tool_loop:911:she_knew_exactly_why_she_was_silent_and_said_no_answer:20260727⬡
+  // LIVE 20260727, POST /cara/consult, reproduced twice in the same minute:
+  //   {"ok":false,"reason":"no_answer","cycleId":"<HAM>.1785162129109.qmih0z"}
+  // returned in 3.8 SECONDS. A full cycle cannot run in 3.8 seconds. Nothing was slow,
+  // nothing timed out, and no model was ever asked: _paiSeatCandidate() found no key for
+  // the c2_organ seat, this door returned pai_seat_key_missing without a single fetch,
+  // the ladder's own seat (OR_KEY_MODEL_LADDER) was missing too so deliberate() returned
+  // null with zero completion attempts, and the turn ended empty.
+  //
+  // The cycle KNEW all of that. It wrote the exact code into global._paiLastError one
+  // line below, stamped it into the model_rung_result bead, and then the silent exit
+  // threw the name away and returned the word 'no_answer', which describes the symptom
+  // and names no cause. The 20260725 ceiling fix taught that exit to name ONE wall, the
+  // daily spend ceiling. A missing seat key is not a spend denial, so lastDenial() is
+  // null and the bare word came back exactly as it did before that fix, and the founder
+  // spent two days looking at the models, which had never been called.
+  //
+  // Two things are wrong and both are fixed here. First, the reason a cycle went silent
+  // must be the reason it actually went silent, whatever it was, not the one failure mode
+  // somebody remembered to special-case. Second, _paiLastError is a PROCESS GLOBAL: two
+  // concurrent cycles overwrite each other, so even the debug field could hand one HAM's
+  // wall to another HAM's turn. The note is now per-cycle. The global is still written so
+  // nothing that reads it changes behaviour, but nothing reads it to make a decision.
+  var _cycleFailure = null;
+  function _noteCycleFailure(reason) {
+    _cycleFailure = reason == null ? null : String(reason);
+    global._paiLastError = _cycleFailure;
+  }
+  // Turn an internal note into a short, honest, safe reason token. Provider codes and seat
+  // names are system facts and carry no identity, but a note can also hold a thrown
+  // message, so the output is bounded and stripped to a token charset before it can ride
+  // out on an HTTP body. Never returns a key, a URL, or anything a caller supplied.
+  function _namedSilentWall(note) {
+    var text = String(note == null ? '' : note).trim();
+    if (!text) return '';
+    if (text.indexOf('pai_seat:') === 0) {
+      try {
+        var parsed = JSON.parse(text.slice('pai_seat:'.length));
+        if (parsed && parsed.code) {
+          text = String(parsed.code) + (parsed.seat ? ':' + String(parsed.seat) : '');
+        }
+      } catch (eParseNote) { /* an unparseable note is still better than no note */ }
+    }
+    text = text.replace(/[^A-Za-z0-9._:-]+/g, '_').replace(/^_+|_+$/g, '');
+    return text.slice(0, 120);
+  }
   async function _callPaiProvider(requestBody, seatName) {
     var candidate = _paiSeatCandidate(seatName);
     if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
@@ -3240,7 +3346,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // live Memory Bank wall. The structured finalizer above instead requires its
   // server-normalized exact evidence wall and cannot fall back to generic text.
   if (!fcw || fcw.ok !== true || typeof fcw.system_prompt !== 'string' || !fcw.system_prompt) {
-    global._paiLastError = 'memory_bank_build_failed:' + ((fcw&&fcw.reason)||'unknown');
+    _noteCycleFailure('memory_bank_build_failed:' + ((fcw&&fcw.reason)||'unknown'));
     // \u2b21B:core.tool.loop:WIRE:needs_clair_before_founder:20260710\u2b21
     // Life Assistant pt6 law: when she lacks context, her FIRST move is to reach the
     // command center (CLAIR), not the founder. This stamps a NEEDS_CLAIR gap the
@@ -3633,7 +3739,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // deploy, book, or move a screen before its answer clears the council.
   var _readOnlyToolNames = ['nash_sports','find_identity_evidence','find_in_brain','read_render_logs',
     'get_budget_upcoming','get_budget_summary','consult_advisor','calendar_read','inbox_read','read_reminders',
-    'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda'];
+    'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda',
+    'look_at_page'];
   var _turnToolDefinitions = _reachIncidentIntake ? [] :
     identity && identity.outbound_finalize === true
     ? TOOLS.filter(function (tool) {
@@ -4170,10 +4277,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if(r&&r.choices&&r.choices.length){
       var _providerMessage=(r.choices[0]&&r.choices[0].message)||{};
       if(!_providerMessage.content&&!((_providerMessage.tool_calls||[]).length)){
-        global._paiLastError='pai_seat_empty_content';r=null;
-      } else { global._paiLastError=null; }
+        _noteCycleFailure('pai_seat_empty_content');r=null;
+      } else { _noteCycleFailure(null); }
     } else if(r&&r.error){
-      global._paiLastError='pai_seat:'+JSON.stringify(r.error).slice(0,180);
+      _noteCycleFailure('pai_seat:'+JSON.stringify(r.error).slice(0,180));
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
@@ -4190,9 +4297,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
         if(_lr&&_lr.content){
           r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
-          global._paiLastError=null;
-        } else if(!global._paiLastError){ global._paiLastError='ladder_no_content'; }
-      }catch(eLad){ global._paiLastError='ladder:'+String(eLad&&eLad.message||eLad).slice(0); }
+          _noteCycleFailure(null);
+        } else if(!_cycleFailure){ _noteCycleFailure('ladder_no_content'); }
+      }catch(eLad){ _noteCycleFailure('ladder:'+String(eLad&&eLad.message||eLad).slice(0)); }
     }
     // ⬡COLD:remember:become:METER_PROVIDER_ATTRIBUTION:20260723⬡
     // COLD-ANEW-METER-0035 stamped, needs-live-verification. This telemetry collapses direct and
@@ -4207,7 +4314,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         ' choices='+((r&&r.choices&&r.choices.length)||0)+
         ' content_len='+String(((_rc&&_rc.message&&_rc.message.content)||'')).length+
         ' tool_calls='+(((_rc&&_rc.message&&_rc.message.tool_calls)||[]).length)+
-        ' err='+String((r&&r.error)?JSON.stringify(r.error).slice(0,80):(global._paiLastError||'none')).slice(0)+
+        // ⬡B:core.tool_loop:FIX:the_durable_trail_must_read_the_same_per_cycle_value:20260727⬡
+        // Found by Codex on #1207. The returned reason was moved off the process global
+        // to a per cycle value so two overlapping cycles cannot hand one HAM's provider
+        // wall to another HAM's turn, but THIS line, the durable model_rung_result trail,
+        // was still reading the global. So the record written for diagnosis could name
+        // another world's error or 'none', which is the exact confusion the change was
+        // made to end. Half a fix on a telemetry line is worse than none: it looks fixed.
+        ' err='+String((r&&r.error)?JSON.stringify(r.error).slice(0,80):(_cycleFailure||'none')).slice(0)+
         ' preview='+JSON.stringify(String(((_rc&&_rc.message&&_rc.message.content)||'')).slice(0)));
     }catch(_eRR){}
     if (!r||r.error||!r.choices){
@@ -5084,9 +5198,23 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
               (_denial.kind === 'image' ? 'DAILY_IMAGE_CALL_CEIL' : 'DAILY_MODEL_CALL_CEIL');
         }
       } catch (eDenial) { /* naming is best effort and never changes the outcome */ }
+      // THE CEILING IS ONE WALL, NOT THE ONLY WALL. The block above names a spend denial and
+      // nothing else, so every other way a turn can end empty still came back as the bare word
+      // 'no_answer'. On 20260727 the real wall was a missing seat key, which is not a denial:
+      // lastDenial() was null, the special case never fired, and the honest cause the cycle had
+      // already written down was discarded one line before it was returned. Whatever this turn
+      // recorded as its last provider failure is the truth about this turn, so it is what she
+      // says. A ceiling denial still wins, because it is the more specific fact and it tells the
+      // reader it is a budget decision rather than a fault. Nothing here changes what she does;
+      // silence is still silence. It just stops being anonymous.
+      if (_silentReason === 'no_answer') {
+        var _namedWall = _namedSilentWall(_cycleFailure);
+        if (_namedWall) _silentReason = 'no_answer:' + _namedWall;
+      }
       _stampStep('cycle_end_silent', _silentReason + ', iterations='+iter);
       return {ok:false,reason:_silentReason,ham:hamObj,cycleId:_cycleId,
-        tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:global._paiLastError||null};
+        requestId:_requestId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,_dbg:_cycleFailure||null};
     }
   }
   // THE REAL SECOND PASS. Deterministic, not another LLM guess trusting itself.
@@ -5225,15 +5353,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (!_preparedHuman.ok) {
       var _terminalPreparationReason = _preparedHuman.reason || 'hollow_protocol_after_preparation';
       _stampStep('cycle_end_silent', _terminalPreparationReason);
+      // Two named causes used to be mapped BACK to the anonymous word here. A draft that was
+      // only a screen block, and a draft a scrub or a formatter emptied, are different faults
+      // with different fixes, and both arrived at the founder as 'no_answer' beside the ones
+      // that kept their names. The name is already in hand one line above; it now survives
+      // the return. Same law as the exit above: the reason is the reason.
       var _terminalReason = /^answer_was_only_screen_block|^emptied_after_model/.test(
-        _terminalPreparationReason) ? 'no_answer'
+        _terminalPreparationReason) ? 'no_answer:' + _namedSilentWall(_terminalPreparationReason)
         : _terminalPreparationReason === 'shadow_scrubbed_to_empty'
           ? 'shadow_scrubbed_to_empty'
           : _terminalPreparationReason.indexOf('false_current_turn_failure_claim') === 0
             ? 'false_current_turn_failure_claim' : 'hollow_protocol_answer';
       return {ok:false,reason:_terminalReason,ham:hamObj,cycleId:_cycleId,
         requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
-        _dbg:global._paiLastError||null};
+        _dbg:_cycleFailure||null};
     }
     finalAns = _preparedHuman.answer;
     // A rejected draft cannot contribute screen bytes to a repaired answer.
@@ -5771,7 +5904,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           reason:stageReceipt.reason||null, ms:stageReceipt.ms };
       }),
       ms:Date.now()-t0 } : null,
-    _dbg:global._paiLastError||null};
+    _dbg:_cycleFailure||null};
   // Internal-only exact binding for synthesis re-verification. Non-enumerable so
   // a route cannot leak the armed deliberation prompt by serializing this result.
   Object.defineProperty(_successResult, '_councilBinding', { enumerable:false,
