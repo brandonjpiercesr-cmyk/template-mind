@@ -1029,7 +1029,7 @@ var TOOLS = [
       to:{type:'string',description:'the exact recipient email address, required for both new mail and replies'},
       subject:{type:'string',description:'the exact one-line subject'},
       body:{type:'string',description:'the full real email body to send'}}}}},
-  {type:'function',function:{name:'read_reminders',description:'Read the HAM real reminders: things they told you to remind them about, and things you flagged for them. Use whenever they ask what reminders or to-dos they have, or what they need to remember. Returns real reminder items only, never invented. If there are none it says so.',
+  {type:'function',function:{name:'read_reminders',description:'Read the HAM real reminders: things they told you to remind them about, and things you flagged for them. Also returns field_followups, due follow-ups a wonder set for itself or for the HAM (forWhom self or ham); judge those the same honest way, never invent one, never treat a due one as already handled. Use whenever they ask what reminders or to-dos they have, or what they need to remember. Returns real reminder items only, never invented. If there are none it says so.',
     parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'}}}}},
   {type:'function',function:{name:'inbox_read',description:'Read the HAM real email inbox: their actual unread and recent messages, with sender and subject. Use whenever the HAM asks about their email, inbox, unread mail, or to show their inbox on the glass. Returns real messages only, never invented; each carries the id needed to draft a reply. If the inbox is clear it says so.',
     parameters:{type:'object',required:['ham_uid'],
@@ -2602,7 +2602,33 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         clearTimeout(_rt);
       }
       var _items = (_rRows || []).map(function(b){ return String(b.summary||'').replace(/^\[?REMINDER[^\]]*\]?\s*[:\-]?\s*/i,'').slice(0,180); }).filter(Boolean);
+      // ⬡B:core.tool_loop:WIRE:field_reminders_surfaced_into_the_cycle:20260727⬡
+      // FIELD (logful/field.js) is the doctrine reminders organ (LOGFUL reconstruction
+      // spec 1.7: "the reminder system will run through LOGFUL... she reads her own
+      // brain that decides what's overdue," no cron deciding). It had zero requirers
+      // anywhere in this repo: fieldCheck was never once called. This is FIELD's first
+      // real requirer inside a live turn. Cold code only fetches due rows here, own
+      // bounded timeout so a slow FIELD table can never eat this tool's budget; the
+      // deliberating mind reading this same tool result decides what a due follow-up
+      // means and whether anything is owed. This never sends anything anywhere, and it
+      // is not the REMINDER-firing pipeline (core/reach/wake.clock.js,
+      // core/reach/wake.intake.js): no new autonomous firing or reach path is added
+      // here, only a fact surfaced on a read the cycle already performs.
+      var _fieldDue = [];
+      try {
+        var _field = require('../logful/field.js');
+        var _fFetched = await _field.fieldCheck(_rUid, Date.now(), 4000);
+        if (_fFetched && _fFetched.ok) {
+          _fieldDue = (_fFetched.due || []).slice(0, 8).map(function (d) {
+            return { note: String(d.note || '').slice(0, 180),
+              due_at: Number.isFinite(d.dueAt) ? new Date(d.dueAt).toISOString() : null,
+              for_whom: d.forWhom === 'self' ? 'self' : 'ham',
+              set_by: String(d.setBy || 'UNKNOWN_WONDER') };
+          });
+        }
+      } catch (eField) { /* honest miss: no invented follow-ups */ }
       return JSON.stringify({ ok:true, count:_items.length, reminders:_items,
+        field_followups: _fieldDue,
         note: _items.length ? 'Real reminders from his brain.' : 'No reminders set right now.' });
     } catch (eRm) { return JSON.stringify({ ok:false, error:eRm.message }); }
   }
