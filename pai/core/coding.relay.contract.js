@@ -4,16 +4,32 @@
 // outbound gate. This is wired evidence/validation, not an answer template.
 'use strict';
 
+// ⬡B:core.coding_relay_contract:FIX:the_relay_line_taught_the_model_a_dead_name:20260726⬡
+// line() below is injected verbatim into a tool-schema description in core/tool.loop.js and
+// into BCW's relay_law part, so the MODEL reads it on every coding turn. It said "CANEW builds
+// through the existing drain", the model learned the builder is called CANEW, and then said
+// CANEW out loud to the founder. That is one of the ways the dead name kept growing back no
+// matter how many surfaces were scrubbed: it was being TAUGHT, upstream of every surface.
+//
+// builder is the machine token CODA must echo back in its relay JSON and it is compared
+// exactly, so it is renamed together with the line, never one without the other. The retired
+// token stays ACCEPTED below, deliberately and for good: a CODA reply already in flight, or an
+// older deployed sister, still echoes 'CANEW', and a naming pass may not turn those into a
+// hard contract failure. Supersede, never delete.
 var CONTRACT = Object.freeze({
   lead: 'CODA',
   sequencer: 'SPAN',
-  builder: 'CANEW',
+  builder: 'PAI',
   grader: 'CANON',
   repair: 'INTERNAL_CLAIR'
 });
+var RETIRED_BUILDER_TOKENS = Object.freeze(['CANEW']);
+function builderMatches(value) {
+  return value === CONTRACT.builder || RETIRED_BUILDER_TOKENS.indexOf(value) !== -1;
+}
 
 function line() {
-  return 'CODA is the coding lead. SPAN owns sequencing. CANEW builds through the existing drain. ' +
+  return 'CODA is the coding lead. SPAN owns sequencing. PAI builds through the existing drain. ' +
     'CANON grades. INTERNAL CLAIR diagnoses a failed gate and amends the next bounded retry. ' +
     'A’NU and outside CATHY relay evidence, decisions, failures, and receipts; ' +
     'they do not invent a parallel build path.';
@@ -66,7 +82,7 @@ function validateLead(value) {
 
 function exactContract(value) {
   return !!(value && value.lead === CONTRACT.lead &&
-    value.sequencer === CONTRACT.sequencer && value.builder === CONTRACT.builder &&
+    value.sequencer === CONTRACT.sequencer && builderMatches(value.builder) &&
     value.grader === CONTRACT.grader && value.repair === CONTRACT.repair);
 }
 
@@ -82,6 +98,7 @@ function repositoryEvidenceDenied(value) {
     /\b(?:repository|code|file)\s+evidence\s+(?:is|was)\s+(?:empty|unavailable|missing|not supplied)\b/i.test(text);
 }
 
-module.exports = { CONTRACT:CONTRACT, line:line, leadConflicts:leadConflicts,
+module.exports = { CONTRACT:CONTRACT, RETIRED_BUILDER_TOKENS:RETIRED_BUILDER_TOKENS,
+  builderMatches:builderMatches, line:line, leadConflicts:leadConflicts,
   validateLead:validateLead, exactContract:exactContract,
   repositoryEvidenceDenied:repositoryEvidenceDenied };

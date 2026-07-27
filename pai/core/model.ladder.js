@@ -12,22 +12,82 @@
 
 var outputGuard = require('./model.output.guard.js');
 
+// ⬡B:core.model_ladder:911:an_unanchored_strip_can_eat_a_real_answer:20260726⬡
+// FOUND 20260726 by a third Codex pass, verified by hand: the two fixes below this
+// comment were each correct on their own and dangerous together. An UNANCHORED
+// `<think>...` strip removes that shape ANYWHERE it appears, so a real, human-facing
+// answer that legitimately discusses or demonstrates `<think>` markup (explaining the
+// tag, showing an example) would have had that real content silently deleted, or
+// everything after it truncated if the example itself had no closing tag nearby.
+//
+// The fix is to ANCHOR: a real reasoning envelope from these providers is always a
+// LEADING block, written before the real answer begins, never something a model
+// inserts in the middle of prose it has already started writing. So this only ever
+// strips from the start of the string: every leading, closed `<think>...</think>`
+// block in sequence, then a leading, still-open `<think>` with no closer (the token-
+// exhaustion case) to the end of what remains. A `<think>` occurring anywhere past the
+// start of the real answer is left untouched, because it is content, not reasoning.
+//
+// One shared function, used everywhere this codebase strips a reasoning trace, so a
+// second reasoning-shaped model never needs this fixed a fourth time.
+//
+// Known, stated limit, WIDENED 20260726 by a fourth Codex pass: this is not only an
+// UNTERMINATED-tag problem. A real final answer that legitimately opens with a
+// PROPERLY CLOSED literal example, `<think>example</think>That is what the tag looks
+// like.`, is byte-for-byte the same shape as a real reasoning envelope followed by a
+// real answer. `cleanModelContent('<think>example</think>', opts)` returns '', and the
+// leading example in the longer case is silently deleted, keeping only the sentence
+// after it. Verified directly, not assumed: `stripReasoningTrace` cannot tell these
+// two intents apart, closed or unterminated, because nothing in the text says which
+// one it is. That is not a bug this file can regex its way out of; the honest fix is
+// a provider that separates reasoning from content in its own response shape, a
+// platform-level fact this file does not control. THE ACCEPTED TRADEOFF, stated rather
+// than silently made: this ladder's actual callers are a life-assistant deliberation
+// cycle (advisors, budget, calendar, the recovery and exhaustion synthesis passes in
+// core/tool.loop.js), not a coding assistant that teaches markup syntax. A real answer
+// that needs to open with the literal string "<think>" as its own content is a realistic
+// possibility this file accepts as a known, rare cost, against the alternative of
+// leaving real reasoning residue unstripped in the common case, which is the defect
+// this whole file exists to prevent. If a caller of this ladder ever needs to compose
+// answers ABOUT think-tag markup as ordinary content, that caller needs a different
+// contract than plain-text scrubbing, not a smarter regex here.
+function stripReasoningTrace(content) {
+  var text = content;
+  text = text.replace(/^\s*(?:<think>[\s\S]*?<\/think>\s*)+/i, '');
+  text = text.replace(/^\s*<think>[\s\S]*$/i, '');
+  return text.trim();
+}
+
 // ⬡B:core.model.ladder:GUARD:json_contract_falls_through_provider_ladder:20260715⬡
 // A provider returning non-empty prose is not a successful JSON deliberation.
 // Validate the requested wire contract at each provider boundary so a malformed
 // verdict falls through to the next authorized provider. If none returns one
 // strict JSON object, deliberate() still returns null and the caller fails closed.
 function hasAcceptedContent(content, opts) {
-  if (typeof content !== 'string' || !content.trim()) return false;
-  if (outputGuard.containsCjk(content)) return false;
+  if (typeof content !== 'string') return false;
+  // ⬡B:core.model_ladder:911:plain_mode_accepted_pure_reasoning_residue:20260726⬡
+  // FOUND 20260726 by an external review of #1163, verified by hand against this
+  // file. The think-block strip below used to run ONLY when opts.json === true,
+  // so a PLAIN mode call (exactly what the recovery and exhaustion synthesis
+  // passes in core/tool.loop.js use) accepted any non-empty string as a real
+  // answer, including one that was ENTIRELY a reasoning trace with no answer in
+  // it at all. A reasoning model that burns its whole token budget inside
+  // <think> and never reaches a real answer would have had that empty-of-
+  // substance trace accepted as her reply. The only thing that counts as an
+  // answer is what remains once the trace is stripped, in every mode, so the
+  // strip runs first and the emptiness check runs on what is left. Uses
+  // stripReasoningTrace so an unterminated <think> (token exhaustion mid
+  // reasoning, no closing tag ever written) is caught the same way.
+  var stripped = stripReasoningTrace(content);
+  if (!stripped) return false;
+  if (outputGuard.containsCjk(stripped)) return false;
   if (!opts || opts.json !== true) return true;
   // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
   // GLM-5.2 and other reasoning models can wrap the real JSON in a thinking
   // trace or leading blank lines. Strip think blocks and grab the outermost
   // JSON object before judging, so a good answer with residue is accepted
   // instead of silently falling the whole turn to a cold RunPod pod.
-  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  var text = stripped.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   if (text[0] !== '{') {
     var s = text.indexOf('{'); var e = text.lastIndexOf('}');
     if (s !== -1 && e > s) text = text.slice(s, e + 1);
@@ -43,9 +103,21 @@ function hasAcceptedContent(content, opts) {
 
 function cleanModelContent(content, opts) {
   if (typeof content !== 'string') return content;
-  if (!opts || opts.json !== true) return content;
-  var text = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  // ⬡B:core.model_ladder:911:plain_mode_never_scrubbed_the_reasoning_trace:20260726⬡
+  // FOUND 20260726, same review as the hasAcceptedContent fix above. This scrub
+  // used to run ONLY when opts.json === true. Every plain-text call in this
+  // codebase, which is what the recovery and exhaustion synthesis passes in
+  // core/tool.loop.js actually use, passed straight through unscrubbed, so a
+  // reasoning model's <think> block could ride along into a real human-facing
+  // reply. There is no mode where leaving a raw reasoning trace in an answer is
+  // correct, so the strip is unconditional. Only the JSON-specific code-fence
+  // and outer-brace extraction stay gated on json mode: running brace
+  // extraction on a legitimate plain-English answer that happens to mention a
+  // brace would corrupt it, which is not a risk json mode carries. Uses
+  // stripReasoningTrace so an unterminated <think> is caught the same way.
+  var text = stripReasoningTrace(content);
+  if (!opts || opts.json !== true) return text;
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   if (text[0] !== '{') {
     var s = text.indexOf('{'); var e = text.lastIndexOf('}');
     if (s !== -1 && e > s) text = text.slice(s, e + 1);
@@ -100,84 +172,33 @@ async function tryRunPodGLM(system, user, opts) {
     // keeps the generous floor so a normal deliberation still tolerates a cold boot.
     var timeout = opts.realtime === true ? opts.timeout
       : (opts.tightTimeout ? opts.timeout : Math.max(opts.timeout, 45000));
-    var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.GLM_RUNPOD_KEY || process.env.RUNPOD_API_KEY || '') }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
+    var runpodKey = seatMap && seatMap.sanitizeKey ? seatMap.sanitizeKey(process.env.GLM_RUNPOD_KEY) : String(process.env.GLM_RUNPOD_KEY || '').trim();
+    if (!runpodKey) return null;
+    var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runpodKey }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
     return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: 'runpod' } : null;
   } catch (e) { return null; }
 }
-async function tryTogetherGLM(system, user, opts) {
-  var key = process.env.TOGETHER_API_KEY; if (!key) return null;
-  try {
-    var body = { model: process.env.GLM_MODEL || 'zai-org/GLM-5.2', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
-    if (opts.json) body.response_format = { type: 'json_object' };
-    // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_together_so_it_returns_fast_clean_json:20260719⬡
-    // GLM-5.2 is a 744B reasoning model that THINKS by default, emitting a long
-    // reasoning trace before (or instead of) the answer. On a json call the
-    // content then fails to parse as pure JSON, hasAcceptedContent rejects it,
-    // and the whole GLM rung falls through to a COLD RunPod pod, which is the
-    // real reason every scene paid a 90-second cold start. Turning thinking OFF
-    // makes GLM-5.2 answer directly and fast, clean JSON on json calls, so the
-    // warm Together rung actually wins instead of silently losing to cold RunPod.
-    body.chat_template_kwargs = { enable_thinking: false };
-    var r = await fetch('https://api.together.xyz/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
-    if (!r.ok) return null;
-    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: 'together' } : null;
-  } catch (e) { return null; }
-}
-// ⬡B:core.model_ladder:911:one_dead_shared_key_silenced_her_whole_mind_while_ten_funded_seat_keys_sat_unused:20260725⬡
-// OUTAGE OF RECORD, 20260725, hours of silence: every OpenRouter rung below read ONE
-// env var, OPENROUTER_API_KEY. That key began answering http_401 on the same morning
-// the Together balance hit zero, so GLM lost both hosts and Qwen (also on the shared
-// key) lost its own. deliberate() returned null on every call, and the founder heard
-// stage_hollow_protocol_answer from her gate. THE BREAK that named it: the compose
-// seat answered with real composed content on the same service in the same minute, on
-// its own per-seat key. TEN funded per-seat keys were alive the whole time and the
-// mind never reached for a single one of them.
-//
-// So the rungs now carry ORDERED key candidates instead of one: the shared key first
-// (nothing changes while it works), then the per-seat keys named by the one source,
-// core/seat.map.js, so the file still hand-maintains no key names of its own. A
-// candidate is abandoned ONLY on a status that means the key itself was refused
-// (401 unauthorized, 402 payment, 403 forbidden, 429 rate limited). Any other failure
-// returns null on the first key exactly as before, so a real model fault still fails
-// fast instead of burning ten wallets on one bad request. With no seat keys present
-// the candidate list is one entry long and this is the old behavior, byte for byte.
+// Every OpenRouter rung resolves one exact functional seat. The seat supplies
+// both its model and its key, so one request cannot rotate through unrelated
+// wallets and a bill remains attributable to the caller that opened it.
 var seatMap = null;
 try { seatMap = require('./seat.map.js'); } catch (eSeatMap) { seatMap = null; }
 
-function openRouterCandidates(seatNames) {
-  var out = [], seen = {};
-  function push(value, label) {
-    if (!value || seen[value]) return;
-    seen[value] = 1;
-    out.push({ key: value, via: label });
-  }
-  push(seatMap && seatMap.sanitizeKey ? seatMap.sanitizeKey(process.env.OPENROUTER_API_KEY) : process.env.OPENROUTER_API_KEY, 'openrouter');
-  for (var i = 0; i < (seatNames || []).length; i++) {
-    var s = null;
-    try { s = seatMap && seatMap.SEATS ? seatMap.SEATS[seatNames[i]] : null; } catch (eSeat) { s = null; }
-    // Only an OpenRouter seat's key may authenticate to OpenRouter. Never borrow a
-    // foreign provider's key, the same law resolveKey() holds in seat.map.js.
-    // Through the one source's sanitizer, so a key pasted with a stray newline authenticates
-    // instead of throwing an illegal header, the same cure every other seat reader gets.
-    if (s && s.keyEnv && s.provider === 'openrouter') push(seatMap.sanitizeKey(process.env[s.keyEnv]), 'openrouter:' + seatNames[i]);
-  }
-  return out;
-}
-
-// A refused KEY, not a refused request. Only these advance to the next candidate.
-function keyWasRefused(status) {
-  return status === 401 || status === 402 || status === 403 || status === 429;
+function openRouterCandidate(seatName) {
+  if (!seatMap) return null;
+  var s = seatMap.seat(String(seatName || ''));
+  if (!s || s.provider !== 'openrouter') return null;
+  var key = seatMap.resolveKey(s);
+  return key ? { key:key,model:s.model,via:'openrouter:' + s.seat,seat:s.seat } : null;
 }
 
 async function tryOpenRouterGLM(system, user, opts) {
-  // GLM seats first (CANON and ADVISORS both sit on z-ai/glm-5.2 and are uncapped),
-  // then the two deliberation seats whose own fallback model is glm-5.2.
-  var candidates = openRouterCandidates(['canon', 'advisors', 'c3_mind', 'c2_organ']);
-  if (!candidates.length) return null;
+  // General ladder work belongs to one exact named seat. A failed or missing
+  // key stops this rung instead of rotating through CANON, mind, or organ money.
+  var candidate = openRouterCandidate(opts.seat || process.env.MODEL_LADDER_SEAT || 'deliberation');
+  if (!candidate) return null;
   try {
         // ⬡B:core.model_ladder:911:glm_4.6_was_EIGHT_versions_old_now_5.2:20260718⬡
     // FOUNDER CAUGHT IT 20260718: this rung was hardcoded to z-ai/glm-4.6, EIGHT
@@ -186,7 +207,9 @@ async function tryOpenRouterGLM(system, user, opts) {
     // A stale default model string silently pins the whole system to an old brain.
     // Now 5.2 everywhere, env-overridable. Truncation fall-through (same file) covers
     // 5.2's reasoning-burn so an empty never wins.
-    var body = { model: process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    var glmModel = opts.seat && /^z-ai\/glm/i.test(candidate.model) ? candidate.model :
+      (process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2');
+    var body = { model: glmModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_openrouter_too:20260719⬡
     // Same disease as the Together rung: GLM-5.2 thinks by default, the content
@@ -197,19 +220,12 @@ async function tryOpenRouterGLM(system, user, opts) {
     // providers differ in which one they honor.
     body.chat_template_kwargs = { enable_thinking: false };
     body.reasoning = { enabled: false };
-    for (var ci = 0; ci < candidates.length; ci++) {
-      var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidates[ci].key, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
-      if (!r.ok) {
-        if (keyWasRefused(r.status)) continue;
-        return null;
-      }
-      var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-      // A key that answered is the right key. A thin or non-contract answer is the
-      // MODEL's miss, not the key's, so it falls to the next RUNG, never the next key.
-      return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: candidates[ci].via } : null;
-    }
-    return null;
+    var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
+    if (!r.ok) return null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts),
+      model:'glm-5.2',model_slug:glmModel,via:candidate.via } : null;
   } catch (e) { return null; }
 }
 async function tryOrnith(system, user, opts) {
@@ -222,7 +238,10 @@ async function tryOrnith(system, user, opts) {
     // response_format is that surface's compatible JSON-mode request; ordinary
     // deliberations keep their existing request shape.
     if (opts.json) body.response_format = { type: 'json_object' };
-    var ornithKey = process.env.ORNITH_KEY || (/openrouter\.ai/.test(url) ? process.env.OPENROUTER_API_KEY : process.env.RUNPOD_API_KEY) || '';
+    var ornithKey = seatMap && seatMap.sanitizeKey
+      ? seatMap.sanitizeKey(process.env.ORNITH_LADDER_API_KEY)
+      : String(process.env.ORNITH_LADDER_API_KEY || '').trim();
+    if (!ornithKey) return null;
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + ornithKey },
       body: JSON.stringify(body), signal: requestSignal(opts, Math.min(opts.timeout, 10000)) });
     if (!r.ok) return null;
@@ -230,27 +249,55 @@ async function tryOrnith(system, user, opts) {
     // ⬡B:core.model_ladder:AMEND:ornith_via_reflects_real_host_not_hardcoded_runpod:20260721⬡
     // Ornith moved off RunPod to a managed API; the via label is env-driven so cost
     // telemetry (METER) names the true host instead of a hardcoded, now-wrong 'runpod'.
-    return hasAcceptedContent(c, opts) ? { content: c, model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
+    // ⬡B:core.model_ladder:911:ornith_accepted_but_never_scrubbed:20260726⬡
+    // FOUND 20260726, a third Codex pass. Every sibling rung in this file scrubs
+    // the content it accepts; this one alone returned the raw string. Checking
+    // CJK on the STRIPPED content (the fix above) means a response with CJK
+    // reasoning residue followed by a clean English answer is now correctly
+    // accepted rather than falling through, but returning it raw would have
+    // handed that CJK reasoning trace straight to a human. Scrubbed like every
+    // other rung, not a new behaviour, a missed one.
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
   } catch (e) { return null; }
 }
 async function tryQwen(system, user, opts) {
-  // The JUDGE seat is the exact model this rung asks for; the rest are the other Qwen
-  // seats, cheapest and fastest first, so a refused key never leaves the rung silent.
-  var candidates = openRouterCandidates(['judge', 'voice_fast', 'c1_cellm', 'c4_watch', 'deploy_tool']);
-  if (!candidates.length) return null;
+  var candidate = openRouterCandidate(opts.seat || process.env.MODEL_LADDER_SEAT || 'deliberation');
+  if (!candidate) return null;
   try {
-    var body = { model: process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
-    for (var ci = 0; ci < candidates.length; ci++) {
-      var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidates[ci].key, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
-      if (!r.ok) {
-        if (keyWasRefused(r.status)) continue;
-        return null;
-      }
-      var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-      return hasAcceptedContent(c, opts) ? { content: c, model: 'qwen3-235b', via: candidates[ci].via } : null;
-    }
-    return null;
+    var qwenModel = opts.seat && /^qwen\//i.test(candidate.model) ? candidate.model :
+      (process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b');
+    var body = { model: qwenModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    if (opts.json) body.response_format = { type: 'json_object' };
+    // ⬡B:core.model_ladder:911:the_last_warm_rung_thought_itself_empty:20260726⬡
+    // FOUND 20260726 while chasing her silence for a full day, and it is the same disease
+    // this file already cured on its sibling rung sixty lines up, on a rung nobody went back
+    // for. Qwen3 is a HYBRID REASONING model and it thinks by default, exactly like GLM-5.2.
+    // Left to think, it spends the whole max_tokens budget on reasoning and returns content
+    // that is EMPTY, hasAcceptedContent correctly rejects it, and this rung answers null.
+    //
+    // Null is not visibly a failure. It is indistinguishable from a rung that is simply
+    // down, so the ladder walks on, and this file's own comment at tryAnthropicBackup
+    // already wrote down what happens next: the open-weight rungs can all be out at once,
+    // deliberate() returns null, "the founder experiences as A'NU going silent."
+    //
+    // That is the state that was live today. Together is out of credits, Ornith is retired,
+    // RunPod is out, and the Anthropic floor is off by default since the cost audit. GLM and
+    // Qwen were the last two warm rungs, and only ONE of them had been told not to think.
+    //
+    // Both passthrough shapes go out because OpenRouter providers differ in which one they
+    // honour, which is the reasoning the GLM rung already carries and the reason it works.
+    body.chat_template_kwargs = { enable_thinking: false };
+    body.reasoning = { enabled: false };
+    var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
+    if (!r.ok) return null;
+    var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    // Its sibling has always run the accepted content through the scrubber and this rung
+    // handed back the raw string. A provider that honours neither passthrough still returns
+    // reasoning residue, so the rung that is most likely to think is the one that most needs
+    // cleaning, and it was the one without it.
+    return hasAcceptedContent(c, opts) ? {content:cleanModelContent(c, opts),model:'qwen3-235b',
+      model_slug:qwenModel,via:candidate.via} : null;
   } catch (e) { return null; }
 }
 // ⬡B:core.model_ladder:FIX:anthropic_backup_floor_kills_no_answer:20260721⬡
@@ -274,11 +321,9 @@ async function tryAnthropicBackup(system, user, opts) {
   // null (the cycle surfaces ok:false, the founder's own "ok:false over a hollow reply" doctrine)
   // instead of paying the most expensive closed model to hide the open-weight outage.
   if (process.env.ANTHROPIC_BACKUP_FLOOR !== 'on') return null;
-  var sonnet = process.env.ANTHROPIC_BACKUP_C2_SONNET5;
-  var haiku = process.env.ANTHROPIC_BACKUP_C0C1_HAIKU;
-  var key = sonnet || haiku;
+  var key = process.env.ANTHROPIC_LADDER_API_KEY;
   if (!key) return null;
-  var model = sonnet ? (process.env.ANTHROPIC_MODEL_SONNET || 'claude-sonnet-4-6') : (process.env.ANTHROPIC_MODEL_HAIKU || 'claude-haiku-4-5');
+  var model = process.env.ANTHROPIC_LADDER_MODEL || 'claude-haiku-4-5';
   try {
     var r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
@@ -297,49 +342,6 @@ async function tryAnthropicBackup(system, user, opts) {
 // reroutes any stray banned call, and the four-API law leaves no seat for it. The
 // runner, its GROQ_MODEL env references, and the 'groq' name in the runner map are
 // all deleted. Nothing reaches for it anymore.
-
-// Hedge authorized providers without handing authority to network luck. Calls
-// start together, but a lower-ranked result cannot win until every higher rank
-// has definitively failed. Once the highest available result is known, pending
-// lower-ranked work is aborted so it cannot linger after the judgment returns.
-async function rankedAccepted(factories, opts) {
-  factories = Array.isArray(factories) ? factories : [];
-  if (!factories.length) return null;
-  return new Promise(function (resolve) {
-    var pending = {};
-    var states = factories.map(function () { return pending; });
-    var controllers = factories.map(function () { return new AbortController(); });
-    var settled = false;
-    function finish(result, winner) {
-      if (settled) return;
-      settled = true;
-      controllers.forEach(function (controller, index) {
-        if (index !== winner && !controller.signal.aborted) controller.abort();
-      });
-      resolve(result || null);
-    }
-    function evaluate() {
-      for (var i = 0; i < states.length; i++) {
-        if (states[i] === pending) return;
-        if (states[i]) return finish(states[i], i);
-      }
-      finish(null, -1);
-    }
-    factories.forEach(function (factory, index) {
-      var childOpts = Object.assign({}, opts, {
-        signal:combinedSignal([opts && opts.signal, controllers[index].signal])
-      });
-      Promise.resolve().then(function () { return factory(childOpts); })
-        .then(function (result) {
-          states[index] = result || null;
-          evaluate();
-        }).catch(function () {
-          states[index] = null;
-          evaluate();
-        });
-    });
-  });
-}
 
 // deliberate(system, user, opts) -> { content, model, via } | null
 // THE LADDER, founder's authorized order: GLM 5.2 -> Ornith -> Qwen -> the Groq
@@ -363,10 +365,18 @@ async function deliberate(system, user, options) {
   }
   // ⬡B:core.model_ladder:KILL:ornith_out_of_the_default_order_founder_911:20260722⬡
   // FOUNDER 911 20260722: Ornith retired, RunPod out. The default rung order no
-  // longer contains ornith, so no ladder deliberation submits a RunPod job unless
-  // an env explicitly re-adds it (MODEL_LADDER_ORDER). The tryOrnith runner stays
-  // defined for that supervised opt-in only.
-  var order = (process.env.MODEL_LADDER_ORDER || 'glm,qwen').split(',').map(function (s) { return s.trim(); });
+  // longer contains ornith. An explicit per-call or env order plus the exact
+  // ORNITH_LADDER_API_KEY is required before that rung can leave the process.
+  // A caller may pin its rung and functional seat per call. This is request
+  // state, never process.env mutation: overlapping contests cannot reseat one
+  // another, and a throw cannot leave the whole process on the wrong ladder.
+  var requestedOrder = opts.order == null ? process.env.MODEL_LADDER_ORDER : opts.order;
+  var order = (Array.isArray(requestedOrder) ? requestedOrder :
+    String(requestedOrder || 'glm,qwen').split(','))
+    .map(function (s) { return String(s || '').trim().toLowerCase(); })
+    .filter(function (name,index,list) {
+      return name && list.indexOf(name) === index;
+    });
   // \u2b21B:core.model_ladder:FIX:glm_provider_order_is_env_truth:20260717\u2b21
   // Live receipt: the RunPod pod is serving glm4:9b, a small quantized model, and
   // because it always answers first the real GLM-5.2 rung (Together) never runs.
@@ -379,14 +389,13 @@ async function deliberate(system, user, options) {
   // RunPod GPU first. Live env already reads together,openrouter; this makes the
   // code fallback match the ruling instead of masking it. The runpod runner stays
   // in the map so the seat can be restored by env if ever wanted, just not defaulted.
-  var glmSeq = String(process.env.GLM_PROVIDER_ORDER || 'together,openrouter')
+  var glmSeq = String(process.env.GLM_PROVIDER_ORDER || 'openrouter')
     .split(',').map(function (s) { return s.trim().toLowerCase(); });
   var glmRunners = {
     runpod: function (o) { return tryRunPodGLM(system, user, o); },
-    together: function (o) { return tryTogetherGLM(system, user, o); },
     openrouter: function (o) { return tryOpenRouterGLM(system, user, o); } };
   var glmChain = glmSeq.filter(function (n) { return typeof glmRunners[n] === 'function'; });
-  if (!glmChain.length) glmChain = ['together', 'openrouter'];
+  if (!glmChain.length) glmChain = ['openrouter'];
   // \u2b21B:core.model_ladder:FIX:tight_timeout_skips_runpod_glm:20260720\u2b21
   // FOUNDER 911 20260720: the RunPod GLM endpoint showed 2708 failed jobs against
   // 1402 completed, a real live number pulled from RunPod's own health API. Root
@@ -395,21 +404,17 @@ async function deliberate(system, user, options) {
   // take longer than that on any cold start, and RunPod bills for GPU time already
   // spent even when the caller gives up and aborts. A tight caller hitting a cold
   // RunPod pod is close to a guaranteed wasted, billed failure. RunPod cannot
-  // reliably promise a sub-10-second answer the way a hosted per-token API can, so
-  // a tight-timeout caller now skips the RunPod rung entirely and goes straight to
-  // Together, a fast hosted API immune to cold starts. Realtime voice already hedges
-  // all providers in parallel above and is unaffected by this.
+  // reliably promise a sub-10-second answer the way a hosted API can, so a
+  // tight-timeout caller skips it and continues through the exact sequential
+  // OpenRouter seat. Realtime uses the same sequential rule.
   if (opts.tightTimeout) {
     glmChain = glmChain.filter(function (n) { return n !== 'runpod'; });
-    if (!glmChain.length) glmChain = ['together', 'openrouter'];
+    if (!glmChain.length) glmChain = ['openrouter'];
   }
   var runners = { glm: async function (runOpts) {
       runOpts = runOpts || opts;
-      if (runOpts.realtime === true) return rankedAccepted(glmChain.map(function (n) {
-        return function (child) { return glmRunners[n](child); };
-      }), runOpts);
       for (var gi = 0; gi < glmChain.length; gi++) {
-        var glmOut = await glmRunners[glmChain[gi]](opts);
+        var glmOut = await glmRunners[glmChain[gi]](runOpts);
         if (glmOut) return glmOut;
       }
       return null;
@@ -420,23 +425,14 @@ async function deliberate(system, user, options) {
   // The Anthropic backup is always the last rung whenever a key is present, so the cycle has a
   // live floor beneath the open-weight ladder. Appended, never inserted, so it runs only after
   // every higher rung has failed, and only added when it is not already in the configured order.
-  if (process.env.ANTHROPIC_BACKUP_FLOOR === 'on' && (process.env.ANTHROPIC_BACKUP_C2_SONNET5 || process.env.ANTHROPIC_BACKUP_C0C1_HAIKU) && order.indexOf('anthropic') === -1) {
+  if (opts.order == null && process.env.ANTHROPIC_BACKUP_FLOOR === 'on' &&
+      process.env.ANTHROPIC_LADDER_API_KEY && order.indexOf('anthropic') === -1) {
     order.push('anthropic');
   }
-  // ⬡B:core.model_ladder:BUILD:realtime_voice_judgment_race:20260716⬡
-  // A phone turn cannot wait behind four sequential cold starts. Hedge the
-  // complete authorized order for the same strict JSON judgment while
-  // preserving MODEL_LADDER_ORDER as authority. The Groq floor starts inside
-  // the same realtime window, but rankedAccepted cannot release its result
-  // until every higher-ranked provider has definitively failed.
-  if (opts.realtime === true) {
-    var realtimeNames = order.filter(function (name) {
-      return typeof runners[name] === 'function';
-    });
-    return rankedAccepted(realtimeNames.map(function (name) {
-      return function (child) { return runners[name](child); };
-    }), opts);
-  }
+  // Realtime changes the deadline profile only. It never launches paid rungs
+  // concurrently. A logical step opens the next provider attempt only after the
+  // prior attempt has settled, so voice SHADOW plus its review cannot multiply
+  // into four simultaneous provider charges.
   for (var i = 0; i < order.length; i++) {
     var fn = runners[order[i]]; if (!fn) continue;
     var res = await fn();
@@ -461,7 +457,7 @@ async function transcribe(audio, opts) {
   try { buf = Buffer.from(b64, 'base64'); } catch (eB) { return null; }
   if (!buf || !buf.length) return null;
   // rung one: Together Whisper (approved), when it has credits
-  var key = process.env.TOGETHER_API_KEY;
+  var key = seatMap && seatMap.sanitizeKey ? seatMap.sanitizeKey(process.env.TOGETHER_TRANSCRIBE_API_KEY) : String(process.env.TOGETHER_TRANSCRIBE_API_KEY || '').trim();
   if (key) {
     try {
       var form = new FormData();
@@ -501,4 +497,4 @@ async function transcribe(audio, opts) {
 }
 
 module.exports = { deliberate: deliberate, transcribe: transcribe,
-  _test: { hasAcceptedContent: hasAcceptedContent } };
+  _test: { hasAcceptedContent: hasAcceptedContent, cleanModelContent: cleanModelContent } };

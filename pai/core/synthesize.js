@@ -6,13 +6,6 @@
 // PAM: gates sensitive content by trust tier. C0 cost.
 // ANYHAM test: trust tier from HAM profile drives PAM gate. No hardcode.
 'use strict';
-// ⬡B:core.synthesize:WIRE:funneled_20260713⬡
-function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
-function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
-
-function ymd(){return new Date().toISOString().slice(0,10).replace(/-/g,'');}
 // SHADOW audit — flags violations in response text
 var HOLLOW = ['Certainly!','Of course!','Great question','Absolutely!','Sure thing',
               'I\'d be happy to','Definitely!','No problem!'];
@@ -55,42 +48,39 @@ function sigil(hamUid, channel, text, ms) {
   return { stamp: stamp, ham_uid: hamUid, channel: channel, ms: ms, ts: ts };
 }
 
-// PAM gate — tier-based content control
-// T10 = founder, gets everything. Lower tiers get filtered if content is sensitive.
+// ⬡B:core.synthesize:FIX:the_ladder_was_inverted_and_this_comment_still_pointed_the_old_way:20260726⬡
+// PAM gate, TRUST TIER, not the people ladder. This function has always operated on
+// identity.trust_level, the 0-to-10 confidence-in-the-channel scale where 10 is the fully
+// resolved owner and 0 is an unknown caller. The sentence that used to sit here said
+// "T10 = founder, gets everything", which reads as if it were describing the PEOPLE ladder.
+// It is not, and the people ladder was INVERTED by the founder's 20260724 doctrine: T0 is
+// the founder and holds everything, T1 is the highest circle, T2 is ENVOLVE only with no
+// external-org connection, and each tier inherits everything beneath it. LOWER NUMBER,
+// MORE PRIVILEGE. Anyone reading the old sentence and writing a comparison against it
+// produced a gate pointing exactly the wrong way, which on the people ladder means showing
+// the founder's most private tier to the widest audience.
+//
+// So the two axes are named apart, permanently:
+//   TRUST TIER   here, 0..10, HIGHER is more resolved. How sure are we who is on this channel.
+//   PEOPLE TIER  core/privacy/people.tier.js, T0..T4, LOWER is more privileged. Who is
+//                allowed to see this content. That is the ladder the doctrine inverted, and
+//                it is enforced structurally at the query, never by a regex over an answer.
+//
+// This regex is a deterministic backstop over an already-composed answer on a low-trust
+// channel, and that is all it has ever been. It is NOT the privacy gate and must never be
+// mistaken for one: judgment about whether content may travel to a person belongs to a mind
+// (board/pam/pam.js pamRelease) and to the query filter, both of which fail closed.
 function pamGate(text, trustTier) {
   var tier = parseInt(trustTier) || 0;
-  // Below T5: no financial details, no personal data summaries
+  // Below trust 5 the channel has not established who is speaking: no financial details,
+  // no personal data summaries, regardless of what the answer says about itself.
   if (tier < 5) {
     var sensitive = /\$[0-9,]+|bank|account|ssn|social security/gi;
     if (sensitive.test(text)) {
-      return { ok: false, gated: true, reason: 'sensitive_content_below_t5' };
+      return { ok: false, gated: true, reason: 'sensitive_content_below_trust5' };
     }
   }
   return { ok: true, gated: false, text: text };
-}
-
-// Stamp meeting minutes to brain
-async function stampMinutes(hamUid, channel, question, answer, toolsUsed, ms) {
-  var BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
-  if (!_bu() || !_bk()) return;
-  var summary = '[MINUTES ' + channel + '] Received message from ' + hamUid +
-    '. Tools used: ' + (toolsUsed.join(',') || 'none') + '. Responded in ' + ms + 'ms.';
-  var bead = {
-    ham_uid: hamUid, agent_global: 'PAI', stamp_type: 'MINUTES',
-    source: 'pai.minutes.' + hamUid + '.' + Date.now(),
-    acl_stamp: '\u2b21B:pai.minutes:MINUTES:turn:20260630\u2b21',
-    summary: summary,
-    content: JSON.stringify({ channel, question: question.slice(0), answer: answer.slice(0), toolsUsed, ms }), // 200-char slice lost the tail of the founder's INVOLVE doctrine drop 20260702 — conversations are the record, keep them
-    importance: 6
-  };
-  try {
-    await fetch(_bu() + '/rest/v1/' + _tbl() + '', {
-      method: 'POST',
-      headers: { apikey: _bk(), Authorization:'Bearer ' + _bk(), 'Accept-Profile':_schema(),
-                 'Content-Profile':_schema(), 'Content-Type':'application/json', Prefer:'return=minimal' },
-      body: JSON.stringify(bead)
-    });
-  } catch(e) {}
 }
 
 // Main synthesize function — wraps PAI output
@@ -166,52 +156,6 @@ async function synthesize(paiResult, question, channel) {
   // SIGIL stamp
   var sg = sigil(hamUid, channel, text, paiResult.ms);
 
-  // Stamp meeting minutes async (fire and forget)
-  stampMinutes(hamUid, channel, question, text, paiResult.tools_used || [], paiResult.ms).catch(function(){});
-
-  // ⬡B:core.synthesize:WIRE:memory_keeper:20260702⬡
-  // MEMORY IS BORN WHEN GIVEN — structurally. Live incident: founder texted "keep
-  // this moment" and her reply confirmed it, but toolsUsed was empty; the model
-  // skipped write_to_brain and the gift survived only as a conversation record. A
-  // prose directive is too soft for something this important, so the keeper runs
-  // deterministically every turn: C1 (penny model) decides if the person handed over
-  // a decision/rename/moment/fact to keep; if yes, a MEMORY bead is stamped with
-  // their words. Never blocks the reply; fails silent.
-  (async function keepGiftedMemory() {
-    try {
-      var GK = process.env.TOGETHER_API_KEY, BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
-      if (!GK || !BU || !BK || !question) return;
-      // ⬡B:core.synthesize:WIRE:ornith_primary_groq_fallback:20260705⬡
-      // Board-settled ladder. Fire-and-forget, never blocks the reply, so
-      // Ornith's real latency costs nothing here -- and unlike the digest's
-      // grounding gate (kept on Groq on purpose), a miss here is low-stakes:
-      // worst case a memory does not get saved, recoverable, not harmful.
-      var sysMem = 'You detect when a person is GIVING a memory to keep: a decision, a rename, a moment, an instruction like keep this or remember this or never lose this. Not questions, not small talk. Reply EXACTLY: KEEP: YES or KEEP: NO, then on the next line GIST: one sentence in their words if YES.';
-      var ornithMem = require('./ornith.client');
-      var out = await ornithMem.callOrnith(sysMem, question.slice(0), 120);
-      if (!out) {
-        var r = await fetch('https://api.together.xyz/v1/chat/completions', {
-          method: 'POST', headers: { Authorization: 'Bearer ' + GK, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: (process.env.TOGETHER_MODEL || 'zai-org/GLM-5.2'), max_tokens: 120, temperature: 0,
-            messages: [{ role: 'system', content: sysMem },
-                       { role: 'user', content: question.slice(0) }] })
-        });
-        var d = await r.json(); out = (d.choices && d.choices[0] && d.choices[0].message.content) || '';
-      }
-      if (!/KEEP:\s*YES/i.test(out)) return;
-      var gm = out.match(/GIST:\s*([\s\S]+)/i); var gist = gm ? gm[1].trim().slice(0) : question.slice(0);
-      await fetch(_bu() + '/rest/v1/' + _tbl() + '', { method: 'POST',
-        headers: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema(), 'Content-Profile': _schema(), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-        body: JSON.stringify({ ham_uid: hamUid, agent_global: 'ANEW', stamp_type: 'MEMORY',
-          acl_stamp: '\u2b21B:anew.memory:MEMORY:gifted:' + ymd() + '\u2b21',
-          source: 'memory.gifted.' + hamUid + '.' + Date.now(),
-          summary: '[MEMORY, given to me] ' + gist,
-          content: JSON.stringify({ their_words: question.slice(0), my_confirmation: text.slice(0), channel: channel, kept_at: new Date().toISOString() }),
-          importance: 9 }) });
-    } catch (e) {}
-  })();
-
-
   if (text !== paiResult.answer) {
     return { ok:false, reason:'post_council_answer_mutation_rejected' };
   }
@@ -231,4 +175,8 @@ async function synthesize(paiResult, question, channel) {
   };
 }
 
-module.exports = { synthesize, shadowAudit, sigil, pamGate, stampMinutes };
+// ⬡COLD:act:remove:PAI_SYNTHESIS_PROJECTION:20260725⬡
+// Synthesis is a pure, post-council projection. Memory gifts are decided inside the
+// full PAI cycle and committed through the governed write_to_brain effect only after
+// council receipt and STAMP readback. No detached model or brain write may escape here.
+module.exports = { synthesize, shadowAudit, sigil, pamGate };

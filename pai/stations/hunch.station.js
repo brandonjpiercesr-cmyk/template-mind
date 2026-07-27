@@ -48,12 +48,13 @@ function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_
 function maxTips(){ var v=parseInt(process.env.HUNCH_MAX_TIPS,10); return isFinite(v)?v:3; }
 
 // ---- (1) GATHER the real signals HUNCH monitors. Cold, each fails open. ----
-async function gatherSignals(hamUid) {
+async function gatherSignals(hamUid, suppliedMoment) {
   var out = { pending: [], calendar_next: null, stale_jobs: [], unread_memos: [], ambient: [] };
   // pending items + unread memos: read from the bank (facts other agents stamped)
   try {
     var url = _bu()+'/rest/v1/'+_tbl()+
-      '?select=summary,stamp_type,created_at&or=(summary.ilike.*pending*,summary.ilike.*unread*,summary.ilike.*follow%20up*,summary.ilike.*stale*,stamp_type.eq.SURFACE)&order=id.desc&limit=25';
+      '?select=summary,stamp_type,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '&or=(summary.ilike.*pending*,summary.ilike.*unread*,summary.ilike.*follow%20up*,summary.ilike.*stale*,stamp_type.eq.SURFACE)&order=id.desc&limit=25';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(9000) }).then(function(x){return x.json();});
     (Array.isArray(r)?r:[]).forEach(function(b){
@@ -64,7 +65,7 @@ async function gatherSignals(hamUid) {
     });
   } catch(e){}
   // upcoming calendar via NOW's moment (already resolved, no twin)
-  try { var m = await nowStation.assembleNow(hamUid); out.calendar_next = m.calendar_next; out._moment = m; } catch(e){}
+  try { var m = suppliedMoment || await nowStation.assembleNow(hamUid); out.calendar_next = m.calendar_next; out._moment = m; } catch(e){}
   // ambient sight/sound if GAZE has a current focus (the eyes the cupcake sign comes through)
   try {
     var gaze = require('./gaze.station.js');
@@ -77,7 +78,8 @@ async function gatherSignals(hamUid) {
 async function alreadyCovered(hamUid) {
   try {
     var url = _bu()+'/rest/v1/'+_tbl()+
-      '?select=summary&or=(agent_global.eq.BURST,agent_global.eq.HUNCH)&order=id.desc&limit=30';
+      '?select=summary&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '&or=(agent_global.eq.BURST,agent_global.eq.HUNCH)&order=id.desc&limit=30';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(8000) }).then(function(x){return x.json();});
     return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
@@ -132,7 +134,9 @@ async function deliverToCommandCenter(hamUid, tip, moment) {
 // organ through the one ladder; cold code only fetches the open tips and writes the outcomes.
 async function openTips(hamUid) {
   try {
-    var url=_bu()+'/rest/v1/'+_tbl()+'?select=id,summary,content,created_at&source=eq.hunch.station.tip.'+String(hamUid).toLowerCase()+'&order=id.desc&limit=20';
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=id,summary,content,created_at&ham_uid=eq.'+
+      encodeURIComponent(String(hamUid))+'&source=eq.hunch.station.tip.'+
+      encodeURIComponent(String(hamUid).toLowerCase())+'&order=id.desc&limit=20';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(9000)}).then(function(x){return x.json();});
     var open=[];
     for (var i=0;i<(Array.isArray(r)?r:[]).length;i++){
@@ -147,7 +151,8 @@ async function openTips(hamUid) {
 // recent context the organ uses to decide if a tip got handled
 async function recentContext(hamUid) {
   try {
-    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&ham_uid=eq.'+hamUid+'&order=id.desc&limit=40';
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&ham_uid=eq.'+
+      encodeURIComponent(String(hamUid))+'&order=id.desc&limit=40';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(9000)}).then(function(x){return x.json();});
     return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
   } catch(e){ return []; }
@@ -213,11 +218,12 @@ async function writeReconcile(hamUid, moment, reviewed, closed, nudged, dropped)
 
 // ---- ENTRANCE: the proactive sweep calls this (3x daily + waking-hour loop, driven by the
 // autonomous cycle service, not a timer HUNCH owns). ----
-async function sweep(hamUid) {
-  var _pre = await nowStation.assembleNow(hamUid);
+async function sweep(hamUid, options) {
+  options=options||{};
+  var _pre = options.moment || await nowStation.assembleNow(hamUid);
   var reconciled = await reconcileTips(hamUid, _pre); // EXIT/RALLY of prior cycle first
-  var signals = await gatherSignals(hamUid);
-  var moment = signals._moment || await nowStation.assembleNow(hamUid);
+  var signals = await gatherSignals(hamUid, _pre);
+  var moment = signals._moment || _pre;
   var covered = await alreadyCovered(hamUid);
   var tips = await composeTips(hamUid, moment, signals, covered);
   for (var i=0;i<tips.length;i++){ await deliverToCommandCenter(hamUid, tips[i], moment); }
@@ -240,7 +246,8 @@ async function stampTip(hamUid, tip, moment) {
 async function pendingForBriefing(hamUid) {
   try {
     var url = _bu()+'/rest/v1/'+_tbl()+
-      '?select=content,created_at&source=eq.hunch.station.tip.'+String(hamUid).toLowerCase()+'&order=id.desc&limit=5';
+      '?select=content,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '&source=eq.hunch.station.tip.'+encodeURIComponent(String(hamUid).toLowerCase())+'&order=id.desc&limit=5';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(8000) }).then(function(x){return x.json();});
     return (Array.isArray(r)?r:[]).map(function(b){ try{return JSON.parse(b.content);}catch(e){return null;} }).filter(Boolean);

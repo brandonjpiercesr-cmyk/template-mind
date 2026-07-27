@@ -1024,6 +1024,15 @@ async function registerLane(HAM) {
 // Stamp the PARKED notice into the brain so the CLAIR Command Center, A'NU, and CODA all
 // read it: the real send-into-the-real-thread connector is OPEN, NOT built, and waits for
 // the founder's explicit go. Runs once at mount, server-side (with the brain keys), fails safe.
+// ⬡B:core.inbox_zero:FIX:parked_notice_names_a_role_never_a_person:20260726⬡
+// This bead carried a real person's full legal name as a literal, and it is written at MOUNT,
+// which means every world that ever boots this file stamps that human into its own brain. This
+// repo is the mind-template every world inherits, so the leak was not one world's debt, it was
+// the starting condition of every world anyone would ever be given. The no-founder-pii gate did
+// not catch it: the gate detected emails, phones and denylisted single tokens, and a name was
+// not a thing it could see, so it printed a clean bill of health over the top of it. The bead is
+// already scoped by ham_uid, the env-resolved identity and the only identity a bead may carry,
+// so the name field was decoration that could only ever leak. Roles, never people.
 async function stampParkedRoadmap(HAM) {
   var ham = String(HAM || process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID || '').toUpperCase();
   if (!ham) return { ok: false, reason: 'no_ham' };
@@ -1032,12 +1041,12 @@ async function stampParkedRoadmap(HAM) {
     acl_stamp: brainClient.buildStamp('roadmap.inbox_zero.send_connector', 'ROADMAP', 'parked_awaits_founder_go'),
     source: 'roadmap.inbox_zero.send_connector_parked',
     importance: 9,
-    summary: '[PARKED] Inbox Zero send-into-real-thread connector is OPEN, NOT built, awaiting the founder explicit go. Drafts rest; founder-test previews only; no station builds the real send until Brandon says it is time.',
+    summary: '[PARKED] Inbox Zero send-into-real-thread connector is OPEN, NOT built, awaiting the founder explicit go. Drafts rest; founder-test previews only; no station builds the real send until the founder says it is time.',
     content: JSON.stringify({ parked: true, agent: 'INBOX_ZERO',
       built: ['drafts_rest_command_center', 'founder_test_preview_send_off_by_default'],
       not_built: ['approved_draft_to_real_external_person'],
       rule: 'CLAIR, CLAIR Command Center, A NU, CODA, cook-off, Wonder Games: do not build the real-send connector until the founder officially says it is time. Surface this bead first if asked.',
-      founder: 'Brandon J. Pierce Sr.', date: ymd() }),
+      authority: 'the founder of this world, resolved by ham_uid', date: ymd() }),
   });
 }
 

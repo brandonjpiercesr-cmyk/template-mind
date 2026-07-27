@@ -5,9 +5,9 @@
 //
 // This is the mind-template every world inherits, so a shared wallet here is a shared wallet
 // in every world. These grade the real behavior that changed: the advisor web search now
-// spends the ADVISORS seat's own key, the PRESS scan resolves its key from the one source
-// instead of naming the shared key, and neither can be tricked into authenticating with a
-// seat NAME or another provider's key. No real provider is ever touched.
+// spends the ADVISORS seat's own key, while the unattended PRESS scan requires a named,
+// provisioned seat and refuses the shared floor. Neither can be tricked into authenticating
+// with a seat NAME or another provider's key. No real provider is ever touched.
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -37,6 +37,10 @@ function captureFetch(payload) {
   const sent = [];
   const savedFetch = global.fetch;
   global.fetch = function (url, opts) {
+    if (/openrouter\.ai\/api\/v1\/key(?:[/?]|$)/.test(String(url))) {
+      return Promise.resolve({ ok:true, status:200,
+        json:function () { return Promise.resolve({data:{usage_daily:0}}); } });
+    }
     sent.push({ url: String(url), key: String(((opts && opts.headers) || {}).Authorization || '').replace(/^Bearer /, '') });
     return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(payload); } });
   };
@@ -65,13 +69,15 @@ test('the advisor web search spends the ADVISORS seat key, so the board bleed ha
   } finally { f.restore(); }
 });
 
-test('an unprovisioned advisors seat is never silent: the one source floors it', async function () {
+test('an unprovisioned advisors seat refuses instead of borrowing the shared wallet', async function () {
   const f = captureFetch(CHAT_OK);
   try {
-    await withEnvAsync(env({ OPENROUTER_API_KEY: 'sk-shared' }), function () {
+    const out = await withEnvAsync(env({ OPENROUTER_API_KEY: 'sk-shared' }), function () {
       return dispatch._test.realSearch('query');
     });
-    assert.equal(f.sent[0].key, 'sk-shared', 'no regression while the seat key is not yet funded');
+    assert.equal(out.ok, false);
+    assert.equal(out.reason, 'no_openrouter_key');
+    assert.equal(f.sent.length, 0, 'the exact advisors seat must be provisioned');
   } finally { f.restore(); }
 });
 
@@ -89,7 +95,7 @@ test('a seat name that resolves to nothing never becomes the key', async functio
   const key = await withEnvAsync(env({ ADVISOR_SEARCH_SEAT: 'not_a_seat', OPENROUTER_API_KEY: 'sk-shared' }), function () {
     return dispatch._test.advisorSearchKey();
   });
-  assert.equal(key, 'sk-shared', 'a typo degrades to the floor');
+  assert.equal(key, '', 'a typo fails closed and borrows no wallet');
   assert.notEqual(key, 'not_a_seat', 'a seat NAME must never be sent as a credential');
 });
 
@@ -116,13 +122,14 @@ test('the PRESS scan spends the seat named by PRESS_SCAN_SEAT', async function (
   } finally { f.restore(); }
 });
 
-test('an unnamed PRESS seat keeps exactly the old behavior, from the one source', async function () {
+test('an unnamed PRESS seat refuses the shared wallet and makes no HTTP call', async function () {
   const f = captureFetch(CHAT_OK);
   try {
-    await withEnvAsync(env({ OPENROUTER_API_KEY: 'sk-shared' }), function () {
+    const out = await withEnvAsync(env({ OPENROUTER_API_KEY: 'sk-shared' }), function () {
       return press.scanExternal(['news']);
     });
-    assert.equal(f.sent[0].key, 'sk-shared', 'PRESS has no seat of its own yet, so it floors, and it floors from seat.map.js');
+    assert.deepEqual(out, []);
+    assert.equal(f.sent.length, 0, 'an unattended scanner never borrows the shared wallet');
   } finally { f.restore(); }
 });
 

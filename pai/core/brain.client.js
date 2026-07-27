@@ -22,20 +22,66 @@ function brainKey() { return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRA
 function beadTable() { return process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain'); }
 function brainSchema() { return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'); }
 
+// ⬡B:core.brain_client:911:stamp_law_four_colons_yyyymmdd_never_a_hollow_descriptor:20260726⬡
+// GRANDMOTHER 911 pass. buildStamp was breaking the stamp law on EVERY bead this
+// client has ever written, two ways at once:
+//   1. it dated stamps with toISOString(), and an ISO timestamp carries two colons
+//      of its own, so the stamp shipped SIX colons instead of the lawful four;
+//   2. its only live caller (writeBead, below) passes suffix '', so the descriptor
+//      field was empty and every stamp read as ⬡B:source:TYPE::<date>⬡.
+// The law is exact: hex glyph, namespace, TYPE, descriptor, YYYYMMDD, four colons.
+// core/decoder.js had NOTICED this and widened its own canon regex to tolerate both
+// (empty descriptor, colons in the date). That is scaffolding around a defect. The
+// defect is fixed here at the one source, and the decoder's tolerance is removed in
+// the same pass; pre-fix beads are still readable there, but they are labelled as
+// the legacy drift they are instead of being blessed as canon.
+function stampDate(when) {
+    const d = when instanceof Date ? when : new Date();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    return `${d.getUTCFullYear()}${mm}${dd}`;
+}
+
+// A stamp field may never carry a colon (it would forge a fifth field) and may
+// never be empty (a hollow descriptor is what the founder read as a broken stamp).
+// Mechanical, no judgment: same class as buildAbcdTag below.
+function stampField(value, fallback) {
+    const cleaned = String(value == null ? '' : value)
+        .trim().replace(/[:⬡]+/g, '_').replace(/\s+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return cleaned || fallback;
+}
+
+// When a caller supplies no descriptor, derive one from the capability tail of the
+// source address (the address IS the ACL, so its last named segment is the truest
+// descriptor available). Trailing numeric segments are call timestamps, not names.
+function descriptorFor(source, type, suffix) {
+    const given = stampField(suffix, '');
+    if (given) return given.toLowerCase();
+    const parts = String(source || '').split('.').filter(Boolean);
+    while (parts.length > 1 && /^\d+$/.test(parts[parts.length - 1])) parts.pop();
+    const tail = parts.length ? parts[parts.length - 1] : '';
+    return stampField(tail, stampField(type, 'bead')).toLowerCase().slice(0, 64);
+}
+
 /**
- * Build a four‑colon ACL stamp wrapped in hex B markers.
- * @param {string} source - resource address
+ * Build a four-colon ACL stamp wrapped in hex B markers.
+ * @param {string} source - resource address (becomes the namespace field)
  * @param {string} type - bead type (e.g. 'page', 'log')
- * @param {string} suffix - additional suffix (e.g. timestamp)
- * @returns {string} stamp in format B:source:type:suffix:dateB
+ * @param {string} suffix - the descriptor; derived from the source when empty
+ * @param {Date} [when] - stamp date, defaults to now (UTC)
+ * @returns {string} stamp in format B:namespace:TYPE:descriptor:YYYYMMDDB
  */
-function buildStamp(source, type, suffix) {
-    const date = new Date().toISOString();
+function buildStamp(source, type, suffix, when) {
     // ⬡B ... ⬡ markers (U+2B21 hexagon glyph + capital B)
     const openGlyph = '⬡B';
     const closeGlyph = '⬡';
-    return `${openGlyph}:${source}:${type}:${suffix}:${date}${closeGlyph}`;
+    const namespace = stampField(source, 'unknown');
+    const stampType = stampField(type, 'BEAD');
+    const descriptor = descriptorFor(source, type, suffix);
+    return `${openGlyph}:${namespace}:${stampType}:${descriptor}:${stampDate(when)}${closeGlyph}`;
 }
+
 
 /**
  * Write a bead to the brain database.
@@ -180,10 +226,15 @@ function buildAbcdTag(agent, category) {
 
 // validate_stamp: does this bead's acl_stamp match the real hexagon-wrapped four-colon
 // shape? Cold, mechanical, no judgment about content, only shape.
+// ⬡B:core.brain_client:911:validator_counts_the_colons_it_claims_to_count:20260726⬡
+// The old pattern ended in `.+`, which accepts an ISO date and therefore accepts a
+// SIX colon stamp: the validator would have passed every malformed stamp buildStamp
+// wrote. It now holds the exact law: four colons, no empty field, YYYYMMDD date (an
+// optional single trailing letter is real in the corpus, e.g. 20260617b).
+var CANON_STAMP_RE = /^⬡B:([^:⬡]+):([^:⬡]+):([^:⬡]+):(\d{8}[a-z]?)⬡$/;
 function validateStamp(aclStamp) {
   var s = String(aclStamp || '');
-  var ok = /^⬡B:[^:]+:[^:]+:[^:]+:.+⬡$/.test(s);
-  return { ok: ok, acl_stamp: s };
+  return { ok: CANON_STAMP_RE.test(s), acl_stamp: s };
 }
 
 // audit_unstamped: find recent beads missing an abcd_tag, so STAMP can self-review its
@@ -215,6 +266,8 @@ async function stampStats(limitCount) {
 
 module.exports = {
     buildStamp,
+    stampDate,
+    CANON_STAMP_RE,
     buildAbcdTag,
     validateStamp,
     auditUnstamped,

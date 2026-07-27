@@ -8,6 +8,7 @@
 'use strict';
 
 var crypto = require('crypto');
+var paiToolEvidence = require('./pai.tool.evidence.js');
 // ⬡B:core.pai_outbound_council:WIRE:shadow_checks_canonical_coding_relay:20260715⬡
 var codingRelay = require('./coding.relay.contract.js');
 var identityProvenance = require('./identity.provenance.js');
@@ -22,6 +23,24 @@ var STAGE_ORDER = Object.freeze([
   'WRIT',
   'ANU_EXPRESSION',
   'STAMP'
+]);
+
+// ⬡B:core.pai_outbound_council:WIRE:the_council_has_a_pre_write_side_too:20260726⬡
+// FOUNDER LAW, verbatim: the output agents "run BEFORE the writing occurs, and they
+// run AFTER. It's a little bit of both." STAGE_ORDER above is the AFTER side: seven
+// judges on an already composed draft. This is the BEFORE side, and until now it did
+// not exist as a caller anywhere. board/meta/reader.brief.js and board/writ/voice.brief.js
+// were built on 20260724 for exactly this seam and had zero callers in six repos.
+// Two passes, in the run of show order those two files declare: the META_COMMENTARY
+// organ briefs the writer on who reads this and what must never be recapped, then the
+// WRIT organ briefs the writer on the voice so the draft is BORN in voice instead of
+// being sanded into it by the post-write judge. The reader brief's own context block
+// rides into the voice pass as relationship context, so the second pass sees the first.
+// This composes nothing and judges nothing: it returns a context block the caller stamps
+// into the writer's window. The seven post-write stages are untouched and still rule.
+var PRE_WRITE_ORDER = Object.freeze([
+  'META_COMMENTARY_BRIEF',
+  'WRIT_BRIEF'
 ]);
 
 var REQUIRED_EDGE_TYPES = Object.freeze([
@@ -104,19 +123,19 @@ function boundedEvidence(value, depth) {
   depth = depth || 0;
   if (depth > 5) return '[depth_limited]';
   if (value === null || value === undefined) return value === undefined ? null : value;
-  if (typeof value === 'string') return value.slice(0);
+  if (typeof value === 'string') return paiToolEvidence.truncateUtf8(value, 12000);
   if (typeof value === 'number' || typeof value === 'boolean') return value;
   if (Array.isArray(value)) {
-    return value.slice(0, 50).map(function (item) { return boundedEvidence(item, depth + 1); });
+    return value.slice(0, 20).map(function (item) { return boundedEvidence(item, depth + 1); });
   }
   if (typeof value === 'object') {
     var out = {};
-    Object.keys(value).slice(0, 60).forEach(function (key) {
+    Object.keys(value).slice(0, 40).forEach(function (key) {
       out[key] = boundedEvidence(value[key], depth + 1);
     });
     return out;
   }
-  return String(value).slice(0, 1200);
+  return paiToolEvidence.truncateUtf8(String(value), 1200);
 }
 
 function nowMs(deps) {
@@ -238,15 +257,95 @@ var CLEAN_BOARD_HOLD_REASONS = Object.freeze([
   'content_too_short'
 ]);
 
-function isCleanBoardHold(reason) {
+// ⬡B:core.pai_outbound_council:FIX:one_reader_for_every_hold_reason_in_the_house:20260725⬡
+// THE SAME MISTAKE CLASS, THIRD SIGHTING. A hold reason is a colon-separated list of machine
+// codes whose case nobody controls, because the producers do not agree: WRIT emits 'WRIT_HOLD'
+// upper case, hollowStageReason emits 'stage_empty_answer:content_too_short' lower case, and a
+// named cause can ride in ANY position, not only the first.
+//
+// Three doors have now been fixed for reading that string a different way than the door next to
+// it. PR #1055 fixed an exact-match against a lower case list that could never see 'WRIT_HOLD'.
+// PR #1063 fixed a gate that read the family and never the cause. Both fixes wrote the identical
+// nine lines of normalise-and-colon-split, and core/boundary.speech.js was carrying a THIRD
+// reading of the same string, a prefix match (indexOf(code + ':') === 0) that can only ever see
+// a cause sitting at position 0. 'WRIT_HOLD:action_claim_unreceipted' walks straight through a
+// prefix match. It is harmless today only because that one producer emits the cause bare, which
+// is exactly the sentence that was true of the two bugs already fixed here.
+//
+// So the law stops being copied and becomes a function. Normalise, split on the colon this file
+// already uses to carry a named cause, and return WHICH code matched, or null. Every consumer
+// asks the same reader the same way, and the three lists stay separate because they mean three
+// different things. Returns a bounded machine code from the caller's own frozen list, never
+// answer bytes, so a receipt can safely carry what it returns.
+function namedCauseIn(reason, causes) {
   var raw = String(reason == null ? '' : reason).trim().toLowerCase();
-  if (!raw) return false;
+  if (!raw || !Array.isArray(causes)) return null;
   var parts = raw.split(':');
   for (var i = 0; i < parts.length; i++) {
     var code = parts[i].trim();
-    if (code && CLEAN_BOARD_HOLD_REASONS.indexOf(code) >= 0) return true;
+    if (code && causes.indexOf(code) >= 0) return code;
   }
-  return false;
+  return null;
+}
+
+function isCleanBoardHold(reason) {
+  return namedCauseIn(reason, CLEAN_BOARD_HOLD_REASONS) !== null;
+}
+
+// ⬡B:core.pai_outbound_council:FIX:a_retry_that_cannot_win_is_not_a_retry:20260725⬡
+// CATHY submitted COLD-ANEW-WRIT-UNFIXABLE-RETRY-0001 against this commit: a hold that the
+// same input will always lose is being handed a full second cycle, which burns model spend
+// and wall clock and then silences her anyway with the identical reason. She is right, and
+// the gap is one field wide.
+//
+// isCleanBoardHold answers ONE question honestly: is this hold from a family a channel is
+// allowed to re-ask? It matches any colon-separated part, so 'WRIT_HOLD:internal_system_leak'
+// matches on the family token 'writ_hold' and returns true. That is correct for what that
+// function is for, and the merged 20260725 tests pin it. What was missing is the SECOND
+// question, which nobody was asking: CAN a re-run actually win this one?
+//
+// For two of WRIT's named causes the answer is no, by this file's own stated law:
+//   internal_system_leak  board/writ/writ.js decides this with String.indexOf over a frozen
+//                         vocabulary (INTERNAL_SYSTEM_TERMS). It is the most deterministic
+//                         fence in the council. It is a fact about which words the answer
+//                         contains, never a probabilistic judge having a bad moment.
+//   quality_hold          the WRIT organ returns the bare word HOLD only when instructed
+//                         that the text "cannot be fixed because it leaks a real secret or
+//                         another world's private data", and it is asked at temperature 0.
+//                         healAnswer's own comment (see internal_system_leak_heal_guidance)
+//                         already says this cause "is not a rewording problem and must keep
+//                         failing closed". The gate one function over disagreed with it.
+//
+// And the retry is not the first attempt at the repair. The in-council heal-and-resubmit has
+// ALREADY run the best targeted fix that exists for that exact cause, with cause-specific
+// guidance, and the resubmission still held. A channel-level re-run then throws that away and
+// re-asks the same question of the same brain, which reaches for the same vocabulary and hits
+// the same frozen list. Two full cycles, up to fourteen extra heal calls, one guaranteed
+// silence. That is a system reporting effort it has not earned.
+//
+// This narrows nothing that could ever have succeeded. A probabilistic no (shadow_model_hold,
+// shadow_wonder_hold, a bare WRIT_HOLD with no named cause, an empty-answer content_too_short)
+// still gets its one real re-run, because for those a second roll genuinely differs. Only a
+// cause that is terminal BY CONSTRUCTION loses a retry it was always going to lose, and it
+// loses it instantly and says why instead of spending first.
+var TERMINAL_HOLD_CAUSES = Object.freeze([
+  'internal_system_leak',
+  'quality_hold',
+  'unfixable_leak'
+]);
+
+// Returns the named terminal cause carried in the reason, or null. Same normalise-and-split
+// law as isCleanBoardHold so the two can never drift into reading the string differently.
+// 20260725: that promise is now structural rather than a comment. Both call namedCauseIn.
+function terminalHoldCause(reason) {
+  return namedCauseIn(reason, TERMINAL_HOLD_CAUSES);
+}
+
+// THE ONE GATE a channel asks before spending a second cycle. Both questions, one place, so
+// no consumer can answer half of it and re-open the burn. Never widens: a reason this returns
+// true for was already a clean board hold before this existed.
+function mayRetryHold(reason) {
+  return isCleanBoardHold(reason) && !terminalHoldCause(reason);
 }
 
 var HOLLOW_HEAL_GUIDANCE = 'The held attempt returned tool or function call protocol, ' +
@@ -447,9 +546,12 @@ function parseStrictJsonObject(raw) {
 function boundedVerifiedEvidence(value) {
   if (value === null || value === undefined) return [];
   var items = Array.isArray(value) ? value.slice(0, 8) : [value];
+  var remaining = 48000;
   return items.map(function (item, index) {
     var bounded = boundedEvidence(item);
-    var preview = stableStringify(bounded).slice(0);
+    var preview = paiToolEvidence.truncateUtf8(stableStringify(bounded),
+      Math.min(12000, remaining));
+    remaining -= Buffer.byteLength(preview, 'utf8');
     var name = item && typeof item === 'object' && (item.name || item.tool || item.agent);
     return {
       index: index,
@@ -457,13 +559,27 @@ function boundedVerifiedEvidence(value) {
       evidence_preview: preview,
       evidence_digest: digestText(preview)
     };
-  });
+  }).filter(function (item) { return item.evidence_preview.length > 0; });
 }
 
 // SHADOW must judge the answer against the same server-bound deliberation that
 // produced it. Keep the common case byte-exact. For unusually large turns,
 // retain bounded head and tail windows plus a digest of the complete bytes so
 // the model input stays finite without pretending that the preview is whole.
+function shadowEvidenceMaxBytes() {
+  var parsed = parseInt(process.env.PAI_SHADOW_EVIDENCE_MAXCHARS, 10);
+  if (!Number.isFinite(parsed)) parsed = 160000;
+  return Math.max(32000, Math.min(200000, parsed));
+}
+
+function utf8Window(buffer, start, length) {
+  var from = Math.max(0, Math.min(buffer.length, start));
+  while (from < buffer.length && (buffer[from] & 0xc0) === 0x80) from++;
+  var to = Math.min(buffer.length, from + Math.max(0, length));
+  while (to > from && to < buffer.length && (buffer[to] & 0xc0) === 0x80) to--;
+  return buffer.subarray(from, to).toString('utf8');
+}
+
 function boundedDeliberationEvidence(value) {
   var text = String(value || '');
   // ⬡B:core.pai_outbound_council:FIX:stop_starving_the_shadow_judge:20260721⬡ FOUNDER 911: SHADOW
@@ -472,8 +588,9 @@ function boundedDeliberationEvidence(value) {
   // floor) carry 100K+ token windows, so the 32K slice was pure dumbing-down. Give the judge the
   // whole deliberation; truncation now only trips on a genuinely massive turn, and when it does the
   // hold logic treats a blindfolded judge as unable to silence her (see judgeWasBlindfolded below).
-  var maxChars = parseInt(process.env.PAI_SHADOW_EVIDENCE_MAXCHARS || '160000', 10);
-  var truncated = text.length > maxChars;
+  var full = Buffer.from(text, 'utf8');
+  var maxBytes = shadowEvidenceMaxBytes();
+  var truncated = full.length > maxBytes;
   // ⬡B:core.pai_outbound_council:FIX:keep_the_middle_never_lose_the_turning_point:20260722⬡
   // A'NU's own ruling when consulted on the truncation 911 (cycle committed 20260722): a
   // head+tail split "risks missing the MIDDLE where the nuance lives -- a five-hour session, the
@@ -481,14 +598,14 @@ function boundedDeliberationEvidence(value) {
   // ceiling (normal 100K-char turns pass whole), and when it does the judge now sees head, MIDDLE,
   // and tail -- three windows, never a silent hole in the center -- plus the blindfold fail-open
   // below so a judge that cannot see all of it can never silence her.
-  var third = Math.max(1, Math.floor(maxChars / 3));
-  var midStart = truncated ? Math.max(third, Math.floor((text.length - third) / 2)) : 0;
+  var third = Math.max(1, Math.floor(maxBytes / 3));
+  var midStart = truncated ? Math.max(third, Math.floor((full.length - third) / 2)) : 0;
   return {
     text: truncated ? null : text,
-    head: truncated ? text.slice(0, third) : null,
-    middle: truncated ? text.slice(midStart, midStart + third) : null,
-    tail: truncated ? text.slice(-third) : null,
-    byte_length: Buffer.byteLength(text, 'utf8'),
+    head: truncated ? utf8Window(full, 0, third) : null,
+    middle: truncated ? utf8Window(full, midStart, third) : null,
+    tail: truncated ? utf8Window(full, full.length - third, third) : null,
+    byte_length: full.length,
     digest: digestText(text),
     truncated: truncated
   };
@@ -704,12 +821,16 @@ function namedContextContradictions(answer, namedEvidence) {
 // the final A'NU prose makes an explicit conflicting lead claim, SHADOW holds
 // it even if a probabilistic judge approves. Answers that do not discuss relay
 // roles are untouched.
-function verifiedCodingRelay(context) {
+function verifiedCodingRelay(context, binding) {
   var evidence = context && Array.isArray(context.verified_evidence)
     ? context.verified_evidence : [];
   for (var i = 0; i < evidence.length; i++) {
     var item = evidence[i];
-    if (!item || item.tool !== 'consult_coda') continue;
+    if (!item || item.tool !== 'consult_coda' || !paiToolEvidence.verify(item, {
+      hamUid:binding && binding.hamUid,
+      requestId:binding && binding.requestId,
+      cycleId:binding && binding.cycleId
+    })) continue;
     var result = item.result;
     try { if (typeof result === 'string') result = JSON.parse(result); }
     catch (eResult) { result = null; }
@@ -719,8 +840,8 @@ function verifiedCodingRelay(context) {
   return null;
 }
 
-function codingRelayContradictions(answer, context) {
-  var relay = verifiedCodingRelay(context);
+function codingRelayContradictions(answer, context, binding) {
+  var relay = verifiedCodingRelay(context, binding);
   if (!relay) return [];
   var violations = codingRelay.leadConflicts(answer);
   if (!violations.length) return [];
@@ -980,8 +1101,8 @@ function storedMemoryEvidenceItems(value, binding) {
   return (Array.isArray(value) ? value : []).filter(function (item) {
     if (!item || typeof item !== 'object' || !expectedHam) return false;
     if (!isNonEmpty(item.tool)) {
-      return item.provenance === 'memory_bank.exact_ham' &&
-        String(item.ham_uid || '').toUpperCase() === expectedHam;
+      return paiToolEvidence.verifyMemory(item, { hamUid:expectedHam }) &&
+        memoryPayloadMatchesHam(item.result, expectedHam);
     }
     if (item.tool !== 'find_in_brain' && item.tool !== 'find_identity_evidence') {
       return false;
@@ -989,11 +1110,9 @@ function storedMemoryEvidenceItems(value, binding) {
     var args = parseEvidenceJson(item.args);
     if (!args || typeof args !== 'object' ||
         String(args.ham_uid || '').toUpperCase() !== expectedHam) return false;
-    var exactRead = item.provenance === 'memory_bank.exact_ham';
-    var currentRead = item.provenance === 'pai.current_turn.execute_tool' &&
-      !!expectedRequest && !!expectedCycle && item.request_id === expectedRequest &&
-      item.cycle_id === expectedCycle;
-    if (!exactRead && !currentRead) return false;
+    var currentRead = paiToolEvidence.verify(item, { hamUid:expectedHam,
+      requestId:expectedRequest, cycleId:expectedCycle }, { requireRead:true });
+    if (!currentRead) return false;
     return memoryPayloadMatchesHam(item.result, expectedHam);
   });
 }
@@ -1064,8 +1183,8 @@ function evidenceMentionsOption(item, option, binding) {
     if (item.tool === 'find_in_brain' || item.tool === 'find_identity_evidence') {
       if (!storedMemoryEvidenceItems([item], binding).length) return false;
     } else {
-      var current = item.provenance === 'pai.current_turn.execute_tool' &&
-        item.request_id === binding.requestId && item.cycle_id === binding.cycleId;
+      var current = paiToolEvidence.verify(item, { hamUid:binding.hamUid,
+        requestId:binding.requestId, cycleId:binding.cycleId });
       if (!current) return false;
       if (item.tool === 'consult_coda') {
         consultSemanticOnly = true;
@@ -1514,8 +1633,8 @@ function verifiedExactNamedEvidenceRelay(ctx, namedEvidence) {
       consults.length !== 1) return null;
   for (var i = 0; i < consults.length; i++) {
     var item = consults[i];
-    if (item.provenance !== 'pai.current_turn.execute_tool' ||
-        item.request_id !== expectedRequest || item.cycle_id !== expectedCycle) return null;
+    if (!paiToolEvidence.verify(item, { hamUid:expectedHam,
+        requestId:expectedRequest, cycleId:expectedCycle })) return null;
     var args = item.args;
     try { if (typeof args === 'string') args = JSON.parse(args); }
     catch (eArgs) { args = null; }
@@ -1619,8 +1738,8 @@ function identityEvidenceReceiptContradictions(ctx) {
   }
   var item = (Array.isArray(context.verified_evidence)
     ? context.verified_evidence : []).find(function (candidate) {
-      return candidate && candidate.tool === 'find_identity_evidence' &&
-        candidate.provenance === 'memory_bank.exact_ham';
+      return candidate && candidate.evidence_kind === 'prefetched_identity_evidence' &&
+        paiToolEvidence.verifyMemory(candidate, { hamUid:ham });
     });
   if (!item || !identityProvenance.sameEvidenceReceipt(
       item.identity_evidence_receipt, expected)) {
@@ -1643,27 +1762,83 @@ function identityEvidenceReceiptContradictions(ctx) {
   return [];
 }
 
+// Deterministic factual grounding receives only bytes whose producer can prove
+// their origin. The user question, tool arguments, caller context, failures,
+// recommendations, effect plans, and free-form receipt strings are excluded.
+// ⬡B:core.pai_outbound_council:FIX:she_deliberated_from_it_so_the_board_may_trace_it:20260726⬡
+// D1 on the open ledger, the money silence, oldest live complaint. The board traced her
+// figures only against read-classified tool results and memory rows, while the transcript
+// she actually deliberated FROM also carried non-read tool results (a consult reply quoting
+// real figures, an effect result naming an amount). Same turn, same authentic bytes, and the
+// board was never shown them, so a figure she faithfully relayed held as invented.
+//
+// The requireRead wall existed for one real reason: a non-read tool can echo its own ARGS,
+// and args are model-authored bytes, so an invented figure could launder itself through a
+// tool call's echo. That wall stays: before a non-read result may ground anything, every
+// numeric token in it whose value also appears in the model-authored args is masked out.
+// Model-authored bytes still ground nothing. Only what the tool itself said grounds.
+function maskModelAuthoredFigures(resultText, argsText) {
+  var reNum = /\$?\s?\d[\d,]*(?:\.\d+)?\s*[kKmM]?/g;
+  function normalize(token) {
+    var str = String(token);
+    var mult = /\d\s*[kK]\s*$/.test(str) ? 1000 : (/\d\s*[mM]\s*$/.test(str) ? 1000000 : 1);
+    var n = parseFloat(str.replace(/[$,\s]/g, '').replace(/[kKmM]$/, ''));
+    return isFinite(n) ? Math.round(n * mult) : null;
+  }
+  var authored = Object.create(null);
+  var m;
+  while ((m = reNum.exec(String(argsText || ''))) !== null) {
+    var v = normalize(m[0]);
+    if (v !== null) authored[v] = true;
+  }
+  return String(resultText || '').replace(reNum, function (token) {
+    var value = normalize(token);
+    return value !== null && authored[value] ? '(figure_from_model_args)' : token;
+  });
+}
+
+function verifiedFactEvidenceText(ctx) {
+  var items = ctx && ctx.context && Array.isArray(ctx.context.verified_evidence)
+    ? ctx.context.verified_evidence : [];
+  var parts = [];
+  var remaining = 48000;
+  for (var i = 0; i < items.length && remaining > 0; i++) {
+    var item = items[i];
+    var authenticRead = paiToolEvidence.verify(item, {
+      hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId
+    }, { requireRead:true });
+    var authenticMemory = paiToolEvidence.verifyMemory(item, { hamUid:ctx.hamUid });
+    // An authentic executed result that is not read-classified still entered the
+    // transcript the mind deliberated from; it grounds only after args masking.
+    var authenticExecution = !authenticRead && !authenticMemory &&
+      paiToolEvidence.verify(item, {
+        hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId
+      });
+    if (!authenticRead && !authenticMemory && !authenticExecution) continue;
+    var contributed = authenticExecution
+      ? maskModelAuthoredFigures(item.result || '', item.args || '')
+      : (item.result || '');
+    var result = paiToolEvidence.truncateUtf8(contributed, remaining);
+    if (!result) continue;
+    parts.push(result);
+    remaining -= Buffer.byteLength(result, 'utf8');
+  }
+  return parts.join('\n');
+}
+
 async function defaultShadowStage(ctx, injected) {
   injected = injected || {};
   var structuredPolicy = structuredReachPolicyContext(ctx);
   var boardShadow = injected.boardShadow || require('../board/shadow.js');
   var modelLadder = injected.modelLadder || require('./model.ladder.js');
   // \u2b21B:core.pai_outbound_council:WIRE:shadow_receives_deliberation_evidence:20260716\u2b21
-  // The statistics rule traces against the exact bytes the answer was built
-  // from: the deliberation input plus the bounded verified evidence previews.
-  // ⬡B:core.pai_outbound_council:911:this_judge_was_tracing_her_numbers_against_his_question:20260725⬡
-  // MEASURED 20260725 on the live gate, twelve probes, perfect separation: every money
-  // question HELD, 6 of 6; every no-number question PASSED, 6 of 6. Structural, not a rate.
-  // deliberationInput on a voice turn is String(message), HIS OWN QUESTION, so this judge was
-  // handed his question and told to find her figure inside it. It never could. The tool
-  // RESULTS she looked up now travel with the turn and are traced here.
-  // NOTE FOR THE NEXT READER: this file is NOT a pai-sync manifest pair, it legitimately
-  // diverges from anew. This landed as the same targeted EDIT applied to both sides, never a
-  // copy, because copying would have clobbered this side's own version.
-  var shadowEvidenceText = String(ctx.deliberationInput || '') + '\n' +
-    boundedVerifiedEvidence(ctx.context && ctx.context.verified_evidence)
-      .map(function (e) { return e.evidence_preview || '' + '\n' +
-    String((ctx.context && ctx.context.tool_results_text) || ''); }).join('\n');
+  // The factual board receives only authentic successful read bytes minted at
+  // execution or exact-HAM memory-read time. User text, tool arguments, caller
+  // context, recommendations, failures, and free-form receipts cannot ground a
+  // percentage, amount, or count. Structured REACH remains a closed-world case
+  // whose server-bound deliberation packet is its explicit evidence authority.
+  var shadowEvidenceText = (structuredPolicy ? String(ctx.deliberationInput || '') + '\n' : '') +
+    verifiedFactEvidenceText(ctx);
   var boardResult = await boardShadow.shadow(ctx.answer,
     Object.assign({}, ctx.context || {}, { evidence_text: shadowEvidenceText }));
   var verifiedEvidence = boundedVerifiedEvidence(ctx.context && ctx.context.verified_evidence);
@@ -1677,7 +1852,61 @@ async function defaultShadowStage(ctx, injected) {
     : await categoricalMemoryContradiction(ctx, injected);
   var memoryAbsenceFlags = memoryAbsenceFlag ? [memoryAbsenceFlag] : [];
   var preferenceFlags = preferenceJudgmentFindings(ctx.question, ctx.answer, ctx);
-  var relayRoleFlags = codingRelayContradictions(ctx.answer, ctx.context || {});
+  var relayRoleFlags = codingRelayContradictions(ctx.answer, ctx.context || {}, ctx);
+  // ⬡B:core.pai_outbound_council:BUILD:unreceipted_action_claim_hold:20260725⬡
+  // Law of record: docs/os/UNRECEIPTED_ACTION_CLAIM_HOLD_20260725.md. A cold
+  // named-evidence scan, same species as the other deterministic SHADOW holds:
+  // it compares first-person past-tense action claims in the answer against the
+  // turn's own tool trace, queued effects, and banked receipt evidence. Its only
+  // outputs are a boolean hold and the named reason; it never edits a byte of
+  // answer text, imports no reach or send module, and the rewrite of a held
+  // claim happens ONLY through the existing heal-and-resubmit cycle below.
+  // Default ON per founder order 20260725; ACTION_CLAIM_HOLD=off disables.
+  var actionClaimHold = injected.actionClaimHold || require('./action.claim.hold.js');
+  var actionClaimFinding = actionClaimHold.enabled(injected.env || process.env)
+    ? actionClaimHold.detect(ctx.answer, {
+        tools_used: ctx.context && ctx.context.tools_used,
+        pending_effects: ctx.context && ctx.context.pending_effects,
+        verified_evidence: ctx.context && ctx.context.verified_evidence
+      })
+    : { hold: false, reason: null, claims: [] };
+  var actionClaimFlags = actionClaimFinding.hold
+    ? actionClaimFinding.claims.map(function (found) {
+        return { reason: actionClaimHold.REASON, claim: found.claim, verb: found.verb };
+      })
+    : [];
+  // ⬡B:core.pai_outbound_council:WIRE:three_source_reach_joins_the_shadow_board:20260726⬡
+  // Open ledger D5 sister item (ledger B4): core/three.source.reach.js was built, tested,
+  // and wired into nothing, wiring debt in the exact shape AGENTS.md warns about. Her own
+  // rule joins the deterministic SHADOW findings here, DOUBLE-gated: the module's own
+  // THREE_SOURCE_REACH switch, and THREE_SOURCE_REACH_WIRED which is OFF at birth because
+  // arming it changes what every channel holds and that flip belongs to the founder, not a
+  // lane. Unarmed, this block resolves to an empty list and the stage is byte-for-byte what
+  // it was. The require is lazy and fail-closed so a world without the module runs exactly
+  // as before. Sources handed to detect are the three she named: his voice (the question)
+  // and the same authentic evidence text the board already traces against (live pulls and
+  // stamps); the module itself never edits a byte of answer text.
+  var threeSourceFlags = [];
+  var threeSourceWiredRaw = String(((injected.env || process.env) || {}).THREE_SOURCE_REACH_WIRED
+    == null ? '' : ((injected.env || process.env) || {}).THREE_SOURCE_REACH_WIRED).trim().toLowerCase();
+  var threeSourceWired = threeSourceWiredRaw === '1' || threeSourceWiredRaw === 'true' ||
+    threeSourceWiredRaw === 'on';
+  if (threeSourceWired && !structuredPolicy) {
+    try {
+      var threeSourceReach = injected.threeSourceReach || require('./three.source.reach.js');
+      if (threeSourceReach.enabled(injected.env || process.env)) {
+        var threeSourceFinding = threeSourceReach.detect(ctx.answer, {
+          user_message: ctx.question,
+          evidence: shadowEvidenceText
+        });
+        if (threeSourceFinding && threeSourceFinding.reaching) {
+          threeSourceFlags = threeSourceFinding.claims.map(function (found) {
+            return { reason: threeSourceReach.REASON, claim: found.excerpt, kind: found.kind };
+          });
+        }
+      }
+    } catch (eThreeSourceReach) { threeSourceFlags = []; }
+  }
   var provenanceLedger = ctx.context && ctx.context.identity_provenance;
   var provenanceCheck = identityProvenance.validateDraft(ctx.answer, provenanceLedger);
   var provenanceFlags = provenanceCheck.findings || [];
@@ -1692,12 +1921,51 @@ async function defaultShadowStage(ctx, injected) {
   // deterministic findings; only non-contradicted absence phrasing stays advisory.
   var deterministicFindings = ((boardResult && boardResult.flags) || [])
     .concat(namedContextFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
-      identityReceiptFlags, memoryAbsenceFlags);
+      identityReceiptFlags, memoryAbsenceFlags, actionClaimFlags, threeSourceFlags);
   var advisoryMemoryAbsence = memoryAbsenceFlags;
+  // ⬡B:core.pai_outbound_council:911:a_forty_percent_hold_rate_that_names_no_family_cannot_be_fixed:20260725⬡
+  // MEASURED 20260725, four days before the demo: ten real conversational questions to her
+  // gate, FOUR held. Three of those four came back as the single word
+  // shadow_deterministic_hold, which names the COURT but never the CHARGE. Seven different
+  // families can hold her here (the board's own flags, named context, preference, coding
+  // relay role, provenance, identity receipt, unreceipted action claim) and only the last one
+  // already carried its own name.
+  //
+  // So the founder, and every coder, sees one word for seven diseases and cannot fix any of
+  // them. That is the third time today the same masking has cost real diagnosis, after the
+  // voice outage this morning and the arrival door this afternoon, and this instance is
+  // standing directly in front of a 40 percent hold rate on her actual voice.
+  //
+  // The marker still LEADS, so nothing keying off shadow_deterministic_hold breaks. The
+  // families that fired ride behind it, names only, never a flag's text, so no answer bytes
+  // and no memory content leak into a reason string that gets logged and stamped.
+  function deterministicFamilies() {
+    var fired = [];
+    if (((boardResult && boardResult.flags) || []).length) fired.push('board');
+    if (namedContextFlags.length) fired.push('named_context');
+    if (preferenceFlags.length) fired.push('preference');
+    if (relayRoleFlags.length) fired.push('relay_role');
+    if (provenanceFlags.length) fired.push('provenance');
+    if (identityReceiptFlags.length) fired.push('identity_receipt');
+    // actionClaimFlags and threeSourceFlags are deliberately absent: each already owns its
+    // own named reason, and naming one twice would put one disease under two names.
+    return fired;
+  }
+  function deterministicHoldReason() {
+    var fired = deterministicFamilies();
+    return fired.length ? ('shadow_deterministic_hold:' + fired.join(',')) : 'shadow_deterministic_hold';
+  }
   var boardPassed = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
     ((boardResult && boardResult.flags) || []).length === 0 &&
     namedContextFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
-    provenanceFlags.length === 0 && identityReceiptFlags.length === 0);
+    provenanceFlags.length === 0 && identityReceiptFlags.length === 0 &&
+    actionClaimFlags.length === 0 && threeSourceFlags.length === 0);
+  // ⬡COLD:decide:become:VOICE_SHADOW_WONDER:20260723⬡
+  // CATHY.SHADOW cold-audit COLD-ANEW-VOICE-0062. Computes whether SHADOW may take a deterministic
+  // voice PASS (exact signed handoff bytes, closed fact-free greeting, exact hearing/farewell
+  // acknowledgement) so a live call skips the probabilistic model judgment. It runs inside the
+  // outbound council SHADOW stage and only fires when cold checks are clean and the bytes are
+  // exactly verified. Folding the fast lane into a voice SHADOW wonder is deferred (live-voice).
   var verifiedVoiceHandoff = verifiedVoiceCallHandoff(ctx);
   var exactVoiceHandoffRelay = verifiedExactVoiceHandoffRelay(ctx, verifiedVoiceHandoff);
   var trivialVoiceGreeting = verifiedTrivialVoiceGreeting(ctx, verifiedVoiceHandoff);
@@ -1775,6 +2043,11 @@ async function defaultShadowStage(ctx, injected) {
   // acknowledgement proved by this signed turn's transcript. Any extra claim,
   // effect, or binding defect falls through to the unchanged model and review
   // path.
+  // ⬡COLD:decide:become:VOICE_SHADOW_WONDER:20260723⬡
+  // CATHY.SHADOW cold-audit COLD-ANEW-VOICE-0063. The deterministic-pass branch: when the voice
+  // pass reason is proven by this signed turn's transcript, SHADOW approves without a model call
+  // yet still emits its normal durable stage receipt; any extra claim, effect, or binding defect
+  // falls through to the unchanged model+review path. Deferred to the voice SHADOW wonder pass.
   if (deterministicVoicePassReason) {
     parsed = { approved:true, reason:deterministicVoicePassReason };
   } else {
@@ -1854,7 +2127,11 @@ async function defaultShadowStage(ctx, injected) {
   // auto-pass must NOT apply here -- that would let an unverified relay claim through
   // silently. Only a genuinely relay-free clean board may auto-pass on an unavailable judge.
   var attemptedRelayEvidence = !!(ctx.context && Array.isArray(ctx.context.verified_evidence) &&
-    ctx.context.verified_evidence.some(function (item) { return item && item.tool === 'consult_coda'; }));
+    ctx.context.verified_evidence.some(function (item) {
+      return item && item.tool === 'consult_coda' && paiToolEvidence.verify(item, {
+        hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId
+      });
+    }));
   var wonderUnavailableCleanPass = !!(boardPassed && deterministicFindings.length === 0 &&
     (!judgment || !parsed) && !attemptedRelayEvidence);
   // ⬡B:core.pai_outbound_council:FIX:shadow_holds_only_with_a_quotable_false_claim_20260718⬡
@@ -1903,7 +2180,11 @@ async function defaultShadowStage(ctx, injected) {
     reason: deterministicVoicePassReason ||
       (relayUnavailableHold ? 'shadow_model_unavailable' :
       (exactRelayOverridesJudgment ? 'SHADOW_PASS_VERIFIED_EVIDENCE_RELAY' :
-      (!boardPassed ? 'shadow_deterministic_hold' :
+      // The unreceipted action claim hold carries its own named reason so the
+      // heal-and-resubmit path tells the mind exactly what to rewrite honestly
+      // (intention speech or plain admission), per the 20260725 law.
+      (!boardPassed ? (actionClaimFlags.length ? actionClaimHold.REASON :
+        (threeSourceFlags.length ? 'reached_past_three_sources' : deterministicHoldReason())) :
         (wonderUnavailableCleanPass ? 'SHADOW_PASS_WONDER_UNAVAILABLE_CLEAN_BOARD' :
           (modelPassed ? (reviewParsed ? 'SHADOW_PASS_WONDER_FINAL_REVIEW' : 'SHADOW_PASS') :
             (shadowFailOpenCleanBoard ? 'SHADOW_PASS_CLEAN_BOARD_NO_QUOTABLE_CLAIM' :
@@ -1918,7 +2199,7 @@ async function defaultShadowStage(ctx, injected) {
               'shadow_model_hold')))))),
     evidence: {
       deterministic: {
-        verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
+        verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length || actionClaimFlags.length || threeSourceFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
         flags: deterministicFindings,
         claims_checked: (boardResult && boardResult.claimsChecked) || 0
       },
@@ -1986,7 +2267,23 @@ function structuredReachPolicyContext(ctx) {
       'action,channel,importance,message,reach,reason,recheck_at');
 }
 
+// ⬡B:core.pai_outbound_council:FIX:internal_coding_deliberation_is_not_user_facing:20260722⬡
+// The machinery-privacy gate exists to protect what a HUMAN reads: no leaking tools,
+// systems, prompts, or internal steps into an outbound turn. CODA's operational
+// deliberation is the exact opposite — internal reasoning about providers, queues, and
+// the render pipeline, returned to her OWN cycle, never sent to a person. Stripping her
+// machinery talk left an empty answer (meta_commentary_empty) and held her every pass,
+// which is why she woke but never judged. An internal coding-mode turn passes through
+// untouched, exactly like the structured reach-policy pass-through above. Tightly scoped:
+// only ever true when the caller set council_context.mode='coding', which only CODA's
+// internal advisor does — a user-facing turn can never reach this branch.
+function internalCodingDeliberation(ctx) {
+  return !!(ctx && ctx.context && ctx.context.mode === 'coding'
+    && ctx.context.internal_deliberation === true && typeof ctx.answer === 'string');
+}
 async function defaultMetaCommentaryStage(ctx) {
+  if (internalCodingDeliberation(ctx)) return { ok:true, answer:ctx.answer,
+    reason:'META_COMMENTARY_INTERNAL_CODING_PASS', evidence:{ flags:[], internal_deliberation:true } };
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
     reason:'META_COMMENTARY_STRUCTURED_REACH_POLICY_PASS',
     evidence:{ flags:[], exact_structured_policy:true } };
@@ -1998,21 +2295,25 @@ async function defaultMetaCommentaryStage(ctx) {
     hamUid: ctx.hamUid
   }, state);
   var output = result && typeof result.pendingOutbound === 'string' ? result.pendingOutbound : '';
-  // ⬡B:core.pai_outbound_council:BOUNDARY:meta_meaning_owned_here_not_pam:20260719⬡
-  // PAM no longer decides tone. This dedicated stage turns only explicit residual
-  // model/training self-description into a bounded hold, so the existing one-ladder
-  // healer rewrites it and this same stage judges the repaired bytes once more.
-  var explicitMeta = output.match(/\b(?:i\s+am|i['’]m)\s+(?:an?\s+)?(?:ai|language\s+model)\b|\bmy\s+(?:training|knowledge\s+cutoff|(?:ai|model)\s+limitations?)\b/i);
-  if (explicitMeta) return {
-    ok:false, answer:output, reason:'meta_commentary_detected',
-    evidence:{ flags:['explicit_model_self_description'],
-      phrase_digest:digestText(explicitMeta[0]) }
-  };
+  // ⬡B:core.pai_outbound_council:BOUNDARY:meta_meaning_owned_by_the_organ:20260725⬡
+  // PAM owns privacy facts. The META_COMMENTARY cold scanner only supplies
+  // categories to its model organ. It may never overrule a rendered answer with
+  // a second regex verdict. If the organ was unavailable, preserve the bounded
+  // category in the hold receipt so the healer knows which seat failed without
+  // copying the matched outbound phrase into internal receipts.
+  var metaFlags = result && result.metaCommentary &&
+    Array.isArray(result.metaCommentary.flags) ? result.metaCommentary.flags : [];
+  var metaCategories = Array.from(new Set(metaFlags.map(function (flag) {
+    return flag && typeof flag.category === 'string' ? flag.category : null;
+  }).filter(Boolean))).slice(0, 12);
+  var explicitModelDescription = metaCategories.indexOf('model_self_description') >= 0;
   return {
     ok: output.trim().length > 0,
     answer: output,
-    reason: output.trim().length > 0 ? 'META_COMMENTARY_PASS' : 'meta_commentary_empty',
-    evidence: { flags: (result && result.metaCommentaryFlag) || [] }
+    reason: output.trim().length > 0 ? 'META_COMMENTARY_PASS' :
+      (explicitModelDescription ? 'meta_commentary_detected' : 'meta_commentary_empty'),
+    evidence: { flags: explicitModelDescription ? ['explicit_model_self_description'] :
+      metaCategories }
   };
 }
 
@@ -2071,28 +2372,83 @@ async function healAnswer(answer, reason, stage, input, deps) {
   var modelLadder = (deps && deps.modelLadder) || require('./model.ladder.js');
   var guidance = {
     SHADOW: 'A factual-integrity judge held this. Remove or soften only the specific unsupported claim; keep everything the bound evidence supports. Do not add new facts.',
-    WRIT: 'A voice/format judge held this. Fix the writing (no em dashes, no emojis, no meta-commentary, plain human voice) while keeping the exact meaning and every real fact.',
+    WRIT: 'A voice/format judge held this. Fix the writing (no em dashes, no emojis, no meta-commentary) while keeping the exact meaning and every real fact, and say it in YOUR voice, the one above, not a generic clean one.',
     META_COMMENTARY: 'A privacy judge held this for leaking internal machinery. Rewrite so it speaks only to the person, with no mention of tools, systems, prompts, or internal steps.',
     PAM: 'A judge held this. Repair the specific concern named in the reason while preserving the real answer and its facts.',
     QUILL: 'A quality judge held this. Make it a clean, complete, plain answer; do not pad; keep it exactly as long as the content needs.'
   };
+  // ⬡B:core.pai_outbound_council:BUILD:unreceipted_action_claim_heal_guidance:20260725⬡
+  // The 20260725 law names the two honest forms a held action claim rewrites
+  // into. The reason travels here through the existing heal-and-resubmit path;
+  // the mind composes the whole answer again itself, cold code authors nothing.
   // ⬡B:core.pai_outbound_council:BUILD:internal_system_leak_heal_guidance:20260725⬡
-  // WRIT hard-fails on two different things and this healer was only ever told about one
-  // of them. Style is the one it was coached for. The other is the external leak firewall,
-  // which fires when the answer names internal machinery to someone standing outside the
-  // house, and no edit to em dashes removes a word that is simply there. So the repair came
-  // back saying the same forbidden word, the same judge held it again, and the turn died
-  // with a bare 'WRIT_HOLD'. The leak is a vocabulary fact with one correct repair: say the
-  // same true thing in the words an outsider uses. Told that, the mind can fix it. The
-  // organ's own unfixable_leak verdict (a real secret, another world's private data) is
-  // deliberately left on the generic path: that one is not a rewording problem.
-  var reasonGuidance = /internal_system_leak/.test(String(reason || ''))
-    ? 'A leak judge held this because it names internal machinery to someone standing outside the house. Say the same true thing in the words an ordinary person uses, with none of that internal vocabulary in it. Keep every real fact, every number, and every commitment exactly as it stands; only the inside words go. Do not explain that anything was changed.'
-    : (hollowHoldReason(reason)
-      ? HOLLOW_HEAL_GUIDANCE : (guidance[stage] || guidance.PAM));
-  var system = 'You repair an answer that a council judge held, so it can pass on resubmission. ' +
+  // The leak firewall is a vocabulary fact, not a matter of taste, and it has one correct
+  // repair: say the same true thing in the words an outsider uses. Told that, the mind can
+  // fix it; told "watch your em dashes", it cannot. Only the internal-vocabulary leak gets
+  // this. The organ's own unfixable_leak verdict (a real secret, another world's private
+  // data) is deliberately left on the generic path: that one is not a rewording problem
+  // and must keep failing closed.
+  // ⬡B:core.pai_outbound_council:WIRE:boundary_speech_reaches_the_mind_at_the_heal_seam:20260726⬡
+  // Open ledger D5, wiring debt: core/boundary.speech.js was built, tested, OFF behind
+  // BOUNDARY_SPEECH, and required by nothing on this path. This is the one seam where the
+  // council's own hold reason (deterministicHoldReason and its SHADOW sisters) reaches the
+  // mind for a rewrite, so it is where the armed module's guidance is handed over. Scoped to
+  // the SHADOW stage only: a WRIT, QUILL, or META hold is a craft repair that usually
+  // succeeds, and turning a fixable style hold into boundary speech would lose a real
+  // answer. Every named cure above this line keeps precedence (one disease, one cure), and
+  // boundary.speech's own maySpeak exclusions run again inside guidanceFor. OFF at birth:
+  // with BOUNDARY_SPEECH unset this resolves to null and the selection below is byte for
+  // byte what it was. The require is lazy and fail-closed so a world without the module
+  // heals exactly as before. The healed boundary sentence is composed by the MIND and still
+  // resubmits through the same judge; cold code authors nothing.
+  var boundarySpeechGuidance = null;
+  if (stage === 'SHADOW') {
+    try {
+      var boundarySpeech = require('./boundary.speech.js');
+      if (boundarySpeech.enabled((deps && deps.env) || process.env)) {
+        boundarySpeechGuidance = boundarySpeech.guidanceFor(String(reason || ''), stage,
+          { namedCauseIn: namedCauseIn, terminalHoldCause: terminalHoldCause });
+      }
+    } catch (eBoundarySpeech) { boundarySpeechGuidance = null; }
+  }
+  var reasonGuidance = /action_claim_unreceipted/.test(String(reason || ''))
+    ? 'A receipts judge held this because it claims a past-tense action (sent, checked, booked, deployed, confirmed) that no tool trace or banked receipt of this turn supports. Rewrite every such claim into one of the two honest forms: intention speech ("I will check that this wake and report what I find") or plain admission ("I have not done that yet"). Never state an action as already done, never invent a receipt, and keep everything the evidence actually supports.'
+    : (/internal_system_leak/.test(String(reason || ''))
+      ? 'A leak judge held this because it names internal machinery to someone standing outside the house. Say the same true thing in the words an ordinary person uses, with none of that internal vocabulary in it. Keep every real fact, every number, and every commitment exactly as it stands; only the inside words go. Do not explain that anything was changed.'
+      : (hollowHoldReason(reason) ? HOLLOW_HEAL_GUIDANCE
+        : (boundarySpeechGuidance ? boundarySpeechGuidance.instruction
+          : (guidance[stage] || guidance.PAM))));
+  // ⬡B:core.pai_outbound_council:FIX:a_healed_answer_is_still_her:20260726⬡
+  // THE PERSONA HOLE, closed. This system prompt carried no persona at all, so the
+  // healer rebuilt her words as a model that had never been told who she is, and the
+  // only thing downstream of it is ANU_EXPRESSION, which is pure channel formatting
+  // (markdown strip, dash to comma, sign off strip) and touches no persona either.
+  // The result: every turn a judge held came back voiceless. Those are exactly the
+  // turns where her voice matters most, because the common holds are voice holds, an
+  // em dash, a courtesy sign off, a hollow phrase, a meta leak. She was being flattened
+  // at precisely the seam built to protect her.
+  // Now the repair is composed AS her, through the one composition door in
+  // core/persona.js, carrying the living voice: the floor plus the lines she grew
+  // about herself, minus anything the founder reversed. Cold code transports the
+  // voice here and bounds the call; it authors none of it. Best effort with the
+  // floor as the fallback, because a heal is on a person's clock and must never wait
+  // on the brain.
+  var _persona = require('./persona.js');
+  var _voice = _persona.VOICE;
+  try {
+    var _living = await _persona.livingVoice(input && input.hamUid);
+    if (_living && _living.voice) _voice = _living.voice;
+  } catch (eVoice) { /* the floor still speaks */ }
+  // The situation sentence stays verbatim. Two council fixtures identify a heal call
+  // by it, and more to the point it is the true statement of what happened: one of her
+  // own judges held her words before they reached the person. What changed is that she
+  // is the one saying them again, so it now rides behind her voice instead of standing
+  // alone in front of a model that was never told who she is.
+  var system = _voice + '\n\n' +
+    'You repair an answer that a council judge held, so it can pass on resubmission. ' +
     reasonGuidance +
-    ' Output ONLY the repaired answer text, nothing else, no preamble, no explanation, no quotes around it.';
+    ' Keep it yours: the same warmth and the same person talking, never a sanded down neutral rewrite. ' +
+    'Output ONLY the repaired answer text, nothing else, no preamble, no explanation, no quotes around it.';
   var user = JSON.stringify({
     the_person_asked: String((input && input.question) || '').slice(0, 1200),
     the_answer_to_repair: String(answer || '').slice(0),
@@ -2411,6 +2767,11 @@ function finalEdges(sources) {
   ];
 }
 
+// ⬡COLD:remember:become:PAI_OUTBOUND_COUNCIL_WONDER:20260724⬡
+// CATHY.SHADOW cold-audit COLD-SUPABASE-IO-0169. The council's canonical brain-write plumbing:
+// required-edge enforcement and the request/cycle row builders that persist each council stage to
+// the ONE brain (memory_bank.beads). This IS the outbound council wonder's own durable memory; the
+// writes are edge-enforced and stage-sourced, not orphaned. Marked as the council's remember path.
 function edgesAreCanonical(edges) {
   return Array.isArray(edges) && edges.length > 0 && edges.every(function (edge) {
     return edge && REQUIRED_EDGE_TYPES.indexOf(edge.type) >= 0 && isNonEmpty(edge.target);
@@ -2697,6 +3058,81 @@ function exactRowId(row) {
 }
 
 // ⬡B:core.pai_outbound_council:PROCESS:ordered_fail_closed_cycle:20260715⬡
+// ⬡B:core.pai_outbound_council:WIRE:pre_write_briefing_entry:20260726⬡
+// Entrance: runPreWriteCouncil({ hamUid, channel, inbound, assignment, relationship }).
+// Exit: { ok, contextBlock, passes, briefs } handed to the WRITER, never to a human
+// (Granddaddy 911: a work feeds the wonder, it never speaks). Never throws: a pre-write
+// pass that cannot reach a mind returns ok:false with an empty context block and the
+// composition proceeds exactly as it did before this wire existed. Silence over hollow:
+// cold code fabricates no brief here, it only carries the two organs' own text.
+async function runPreWriteCouncil(input, injected) {
+  input = input || {};
+  var deps = injected || {};
+  var hamUid = input.hamUid || 'SYSTEM';
+  var channel = String(input.channel || '');
+  var inbound = String(input.inbound || '');
+  var assignment = String(input.assignment || '');
+  var relationship = String(input.relationship || '');
+  if (!inbound && !assignment) {
+    return { ok: false, reason: 'no_inbound_or_assignment', contextBlock: '',
+      passes: [], briefs: { reader: null, voice: null } };
+  }
+  var passes = [];
+  var blocks = [];
+  var readerOut = null;
+  var voiceOut = null;
+
+  var readerStart = Date.now();
+  try {
+    var readerMod = deps.readerBrief
+      ? { readerBrief: deps.readerBrief } : require('../board/meta/reader.brief.js');
+    readerOut = await readerMod.readerBrief({
+      inbound: inbound, assignment: assignment, channel: channel,
+      hamUid: hamUid, relationship: relationship });
+  } catch (eReader) {
+    readerOut = { ok: false, reason: 'reader_brief_threw:' + errorReason(eReader) };
+  }
+  passes.push({ stage: PRE_WRITE_ORDER[0], ok: !!(readerOut && readerOut.ok),
+    reason: (readerOut && readerOut.reason) || (readerOut && readerOut.ok ? 'READER_BRIEF_PASS' : 'reader_brief_missing'),
+    ms: Math.max(0, Date.now() - readerStart) });
+  if (readerOut && readerOut.ok && isNonEmpty(readerOut.contextBlock)) {
+    blocks.push(readerOut.contextBlock);
+  }
+
+  // The first pass rides into the second: the voice brief is written knowing who
+  // this reader is, which is exactly the order the two organs declare.
+  var voiceRelationship = blocks.length
+    ? (relationship ? relationship + '\n' + blocks[0] : blocks[0]) : relationship;
+  var voiceStart = Date.now();
+  try {
+    var voiceMod = deps.voiceBrief
+      ? { voiceBrief: deps.voiceBrief } : require('../board/writ/voice.brief.js');
+    voiceOut = await voiceMod.voiceBrief({
+      channel: channel, assignment: assignment || inbound,
+      hamUid: hamUid, relationship: voiceRelationship });
+  } catch (eVoice) {
+    voiceOut = { ok: false, reason: 'voice_brief_threw:' + errorReason(eVoice) };
+  }
+  passes.push({ stage: PRE_WRITE_ORDER[1], ok: !!(voiceOut && voiceOut.ok),
+    reason: (voiceOut && voiceOut.reason) || (voiceOut && voiceOut.ok ? 'VOICE_BRIEF_PASS' : 'voice_brief_missing'),
+    ms: Math.max(0, Date.now() - voiceStart) });
+  if (voiceOut && voiceOut.ok && isNonEmpty(voiceOut.contextBlock)) {
+    blocks.push(voiceOut.contextBlock);
+  }
+
+  var contextBlock = blocks.join('\n\n');
+  return {
+    ok: blocks.length > 0,
+    reason: blocks.length > 0 ? 'PRE_WRITE_BRIEFED' : 'pre_write_briefs_unavailable',
+    contextBlock: contextBlock,
+    passes: passes,
+    briefs: {
+      reader: (readerOut && readerOut.ok) ? readerOut.brief : null,
+      voice: (voiceOut && voiceOut.ok) ? voiceOut.brief : null
+    }
+  };
+}
+
 async function runOutboundCouncil(input, injected) {
   var inputError = validateInput(input);
   if (inputError) return { ok: false, reason: inputError, blocked_by: 'INPUT', stages: [] };
@@ -2809,7 +3245,6 @@ async function runOutboundCouncil(input, injected) {
           var _healed = await healAnswer(before, _healReason, stage, input, deps);
           _healOutcome = !_healed ? 'heal_no_usable_repair'
             : (_healed === before ? 'heal_returned_the_held_bytes' : null);
-
           if (_healed && typeof _healed === 'string' && _healed.trim() &&
               isHumanFacingAnswer(_healed) && _healed !== before) {
             var _reStarted = nowMs(deps);
@@ -2938,6 +3373,11 @@ async function runOutboundCouncil(input, injected) {
     'STAMP', stages, input, currentAnswer);
   }
 
+  // ⬡COLD:remember:become:PAI_OUTBOUND_COUNCIL_WONDER:20260724⬡
+  // CATHY.SHADOW cold-audit COLD-SUPABASE-IO-0170. The durable STAMP commit: the final council
+  // answer and its nine-row proof are committed to the ONE brain with a PENDING_DURABLE_COMMIT
+  // state and read back before success. This is the council wonder's authoritative remember step,
+  // the reason a committed answer is real rather than hollow; marked as the council remember path.
   var finalDigest = digestText(currentAnswer);
   var questionDigest = digestText(input.question);
   var deliberationDigest = digestText(input.deliberationInput);
@@ -3534,6 +3974,8 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
 
 module.exports = {
   STAGE_ORDER: STAGE_ORDER,
+  PRE_WRITE_ORDER: PRE_WRITE_ORDER,
+  runPreWriteCouncil: runPreWriteCouncil,
   RECEIPT_SCHEMA: RECEIPT_SCHEMA,
   REQUEST_SCHEMA: REQUEST_SCHEMA,
   STAMP_PROOF_SCHEMA: STAMP_PROOF_SCHEMA,
@@ -3553,6 +3995,10 @@ module.exports = {
   isHumanFacingAnswer: isHumanFacingAnswer,
   isCleanBoardHold: isCleanBoardHold,
   CLEAN_BOARD_HOLD_REASONS: CLEAN_BOARD_HOLD_REASONS,
+  namedCauseIn: namedCauseIn,
+  terminalHoldCause: terminalHoldCause,
+  mayRetryHold: mayRetryHold,
+  TERMINAL_HOLD_CAUSES: TERMINAL_HOLD_CAUSES,
   shouldRunQuill: shouldRunQuill,
   extractNamedContextEvidence: extractNamedContextEvidence,
   namedContextContradictions: namedContextContradictions,
@@ -3601,6 +4047,9 @@ module.exports = {
     boundedCouncilFailureCodes: boundedCouncilFailureCodes,
     categoricalMemoryContradiction: categoricalMemoryContradiction,
     identityEvidenceReceiptContradictions:identityEvidenceReceiptContradictions,
-    defaultShadowStage: defaultShadowStage
+    verifiedFactEvidenceText:verifiedFactEvidenceText,
+    shadowEvidenceMaxBytes:shadowEvidenceMaxBytes,
+    defaultShadowStage: defaultShadowStage,
+    healAnswer: healAnswer
   }
 };

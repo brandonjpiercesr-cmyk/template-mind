@@ -38,14 +38,20 @@
 // ⬡B:core.selfReminders:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
+// ⬡B:core.selfReminders:FIX:a_hardcoded_schema_no_env_could_reach:20260726⬡
+// THE SECOND BREAK. _schema() was written, and then never called: every header below
+// used a module-level `var SCHEMA = 'abacia_core'` literal instead. So a world pointed
+// at the live memory_bank bank read and wrote its self-reminders against a schema that
+// is not there, and no env var on earth could correct it because the accessor was dead
+// code. Both the schema and the table now derive from the same signal as the URL, the
+// core/brain.client.js shape, and there is no second literal left to drift.
+function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
-
-var SCHEMA = 'abacia_core';
+var contract = require('./reminder.contract.js');
 function env() { return { BU: _bu(), BK: _bk() }; }
-function rh(BK) { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': SCHEMA }; }
-function wh(BK) { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': SCHEMA, 'Content-Profile': SCHEMA, 'Content-Type': 'application/json', Prefer: 'return=minimal' }; }
+function rh(BK) { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() }; }
+function wh(BK) { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema(), 'Content-Profile': _schema(), 'Content-Type': 'application/json', Prefer: 'return=minimal' }; }
 
 // ENTRANCE: create a self-reminder the owning station will fire on a later cycle.
 // fireAt: ISO string or ms-from-now number. action: what to do (folded into intent).
@@ -62,25 +68,34 @@ async function setSelfReminder(agentGlobal, hamUid, opts) {
   else fireAt = new Date(ts).toISOString(); // no delay given = due now
   var action = opts.action || opts.text || '';
   var src = 'ham_' + HAM.toLowerCase() + '.selfreminder.' + String(agentGlobal).toLowerCase() + '.' + ts;
+  // \u2b21B:core.selfReminders:FIX:the_third_name_for_one_due_time:20260726\u2b21
+  // This writer called the due time `fireAt`, the HAM route called it `when`, and the
+  // cycle tool called it due_at. Three names, one fact, no reader that agreed with more
+  // than one of them. The opts key stays fireAt because that is this module's caller-
+  // facing API and stations already pass it; the STORED field is now the one canonical
+  // due_at, built through core/reminder.contract.js like every other writer.
+  var built = contract.buildReminderContent({
+    text: opts.text || action,
+    dueAt: fireAt,
+    audience: 'self',                   // this is the flag that separates it from HAM reminders
+    extra: {
+      owner: agentGlobal,
+      action: action,
+      surfaceToHam: !!opts.surfaceToHam,
+      // ENTRANCE note
+      setBy: opts.setBy || agentGlobal,
+      setAt: new Date(ts).toISOString(),
+      why: opts.why || 'self-scheduled follow-up'
+    }
+  });
+  if (!built.ok) return { ok: false, reason: built.reason };
   var body = {
     ham_uid: HAM,
     agent_global: agentGlobal,
     stamp_type: 'REMINDER',
     acl_stamp: '\u2b21B:core.selfReminders:REMINDER:set:' + ts + '\u2b21',
     source: src,
-    content: JSON.stringify({
-      audience: 'self',                 // this is the flag that separates it from HAM reminders
-      owner: agentGlobal,
-      text: opts.text || action,
-      action: action,
-      fireAt: fireAt,
-      surfaceToHam: !!opts.surfaceToHam,
-      fired: false,
-      // ENTRANCE note
-      setBy: opts.setBy || agentGlobal,
-      setAt: new Date(ts).toISOString(),
-      why: opts.why || 'self-scheduled follow-up'
-    }),
+    content: JSON.stringify(built.content),
     summary: '[SELF-REMINDER] ' + agentGlobal + ' -> itself, fires ' + fireAt + ': ' + String(action).slice(0, 70),
     importance: opts.importance || 6
   };
@@ -105,10 +120,15 @@ async function dueSelfReminders(agentGlobal, hamUid) {
     var due = [];
     (Array.isArray(rows) ? rows : []).forEach(function (row) {
       var c; try { c = JSON.parse(row.content || '{}'); } catch (x) { return; }
-      if (c.audience !== 'self') return;      // only self-reminders
-      if (c.fired) return;                     // not already fired
-      if (c.fireAt && new Date(c.fireAt).getTime() > now) return; // not yet due
-      due.push({ source: row.source, text: c.text, action: c.action, surfaceToHam: c.surfaceToHam, fireAt: c.fireAt, why: c.why });
+      if (contract.audienceOf(c) !== 'self') return;   // only self-reminders
+      if (contract.isClosed(c)) return;                // not already fired or completed
+      // READ TOLERANTLY. Rows this module wrote before the contract carry the due time
+      // under fireAt; rows written now carry due_at. Both fire, neither is left behind.
+      var dueRead = contract.readDueAt(c);
+      if (dueRead.ok && dueRead.ms > now) return;      // not yet due
+      due.push({ source: row.source, text: c.text, action: c.action, surfaceToHam: c.surfaceToHam,
+        fireAt: dueRead.ok ? dueRead.iso : null, dueAt: dueRead.ok ? dueRead.iso : null,
+        dueField: dueRead.ok ? dueRead.field : null, why: c.why });
     });
     return due;
   } catch (err) { return []; }
