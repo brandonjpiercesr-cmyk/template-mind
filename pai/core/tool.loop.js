@@ -3139,8 +3139,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // One provider-capable door for the complete PAI turn. Voice uses its own
   // low-latency seat; every other cycle uses the C2 organ. No call may borrow
   // Together, a shared OpenRouter key, or another component's seat.
+  // ⬡B:core.tool_loop:FIX:codas_own_deliberation_never_used_her_named_seat:20260727⬡
+  // COLD-ANEW-CODA-SEAT-MISROUTE (CLAIR), found chasing a 100% CODA deliberation failure
+  // rate the same night her OpenRouter keys were meant to be fixed. channel:'coding' has
+  // exactly two real callers in this repo: advisors/coding.js's llm() (CODA's own runLead
+  // deliberation, used by both her autonomous mind cycle and any direct founder coding ask)
+  // and routes/cara.routes.js's /cara/consult door (an external coder asking A'NU in coding
+  // mode). Neither is voice, so both fell through this line's old fallback straight to
+  // c2_organ (minimax-01, OR_KEY_C2_ORGAN), a shared general-purpose seat with its own
+  // unrelated $6/day cap. core/seat.map.js's dedicated 'coda' seat (moonshotai/kimi-k3,
+  // OR_KEY_CODA_KIMI, her own $8/day named key) was wired only into
+  // coding-department/canew.build.js, the separate patch-authoring engine, and was never
+  // reachable from her actual deliberation call. Fixing OR_KEY_CODA_KIMI tonight changed
+  // nothing for her: her real calls were never reading it. A dead key, an exhausted cap, or
+  // any other c2_organ-specific fault on the shared seat then looks identical to a
+  // CODA-specific outage from the outside, at 100%, structurally, every single cycle. One
+  // function, fixed once; the spend-attribution copy in runPAI() below carries the same fix.
   function _paiSeatName() {
-    return String(channel || '').toLowerCase() === 'voice' ? 'voice_fast' : 'c2_organ';
+    var normalizedChannel = String(channel || '').toLowerCase();
+    if (normalizedChannel === 'voice') return 'voice_fast';
+    if (normalizedChannel === 'coding') return 'coda';
+    return 'c2_organ';
   }
   function _paiSeatCandidate(name) {
     var seat = seatMap.seat(name || _paiSeatName());
@@ -6062,7 +6081,12 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var requestId = typeof requestCandidate === 'string'
     && /^[A-Za-z0-9._:-]{8,160}$/.test(requestCandidate.trim())
     ? requestCandidate.trim() : cycleId + '.request';
-  var seat = String(channel || '').toLowerCase() === 'voice' ? 'voice_fast' : 'c2_organ';
+  // Same seat correction as _paiSeatName() above, kept in step with it on purpose: this is
+  // the spend-attribution copy, and channel:'coding' must be attributed to and paid from
+  // CODA's own named seat, not the shared c2_organ wallet. See the fix note on
+  // _paiSeatName() for the full finding.
+  var _channelLower = String(channel || '').toLowerCase();
+  var seat = _channelLower === 'voice' ? 'voice_fast' : _channelLower === 'coding' ? 'coda' : 'c2_organ';
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
   var result;
   try {
