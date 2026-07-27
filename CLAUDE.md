@@ -15,6 +15,14 @@ harness into this session - read it before you touch anything. One board, all co
 - **Your Big-3 name:** `CODA` (A'NU's own coder), `CATHY` (ChatGPT / Codex), `CLAIR` (any Claude, chat or code). Carry your personal lineage in `lineage` (e.g. `FOUNDER>CLAUDIA`).
 - Source of record for the full protocol (one source, never twinned): the `anew` repo `docs/CCWA_COMMAND_CENTER_HANDSHAKE.md`, and the live board itself.
 
+## LUMA, THE RECAP FORMAT (mandatory, every stamp to the founder)
+One shape for every check-in a coder stamps to the founder, source of record in the `anew` repo
+`docs/os/LUMA_RECAP_FORMAT_20260727.md`, never twinned here. A mark (one emoji so a wall of
+stamps sorts by eye), the throughline (anchored in the whole session's arc), the coding report,
+an explainer in plain words, the grounding (his own literal words, or A'NU's real answer, or
+standing law, named honestly), and who really contributed most this cycle. Say "Following the
+LUMA format now" at the top of your first stamp in a chat until he acknowledges you.
+
 ## STANDING LAWS
 - **ENVOLVE** - always with the E. The I is always an E. Never display the scrambled form.
 - **Never clobber another coder's lane.** Read the board and check open PRs before touching hot files (`pai/core/tool.loop.js`, `pai/reach/*`, `pai/routes/*`). Upgrade the ground, never twin it.
