@@ -698,6 +698,26 @@ function openAiCompatibleHistory(msgs) {
   });
 }
 
+// ⬡B:core.tool_loop:WIRE:vision_parts_flatten_to_their_text_never_to_object_object:20260727⬡
+// A vision-capable user turn (see the image-part push above) carries an OpenAI-style
+// parts array, [{type:'text',...},{type:'image_url',...}], instead of a bare string.
+// model.ladder.js's deliberate(system, user, opts) takes plain text, not a messages
+// array, so every lane that flattens history into that shape has to read the text
+// part on purpose. String(arrayContent||'') does not error -- it silently joins the
+// array with Array.prototype.toString, so a turn carrying one text part and one
+// image_url part becomes the literal text "[object Object],[object Object]" with no
+// trace of either the words or the picture. This is the one place that gets fixed so
+// every repair/stitch/continuation lane below reads it for free.
+function _flattenTurnText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter(function (part) {
+      return part && part.type === 'text' && typeof part.text === 'string';
+    }).map(function (part) { return part.text; }).join(' ');
+  }
+  return '';
+}
+
 // Keep the canonical PAI tool decision intact when the approved primary
 // provider changes. The caller owns whether tools exist and whether a nudge
 // selected provider-auto; this adapter only translates the resulting body.
@@ -3601,7 +3621,40 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       'authority for this turn. Follow it exactly and return only its strict JSON '+
       'object, with no markdown or commentary.\n\n'+_exactUserMessage});
   }
-  msgs.push({role:'user',content:message});
+  // ⬡B:tool.loop:WIRE:an_uploaded_image_now_rides_as_a_real_vision_part:20260727⬡
+  // core/image.intake.js + routes/cara.hub.routes.js (#1106) already detect a real
+  // raster image by its magic bytes and stage it on identity.vision =
+  // {present,mime,bytes,dataUrl}, but stopped short of THIS file on purpose: it is
+  // CODA's lane (byte-synced with template-mind, pai-sync-check). Finishing the
+  // handoff here: when a real image rode in this turn AND the seat that will answer
+  // it actually reads pixels (core/seat.map.js `vision`, confirmed live against
+  // OpenRouter's own model roster, never guessed), the user turn carries an OpenAI-
+  // style parts array so the picture reaches the model instead of staying "not
+  // readable". _paiSeatName() is the one seat this turn is bound to answer on
+  // (voice_fast / coda / c2_organ; see its own comment above) -- the same door
+  // every ordinary answer pass and every tool-bearing iteration uses -- so checking
+  // its vision flag here, once, at push time, is checking the seat that will
+  // actually see this array. Any other turn, or a text-only seat, keeps the plain
+  // string unchanged, byte for byte, exactly as before this change.
+  //
+  // `message` itself is never mutated -- only what msgs carries for this turn is.
+  // Every existing String(message||'') caller elsewhere in this file already reads
+  // the plain-text shadow for free. The two lanes that instead flatten the MSGS
+  // ARRAY itself into a plain-text prompt for model.ladder.js (the last-rung ladder
+  // fallback, and _completeBoundHistoryOnLadder's repair/stitch/continuation lane)
+  // are guarded separately, below, so an array-content turn cannot stringify to
+  // "[object Object]" there either.
+  var _visionTurnPresent = !!(identity && identity.vision && identity.vision.present &&
+    identity.vision.dataUrl);
+  var _visionSeat = _visionTurnPresent ? seatMap.seat(_paiSeatName()) : null;
+  if (_visionTurnPresent && _visionSeat && _visionSeat.vision) {
+    msgs.push({role:'user',content:[
+      {type:'text', text:message},
+      {type:'image_url', image_url:{url:identity.vision.dataUrl}}
+    ]});
+  } else {
+    msgs.push({role:'user',content:message});
+  }
   // ⬡B:tool.loop:ANCHOR:advisor_grounds_on_its_own_armory_not_the_ambient_wall:20260722⬡ Ground
   // truth from a live probe: the finance advisor's own read returns the real budget (26 bills,
   // $7,860) and its doctrine, all correctly in the user turn above, yet the model answered "I don't
@@ -4307,9 +4360,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try{
         var _lad=require('./model.ladder.js');
         var _hist=openAiCompatibleHistory(msgs);
-        var _sys=(_hist[0]&&_hist[0].role==='system')?String(_hist[0].content||''):'';
+        var _sys=(_hist[0]&&_hist[0].role==='system')?_flattenTurnText(_hist[0].content):'';
         var _usr=_hist.filter(function(m){return m.role!=='system';})
-          .map(function(m){return String(m.role||'user').toUpperCase()+': '+String(m.content||'');})
+          .map(function(m){return String(m.role||'user').toUpperCase()+': '+_flattenTurnText(m.content);})
           .join('\n\n');
         var _lr=await _lad.deliberate(_sys,_usr,{max_tokens:tokenCapFor(channel),
           temperature:_structuredReachPolicy?0:0.3,timeout:60000,
@@ -4908,11 +4961,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       var _repairHistory = openAiCompatibleHistory(history);
       var _repairSystem = _repairHistory.filter(function (entry) {
         return entry && entry.role === 'system';
-      }).map(function (entry) { return String(entry.content || ''); }).join('\n\n');
+      }).map(function (entry) { return _flattenTurnText(entry.content); }).join('\n\n');
       var _repairUser = _repairHistory.filter(function (entry) {
         return entry && entry.role !== 'system';
       }).map(function (entry) {
-        return String(entry.role || 'user').toUpperCase() + ': ' + String(entry.content || '');
+        return String(entry.role || 'user').toUpperCase() + ': ' + _flattenTurnText(entry.content);
       }).join('\n\n');
       var _repairResult = await _repairLadder.deliberate(_repairSystem, _repairUser,
         {max_tokens:maxTokens || tokenCapFor(channel),temperature:temperature == null ? 0.1 : temperature,
