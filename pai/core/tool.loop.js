@@ -1802,6 +1802,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // persists the choice to the one writer (POST /os/background/:ham). The living background
     // (Phase 8 Group A) is now settable through the one cycle, not only the UI. Per-HAM by the
     // route's own construction, so a set can never paint another person's world.
+    //
+    // ⬡B:tool.loop:WIRE:set_background_proves_itself_to_the_now_gated_door:20260727⬡
+    // /os/background/:hamUid closed 20260727 (it used to check only the shape of the path
+    // param, never who was asking). This hop leaves the process over OS_API_BASE/SELF_BASE_URL
+    // and comes back in over the public internet, indistinguishable from a stranger at the
+    // door, so it proves itself the same established way as the inbox and calendar tools
+    // just above: a token minted from the server-only signing secret by internalSessionHeaders,
+    // verified by the SAME verifySessionToken the door already trusts for a browser session.
     try {
       var _bgHam = String(hamUid || '').toUpperCase();
       if (!/^[0-9A-F]{8}$/.test(_bgHam)) return JSON.stringify({ok:false,reason:'ham_uid_required'});
@@ -1814,8 +1822,9 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         videoUrl: (args && args.video_url) || ''
       };
       if (args && args.app) _bgBody.app = args.app;
+      var _bgHdrs = require('./ham.session.authorization.js').internalSessionHeaders(_bgHam) || {};
       var _bgRes = await fetch(_bgSelf.replace(/\/+$/, '') + '/os/background/' + encodeURIComponent(_bgHam), {
-        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(_bgBody),
+        method:'POST', headers:Object.assign({'Content-Type':'application/json'}, _bgHdrs), body:JSON.stringify(_bgBody),
         signal:(runtime && runtime.abortSignal)
       }).then(function(x){return x.ok?x.json():null;}).catch(function(){return null;});
       if (_bgRes && _bgRes.ok) {
