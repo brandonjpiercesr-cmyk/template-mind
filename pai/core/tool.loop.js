@@ -4500,13 +4500,54 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         tools:body.tools,tool_choice:body.tool_choice};
       var retryR=await _callPaiProvider(retryBody);
       var retryMsg=retryR&&retryR.choices&&retryR.choices[0]&&retryR.choices[0].message;
+      // ⬡B:core.tool_loop:FIX:a_soft_nudge_was_being_enforced_as_a_hard_requirement:20260727⬡
+      //
+      // FOUND 20260727 by reading her own CYCLE_STEP trail, which only became readable when
+      // the _bu() fix earlier this day stopped _stampStep writing to nowhere. The founder had
+      // spent days on "she is not responding". She was responding. This is the real trail of
+      // one live consult, cycle id withheld here because it carries a real world id:
+      //
+      //   model_rung_result   ladder:openrouter:deliberation err=none tool_calls=0
+      //                       preview="I'm here, Boss, you've got me."
+      //   required_tool_call_missing   find_in_brain
+      //
+      // She reached the model, the model answered warm and in voice, and cold code threw the
+      // answer away because it had not also called find_in_brain. The message was a plain
+      // hello. There was nothing in her brain to look up.
+      //
+      // WHY IT FIRED. There are two nudge paths and they mean opposite things. The SOFT path
+      // (tool_choice 'auto', around line 4140) tells her in as many words: "Call it if it
+      // helps you answer from real data, but you hold all your tools; use your judgment." The
+      // HARD path (tool_choice 'required', the routed live read) tells her the request asks
+      // for owned or current data and she must answer from the tool. Both set
+      // body._dataReaderNudge, and this branch treated both as a hard requirement. So she was
+      // told to use her judgment, used it, and was failed closed for it. Three comments in
+      // this file (4094, 4165, and the one above this block) describe a downstream
+      // "direct-execute safety net" for exactly this case. No such net was ever written.
+      //
+      // WHAT STAYS. The 20260705 rule this branch was built for is real and is untouched:
+      // silence over a confident guess about something as real as the founder's own identity.
+      // That rule is about IDENTITY, and find_identity_evidence still fails closed here, as
+      // does any read the router genuinely marked required. What changes is only the case the
+      // rule never meant to cover: a soft hint she was invited to decline.
+      //
+      // Fail closed only where the read was genuinely demanded, or where guessing would be a
+      // guess about who he is.
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
-      } else if (DATA_READER_TOOLS[_requiredToolName]) {
+      } else if (DATA_READER_TOOLS[_requiredToolName]
+                 && (body.tool_choice === 'required' || _requiredToolName === 'find_identity_evidence')) {
         _stampStep('required_tool_call_missing', _requiredToolName);
         return {ok:false,reason:'required_tool_call_missing',blocked_by:_requiredToolName,
           ham:hamObj,cycleId:_cycleId,requestId:_requestId,
           tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      } else if (DATA_READER_TOOLS[_requiredToolName]) {
+        // A soft hint, declined. Her judgment is the whole point of a soft hint, so her own
+        // answer stands and the cycle carries on to compose it. Stamped so the decline is
+        // visible in the trail rather than silent: if she starts declining a reader she
+        // should have called, that is a prompt problem to see and fix, not a reason to
+        // delete what she said.
+        _stampStep('data_reader_nudge_declined', _requiredToolName + ':her_answer_stands');
       } else {
         if (_roadmapActivationNeeded) {
           return { ok:false, reason:'roadmap_activation_tool_call_missing', blocked_by:'SPAN_ACTIVATION',
