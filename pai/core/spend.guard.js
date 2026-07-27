@@ -202,27 +202,104 @@ function usageToday() { pruneOld(); return CALL_LOG.length; }
 // present this is exactly the old behavior.
 var orAccount = require('./openrouter.account.key.js');
 
-// Read each provider's real remaining balance. Together and OpenRouter both
-// expose it. Returns a list of low/empty providers for the watchdog to stamp.
-async function checkBalances() {
-  var low = [];
+// ⬡B:core.spend_guard:FACT:the_account_balance_is_read_in_exactly_one_place:20260726⬡
+// The external auditor (CATHY, P1 on the model health wonder, PR #1132) caught the exact
+// shape this bead exists to end. A SECOND balance reader had been written that took
+// `limit_remaining` out of GET /api/v1/key and called it the wallet. That field is the
+// spending limit left on that ONE API KEY, not the account balance, and on an ordinary
+// uncapped pay as you go key the provider sends null for it. So the exhausted ACCOUNT
+// that started this whole line of work still read as unknown, the watchdog stayed dead,
+// and the doomed request still left. The mirror failure was just as bad: an exhausted
+// per key limit on the monitor credential would have declared the ENTIRE provider dry
+// while every completion seat was still able to pay, which silences her over nothing.
+//
+// Both failures point the same way. Read the field that answers the question you asked.
+// The question is "can this ACCOUNT pay at all", and GET /api/v1/credits is the only
+// free read that answers it. That derivation already lived in this file, so the second
+// reader was a twin as well as a hollow one. This function is now the ONE place the
+// account balance is derived. The watchdog, the health surface and the paid door all
+// consume THIS, so the tree never carries two hand maintained balance readers again.
+//
+// It is a READ, never a ruling. It states a mechanical fact and stops. What to DO about
+// an empty account (top up, reseat, reach a human) is a judgment for a mind in the
+// cycle, never for this function.
+var BALANCE_MEMO = null;
+
+// Strict on purpose, because a loose parse here is the whole danger. Number(null) is 0
+// and Number('') is 0, so a coerced read would turn a missing or malformed credits body
+// into an account holding exactly zero dollars, and a gate acting on that would silence
+// her over a number the provider never sent. Only a real finite number, or a string that
+// is entirely a number, counts as reported.
+function reportedDollars(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  var parsed = Number(value.trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+// UNKNOWN is a THIRD state beside present and empty. It is never dry, it never blocks a
+// request, and it never stamps a warning. A balance nobody could read is not a low
+// balance, and pretending otherwise is how a monitor takes her voice down.
+function unknownBalance(reason) {
+  return {known:false,remaining:null,dry:false,reason:reason,
+    source:'openrouter_credits_control_plane',read_by_seat:null};
+}
+
+async function readAccountBalance(options) {
   var OR = orAccount.accountKey();
-  // OpenRouter exposes remaining credit directly.
-  if (OR.key) {
-    try {
-      var r = await fetch('https://openrouter.ai/api/v1/credits',
-        { headers: { Authorization: 'Bearer ' + OR.key }, signal: AbortSignal.timeout(10000) });
-      if (r.ok) {
-        var d = await r.json();
-        var remaining = (d.data && (d.data.total_credits - d.data.total_usage)) || 0;
-        if (remaining < 10) low.push({ provider: 'openrouter', remaining: Math.round(remaining * 100) / 100, read_by_seat: OR.seat });
-      }
-    } catch (e) { /* a failed check is not a spend event */ }
+  if (!OR.key) return unknownBalance('no_account_monitor_key');
+  var doFetch = typeof options.fetchImpl === 'function' ? options.fetchImpl : fetch;
+  try {
+    var r = await doFetch('https://openrouter.ai/api/v1/credits',
+      { headers: { Authorization: 'Bearer ' + OR.key }, signal: AbortSignal.timeout(10000) });
+    if (!r || r.ok !== true) return unknownBalance('credits_http_' + ((r && r.status) || 0));
+    var body = await r.json().catch(function () { return null; });
+    var d = body && typeof body === 'object' ? body.data : null;
+    var credits = d ? reportedDollars(d.total_credits) : null;
+    var used = d ? reportedDollars(d.total_usage) : null;
+    if (credits === null || used === null) return unknownBalance('credits_body_invalid');
+    var remaining = Math.round((credits - used) * 100) / 100;
+    // DRY only when the ACCOUNT itself reports a finite balance at or below zero.
+    return {known:true,remaining:remaining,dry:remaining <= 0,reason:null,
+      source:'openrouter_credits_control_plane',read_by_seat:OR.seat};
+  } catch (e) { return unknownBalance('credits_unreachable'); }
+}
+
+// The account balance fact. A free control-plane read on the monitor-only credential:
+// no completion is manufactured, no model is called, no dollar is spent to ask whether
+// dollars remain. Pass maxAgeMs to accept a recent read instead of asking again, which
+// is how the paid door consults this without adding a round trip to every request.
+// Callers that pass nothing always read fresh.
+async function accountBalance(options) {
+  options = options || {};
+  var maxAge = Number(options.maxAgeMs);
+  if (Number.isFinite(maxAge) && maxAge > 0 && BALANCE_MEMO &&
+      (Date.now() - BALANCE_MEMO.at) <= maxAge) return BALANCE_MEMO.fact;
+  var fact = await readAccountBalance(options);
+  BALANCE_MEMO = {at:Date.now(),fact:fact};
+  return fact;
+}
+
+// The one low threshold. A LEASH on a warning stamp, never a refusal and never a reach.
+var LOW_BALANCE_USD = 10;
+
+// Pure, no I/O. Derives the watchdog's low list from the ONE balance fact, so a caller
+// that already read the balance this tick never reads it a second time to learn this.
+function lowProviders(balance) {
+  var low = [];
+  if (balance && balance.known === true && balance.remaining < LOW_BALANCE_USD) {
+    low.push({ provider: 'openrouter', remaining: balance.remaining,
+      read_by_seat: balance.read_by_seat });
   }
-  // Together has no non-spending balance endpoint. Never manufacture a paid
-  // completion as a health probe. Absence of an account read is reported by the
-  // health surface instead of burning a token to ask whether tokens remain.
   return low;
+}
+
+// Returns the list of low/empty providers for the watchdog to stamp.
+// Together has no non-spending balance endpoint. Never manufacture a paid completion as
+// a health probe. Absence of an account read is reported by the health surface instead
+// of burning a token to ask whether tokens remain.
+async function checkBalances(options) {
+  return lowProviders(await accountBalance(options));
 }
 
 // ⬡B:core.spend_guard:WIRE:a_clamped_ceiling_needs_a_real_door_not_a_test_one:20260726⬡
@@ -236,5 +313,10 @@ module.exports = { lastDenial: lastDenial, allow: allow, usageToday: usageToday,
   ceilDetail: ceilDetail,
   withAttribution:withAttribution,
   checkBalances: checkBalances,
+  accountBalance: accountBalance,
+  lowProviders: lowProviders,
   _test:{configuredCeil:configuredCeil,ceilDetail:ceilDetail,cleanAttribution:cleanAttribution,
-    reset:function () { CALL_LOG=[]; LAST_DENIAL=null; DENIALS_BY_SCOPE.clear(); }} };
+    reportedDollars:reportedDollars,LOW_BALANCE_USD:LOW_BALANCE_USD,
+    resetBalanceMemo:function () { BALANCE_MEMO = null; },
+    reset:function () { CALL_LOG=[]; LAST_DENIAL=null; DENIALS_BY_SCOPE.clear();
+      BALANCE_MEMO=null; }} };
