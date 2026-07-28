@@ -741,6 +741,30 @@ function _flattenTurnText(content) {
   return '';
 }
 
+// ⬡B:core.tool_loop:911:the_seat_failover_rule_itself_where_a_test_can_reach_it:20260728⬡
+// The ORDER-AND-CHOICE half of the seat failover, deliberately at module scope and taking
+// its attempt function as an argument, so the rule can be proven by a test without standing
+// up a whole cycle. The transport half (fetch, headers, spend guard) stays in the closure
+// where it belongs. Independently flagged P1 by the Codex reviewer on #1258, same finding.
+//
+// THE RULE, in one place:
+//   1. Try the primary. If it answered, that is the answer. A working turn never reaches
+//      line two, which is what makes this change unable to break a cycle that works today.
+//   2. It failed. With no declared fallback, return the primary's own failure: cold code
+//      never invents a model to try.
+//   3. Try the declared fallback exactly once. No loop, no ladder, no third guess.
+//   4. If the fallback ALSO failed, return the PRIMARY's failure, not the fallback's. The
+//      first wall is the true cause; reporting the second would send whoever debugs this
+//      chasing a model that was only ever a rescue attempt.
+async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
+  var primary = await attempt(primaryCandidate);
+  if (!(primary && primary.error)) return primary;
+  if (!fallbackCandidate) return primary;
+  var recovered = await attempt(fallbackCandidate);
+  if (recovered && recovered.error) return primary;
+  return recovered;
+}
+
 // Keep the canonical PAI tool decision intact when the approved primary
 // provider changes. The caller owns whether tools exist and whether a nudge
 // selected provider-auto; this adapter only translates the resulting body.
@@ -3282,16 +3306,42 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     text = text.replace(/[^A-Za-z0-9._:-]+/g, '_').replace(/^_+|_+$/g, '');
     return text.slice(0, 120);
   }
-  async function _callPaiProvider(requestBody, seatName) {
-    var candidate = _paiSeatCandidate(seatName);
-    if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
-    try {
-      if (!require('./spend.guard.js').allow('text')) {
-        return {error:{code:'daily_spend_ceiling_reached',seat:candidate.seat.seat}};
-      }
-    } catch (ePaiSpend) {
-      return {error:{code:'spend_guard_unavailable',seat:candidate.seat.seat}};
-    }
+  // ⬡B:core.tool_loop:911:every_declared_failover_was_dead_configuration_on_her_main_path:20260728⬡
+  // FOUND 20260728 while curing the outage that muted her the day before the launch. The
+  // cause of THAT outage was one seat model without tool support (see core/seat.map.js), but
+  // the reason a single bad model could take down every surface at once is here: this door
+  // called the PRIMARY seat and nothing else. `seatMap.fallback()` was never called anywhere
+  // in this file. The failovers sitting in the seat map for c2_organ, c3_mind and judge, each
+  // one deliberately chosen and dated by a founder ruling, were dead configuration on the one
+  // path that carries every chat and every arrival. The map promised a safety net that the
+  // code never strung.
+  //
+  // So the net is strung, and deliberately ONLY on the error path: the fallback is attempted
+  // exclusively when the primary has ALREADY failed, which means this can convert a failed
+  // turn into an answered one and can never change a turn that was going to succeed. A cycle
+  // that works today takes byte-identical actions after this change.
+  //
+  // What does NOT fail over, on purpose:
+  //   daily_spend_ceiling_reached  a ceiling is a decision about money, not a broken seat.
+  //                                Retrying on another model spends more against the very
+  //                                wall that just said stop. It stands.
+  //   pai_seat_key_missing         the fallback bills the same named key (fallbackKeyEnv), so
+  //                                a missing key is missing for both. Nothing to try.
+  //   a seat with no declared fallback   silence over a guess: cold code never invents a model.
+  // Every other failure (a provider error payload, an HTTP failure, a thrown request) is a
+  // seat that could not answer, which is exactly what a failover exists for.
+  //
+  // The receipt stays honest: a served fallback stamps `_provider` with the fallback seat's
+  // own name (`<seat>.fallback`), so telemetry and the model_rung_result bead say which model
+  // actually spoke, never the one that was asked first.
+  function _paiFallbackCandidate(name) {
+    if (!seatMap || typeof seatMap.fallback !== 'function') return null;
+    var fb = seatMap.fallback(name || _paiSeatName());
+    if (!fb || fb.provider !== 'openrouter') return null;
+    var key = seatMap.resolveKey(fb);
+    return key ? { seat:fb, key:key } : null;
+  }
+  async function _attemptPaiSeat(requestBody, candidate) {
     var providerBody = primaryProviderBody(requestBody,
       requestBody && requestBody.messages || [], candidate.seat.model);
     try {
@@ -3314,6 +3364,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return {error:{code:'pai_seat_request_failed',seat:candidate.seat.seat,
         detail:String(ePaiProvider&&ePaiProvider.message||ePaiProvider).slice(0,160)}};
     }
+  }
+  async function _callPaiProvider(requestBody, seatName) {
+    var candidate = _paiSeatCandidate(seatName);
+    if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
+    try {
+      if (!require('./spend.guard.js').allow('text')) {
+        return {error:{code:'daily_spend_ceiling_reached',seat:candidate.seat.seat}};
+      }
+    } catch (ePaiSpend) {
+      return {error:{code:'spend_guard_unavailable',seat:candidate.seat.seat}};
+    }
+    return paiSeatFailover(function (c) { return _attemptPaiSeat(requestBody, c); },
+      candidate, _paiFallbackCandidate(seatName));
   }
   async function callPAIPlain(sys, user, maxTokens) {
     var messages = sys ? [{role:'system',content:sys},{role:'user',content:user}] : user;
@@ -6290,4 +6353,5 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // ⬡B:core.tool_loop:WIRE:the_bounds_and_the_progress_stop_are_testable:20260726⬡ A guard
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
-  _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit}};
+  _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
+  paiSeatFailover}};
