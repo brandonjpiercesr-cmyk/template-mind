@@ -794,6 +794,58 @@ async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   return recovered;
 }
 
+// ⬡B:core.tool_loop:FIX:the_last_rung_cannot_serve_a_turn_that_needed_a_tool:20260728⬡
+// CODEX P1 on #1297, and it is a hole in the tools-capability guard further down rather than
+// a separate defect. That guard REFUSES a seat that cannot hold a tool, specifically so the
+// turn fails closed instead of answering blind. But every seat error lands on the ladder rung,
+// and model.ladder.deliberate() is called with the history FLATTENED TO TEXT and no tool
+// definitions at all. So a refusal written to prevent a blind answer was producing one anyway,
+// one rung further down, and the receipt would say `ladder` instead of saying nothing.
+//
+// The rule is about the TURN, not the error code: a door that cannot call a tool must not be
+// the one to answer a turn that carried tools. Asking the calendar and then answering from
+// memory is worse than saying nothing, because nothing is visibly nothing and a confident
+// wrong date is not. So this returns true whenever the turn sent tools and nothing usable came
+// back, whatever refused the seat, and the caller leaves the failure named for the wall above.
+//
+// A turn carrying NO tools is untouched. The ladder stays the last rung before silence, exactly
+// as the 20260718 law says, and this changes nothing for it.
+function paiToolTurnBlocksLadder(providerBody, result) {
+  var carriedTools = !!(providerBody && Array.isArray(providerBody.tools) && providerBody.tools.length);
+  if (!carriedTools) return false;
+  return !paiSeatUsable(result);
+}
+
+// ⬡B:core.tool_loop:FIX:a_one_millisecond_call_is_cold_code_choosing_silence:20260728⬡
+// FOUND 20260728 by a PR sweep lane, confirmed here by reading the wire path rather than the
+// claim. The voice deadline is real and correct in intent: the Pipecat bridge owns a 12 second
+// whole-turn budget, so every main-model attempt shares one deadline at t0+6500 and provider
+// fallback cannot stack three long waits in front of SHADOW, STAMP and readback.
+//
+// The defect is the clamp under it: `AbortSignal.timeout(Math.max(1, deadline - Date.now()))`.
+// Once the deadline is past, that is not a short call, it is a call that CANNOT succeed. A
+// tool-using voice turn spends its budget on the first model call and the tool round trip, so
+// the second call gets a one-millisecond signal and aborts before a byte leaves. Then it gets
+// worse in a way the sweep did not name: the abort is caught as an ordinary seat failure, so
+// paiSeatFailover() spends the seat's DECLARED FALLBACK on a second guaranteed-fail call with
+// the same expired deadline, and the turn ends reporting `pai_seat_request_failed` -- a budget
+// problem wearing a provider problem's name, which is what the next debugger will chase.
+//
+// So it refuses by name instead, exactly as the tools-capability guard above does. Cold code
+// may decline to spend a call it knows cannot land; what it may never do is issue one and let
+// the failure look like the provider's. The floor is a real window rather than a tick: under
+// it, a fresh provider round trip does not complete, so calling is only a slower way to fail.
+//
+// A turn with NO voice deadline (every non-voice channel: portal, chat, sms, coding, reach) is
+// untouched. The predicate returns false, nothing refuses, and the behaviour is byte for byte
+// what it was. That is the whole safety property of this change.
+var PAI_VOICE_MIN_MODEL_WINDOW_MS = 1200;
+function paiVoiceDeadlineExhausted(deadline, now, minWindowMs) {
+  if (!deadline || !Number.isFinite(deadline)) return false;
+  var floor = Number.isFinite(minWindowMs) ? minWindowMs : PAI_VOICE_MIN_MODEL_WINDOW_MS;
+  return (deadline - now) < floor;
+}
+
 // ⬡B:core.tool_loop:FIX:the_arrival_exemption_where_a_test_can_actually_reach_it:20260728⬡
 // Codex P2 on #1270, and it was right about my own test: the first version of the arrival
 // exemption lived as an inline expression inside runPAI's closure, and its test re-declared
@@ -3449,6 +3501,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     return key ? { seat:fb, key:key } : null;
   }
   async function _attemptPaiSeat(requestBody, candidate) {
+    // ⬡B:core.tool_loop:911:the_capability_that_nothing_consumed_could_not_prevent_anything:20260728⬡
+    // Codex P2 on #1297, and the sharpest kind of finding: core/seat.map.js now COMPUTES a
+    // `tools` capability for the model that will actually be called, env override included,
+    // and a repo-wide search found NOTHING reading it. A capability nothing consumes cannot
+    // prevent the outage it was written for. That is the same "looks live and is not" disease
+    // as the ladder knob in D11 and as the seat flag in D12, arriving a third time in one
+    // night, in the very table built to end it.
+    //
+    // So it is consumed here, at the one door that talks to the provider, and it is consumed
+    // by REFUSING rather than by silently stripping. Stripping the tools would let the turn
+    // proceed blind: she would answer about a calendar she never read, confidently, which is
+    // worse than not answering. A named refusal instead becomes an ordinary seat failure, and
+    // paiSeatFailover() above already knows what to do with one: try the seat's declared
+    // fallback, which the seat map guarantees is tool-capable. So a mis-set SEAT_C2_MODEL now
+    // degrades to the failover instead of taking every surface down, which is exactly what
+    // happened tonight and took hours to find.
+    var _wantsTools = !!(requestBody && Array.isArray(requestBody.tools) && requestBody.tools.length);
+    if (_wantsTools && candidate.seat && candidate.seat.tools === false) {
+      return { error: { code: 'pai_seat_cannot_call_tools', seat: candidate.seat.seat,
+        detail: String(candidate.seat.model || '').slice(0, 80) } };
+    }
     var providerBody = primaryProviderBody(requestBody,
       requestBody && requestBody.messages || [], candidate.seat.model);
     try {
@@ -3473,6 +3546,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   }
   async function _callPaiProvider(requestBody, seatName) {
+    // Refused here rather than at the seat, so ONE check covers the primary and its declared
+    // fallback. Refusing inside _attemptPaiSeat would let paiSeatFailover() spend the rescue on
+    // the same expired deadline, which is the second half of the defect this exists for.
+    if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
+      return {error:{code:'pai_voice_deadline_exhausted',seat:seatName||_paiSeatName(),
+        detail:'voice turn budget spent before this call'}};
+    }
     var candidate = _paiSeatCandidate(seatName);
     if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
     try {
@@ -4628,7 +4708,30 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
-    if (!r||r.error||!r.choices){
+    // ⬡B:core.tool_loop:FIX:the_last_rung_cannot_serve_a_turn_that_needed_a_tool:20260728⬡
+    // CODEX P1 on #1297, and it is a hole in the guard three hundred lines above rather than a
+    // separate defect. That guard REFUSES a seat that cannot hold a tool, specifically so the
+    // turn fails closed instead of answering blind. But every error lands here, and this rung
+    // calls model.ladder.deliberate() with the history FLATTENED TO TEXT and no tool
+    // definitions at all. So a refusal written to prevent a blind answer was itself producing
+    // one, one rung further down, and the receipt would say ladder rather than say nothing.
+    //
+    // The rule is not about the error code, it is about the turn: a door that cannot call a
+    // tool must not be the one to answer a turn that carried tools. Asking the calendar and
+    // then answering from memory is worse than saying nothing, because nothing is visibly
+    // nothing and a confident wrong date is not. So the ladder is skipped whenever this turn
+    // sent tools, whatever refused the seat, and the failure stays named for the wall above.
+    //
+    // A turn carrying no tools is untouched: the ladder is still the last rung before silence,
+    // exactly as the 20260718 law says, and this changes nothing for it.
+    if (paiToolTurnBlocksLadder(_providerBody, r)) {
+      if (!_cycleFailure) _noteCycleFailure('pai_seat_tool_turn_unserved');
+    } else if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
+      // The rung shares _modelRequestSignal(), so on an expired voice deadline it would take
+      // the same one-millisecond signal and abort before a byte left, then report `ladder:`
+      // and send the next reader to the ladder. Named for what it is instead.
+      if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
+    } else if (!r||r.error||!r.choices){
       try{
         var _lad=require('./model.ladder.js');
         var _hist=openAiCompatibleHistory(msgs);
@@ -6451,4 +6554,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover,paiSeatUsable,isArrivalDestinationBlock,repairRawJsonAnswer}};
+  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer}};
