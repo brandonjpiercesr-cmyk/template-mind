@@ -28,10 +28,21 @@ function BU_PUBLIC() { return process.env.SELF_BASE_URL || 'https://aibebase.onr
 const reflex = require('./reflex');
 const consumer = require('../reach/screen.consumer');
 
-// The canonical identity backgrounds. Mirrors the shared repo list
-// (aba-shared/packages/ccwa-core/src/backgrounds.js) by id; the frontend resolves
-// ids to its own canonical URLs, so no URL and no invention lives here.
-const BACKGROUND_IDS = ['black-landscape','nebula','storm-clouds','glass-windows','motion','mountain-snow','particle-lights','wet-city','beach','embers','pink-smoke','unity','three-goats'];
+// ⬡B:stream.screen_awareness:FIX:she_can_only_name_an_approved_background:20260728⬡
+// This was its own thirteen-id literal, and it is the list SHE READS: promptAddendum offers it
+// to the mind as the menu of ids she may choose from, and applyScreenBlock validates her
+// answer against it. So the longest unapproved list in this repo was also the one actively
+// teaching her to ask for a nebula, in the template every world inherits. It now reads
+// pai/core/brand.js, so the menu she is offered and the set every surface can actually paint
+// are the same five by construction, and an id no door can render is an id she is never shown.
+//
+// NOT A WHOLESALE GRAFT. This file and its anew counterpart genuinely differ on main, on an
+// unrelated 20260725 change (_osHeaders, the signed session the screen pieces carry to the OS
+// doors) that has not landed here yet. Only this one declaration was changed on both sides, so
+// nothing unrelated was dragged across and the real divergence stays visible to whoever lands
+// it properly. This file is not in the pai-sync-check manifest; pai/core/os/registry.js is, and
+// that one IS byte-identical with anew.
+const BACKGROUND_IDS = require('../brand.js').BACKGROUND_IDS;
 
 function hasLiveScreen(hamUid) {
   return consumer.hasLiveSession(hamUid);
