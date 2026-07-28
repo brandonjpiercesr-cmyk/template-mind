@@ -816,6 +816,36 @@ function paiToolTurnBlocksLadder(providerBody, result) {
   return !paiSeatUsable(result);
 }
 
+// ⬡B:core.tool_loop:FIX:a_one_millisecond_call_is_cold_code_choosing_silence:20260728⬡
+// FOUND 20260728 by a PR sweep lane, confirmed here by reading the wire path rather than the
+// claim. The voice deadline is real and correct in intent: the Pipecat bridge owns a 12 second
+// whole-turn budget, so every main-model attempt shares one deadline at t0+6500 and provider
+// fallback cannot stack three long waits in front of SHADOW, STAMP and readback.
+//
+// The defect is the clamp under it: `AbortSignal.timeout(Math.max(1, deadline - Date.now()))`.
+// Once the deadline is past, that is not a short call, it is a call that CANNOT succeed. A
+// tool-using voice turn spends its budget on the first model call and the tool round trip, so
+// the second call gets a one-millisecond signal and aborts before a byte leaves. Then it gets
+// worse in a way the sweep did not name: the abort is caught as an ordinary seat failure, so
+// paiSeatFailover() spends the seat's DECLARED FALLBACK on a second guaranteed-fail call with
+// the same expired deadline, and the turn ends reporting `pai_seat_request_failed` -- a budget
+// problem wearing a provider problem's name, which is what the next debugger will chase.
+//
+// So it refuses by name instead, exactly as the tools-capability guard above does. Cold code
+// may decline to spend a call it knows cannot land; what it may never do is issue one and let
+// the failure look like the provider's. The floor is a real window rather than a tick: under
+// it, a fresh provider round trip does not complete, so calling is only a slower way to fail.
+//
+// A turn with NO voice deadline (every non-voice channel: portal, chat, sms, coding, reach) is
+// untouched. The predicate returns false, nothing refuses, and the behaviour is byte for byte
+// what it was. That is the whole safety property of this change.
+var PAI_VOICE_MIN_MODEL_WINDOW_MS = 1200;
+function paiVoiceDeadlineExhausted(deadline, now, minWindowMs) {
+  if (!deadline || !Number.isFinite(deadline)) return false;
+  var floor = Number.isFinite(minWindowMs) ? minWindowMs : PAI_VOICE_MIN_MODEL_WINDOW_MS;
+  return (deadline - now) < floor;
+}
+
 // ⬡B:core.tool_loop:FIX:the_arrival_exemption_where_a_test_can_actually_reach_it:20260728⬡
 // Codex P2 on #1270, and it was right about my own test: the first version of the arrival
 // exemption lived as an inline expression inside runPAI's closure, and its test re-declared
@@ -3516,6 +3546,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   }
   async function _callPaiProvider(requestBody, seatName) {
+    // Refused here rather than at the seat, so ONE check covers the primary and its declared
+    // fallback. Refusing inside _attemptPaiSeat would let paiSeatFailover() spend the rescue on
+    // the same expired deadline, which is the second half of the defect this exists for.
+    if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
+      return {error:{code:'pai_voice_deadline_exhausted',seat:seatName||_paiSeatName(),
+        detail:'voice turn budget spent before this call'}};
+    }
     var candidate = _paiSeatCandidate(seatName);
     if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
     try {
@@ -4689,6 +4726,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // exactly as the 20260718 law says, and this changes nothing for it.
     if (paiToolTurnBlocksLadder(_providerBody, r)) {
       if (!_cycleFailure) _noteCycleFailure('pai_seat_tool_turn_unserved');
+    } else if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
+      // The rung shares _modelRequestSignal(), so on an expired voice deadline it would take
+      // the same one-millisecond signal and abort before a byte left, then report `ladder:`
+      // and send the next reader to the ladder. Named for what it is instead.
+      if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
     } else if (!r||r.error||!r.choices){
       try{
         var _lad=require('./model.ladder.js');
@@ -6512,4 +6554,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,isArrivalDestinationBlock,repairRawJsonAnswer}};
+  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer}};
