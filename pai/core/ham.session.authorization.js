@@ -496,9 +496,23 @@ const SIGN_IN_TIER_ONLY_PATHS = [
   /^\/clair\/[^/]+\/files\/download(\/|$)/i
 ];
 
+// ⬡B:core.ham_session_authorization:FIX:the_wall_blocked_the_upgrade_the_page_advertised:20260728⬡
+// CATHY (Codex) on #1301, and this one was caused by the fix directly above it, which is the
+// honest way to record it. Letting a typed world id see the root form again put the Google
+// button back in front of that person, and the Google leg finishes at POST
+// /auth/advisor/resolve, which was NOT on this list. So the wall refused the very upgrade the
+// page had just offered: a button that is visible, enabled, and answers 403.
+//
+// Allowing it is not a loosening, and the reason is the test to apply to anything added here.
+// That handler takes an access token, verifies it against the provider, reads the email the
+// PROVIDER attests to, and resolves that email to a world. Nothing the caller says about
+// themselves is believed. It is the same shape as /auth/advisor/request and the emailed link,
+// and it is the shape every upgrade door must have: it proves a credential the weaker tier
+// cannot forge BEFORE it mints anything. A door that merely writes something is not eligible.
 const WORLD_ID_MAY_WRITE_PATHS = [
   /^\/auth\/home\/ham$/i,
   /^\/auth\/advisor\/request$/i,
+  /^\/auth\/advisor\/resolve$/i,
   /^\/os\/wake\/[^/]+$/i,
   /^\/os\/sleep$/i,
   /^\/door\/where$/i,
