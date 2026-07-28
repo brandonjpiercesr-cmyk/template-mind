@@ -794,6 +794,28 @@ async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   return recovered;
 }
 
+// ⬡B:core.tool_loop:FIX:the_last_rung_cannot_serve_a_turn_that_needed_a_tool:20260728⬡
+// CODEX P1 on #1297, and it is a hole in the tools-capability guard further down rather than
+// a separate defect. That guard REFUSES a seat that cannot hold a tool, specifically so the
+// turn fails closed instead of answering blind. But every seat error lands on the ladder rung,
+// and model.ladder.deliberate() is called with the history FLATTENED TO TEXT and no tool
+// definitions at all. So a refusal written to prevent a blind answer was producing one anyway,
+// one rung further down, and the receipt would say `ladder` instead of saying nothing.
+//
+// The rule is about the TURN, not the error code: a door that cannot call a tool must not be
+// the one to answer a turn that carried tools. Asking the calendar and then answering from
+// memory is worse than saying nothing, because nothing is visibly nothing and a confident
+// wrong date is not. So this returns true whenever the turn sent tools and nothing usable came
+// back, whatever refused the seat, and the caller leaves the failure named for the wall above.
+//
+// A turn carrying NO tools is untouched. The ladder stays the last rung before silence, exactly
+// as the 20260718 law says, and this changes nothing for it.
+function paiToolTurnBlocksLadder(providerBody, result) {
+  var carriedTools = !!(providerBody && Array.isArray(providerBody.tools) && providerBody.tools.length);
+  if (!carriedTools) return false;
+  return !paiSeatUsable(result);
+}
+
 // ⬡B:core.tool_loop:FIX:the_arrival_exemption_where_a_test_can_actually_reach_it:20260728⬡
 // Codex P2 on #1270, and it was right about my own test: the first version of the arrival
 // exemption lived as an inline expression inside runPAI's closure, and its test re-declared
@@ -4649,7 +4671,25 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
-    if (!r||r.error||!r.choices){
+    // ⬡B:core.tool_loop:FIX:the_last_rung_cannot_serve_a_turn_that_needed_a_tool:20260728⬡
+    // CODEX P1 on #1297, and it is a hole in the guard three hundred lines above rather than a
+    // separate defect. That guard REFUSES a seat that cannot hold a tool, specifically so the
+    // turn fails closed instead of answering blind. But every error lands here, and this rung
+    // calls model.ladder.deliberate() with the history FLATTENED TO TEXT and no tool
+    // definitions at all. So a refusal written to prevent a blind answer was itself producing
+    // one, one rung further down, and the receipt would say ladder rather than say nothing.
+    //
+    // The rule is not about the error code, it is about the turn: a door that cannot call a
+    // tool must not be the one to answer a turn that carried tools. Asking the calendar and
+    // then answering from memory is worse than saying nothing, because nothing is visibly
+    // nothing and a confident wrong date is not. So the ladder is skipped whenever this turn
+    // sent tools, whatever refused the seat, and the failure stays named for the wall above.
+    //
+    // A turn carrying no tools is untouched: the ladder is still the last rung before silence,
+    // exactly as the 20260718 law says, and this changes nothing for it.
+    if (paiToolTurnBlocksLadder(_providerBody, r)) {
+      if (!_cycleFailure) _noteCycleFailure('pai_seat_tool_turn_unserved');
+    } else if (!r||r.error||!r.choices){
       try{
         var _lad=require('./model.ladder.js');
         var _hist=openAiCompatibleHistory(msgs);
@@ -6472,4 +6512,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover,paiSeatUsable,isArrivalDestinationBlock,repairRawJsonAnswer}};
+  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,isArrivalDestinationBlock,repairRawJsonAnswer}};
