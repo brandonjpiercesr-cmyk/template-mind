@@ -3651,8 +3651,25 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // ⬡B:tool.loop:NUDGE:nash_routing_20260711⬡ cold keyword router: a sports
   // question MUST reach NASH; the model was answering "no real-time access"
   // instead of deploying the wonder it already has.
+  // ⬡B:core.tool_loop:FIX:nash_tested_the_whole_armory_not_the_actual_ask:20260728⬡
+  // Live, found reading CODA's own CYCLE_STEP trail: her real deliberation calls kept
+  // failing closed with required_tool_call_missing: nash_sports on turns that were never
+  // about sports at all -- GitHub check-run reconciliation, drain-pass status, business
+  // plan search. Root cause: this test ran against `message`, the FULL deliberation input
+  // (system prompt plus her entire armory: BCW, operational evidence, repo evidence, tens
+  // of thousands of characters), not the actual words anyone asked. That armory routinely
+  // contains the bare word "score" or "scores" in an unrelated sense (a CI/test/CANON
+  // grading score, a confidence score), which alone satisfies this regex and forces a
+  // sports tool she has no reason to call, burning her call budget on a demand she cannot
+  // satisfy. The 20260719 fix immediately below this block (see its own comment,
+  // "intent_detection_uses_raw_words_not_fusion_wrapped_message") already established that
+  // every cold intent check in this file must read _exactUserMessage, the real raw words,
+  // never the fused/armory-wrapped `message` -- this one nudge was missed. Switched to the
+  // same raw words every other nudge already reads; a real "did the Lakers win" question
+  // still contains its own trigger words in _exactUserMessage, so the real NASH routing is
+  // unchanged for an actual sports question, on any channel.
   var _nashNeeded = !_structuredReachPolicy && !_reachIncidentIntake &&
-    /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|score|scores|playoffs?|game (to)?night|did .{1,40}(win|lose|beat)|final score)\b/i.test(message);
+    /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|score|scores|playoffs?|game (to)?night|did .{1,40}(win|lose|beat)|final score)\b/i.test(_exactUserMessage);
   if (_nashNeeded) {
     msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
   }
