@@ -4191,7 +4191,28 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // assemble_bcw but never picked them. A build/code/consult request nudges the
       // coding lead. HINT not a rail, she keeps all tools. Named machinery (MACE, CODA,
       // cook-off, wonder games, BCW) or a plain build/code/ship ask routes here.
-      var _isCodingBuildQ = /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
+      // ⬡B:core.tool_loop:FIX:codas_own_cycle_prompt_matched_its_own_named_nudge:20260728⬡
+      // Live tonight: CODA's own fixed autonomous-cycle instruction ("Run one autonomous
+      // CODA operational cycle...") IS _exactUserMessage for her internal deliberation
+      // calls (identity.user_message, set by finalizePublicTurn from her own runLead's
+      // operationalAsk() text), and it names herself: the bare word "coda" in her own
+      // prompt matches this regex's first alternative. That fired a FIRM nudge built for
+      // a human asking her to consult MACE about a named file ("you must call consult_mace
+      // FIRST... do not answer from your day, your schedule, or an old note instead"),
+      // aimed at her own report-on-my-own-cycle turn, which has no file or repo to hand
+      // consult_mace and cannot satisfy the instruction it was just given. This is cold
+      // keyword-matching a heuristic built for a human's first-contact chat message
+      // against her own machine-generated internal prompt -- never the case it was built
+      // for. Excluded the same way this file already exempts her internal reasoning
+      // elsewhere (_codaLeadNeeded reads this identical signal): identity.council_context.
+      // mode==='coding' is set ONLY by advisors/coding.js's own llm() for her internal
+      // deliberation (councilContext:{mode:'coding', internal_deliberation:true}); the
+      // external human-facing /cara/consult door uses mode:'internal', never 'coding', so
+      // this narrows to exactly her own self-talk and touches no other caller.
+      var _isCodaInternalCycle = !!(identity && identity.council_context &&
+        identity.council_context.mode === 'coding');
+      var _isCodingBuildQ = !_isCodaInternalCycle &&
+        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
