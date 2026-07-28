@@ -230,7 +230,36 @@ var SEATS = {
   // moved to the -2507 build this file already trusts for the judge seat (verified live
   // 20260721, 2-4s clean strict JSON) which is also $0.09/$0.55 per M and 262k context: five
   // times cheaper than the literal it replaces, on a model this house has already proved.
-  deliberation:{ role: 'general deliberation ladder',envModel:'SEAT_LADDER_MODEL',model:'z-ai/glm-5.2',             provider:'openrouter', keyEnv:'OR_KEY_MODEL_LADDER',  via:'openrouter', capEnv:'SEAT_DELIBERATION_DAILY_CAP_USD', dailyCapUsd:3, vision:false, tools:true,
+  // ⬡B:core.seat_map:911:three_dollars_on_the_seat_that_generates_the_whole_seated_experience:20260728⬡
+  // MEASURED LIVE 20260728, launch eve, and traced end to end rather than reasoned about.
+  // POST /seer/native/day/advance answered 503 on a real world: DAY ONE of SEATED did not
+  // generate at all. A named-failure fix landed first so the door would stop saying one word,
+  // and the next live read named it exactly: `no_rung_answered`, meaning modelLadder.deliberate
+  // returned null with NO rung having answered.
+  //
+  // WHY THAT LANDS HERE. core/model.ladder.js `deliberate` defaults its order to 'glm,qwen' and
+  // resolves BOTH rungs through `opts.seat || MODEL_LADDER_SEAT || 'deliberation'`, so the two
+  // rungs that look like redundancy are ONE seat wearing two model names. When this seat refuses,
+  // there is no second opinion, there is silence. Verified against the live service rather than
+  // assumed: OR_KEY_MODEL_LADDER is set (so it is not a missing credential), MODEL_LADDER_ORDER
+  // and MODEL_LADDER_SEAT are unset (so the defaults above are what actually run),
+  // SEAT_DELIBERATION_DAILY_CAP_USD is unset (so THIS number is the live ceiling), the daily call
+  // ceiling was nowhere near tripped (1 of 3000 used), and ANTHROPIC_BACKUP_FLOOR is unset, so
+  // nothing catches the fall when this one seat closes.
+  //
+  // Three dollars a day was a coder default, never a decision: /coda/sensors/health reports this
+  // seat as "chosen_by: a coder, not the founder". It is also the GENERAL ladder, shared across
+  // the estate, so on a day the whole system spent 19.99 USD it is drained by ordinary traffic
+  // long before anyone opens SEATED, and then the founder's flagship experience is dead with no
+  // error a human could read. That is the same shape as the CODA seat cap cured earlier today.
+  //
+  // 25 is sized to the job, not invented: it must carry every scene generation in the experience
+  // AND the general deliberation of the rest of the estate on the same key. The env override
+  // remains the founder's and still wins whenever it is present; this only moves the fallback.
+  // NOT DONE HERE, named rather than hidden: the single-seat-no-floor design is the deeper
+  // defect, and turning on ANTHROPIC_BACKUP_FLOOR is a real spend decision that belongs to its
+  // own lane, not to a launch-eve edit.
+  deliberation:{ role: 'general deliberation ladder',envModel:'SEAT_LADDER_MODEL',model:'z-ai/glm-5.2',             provider:'openrouter', keyEnv:'OR_KEY_MODEL_LADDER',  via:'openrouter', capEnv:'SEAT_DELIBERATION_DAILY_CAP_USD', dailyCapUsd:25, vision:false, tools:true,
                  fallbackModel:'qwen/qwen3-235b-a22b-2507', fallbackProvider:'openrouter', fallbackKeyEnv:'OR_KEY_MODEL_LADDER', fallbackTools:true },
   voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', capEnv:'SEAT_VOICE_FAST_DAILY_CAP_USD', dailyCapUsd:3, vision:true, tools:true },
   runaway_sweep:{ role:'runaway SHADOW judge', envModel:'RUNAWAY_SWEEP_MODEL', model:'qwen/qwen3.5-flash-02-23', provider:'openrouter',keyEnv:'OR_KEY_RUNAWAY_SWEEP',via:'openrouter', capEnv:'SEAT_RUNAWAY_SWEEP_DAILY_CAP_USD', dailyCapUsd:1, vision:true, tools:true },
