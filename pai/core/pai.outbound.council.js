@@ -2313,7 +2313,15 @@ async function defaultMetaCommentaryStage(ctx) {
     reason: output.trim().length > 0 ? 'META_COMMENTARY_PASS' :
       (explicitModelDescription ? 'meta_commentary_detected' : 'meta_commentary_empty'),
     evidence: { flags: explicitModelDescription ? ['explicit_model_self_description'] :
-      metaCategories }
+      metaCategories,
+      // ⬡B:core.pai_outbound_council:BUILD:name_which_mind_judged_this_seat:20260728⬡
+      // Which decider actually ruled, and whether this seat failed open because no
+      // mind was reachable. Before this, a turn where the ladder was down and a turn
+      // where the organ read every flag and deliberately kept the sentence produced
+      // an identical receipt, so LOGFUL could not tell an absent judge from a
+      // decisive one. Bounded machine codes, never answer bytes.
+      decider: (result && result.metaCommentary && result.metaCommentary.decider) || null,
+      failed_open: !!(result && result.metaCommentary && result.metaCommentary.failed_open) }
   };
 }
 
@@ -2502,9 +2510,14 @@ async function defaultWritStage(ctx) {
       meta_removed:0,exact_structured_policy:true } };
   var writ = require('../board/writ.js');
   var mode = ctx.context && ctx.context.mode;
+  // ⬡B:core.pai_outbound_council:WIRE:writ_reads_its_law_for_this_world:20260728⬡
+  // hamUid rides in so the WRIT organ can read doctrine.writ.persona.v1 from THIS
+  // world's brain and supersede its embedded law floor. Resolved upstream through
+  // the ABAHAM door, never a literal, and absent it the organ simply uses the floor.
   var result = await writ.writCheck(ctx.answer, {
     channel: ctx.channel || 'unknown',
     mode: mode || 'default',
+    hamUid: ctx.hamUid,
     internal: mode === 'coding' || mode === 'internal'
   });
   // ⬡B:core.pai_outbound_council:FIX:writ_canonical_output_only:20260715⬡
@@ -2547,7 +2560,15 @@ async function defaultWritStage(ctx) {
       advisory_flags: (result && result.advisoryFlags) || [],
       emojis_removed: (result && result.emojis_removed) || 0,
       em_dashes_removed: (result && result.em_dashes_removed) || 0,
-      meta_removed: (result && result.meta_removed) || 0
+      meta_removed: (result && result.meta_removed) || 0,
+      // ⬡B:core.pai_outbound_council:BUILD:the_overrule_rides_the_receipt:20260728⬡
+      // Spec gap 8. Which law judged these words ('brain' when this world's
+      // doctrine superseded, 'embedded' when the shipped floor stood), and which
+      // cold hints the organ was handed and kept anyway. This is what makes "the
+      // LLM decided, the regex did not" a provable claim on the receipt instead
+      // of an assertion in a comment. Bounded phrases only, never answer bytes.
+      law_source: (result && result.law_source) || null,
+      overruled_hints: (result && result.overruled_hints) || []
     }
   };
 }
