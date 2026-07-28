@@ -4220,14 +4220,24 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // consult_mace and cannot satisfy the instruction it was just given. This is cold
       // keyword-matching a heuristic built for a human's first-contact chat message
       // against her own machine-generated internal prompt -- never the case it was built
-      // for. Excluded the same way this file already exempts her internal reasoning
-      // elsewhere (_codaLeadNeeded reads this identical signal): identity.council_context.
-      // mode==='coding' is set ONLY by advisors/coding.js's own llm() for her internal
-      // deliberation (councilContext:{mode:'coding', internal_deliberation:true}); the
-      // external human-facing /cara/consult door uses mode:'internal', never 'coding', so
-      // this narrows to exactly her own self-talk and touches no other caller.
+      // for.
+      // ⬡B:core.tool_loop:FIX:mode_coding_alone_also_caught_two_real_human_doors:20260728⬡
+      // CAUGHT IN REVIEW by CATHY (Codex) before this widened further: the first cut of
+      // this exclusion keyed on council_context.mode==='coding' alone, on the claim that
+      // only CODA's own advisors/coding.js llm() sets that mode. False -- both
+      // routes/clair.console.routes.js's /clair/:hamUid/bcw door and
+      // routes/chat.bridge.routes.js's coding-mode chat bridge also set
+      // council_context.mode:'coding' for a REAL HUMAN asking her to consult MACE about a
+      // named file, and neither sets internal_deliberation. Matching on mode alone would
+      // have silently stripped the 20260719 consult_mace nudge (and its forced-execution
+      // safety net) from those two live builder doors, the exact regression this whole
+      // nudge exists to prevent. advisors/coding.js's llm() is the only caller that sets
+      // BOTH mode:'coding' AND internal_deliberation:true
+      // (councilContext:{mode:'coding', internal_deliberation:true}), so both are now
+      // required together; a real human's coding consult through any door keeps the nudge.
       var _isCodaInternalCycle = !!(identity && identity.council_context &&
-        identity.council_context.mode === 'coding');
+        identity.council_context.mode === 'coding' &&
+        identity.council_context.internal_deliberation === true);
       var _isCodingBuildQ = !_isCodaInternalCycle &&
         /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
