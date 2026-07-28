@@ -3449,6 +3449,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     return key ? { seat:fb, key:key } : null;
   }
   async function _attemptPaiSeat(requestBody, candidate) {
+    // ⬡B:core.tool_loop:911:the_capability_that_nothing_consumed_could_not_prevent_anything:20260728⬡
+    // Codex P2 on #1297, and the sharpest kind of finding: core/seat.map.js now COMPUTES a
+    // `tools` capability for the model that will actually be called, env override included,
+    // and a repo-wide search found NOTHING reading it. A capability nothing consumes cannot
+    // prevent the outage it was written for. That is the same "looks live and is not" disease
+    // as the ladder knob in D11 and as the seat flag in D12, arriving a third time in one
+    // night, in the very table built to end it.
+    //
+    // So it is consumed here, at the one door that talks to the provider, and it is consumed
+    // by REFUSING rather than by silently stripping. Stripping the tools would let the turn
+    // proceed blind: she would answer about a calendar she never read, confidently, which is
+    // worse than not answering. A named refusal instead becomes an ordinary seat failure, and
+    // paiSeatFailover() above already knows what to do with one: try the seat's declared
+    // fallback, which the seat map guarantees is tool-capable. So a mis-set SEAT_C2_MODEL now
+    // degrades to the failover instead of taking every surface down, which is exactly what
+    // happened tonight and took hours to find.
+    var _wantsTools = !!(requestBody && Array.isArray(requestBody.tools) && requestBody.tools.length);
+    if (_wantsTools && candidate.seat && candidate.seat.tools === false) {
+      return { error: { code: 'pai_seat_cannot_call_tools', seat: candidate.seat.seat,
+        detail: String(candidate.seat.model || '').slice(0, 80) } };
+    }
     var providerBody = primaryProviderBody(requestBody,
       requestBody && requestBody.messages || [], candidate.seat.model);
     try {
