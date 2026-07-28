@@ -794,6 +794,27 @@ async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   return recovered;
 }
 
+// ⬡B:core.tool_loop:FIX:the_arrival_exemption_where_a_test_can_actually_reach_it:20260728⬡
+// Codex P2 on #1270, and it was right about my own test: the first version of the arrival
+// exemption lived as an inline expression inside runPAI's closure, and its test re-declared
+// the same regex locally and then grepped this file for two marker strings. That test would
+// have stayed green if someone deleted the exemption outright, which is precisely the
+// "a green suite is only green over what it ran" law this repo already carries.
+//
+// So the predicate lives here, at module scope, exported, and the guard below calls THIS.
+// One source: the test now executes the same function production executes, so broadening it,
+// narrowing it, or removing it moves a real assertion.
+//
+// The three names are the arrival contract (docs/specs/ui_contract.v1.md, and the
+// DESTINATIONS set in routes/arrive.routes.js). Anything else, including a tool result, a
+// calendar payload, or a JSON object carrying some other `destination` word, is not an
+// arrival block and is still repaired by the raw-JSON guard exactly as before.
+function isArrivalDestinationBlock(parsed) {
+  return !!(parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    && typeof parsed.destination === 'string'
+    && /^(alive|cib|surface)$/i.test(parsed.destination.trim()));
+}
+
 // Keep the canonical PAI tool decision intact when the approved primary
 // provider changes. The caller owns whether tools exist and whether a nudge
 // selected provider-auto; this adapter only translates the resulting body.
@@ -5358,9 +5379,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // untouched and still repaired exactly as before. This is the same kind of shape check
     // the branch below already makes for `next_open_slots`, kept narrower on purpose, and it
     // authors no bytes: it only declines to overwrite hers.
-    var _arrivalDestination = _rawParsed && typeof _rawParsed === 'object'
-      && typeof _rawParsed.destination === 'string'
-      && /^(alive|cib|surface)$/i.test(_rawParsed.destination.trim());
+    var _arrivalDestination = isArrivalDestinationBlock(_rawParsed);
     if (_arrivalDestination) {
       _stampStep('arrival_destination_answer_kept',
         'her arrival block is the contract for that surface, not a tool result leaking to a human');
@@ -6415,4 +6434,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover,paiSeatUsable}};
+  paiSeatFailover,paiSeatUsable,isArrivalDestinationBlock}};
