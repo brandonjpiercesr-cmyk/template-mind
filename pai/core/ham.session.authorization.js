@@ -510,16 +510,29 @@ function requireAnyHamSession(req, res) {
 // already been the failure four times on this branch; refusing everything is not the safe
 // direction, it is a different way to be wrong.
 //
-// Verified rather than assumed, and named so nobody re-flags them: /geer/barrier/status and
-// /health/deep matched only because their FILES contain a write helper their GET never reaches,
-// and the clair console and wonder wall matched on crypto's own hmac update().
+// ⬡B:core.ham_session_authorization:P1:i_wrote_verified_about_a_door_i_had_only_skimmed:20260728⬡
+// CATHY (Codex) on #1301. THE COMMENT THAT STOOD HERE SAID /geer/barrier/status was verified
+// safe. It was not. I had grepped the first dozen lines of that handler, seen no write, and
+// written the word "verified" over a skim. Further down it calls coverSeat for every absent
+// seat and then tryResolve: model cycles, written choices, a fused result, every member's
+// meters and flags and traces updated, and provider backed films started. It is one of the most
+// state-changing doors in the estate and it is spelled GET.
+//
+// The defect worth keeping is not the missing entry, it is that a false claim of verification
+// is more dangerous than no claim, because the next reader stops looking. Anything on this list
+// that says "checked" now names WHAT was checked, so a skim cannot pass for a proof again.
+//
+// Still genuinely checked, and this time by reading each handler to its end rather than its
+// first screen: /health/deep contains a write helper its GET never reaches, and the clair
+// console and wonder wall matched only on crypto's own hmac update().
 const SIGN_IN_TIER_ONLY_PATHS = [
   /^\/arrive\/provision(\/|$)/i,
   /^\/vara\/convai\/url(\/|$)/i,
   /^\/cara\/files\/[^/]+\/download(\/|$)/i,
   /^\/clair\/[^/]+\/files\/download(\/|$)/i,
   /^\/os\/sports\/[^/]+(\/|$)/i,
-  /^\/os\/crm\/[^/]+\/contact\/[^/]+\/insight(\/|$)/i
+  /^\/os\/crm\/[^/]+\/contact\/[^/]+\/insight(\/|$)/i,
+  /^\/geer\/barrier\/status(\/|$)/i
 ];
 
 // ⬡B:core.ham_session_authorization:FIX:the_wall_blocked_the_upgrade_the_page_advertised:20260728⬡
@@ -536,13 +549,13 @@ const SIGN_IN_TIER_ONLY_PATHS = [
 // and it is the shape every upgrade door must have: it proves a credential the weaker tier
 // cannot forge BEFORE it mints anything. A door that merely writes something is not eligible.
 const WORLD_ID_MAY_WRITE_PATHS = [
-  /^\/auth\/home\/ham$/i,
-  /^\/auth\/advisor\/request$/i,
-  /^\/auth\/advisor\/resolve$/i,
-  /^\/os\/wake\/[^/]+$/i,
-  /^\/os\/sleep$/i,
-  /^\/door\/where$/i,
-  /^\/arrive\/decide$/i
+  /^\/auth\/home\/ham\/?$/i,
+  /^\/auth\/advisor\/request\/?$/i,
+  /^\/auth\/advisor\/resolve\/?$/i,
+  /^\/os\/wake\/[^/]+\/?$/i,
+  /^\/os\/sleep\/?$/i,
+  /^\/door\/where\/?$/i,
+  /^\/arrive\/decide\/?$/i
 ];
 
 // ⬡B:core.ham_session_authorization:FIX:a_read_that_re_enters_the_router_as_a_post:20260728⬡
@@ -568,8 +581,17 @@ const WORLD_ID_MAY_WRITE_PATHS = [
 // composes panels. No insert, no update, no delete, no model call, no outbound reach. The test
 // beside this file reads that handler's source and fails if it ever gains one, because an
 // allowlist entry whose claim has quietly stopped being true is a hole with a comment on it.
+// ⬡B:core.ham_session_authorization:FIX:end_anchored_patterns_lock_out_a_trailing_slash:20260728⬡
+// CATHY (Codex) on template-mind #315. Express default routing is NON-STRICT, so /os/sleep/ and
+// /os/sleep reach the same handler. These patterns were end-anchored with $, and the sign-in
+// only list above already allowed an optional final slash, so the two lists disagreed about
+// what a path is. The list that REFUSES tolerated the slash and the lists that ALLOW did not,
+// which is the worst possible direction for the disagreement: any client or proxy that appends
+// a slash locked the weaker tier out of entry, world switching, sign out, and both upgrade
+// legs, while every refusal kept working. Reachability has been the repeated failure on this
+// branch and this is the same shape one character wide.
 const WORLD_ID_READ_SHAPED_POSTS = [
-  /^\/awa\/[^/]+\/canvas$/i
+  /^\/awa\/[^/]+\/canvas\/?$/i
 ];
 
 const READ_ONLY_METHODS = { GET:true, HEAD:true, OPTIONS:true };
