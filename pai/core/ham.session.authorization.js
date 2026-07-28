@@ -431,15 +431,27 @@ function requireAnyHamSession(req, res) {
 //                              Both run the arrival wonder, which is a model call, which costs
 //                              money, and "anything that can spend" is on the refuse list. The
 //                              distinction being drawn is DIRECTED spend versus the cost of
-//                              rendering the page the person is already allowed to see. These
-//                              two doors take no recipient, no amount, no destination and no
-//                              free text; they answer "which surface does this world open on",
-//                              exactly once per page load, for the world the credential already
-//                              names. Refusing them makes requirement one of the order
-//                              impossible, because the world would not actually open. The
+//                              rendering the page the person is already allowed to see. The
 //                              spend that IS refused is the spend a person aims: POST
 //                              /cara/chat and every voice and reach door are absent from this
 //                              list and are therefore closed to a typed world id.
+//
+// ⬡B:core.ham_session_authorization:P1:i_asserted_no_free_text_without_reading_the_branch:20260728⬡
+// WHAT STOOD HERE SAID these two doors "take no recipient, no amount, no destination and no
+// free text" and answer "exactly once per page load". CATHY (Codex) on #1301 read the handler.
+// That is true of the PLAIN ARRIVAL and false of a TAP: routes/arrive.routes.js takes caller
+// authored body.event and body.fields, folds them into a prompt through buildArrivalMessage,
+// and spends on it through ringGate, and its own comment says a tap "is always a new decision",
+// so it repeats as often as somebody likes. A caller who knew only a world id could aim
+// arbitrary follow-up turns, indefinitely, through the one exception I had written a paragraph
+// defending. Third time tonight I recorded a verification I had not performed, and the shape is
+// always the same: I checked the branch that matched my expectation.
+//
+// THE REFUSAL CANNOT LIVE ON THIS LIST. This wall judges a method and a path, and the plain
+// arrival and the tap are both POST /arrive/decide; the difference is in the body, which this
+// wall never sees. So the entry stays and the refusal lives at the door, in
+// routes/arrive.routes.js, which is the only place that can tell them apart. Removing the entry
+// instead would close the arrival itself and break requirement one of the founder's order.
 //
 // AND SOME PATHS ARE REFUSED IN EVERY METHOD, INCLUDING GET.
 //
