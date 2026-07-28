@@ -93,7 +93,7 @@ const LIVE = [
   { id: 'gmg-university', label: 'GMG University',   mark: 'V', color: '#EC4899', keywords: ['gmg university','guru','curriculum','learn','course'], aliases: ['GMG University','GURU'], path: function (H) { return '/gmg-university-view/' + H; } },
   { id: 'memos',    label: 'Memos',              mark: 'Z', color: '#8B5CF6', keywords: ['memos','notes','memo'], aliases: ['Memos'], path: function (H) { return '/memos-view/' + H; } },
   { id: 'reading',  label: 'Reading',            mark: 'P', color: '#8B5CF6', keywords: ['reading','page','books','library'], aliases: ['Reading','PAGE'], path: function (H) { return '/reading-view/' + H; } },
-  { id: 'atter',    label: 'ATTER',              mark: 'A', color: '#14B8A6', keywords: ['atter','capture','voice','record'], aliases: ['ATTER'], path: function (H) { return '/atter-view/' + H; } },
+  { id: 'atter',    label: 'ATTER',              mark: 'A', color: '#14B8A6', keywords: ['atter','capture','voice','record'], aliases: ['ATTER'], path: function (H) { return '/atter/' + H; } }, // ⬡B:os.registry:WIRE:atter_repointed_to_real_page_20260727⬡ was pointed at /atter-view, which was reserved but never built; now points at the real page shipped 20260727
   { id: 'sync',     label: 'Sync',               mark: '6', color: '#22D3EE', keywords: ['sync','onboarding','setup','connect'], aliases: ['Sync'], path: function (H) { return '/sync-view/' + H; } },
   { id: 'sports',   label: 'Sports',             mark: '5', color: '#F97316',
     keywords: ['sports', 'nash', 'nba', 'nfl', 'game', 'score', 'lakers'],
