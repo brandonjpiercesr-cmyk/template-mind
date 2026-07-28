@@ -632,20 +632,45 @@ function worldIdTierRefusal(method, urlPath, via, sessionHamUid) {
 // be steered by precedence, because it no longer depends on precedence. A caller who genuinely
 // holds only the full tier is untouched, and a caller holding nothing valid still reaches the
 // gates it always did.
-function worldIdCredentialOn(req) {
+// ⬡B:core.ham_session_authorization:P2:the_same_precedence_trap_at_a_second_door:20260728⬡
+// CATHY (Codex) on #1301, immediately after the guard fix below, and at a DIFFERENT call site:
+// routes/home.door.routes.js asked authorizeSessionRequest whether a stronger credential was
+// already held before minting a weaker one. A junk Authorization header made that answer 401,
+// the preservation branch was skipped, and a real thirty day sign in was overwritten by a
+// twelve hour token. Same root cause as the wall, one door along, which is the signal that the
+// question needed a name of its own rather than a second careful call site.
+//
+// heldSessionOn answers WHAT THIS REQUEST ACTUALLY CARRIES, across both carriers, strongest
+// first. It is deliberately NOT authorizeSessionRequest and does not replace it: that function
+// answers WHO IS THIS for a door deciding whether to serve, and its refusal to downgrade an
+// explicit bearer to a cookie beside it is correct there and must stay. Two questions, two
+// functions, one implementation each.
+function heldSessionOn(req) {
   const headers = (req && req.headers) || {};
   const candidates = [
     bearerToken(headers.authorization || headers.Authorization),
     cookieToken(headers.cookie || headers.Cookie)
   ];
+  let weaker = null;
   for (const candidate of candidates) {
     if (!candidate) continue;
     const verified = verifySessionToken(candidate);
     // Only a token that really verifies counts. An unsigned or expired string is not a
     // credential, and treating it as one would refuse requests that carry nothing at all.
-    if (verified.ok && verified.via === TIER_WORLD_ID) return verified.hamUid;
+    if (!verified.ok) continue;
+    // Strongest wins outright, so a weak token cannot be used to hide a full one that is also
+    // present. Otherwise remember the weak one and keep looking.
+    if (verified.via === TIER_SIGN_IN) {
+      return { ok:true, hamUid:verified.hamUid, via:TIER_SIGN_IN, expiresAt:verified.expiresAt };
+    }
+    if (!weaker) weaker = { ok:true, hamUid:verified.hamUid, via:verified.via, expiresAt:verified.expiresAt };
   }
-  return null;
+  return weaker || { ok:false };
+}
+
+function worldIdCredentialOn(req) {
+  const held = heldSessionOn(req);
+  return (held.ok && held.via === TIER_WORLD_ID) ? held.hamUid : null;
 }
 
 // Mounted on BOTH entry points, ahead of every route, so there is no door on either surface it
@@ -710,6 +735,7 @@ module.exports = {
   signWorldIdSession,
   worldIdSessionCookie,
   worldIdTierRefusal,
+  heldSessionOn,
   signInTierGuard,
   requireSignInTier,
   verifySessionToken,
