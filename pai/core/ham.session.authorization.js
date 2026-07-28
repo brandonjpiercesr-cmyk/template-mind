@@ -668,9 +668,38 @@ function heldSessionOn(req) {
   return weaker || { ok:false };
 }
 
+// ⬡B:core.ham_session_authorization:P1:strongest_first_is_the_wrong_reduction_for_a_guard:20260728⬡
+// CATHY (Codex) on #1301, and this is MY regression, introduced one commit earlier when I routed
+// this function through heldSessionOn to avoid a second implementation. Sharing the walk was
+// right; sharing the REDUCTION was wrong, and the two questions differ exactly there.
+//
+// heldSessionOn answers "what is the best credential this browser holds", so strongest wins and
+// a weak token cannot hide a full one. Correct for a door deciding what to grant. Applied here
+// it inverted the guard: a request carrying a full sign_in COOKIE together with a valid world_id
+// BEARER reported only the cookie, this returned null, and the wall stood aside. Downstream,
+// authorizeSessionRequest treats the explicit bearer as authoritative, so POST /cara/chat then
+// ran the paid cycle on that weak bearer. Any signed-in caller could pair their own cookie with
+// a weak token for someone else's world and spend and write as that world. Presenting a
+// STRONGER credential was the bypass.
+//
+// A guard does not ask what is best on the request. It asks whether anything on the request can
+// cause what it forbids, and answers about the worst of them. So this walks every carrier
+// independently and reports a world_id credential wherever it sits, however strong its
+// neighbours are. Fail closed: when both tiers are present the weak rules apply, which at worst
+// costs a signed-in person one refusal they can fix by dropping a token they should not be
+// sending, and at best is the difference between a wall and a suggestion.
 function worldIdCredentialOn(req) {
-  const held = heldSessionOn(req);
-  return (held.ok && held.via === TIER_WORLD_ID) ? held.hamUid : null;
+  const headers = (req && req.headers) || {};
+  const candidates = [
+    bearerToken(headers.authorization || headers.Authorization),
+    cookieToken(headers.cookie || headers.Cookie)
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const verified = verifySessionToken(candidate);
+    if (verified.ok && verified.via === TIER_WORLD_ID) return verified.hamUid;
+  }
+  return null;
 }
 
 // Mounted on BOTH entry points, ahead of every route, so there is no door on either surface it
