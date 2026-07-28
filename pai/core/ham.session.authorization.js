@@ -535,6 +535,35 @@ const SIGN_IN_TIER_ONLY_PATHS = [
   /^\/geer\/barrier\/status(\/|$)/i
 ];
 
+// ⬡B:core.ham_session_authorization:WIRE:the_awa_write_paths_are_already_covered_by_default_deny:20260728⬡
+// CLAIR.AWAGATE2 offered this list a better home for the seven AWA write paths its lane guards
+// locally, and reported POST /awa/<world>/apply, the one AWA door that REACHES A HUMAN, as
+// proving exact-HAM without consulting the tier. I added it here, then mutation tested the entry
+// and it came back GREEN: removing it changed nothing, because this tier is DEFAULT DENY on
+// every state change and that POST is on no allow list. The wall already refused it. The entry
+// was removed rather than kept as belt and braces, because a redundant lock reads as the reason
+// a thing is safe and the next coder then edits the real one without noticing.
+//
+// The mutation is the finding. Without it I would have shipped a comment and a test claiming to
+// have closed a gap that was already closed, which is the same false-verification defect this
+// file already carries one correction for tonight. The guard that matters is the test beside
+// this file asserting apply is refused BY DEFAULT DENY, so it goes red if anybody ever adds it
+// to the write allow list.
+//
+// On the wider offer, refused with a reason rather than left hanging.
+//
+// This list is METHOD BLIND on purpose: an entry here refuses every verb, which is exactly right
+// for a path whose mere reading is the harm. Six of those seven share a path with a READ this
+// tier is supposed to have. /awa/<world>/pipeline/status is a GET that returns a board and a
+// POST that overrides a card. Putting that path here would refuse the board, and a typed world
+// id that opens a world showing nothing is the founder's own requirement broken to close a hole
+// that was already closed. Their local, method-aware check is the RIGHT place for those six, and
+// two locks on a write path is the safe direction anyway.
+//
+// And /awa/<world>/apply needs no entry at all, per the mutation above: default deny already
+// keeps this tier's own stated promise there, that a typed world id "buys no spend, no outbound
+// message to a person, and no identity change".
+
 // ⬡B:core.ham_session_authorization:FIX:the_wall_blocked_the_upgrade_the_page_advertised:20260728⬡
 // CATHY (Codex) on #1301, and this one was caused by the fix directly above it, which is the
 // honest way to record it. Letting a typed world id see the root form again put the Google
