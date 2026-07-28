@@ -38,6 +38,50 @@ function env(key, dflt) {
   return (v && String(v).trim()) ? String(v).trim() : dflt;
 }
 
+// ⬡B:core.seat_map:911:a_capability_flag_that_survives_a_re_seat_is_a_lie_with_a_deploy_behind_it:20260728⬡
+// Read live from OpenRouter's public catalog on 20260728, no auth required, per model, so the
+// next lane can re-derive every row here instead of trusting this one:
+//   curl -s https://openrouter.ai/api/v1/models
+//   tools  -> supported_parameters contains "tools"
+//   vision -> architecture.input_modalities contains "image"
+// `minimax/minimax-01` is the only model this house has ever seated whose
+// supported_parameters is [max_tokens, temperature, top_p] with no tool use at all.
+//
+// WHY THIS TABLE EXISTS AND NOT JUST THE PER-SEAT FLAGS. Both flags below describe a seat's
+// BAKED DEFAULT. That was honest while a re-seat was rare, and it stops being honest the
+// moment somebody actually uses the env knob this file advertises: the fastest mitigation for
+// the outage above is SEAT_C2_MODEL=z-ai/glm-5.2 on the live service, one minute, no deploy,
+// and GLM-5.2 is text-only. The seat would have gone on publishing vision:true from its baked
+// row, and core/tool.loop.js attaches an uploaded image ONLY when the seat says it reads
+// pixels, so the one-minute cure for the tool outage would have quietly started posting
+// image parts to a model that cannot take them. A flag that cannot survive the exact
+// operation it exists to support is not a fact, it is a stale label.
+// So capability is answered about the model that will ACTUALLY be called: the table when the
+// resolved slug is one this file has verified, the seat's declared flag when the resolved slug
+// IS the baked default, and false when a world overrides to a slug nobody here has checked.
+// Unverified is not capable. Failing closed costs at most an image left as text or a tool
+// array withheld; failing open costs the turn, which is the whole 911 above.
+var MODEL_CAPABILITY = {
+  'qwen/qwen3.5-flash-02-23':  { tools:true,  vision:true  },
+  'minimax/minimax-01':        { tools:false, vision:true  },
+  'z-ai/glm-5.2':              { tools:true,  vision:false },
+  'x-ai/grok-4.5':             { tools:true,  vision:true  },
+  'x-ai/grok-build-0.1':       { tools:true,  vision:true  },
+  'moonshotai/kimi-k3':        { tools:true,  vision:true  },
+  'qwen/qwen3-coder':          { tools:true,  vision:false },
+  'qwen/qwen3-235b-a22b':      { tools:true,  vision:false },
+  'qwen/qwen3-235b-a22b-2507': { tools:true,  vision:false },
+  'deepseek/deepseek-v3.2':    { tools:true,  vision:false }
+};
+
+// resolvedModel is what this call will really send; bakedModel and declared are what the seat
+// row says about its own default. Never guesses: an unknown override is false, not inherited.
+function capability(kind, resolvedModel, bakedModel, declared) {
+  var known = MODEL_CAPABILITY[resolvedModel];
+  if (known) return !!known[kind];
+  return resolvedModel === bakedModel ? !!declared : false;
+}
+
 function envUsd(key, dflt) {
   var raw = process.env[key];
   if (raw === undefined || raw === '') return dflt;
@@ -52,6 +96,54 @@ function envUsd(key, dflt) {
 // represented here: OpenRouter usage is observable, but this process cannot
 // atomically enforce a per-key USD limit, so publishing one would be false.
 //
+// ⬡B:core.seat_map:911:the_everyday_seat_was_the_one_model_that_cannot_hold_a_tool:20260728⬡
+// LIVE OUTAGE, reproduced twice against the running world on 20260728, 100% deterministic:
+// a chat turn that needs no tool answered normally, seven stages, committed. A chat turn
+// that carries tools ("how many months until I have saved 3600") came back
+//   ok:false  no_answer:pai_seat:_message_:_No_endpoints_found_that_support_tool_use.
+// The whole turn, not a degraded one. Root cause, verified by hand against OpenRouter's own
+// roster the same day (GET /api/v1/models, supported_parameters, per model, never assumed):
+// of every model seated in this file, `minimax/minimax-01` was the ONLY one with no
+// tool-use-capable endpoint. It was seated on `c2_organ`, which core/tool.loop.js's
+// _paiSeatName() routes EVERY non-voice, non-coding channel to, and the founder's own
+// 20260726 law is that she holds her tools for the whole run. So the everyday chat seat was
+// the one seat whose entire job the seated model structurally could not do, and OpenRouter
+// rejected the request outright rather than answering without tools.
+//
+// The seat's declared GLM-5.2 failover did not save it: that failover is consulted by
+// core/model.router.js and the judge, not by tool.loop's completion door, which resolves
+// seat() once and returns the provider error. Fixing that door is a tool.loop.js change and
+// that file belongs to another lane; it is reported, not taken, and it is the reason this
+// fix lands here, on the one source that actually decides which model leaves.
+//
+// THE RE-SEAT, and the founder ruling it supersedes. The 20260722 ruling picked MiniMax-01
+// on four stated criteria: fresh, strong, cheap, clean fast JSON, 1M context. Tool use was
+// not among them because nobody had the fact. `qwen/qwen3.5-flash-02-23` satisfies every one
+// of those criteria that a re-seat can still honor and regresses nothing measured against
+// what was live: tool use no (dead) -> yes, vision yes -> yes (the 20260727 image handoff
+// keeps working), 1M context -> 1M context, and $0.20/$1.10 per M -> $0.07/$0.26 per M,
+// CHEAPER than the model it replaces, which is the penny hustle read of the law rather than
+// a coder buying a bigger mind. Every price and capability here is from OpenRouter's live
+// roster on 20260728, not memory. The GLM-5.2 failover the founder declared for this seat is
+// untouched and still carries the bigger mind when the primary misses.
+// STATED PLAINLY, not buried: this seats the C2 organ on the same model slug as the C1 penny
+// gate, so the two tiers now differ by key, cap and role rather than by model. That is a real
+// doctrine cost. It is the founder's to weigh, and it is one env var either way, with no code
+// change and no deploy of this file: SEAT_C2_MODEL=z-ai/glm-5.2 buys back the bigger mind at
+// 8x the input price and loses vision on this seat; SEAT_C2_MODEL=minimax/minimax-01 restores
+// his original pick and re-breaks every tool-carrying turn.
+//
+// ⬡B:core.seat_map:WIRE:tool_use_capability_is_a_confirmed_fact_not_a_guess:20260728⬡
+// `tools` states whether THIS seat's baked default model has a tool-use-capable endpoint,
+// checked live against OpenRouter's own roster (GET /api/v1/models, supported_parameters
+// contains `tools`) on 20260728, per model, never inferred from a family name. Same contract
+// as `vision` directly below, including its caveat: it reflects the BAKED DEFAULT only, so a
+// SEAT_*_MODEL env override to a different slug does not retarget this flag any more than it
+// retargets `role`. `fallbackTools` says the same thing about the seat's declared failover,
+// because a failover that cannot carry tools is no failover for a tool-carrying seat.
+// Verified false for exactly one model this file has ever seated, `minimax/minimax-01`, which
+// is why the row above exists.
+//
 // ⬡B:core.seat_map:WIRE:vision_capability_is_a_confirmed_fact_not_a_guess:20260727⬡
 // `vision` states whether THIS seat's baked default model accepts an image_url
 // message part. Checked live against OpenRouter's own model roster (GET
@@ -64,41 +156,51 @@ function envUsd(key, dflt) {
 // SEAT_*_MODEL env override to a different slug does not retarget this flag,
 // the same way an override does not retarget `role`.
 var SEATS = {
-  c1_cellm:    { role: 'C1 penny gate',        envModel: 'SEAT_C1_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C1_CELLM',    via: 'openrouter', capEnv:'SEAT_C1_CELLM_DAILY_CAP_USD', dailyCapUsd:2, vision:true },
-  // Founder ruling 20260722: use a fresh, never-before-wired model on the everyday
-  // organ. MiniMax-01 (instruct, 1M ctx, ~$0.20/$1.10) is strong, cheap enough for the
-  // high-volume workhorse, and returns clean JSON in ~3.7s (verified live), unlike the
-  // MiniMax M2 reasoners which burn the whole budget thinking. GLM-5.2 is the failover.
-  c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'minimax/minimax-01',       provider: 'openrouter', keyEnv: 'OR_KEY_C2_ORGAN',    via: 'openrouter', capEnv:'SEAT_C2_ORGAN_DAILY_CAP_USD', dailyCapUsd:6, vision:true,
-                 fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_C2_ORGAN' },
+  c1_cellm:    { role: 'C1 penny gate',        envModel: 'SEAT_C1_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C1_CELLM',    via: 'openrouter', capEnv:'SEAT_C1_CELLM_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  // Founder ruling 20260722 seated MiniMax-01 here (fresh, 1M ctx, ~$0.20/$1.10, clean JSON
+  // in ~3.7s), SUPERSEDED 20260728 by the live tool-use outage in the 911 comment above:
+  // that model has no tool-use endpoint and this is the seat every tool-carrying chat turn
+  // lands on. Re-seated on qwen3.5-flash-02-23 (tool-use yes, vision yes, 1M ctx,
+  // $0.07/$0.26 per M, cheaper than the pick it replaces). GLM-5.2 stays the failover.
+  c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C2_ORGAN',    via: 'openrouter', capEnv:'SEAT_C2_ORGAN_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
+                 fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_C2_ORGAN', fallbackTools:true },
   // Founder ruling 20260722: Grok 4.5 is the mind; GLM-5.2 is its failover. Grok is
   // closed-weight (xAI) and founder-lifted from the ban for this seat. Seated on C3
   // (the flagship mind) only, not the high-volume C2 organ, to keep the $2/$6-per-M
   // Grok off the everyday workhorse. verified live 20260722.
-  c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6, vision:true,
-                 fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK' },
-  c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2, vision:true },
-  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', capEnv:'SEAT_CODA_DAILY_CAP_USD', dailyCapUsd:8, vision:true },
-  deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', capEnv:'SEAT_DEPLOY_TOOL_DAILY_CAP_USD', dailyCapUsd:4, vision:false },
+  c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
+                 fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK', fallbackTools:true },
+  c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', capEnv:'SEAT_CODA_DAILY_CAP_USD', dailyCapUsd:8, vision:true, tools:true },
+  deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', capEnv:'SEAT_DEPLOY_TOOL_DAILY_CAP_USD', dailyCapUsd:4, vision:false, tools:true },
   // FOUNDER 911 20260722: Ornith is RETIRED and RunPod is out entirely (the live
   // endpoint was failure-looping: 937 failures, 0 completions, billed GPU). The
   // judge seat moves to its own proven reliability pick: qwen3-235b (2-4s clean
   // strict JSON, verified) on OpenRouter, with Kimi K3 as the failover so a qwen
   // miss never leaves a contest ungraded. No RunPod anywhere in this map.
-  judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'qwen/qwen3-235b-a22b-2507',provider: 'openrouter', keyEnv: 'OR_KEY_JUDGE_QWEN', via: 'openrouter', capEnv:'SEAT_JUDGE_DAILY_CAP_USD', dailyCapUsd:4, vision:false,
-                 fallbackModel: 'moonshotai/kimi-k3', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_JUDGE_QWEN' },
-  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', capEnv:'SEAT_CANON_DAILY_CAP_USD', dailyCapUsd:2, vision:false },
-  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', capEnv:'SEAT_ADVISORS_DAILY_CAP_USD', dailyCapUsd:2, vision:false },
-  deliberation:{ role: 'general deliberation ladder',envModel:'SEAT_LADDER_MODEL',model:'z-ai/glm-5.2',             provider:'openrouter', keyEnv:'OR_KEY_MODEL_LADDER',  via:'openrouter', capEnv:'SEAT_DELIBERATION_DAILY_CAP_USD', dailyCapUsd:3, vision:false },
-  voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', capEnv:'SEAT_VOICE_FAST_DAILY_CAP_USD', dailyCapUsd:3, vision:true },
-  runaway_sweep:{ role:'runaway SHADOW judge', envModel:'RUNAWAY_SWEEP_MODEL', model:'qwen/qwen3.5-flash-02-23', provider:'openrouter',keyEnv:'OR_KEY_RUNAWAY_SWEEP',via:'openrouter', capEnv:'SEAT_RUNAWAY_SWEEP_DAILY_CAP_USD', dailyCapUsd:1, vision:true },
-  wonder_games_glm:  { role: 'Wonder Games GLM contestant',  envModel:'WONDER_GAMES_GLM_MODEL',  model:'z-ai/glm-5.2',       provider:'openrouter',keyEnv:'OR_KEY_WONDER_GAMES_GLM', via:'openrouter', capEnv:'SEAT_WONDER_GAMES_GLM_DAILY_CAP_USD', dailyCapUsd:2, vision:false },
-  wonder_games_qwen: { role: 'Wonder Games Qwen contestant', envModel:'WONDER_GAMES_QWEN_MODEL', model:'qwen/qwen3-235b-a22b',provider:'openrouter',keyEnv:'OR_KEY_WONDER_GAMES_QWEN',via:'openrouter', capEnv:'SEAT_WONDER_GAMES_QWEN_DAILY_CAP_USD', dailyCapUsd:2, vision:false },
-  cookoff_kimi:     { role: 'cook-off Kimi contestant',     envModel: 'COOKOFF_KIMI_MODEL',     model: 'moonshotai/kimi-k3',     provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_KIMI',     via: 'openrouter', capEnv:'SEAT_COOKOFF_KIMI_DAILY_CAP_USD', dailyCapUsd:2, vision:true },
-  cookoff_qwen:     { role: 'cook-off Qwen contestant',     envModel: 'COOKOFF_QWEN_MODEL',     model: 'qwen/qwen3-coder',       provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_QWEN',     via: 'openrouter', capEnv:'SEAT_COOKOFF_QWEN_DAILY_CAP_USD', dailyCapUsd:2, vision:false },
-  cookoff_glm:      { role: 'cook-off GLM contestant',      envModel: 'COOKOFF_GLM_MODEL',      model: 'z-ai/glm-5.2',           provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GLM',      via: 'openrouter', capEnv:'SEAT_COOKOFF_GLM_DAILY_CAP_USD', dailyCapUsd:2, vision:false },
-  cookoff_deepseek: { role: 'cook-off DeepSeek contestant', envModel: 'COOKOFF_DEEPSEEK_MODEL', model: 'deepseek/deepseek-v3.2', provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_DEEPSEEK', via: 'openrouter', capEnv:'SEAT_COOKOFF_DEEPSEEK_DAILY_CAP_USD', dailyCapUsd:2, vision:false },
-  cookoff_grok:     { role: 'cook-off Grok contestant',     envModel: 'COOKOFF_GROK_MODEL',     model: 'x-ai/grok-build-0.1',    provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GROK',     via: 'openrouter', capEnv:'SEAT_COOKOFF_GROK_DAILY_CAP_USD', dailyCapUsd:2, vision:true }
+  judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'qwen/qwen3-235b-a22b-2507',provider: 'openrouter', keyEnv: 'OR_KEY_JUDGE_QWEN', via: 'openrouter', capEnv:'SEAT_JUDGE_DAILY_CAP_USD', dailyCapUsd:4, vision:false, tools:true,
+                 fallbackModel: 'moonshotai/kimi-k3', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_JUDGE_QWEN', fallbackTools:true },
+  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', capEnv:'SEAT_CANON_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', capEnv:'SEAT_ADVISORS_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  // ⬡B:core.seat_map:WIRE:the_ladders_second_rung_is_a_declared_failover_not_a_literal:20260728⬡
+  // core/model.ladder.js walks two OpenRouter rungs on this one seat. Its second rung used to
+  // carry a model slug hardcoded in that file (`qwen/qwen3-235b-a22b`, $0.455/$1.82 per M),
+  // which is a second hand-maintained copy of a decision this file owns. Declared here as a
+  // real failover so the ladder resolves it the same way every other seat resolves one, and
+  // moved to the -2507 build this file already trusts for the judge seat (verified live
+  // 20260721, 2-4s clean strict JSON) which is also $0.09/$0.55 per M and 262k context: five
+  // times cheaper than the literal it replaces, on a model this house has already proved.
+  deliberation:{ role: 'general deliberation ladder',envModel:'SEAT_LADDER_MODEL',model:'z-ai/glm-5.2',             provider:'openrouter', keyEnv:'OR_KEY_MODEL_LADDER',  via:'openrouter', capEnv:'SEAT_DELIBERATION_DAILY_CAP_USD', dailyCapUsd:3, vision:false, tools:true,
+                 fallbackModel:'qwen/qwen3-235b-a22b-2507', fallbackProvider:'openrouter', fallbackKeyEnv:'OR_KEY_MODEL_LADDER', fallbackTools:true },
+  voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', capEnv:'SEAT_VOICE_FAST_DAILY_CAP_USD', dailyCapUsd:3, vision:true, tools:true },
+  runaway_sweep:{ role:'runaway SHADOW judge', envModel:'RUNAWAY_SWEEP_MODEL', model:'qwen/qwen3.5-flash-02-23', provider:'openrouter',keyEnv:'OR_KEY_RUNAWAY_SWEEP',via:'openrouter', capEnv:'SEAT_RUNAWAY_SWEEP_DAILY_CAP_USD', dailyCapUsd:1, vision:true, tools:true },
+  wonder_games_glm:  { role: 'Wonder Games GLM contestant',  envModel:'WONDER_GAMES_GLM_MODEL',  model:'z-ai/glm-5.2',       provider:'openrouter',keyEnv:'OR_KEY_WONDER_GAMES_GLM', via:'openrouter', capEnv:'SEAT_WONDER_GAMES_GLM_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  wonder_games_qwen: { role: 'Wonder Games Qwen contestant', envModel:'WONDER_GAMES_QWEN_MODEL', model:'qwen/qwen3-235b-a22b',provider:'openrouter',keyEnv:'OR_KEY_WONDER_GAMES_QWEN',via:'openrouter', capEnv:'SEAT_WONDER_GAMES_QWEN_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  cookoff_kimi:     { role: 'cook-off Kimi contestant',     envModel: 'COOKOFF_KIMI_MODEL',     model: 'moonshotai/kimi-k3',     provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_KIMI',     via: 'openrouter', capEnv:'SEAT_COOKOFF_KIMI_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  cookoff_qwen:     { role: 'cook-off Qwen contestant',     envModel: 'COOKOFF_QWEN_MODEL',     model: 'qwen/qwen3-coder',       provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_QWEN',     via: 'openrouter', capEnv:'SEAT_COOKOFF_QWEN_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  cookoff_glm:      { role: 'cook-off GLM contestant',      envModel: 'COOKOFF_GLM_MODEL',      model: 'z-ai/glm-5.2',           provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GLM',      via: 'openrouter', capEnv:'SEAT_COOKOFF_GLM_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  cookoff_deepseek: { role: 'cook-off DeepSeek contestant', envModel: 'COOKOFF_DEEPSEEK_MODEL', model: 'deepseek/deepseek-v3.2', provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_DEEPSEEK', via: 'openrouter', capEnv:'SEAT_COOKOFF_DEEPSEEK_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  cookoff_grok:     { role: 'cook-off Grok contestant',     envModel: 'COOKOFF_GROK_MODEL',     model: 'x-ai/grok-build-0.1',    provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GROK',     via: 'openrouter', capEnv:'SEAT_COOKOFF_GROK_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true }
 };
 
 // Resolve a seat, reading its model fresh from env each call (env truth wins;
@@ -106,10 +208,11 @@ var SEATS = {
 function seat(name) {
   var d = SEATS[name];
   if (!d) return null;
+  var resolvedModel = env(d.envModel, d.model);
   return {
     seat: name,
     role: d.role,
-    model: env(d.envModel, d.model),
+    model: resolvedModel,
     provider: d.provider,
     keyEnv: d.keyEnv,
     via: d.via,
@@ -119,10 +222,13 @@ function seat(name) {
     // primary's own model is not a fallback, so this seat reports that it has none.
     hasFallback: !!(d.fallbackModel &&
       env(d.envModel + '_FALLBACK', d.fallbackModel) !== env(d.envModel, d.model)),
-    // Confirmed per the comment above SEATS, for the baked default model. A caller
-    // that sends an image part to a seat this says is not vision-capable is not
-    // this file's decision to have made for it; it is the caller's to skip or accept.
-    vision: !!d.vision
+    // Both answered about `resolvedModel`, the model this call will really send, not
+    // about the row's baked default. A caller that sends an image part to a seat this
+    // says is not vision-capable, or a tools array to a seat this says cannot hold one,
+    // is choosing a request the provider will refuse; that is the caller's call to make,
+    // and this file's job is only to tell it the truth about the model it is about to use.
+    vision: capability('vision', resolvedModel, d.model, d.vision),
+    tools: capability('tools', resolvedModel, d.model, d.tools)
   };
 }
 
@@ -145,16 +251,21 @@ function fallback(name) {
   var d = SEATS[name];
   if (!d || !d.fallbackModel) return null;
   if (env(d.envModel + '_FALLBACK', d.fallbackModel) === env(d.envModel, d.model)) return null;
+  var resolvedFallback = env(d.envModel + '_FALLBACK', d.fallbackModel);
   return {
     seat: name + '.fallback',
     role: d.role + ' (fallback)',
-    model: env(d.envModel + '_FALLBACK', d.fallbackModel),
+    model: resolvedFallback,
     provider: d.fallbackProvider,
     keyEnv: d.fallbackKeyEnv,
     via: d.fallbackProvider,
     dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd),
     capEnv: d.capEnv,
-    hasFallback: false
+    hasFallback: false,
+    // Same rule as the primary: answered about the failover model that will really be
+    // called, so a SEAT_*_MODEL_FALLBACK re-seat cannot inherit a stale capability claim.
+    tools: capability('tools', resolvedFallback, d.fallbackModel, d.fallbackTools),
+    vision: capability('vision', resolvedFallback, d.fallbackModel, false)
   };
 }
 
