@@ -831,12 +831,29 @@ function isArrivalDestinationBlock(parsed) {
 // Behaviour is deliberately byte-for-byte what the in-closure version did: the same
 // leading-bracket test, the same JSON.parse in a try, the same three outcomes, the same two
 // stamp names, the same literals. Nothing about what a human receives changes here.
-function repairRawJsonAnswer(answer) {
+// ⬡B:core.tool_loop:911:a_shape_is_not_a_context_and_this_guard_protects_a_real_phone:20260728⬡
+// Codex P1 on #1270, correct and serious, and my own regression. The first version of this
+// exemption keyed on the SHAPE of her answer alone, and it runs inside a CHANNEL-AGNOSTIC
+// cycle. So any turn anywhere, including the SMS lane, whose answer happened to parse as an
+// object carrying destination "alive" would have skipped the repair entirely and could have
+// sent a raw blob to a human. That is the exact incident this guard was built for after a
+// tool result went out as a text message to the founder's phone. I widened a live safety
+// guard across every channel to fix one surface.
+//
+// The exemption now requires TWO independent facts, and a turn missing either is repaired
+// exactly as before:
+//   1. the turn PROVED it is the arrival, by carrying council_context.surface === 'arrival',
+//      set only by routes/arrive.routes.js and carried by routes/cara.routes.js. A reach
+//      channel never sets it, so an SMS turn cannot reach this branch at all.
+//   2. the answer matches the arrival contract shape.
+// Context first, then shape. That ordering is the whole correction.
+function repairRawJsonAnswer(answer, context) {
   var text = answer == null ? '' : String(answer);
   if (!text || !/^[[{]/.test(text.trim())) return { answer: answer, stamp: null, why: null };
   var parsed = null;
   try { parsed = JSON.parse(text.trim()); } catch (eRawJ) { parsed = null; }
-  if (isArrivalDestinationBlock(parsed)) {
+  var provenArrivalTurn = !!(context && String(context.surface || '') === 'arrival');
+  if (provenArrivalTurn && isArrivalDestinationBlock(parsed)) {
     return { answer: answer, stamp: 'arrival_destination_answer_kept',
       why: 'her arrival block is the contract for that surface, not a tool result leaking to a human' };
   }
@@ -5391,7 +5408,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // guard would ship raw JSON to the human; rerouting to re-synthesis cannot be verified here, so it
   // is contained by stamp only.
   if (!_structuredReachPolicy) {
-    var _rawRepair = repairRawJsonAnswer(finalAns);
+    var _rawRepair = repairRawJsonAnswer(finalAns, identity && identity.council_context);
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
   }
