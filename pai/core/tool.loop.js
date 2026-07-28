@@ -352,6 +352,29 @@ function draftArgsFromMessage(message) {
   return { org:'' };
 }
 // ⬡B:core.tool_loop:MAP:data_reader_tools_executable_in_cold_code:20260719⬡
+// ⬡B:core.tool_loop:CONST:the_only_reader_a_soft_hint_may_decline:20260727⬡
+//
+// THE ALLOWLIST IS THE WHOLE SAFETY PROPERTY, so it is stated before the table it guards.
+//
+// The soft nudge path (tool_choice 'auto') tells her "call it if it helps, but you hold all
+// your tools; use your judgment". Honouring that literally, for every data reader, was wrong
+// and was caught in review by CATHY (Codex) at P1 the same day it was written. The soft path
+// also selects get_budget_summary for a finance turn (line ~4105) and calendar_read for a day
+// question (line ~4115). Letting those be declined means she can answer "how much have I got
+// left" from a guess instead of from his real budget, and "am I free Thursday" by inventing
+// availability. Money and current events are exactly what must never be guessed.
+//
+// So the default is FAIL CLOSED and this is the single named exception. find_in_brain is a
+// "would an old note help here" lookup, not a source of owned or current fact; declining it on
+// a plain greeting is judgment working correctly, and forcing it is what deleted a real answer.
+// Everything else in the table below reads owned or current data, where a missing read makes
+// the answer a fabrication rather than merely unadorned. find_identity_evidence is absent on
+// purpose and stays fail-closed: silence over a confident guess about who he is.
+//
+// Adding a name here removes a grounding guarantee. Do not add one without a reason as
+// specific as this paragraph.
+var OPTIONAL_SOFT_READERS = { find_in_brain: true };
+
 // Deterministic data-reader tools that cold code can execute directly when the
 // model refuses to emit a forced tool_choice. Each maps the raw user message to
 // the tool's args. Used only to ground an answer in REAL data, never to fabricate.
@@ -4629,12 +4652,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // does any read the router genuinely marked required. What changes is only the case the
       // rule never meant to cover: a soft hint she was invited to decline.
       //
-      // Fail closed only where the read was genuinely demanded, or where guessing would be a
-      // guess about who he is.
+      // TOO BROAD ON THE FIRST WRITING, caught in review by CATHY (Codex) at P1 before it
+      // shipped. Honouring the decline for EVERY data reader also honoured it for
+      // get_budget_summary on a finance turn and calendar_read on a day question, both of which
+      // reach this branch with tool_choice still 'auto'. That would let her answer about his
+      // money, and about whether he is free, from a guess. The default is therefore fail
+      // closed, and OPTIONAL_SOFT_READERS above is the one named exception, with the reasoning
+      // for it written where the list lives.
+      var _readWasDemanded = (body.tool_choice === 'required');
+      var _declinable = !_readWasDemanded && OPTIONAL_SOFT_READERS[_requiredToolName] === true;
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
-      } else if (DATA_READER_TOOLS[_requiredToolName]
-                 && (body.tool_choice === 'required' || _requiredToolName === 'find_identity_evidence')) {
+      } else if (DATA_READER_TOOLS[_requiredToolName] && !_declinable) {
         _stampStep('required_tool_call_missing', _requiredToolName);
         return {ok:false,reason:'required_tool_call_missing',blocked_by:_requiredToolName,
           ham:hamObj,cycleId:_cycleId,requestId:_requestId,
