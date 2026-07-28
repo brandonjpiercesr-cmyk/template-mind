@@ -519,6 +519,33 @@ const WORLD_ID_MAY_WRITE_PATHS = [
   /^\/arrive\/decide$/i
 ];
 
+// ⬡B:core.ham_session_authorization:FIX:a_read_that_re_enters_the_router_as_a_post:20260728⬡
+// CATHY (Codex) on #1301. GET /api/awa/jobs?assignee=<world> passes this guard as the read it
+// is, and then routes/air.compat.routes.js rewrites req.method to POST and req.url to
+// /awa/<world>/canvas and calls app.handle again. The second pass sees a POST that is on no
+// list and refuses, so the weaker tier could not open a surface that only reads.
+//
+// KEPT AS ITS OWN LIST RATHER THAN ADDED TO THE ONE ABOVE, deliberately. That list is doors
+// this tier may ACT through. This one is reads that happen to be spelled POST because the
+// request carries a body. Merging them would lose the distinction the whole guard rests on,
+// and the next coder would read a write door as blessed.
+//
+// THE REJECTED ALTERNATIVE, written down so it is not retried as an improvement: marking the
+// request as already judged and skipping the second pass. It is more general and it is wrong.
+// The guard's question is what this credential CAUSES, not how many times a router saw it, so
+// a future alias that rewrote a GET into a door that writes would sail through on a marker
+// saying an earlier read was fine. Judging the final path every time is the property worth
+// keeping; the fix belongs in what the final path is allowed to be.
+//
+// EACH ENTRY IS A CLAIM ABOUT A HANDLER, and the claim is verified rather than assumed:
+// routes/awa.routes.js POST /awa/:hamUid/canvas reads AWA_JOB beads through Agent FIND and
+// composes panels. No insert, no update, no delete, no model call, no outbound reach. The test
+// beside this file reads that handler's source and fails if it ever gains one, because an
+// allowlist entry whose claim has quietly stopped being true is a hole with a comment on it.
+const WORLD_ID_READ_SHAPED_POSTS = [
+  /^\/awa\/[^/]+\/canvas$/i
+];
+
 const READ_ONLY_METHODS = { GET:true, HEAD:true, OPTIONS:true };
 
 // The verdict, as a pure function of the three facts it depends on, so a test can drive every
@@ -532,6 +559,9 @@ function worldIdTierRefusal(method, urlPath, via) {
     }
   }
   if (READ_ONLY_METHODS[String(method || '').toUpperCase()]) return null;
+  for (const pattern of WORLD_ID_READ_SHAPED_POSTS) {
+    if (pattern.test(path)) return null;
+  }
   for (const pattern of WORLD_ID_MAY_WRITE_PATHS) {
     if (pattern.test(path)) return null;
   }
