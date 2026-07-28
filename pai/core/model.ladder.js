@@ -186,86 +186,41 @@ async function tryRunPodGLM(system, user, opts) {
 var seatMap = null;
 try { seatMap = require('./seat.map.js'); } catch (eSeatMap) { seatMap = null; }
 
-// ⬡B:core.model_ladder:911:the_rung_spent_the_seats_KEY_and_threw_away_its_MODEL:20260728⬡
-// THE OPEN LEDGER row B7, "re-seat the ladder onto funded seat-map models". It was real, and
-// this is what it was. Both OpenRouter rungs below already resolved the funded seat and paid
-// with that seat's exact named key, then discarded the model the seat funds and sent a slug
-// hardcoded in THIS file instead, behind a model-family test:
-//   var glmModel = opts.seat && /^z-ai\/glm/i.test(candidate.model) ? candidate.model
-//     : (process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2');
-// Reproduced against the real code before changing a line, not reasoned about. Three defects
-// fell out of that one expression:
-//
-// 1. `opts.seat &&` meant the seat's model was honored ONLY when a caller passed the seat by
-//    argument. The DEFAULT path resolves its seat from MODEL_LADDER_SEAT or 'deliberation',
-//    which are falsy for `opts.seat`, so the funded seat's model was thrown away on every
-//    ordinary deliberation in the estate. SEAT_LADDER_MODEL, this map's own documented
-//    re-seat knob, was dead: setting it changed nothing, verified.
-// 2. The family test meant a seat funding any other family got billed for a foreign model.
-//    Verified: MODEL_LADDER_SEAT=c1_cellm sent z-ai/glm-5.2 on the penny gate's key, and
-//    deliberate(s,u,{seat:'coda'}) sent z-ai/glm-5.2 on OR_KEY_CODA_KIMI. The per-function
-//    key exists so a bleed traces to the exact seat; a foreign model on that key breaks the
-//    other half of the same promise, because the money is attributable and the spend is not.
-// 3. The receipt named a model that was never called: the rungs returned a fixed
-//    model:'glm-5.2' / 'qwen3-235b' label whatever went out on the wire.
-//
-// THE RE-SEAT. A rung resolves the seat and sends what the seat funds, full stop. There is no
-// model literal left in this file to drift. GLM_OPENROUTER_MODEL and QWEN_MODEL were the
-// pre-seat-map way to pin these two rungs and they are SUPERSEDED, not deleted twice over:
-// the same pin is one env var on the seat itself (SEAT_LADDER_MODEL, SEAT_LADDER_MODEL_FALLBACK,
-// or SEAT_*_MODEL for whichever seat a caller pins), read live per call by core/seat.map.js,
-// which is the one source that already owns this decision. A world still carrying the old env
-// re-pins on the seat instead; that is the deliberate cost of ending the second copy.
-//
-// The two rungs are no longer two model families. `glm` is the seat's PRIMARY and `qwen` is
-// the seat's DECLARED FAILOVER, resolved through seatMap.fallback(), which already refuses to
-// hand back a failover that is byte-identical to the primary. A seat with no declared failover
-// falls back to its own primary so a caller that pins one rung by name still gets its funded
-// model, and deliberate() then skips any rung that would repeat a model+key pair it has
-// already paid for this call. Comparing two resolved slugs is a fact, not a judgment.
-function openRouterCandidate(seatName, useFallback) {
+function openRouterCandidate(seatName) {
   if (!seatMap) return null;
-  var name = String(seatName || '');
-  var s = useFallback === true ? seatMap.fallback(name) : null;
-  if (!s) s = seatMap.seat(name);
+  var s = seatMap.seat(String(seatName || ''));
   if (!s || s.provider !== 'openrouter') return null;
   var key = seatMap.resolveKey(s);
   return key ? { key:key,model:s.model,via:'openrouter:' + s.seat,seat:s.seat } : null;
 }
 
-function ladderSeatName(opts) {
-  return String((opts && opts.seat) || process.env.MODEL_LADDER_SEAT || 'deliberation');
-}
-
-// One paid model+key pair per deliberate() call. `attempts` is created fresh per call in
-// deliberate() and lives on that call's own opts, so two concurrent cycles cannot see each
-// other's attempts and no process state is mutated.
-function alreadyAttempted(opts, candidate) {
-  if (!opts || !candidate) return false;
-  var stamp = candidate.model + '|' + candidate.key;
-  var seen = opts._attempted || (opts._attempted = []);
-  if (seen.indexOf(stamp) !== -1) return true;
-  seen.push(stamp);
-  return false;
-}
-
 async function tryOpenRouterGLM(system, user, opts) {
   // General ladder work belongs to one exact named seat. A failed or missing
   // key stops this rung instead of rotating through CANON, mind, or organ money.
-  var candidate = openRouterCandidate(ladderSeatName(opts));
-  if (!candidate || alreadyAttempted(opts, candidate)) return null;
+  var candidate = openRouterCandidate(opts.seat || process.env.MODEL_LADDER_SEAT || 'deliberation');
+  if (!candidate) return null;
   try {
         // ⬡B:core.model_ladder:911:glm_4.6_was_EIGHT_versions_old_now_5.2:20260718⬡
     // FOUNDER CAUGHT IT 20260718: this rung was hardcoded to z-ai/glm-4.6, EIGHT
     // versions behind the current z-ai/glm-5.2 that OpenRouter serves right now
     // (5.2, 5.1, 5, 4.7, 4.6...). The RunPod rung was worse: glm4:9b, a 9B GLM-4.
     // A stale default model string silently pins the whole system to an old brain.
-    // That fix moved the literal forward; the 20260728 re-seat above removes the
-    // literal, because a model string in this file is the disease and 5.2 was only
-    // the current symptom. The seat funds z-ai/glm-5.2 today and says so in one
-    // place. Truncation fall-through (same file) still covers 5.2's reasoning-burn
-    // so an empty never wins.
-    var glmModel = candidate.model;
+    // Now 5.2 everywhere, env-overridable. Truncation fall-through (same file) covers
+    // 5.2's reasoning-burn so an empty never wins.
+    // ⬡B:core.model_ladder:911:the_guard_tested_how_it_was_called_not_what_the_seat_resolved_to:20260728⬡
+    // B7, and the entry that first investigated it (ledger D11) wrongly called this deliberate.
+    // FOUND BY CATHY (Codex) on #1254 by RUNNING it: with SEAT_LADDER_MODEL set, the ladder
+    // still sent a hardcoded slug unless the caller also passed opts.seat. The candidate above
+    // is already resolved from opts.seat || MODEL_LADDER_SEAT || 'deliberation', so testing
+    // `opts.seat` here asks HOW THE CALLER INVOKED the ladder instead of WHAT THE SEAT
+    // RESOLVED TO, and every caller that omits it, the default path, silently ignored the seat
+    // map. A configuration knob that looks live and is not is worse than a stale default: it
+    // reports no error, so an operator re-seating by env believes they have. Same shape as the
+    // outage in ledger D12. The family check is the part that was always right and it stays:
+    // a GLM rung still refuses a non-GLM seat model and falls back, so a ladder that tries
+    // several families in sequence never feeds one family's slug to another's call.
+    var glmModel = /^z-ai\/glm/i.test(candidate.model) ? candidate.model :
+      (process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2');
     var body = { model: glmModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_openrouter_too:20260719⬡
@@ -281,11 +236,8 @@ async function tryOpenRouterGLM(system, user, opts) {
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    // The receipt names the model that was actually called. It used to say 'glm-5.2'
-    // whatever left the process, which is a false receipt the moment a seat funds
-    // anything else, and after the re-seat above every seat can.
     return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts),
-      model:glmModel,model_slug:glmModel,via:candidate.via } : null;
+      model:'glm-5.2',model_slug:glmModel,via:candidate.via } : null;
   } catch (e) { return null; }
 }
 async function tryOrnith(system, user, opts) {
@@ -320,17 +272,14 @@ async function tryOrnith(system, user, opts) {
     return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
   } catch (e) { return null; }
 }
-// The seat's declared failover rung. Named `qwen` because that is what the default
-// deliberation seat's failover has always been on the wire, and renaming a rung would
-// break every caller and env that pins MODEL_LADDER_ORDER by that name. What it resolves
-// is no longer a family: it is whatever seatMap.fallback() says this seat fails over to,
-// and the seat's own primary when the seat declares no failover, so a caller that pins
-// this single rung by name still gets a funded model rather than a literal.
 async function tryQwen(system, user, opts) {
-  var candidate = openRouterCandidate(ladderSeatName(opts), true);
-  if (!candidate || alreadyAttempted(opts, candidate)) return null;
+  var candidate = openRouterCandidate(opts.seat || process.env.MODEL_LADDER_SEAT || 'deliberation');
+  if (!candidate) return null;
   try {
-    var qwenModel = candidate.model;
+    // Same defect, same cure as the GLM rung above: the resolved seat decides, not the call
+    // shape. This is the rung Codex's repro actually measured.
+    var qwenModel = /^qwen\//i.test(candidate.model) ? candidate.model :
+      (process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b');
     var body = { model: qwenModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     // ⬡B:core.model_ladder:911:the_last_warm_rung_thought_itself_empty:20260726⬡
@@ -361,7 +310,7 @@ async function tryQwen(system, user, opts) {
     // handed back the raw string. A provider that honours neither passthrough still returns
     // reasoning residue, so the rung that is most likely to think is the one that most needs
     // cleaning, and it was the one without it.
-    return hasAcceptedContent(c, opts) ? {content:cleanModelContent(c, opts),model:qwenModel,
+    return hasAcceptedContent(c, opts) ? {content:cleanModelContent(c, opts),model:'qwen3-235b',
       model_slug:qwenModel,via:candidate.via} : null;
   } catch (e) { return null; }
 }
@@ -421,9 +370,6 @@ async function tryAnthropicBackup(system, user, opts) {
 // stamp only; no hot-path behavior is changed here.
 async function deliberate(system, user, options) {
   var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: 25000, json: false }, options || {});
-  // Reset per call, never inherited from a caller's reused options object: this call's
-  // own paid model+key attempts, so no rung repeats a call this call already paid for.
-  opts._attempted = [];
   // ⬡B:core.model_ladder:LAW:spend_guard_at_the_one_door:20260719⬡ the daily
   // ceiling lives at the single door every paid text call flows through, so a
   // runaway loop or retry storm trips a brake instead of draining a balance to
