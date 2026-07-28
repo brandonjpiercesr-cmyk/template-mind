@@ -467,9 +467,33 @@ function requireAnyHamSession(req, res) {
 // own gate compares the session to the env named host, and a world_id credential for the host's
 // own world would have satisfied that comparison. core/world.birth.js now checks the tier
 // itself as well, so this is defense in depth and not the only lock.
+// ⬡B:core.ham_session_authorization:FIX:the_first_sweep_grepped_for_the_wrong_words:20260728⬡
+// The two file download doors were found by CATHY (Codex) AFTER the ConvAI fix above, and the
+// miss is worth recording because the rule was already written and the sweep still missed them.
+// That sweep grepped handler bodies for `/object/sign` and `createSignedUrl`; the CLAIR door
+// calls `store.signedUrl(key, 300)` through a helper, so it matched no pattern and read as
+// clean. Grepping for the SPELLING of a side effect finds the doors that spell it your way.
+// The second pass enumerated every app.get in routes/ and read what each handler actually does,
+// which is the only version of this sweep that is worth anything.
+//
+// Both doors sign a five minute storage URL and REDIRECT the caller to it. That URL is bearer
+// authority: it carries no cookie, so once handed over it works for anyone holding the string,
+// which is squarely the "hands back something that authorizes a later call" case.
+//
+// Checked and deliberately NOT added, so the next lane does not re-litigate them:
+//   GET /auth/advisor/enter   mints the FULL tier, and must stay reachable. It is gated on the
+//                             emailed token, not on the cookie, and it is the one path by which
+//                             a person holding a typed world id upgrades to a real sign in.
+//                             Refusing it here would make the weaker tier a trap.
+//   GET /seer/veer/providers  reports which providers are CONFIGURED as booleans, no call.
+//   GET /seated/api/status    same shape, a boolean off an env var.
+//   GET /vara/call/status     reads a worker health endpoint, mints nothing.
+//   GET /stream/live/:token   CONSUMES a credential rather than issuing one.
 const SIGN_IN_TIER_ONLY_PATHS = [
   /^\/arrive\/provision(\/|$)/i,
-  /^\/vara\/convai\/url(\/|$)/i
+  /^\/vara\/convai\/url(\/|$)/i,
+  /^\/cara\/files\/[^/]+\/download(\/|$)/i,
+  /^\/clair\/[^/]+\/files\/download(\/|$)/i
 ];
 
 const WORLD_ID_MAY_WRITE_PATHS = [
