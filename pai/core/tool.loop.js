@@ -4140,6 +4140,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }
     }
     else if (iter===1) {
+      // \u2b21B:core.tool_loop:FIX:the_whole_consumer_nudge_lane_read_her_own_evidence_as_an_ask:20260728\u2b21
+      // Live tonight, twice, two different tools: CODA's own internal deliberation carries
+      // identity.user_message set from her runLead's operationalAsk() -- either her fixed
+      // "Run one autonomous CODA operational cycle..." head, OR (interactive mode) that head
+      // PLUS spendStanding()'s real, varying cost-evidence prose appended to it. That
+      // evidence prose is real content about her own spend, budget, and daily counter --
+      // ordinary words like "today" (the counter-reset recommendation) or her own name
+      // ("coda") show up in it naturally. Every classifier below this line was built to
+      // read a human's first-contact chat message, not her own machinery report, and each
+      // one that matches fires a nudge (soft or, since the 20260727 read-tools-fail-closed
+      // fix, effectively hard for most readers) at a turn that has no real day/sports/lookup
+      // question to answer and no reason to call the tool it is being told to call. Found
+      // live via her CYCLE_STEP trail: _isCodingBuildQ matched "coda" in her own prompt
+      // (consult_mace nudge, fixed first); _isDayQ matched "today" in her own spend evidence
+      // (calendar_read nudge, found chasing this one). Both are the same bug class, and nothing
+      // in this lane can distinguish a third one from a fourth by inspection alone. Rather than
+      // patch each regex as it is caught, the whole lane is skipped for exactly her own internal
+      // deliberation: identity.council_context.mode==='coding' AND internal_deliberation===true
+      // together is the one signal only advisors/coding.js's own llm() sets
+      // (councilContext:{mode:'coding', internal_deliberation:true}); CAUGHT IN REVIEW by
+      // CATHY (Codex): mode alone also matches two real human doors
+      // (routes/clair.console.routes.js's /clair/:hamUid/bcw, routes/chat.bridge.routes.js's
+      // coding-mode chat bridge), neither of which sets internal_deliberation, so both fields
+      // are required together. She already carries her real evidence inline in her own armory;
+      // none of these consumer lookups are for her.
+      var _isCodaInternalCycle = !!(identity && identity.council_context &&
+        identity.council_context.mode === 'coding' &&
+        identity.council_context.internal_deliberation === true);
+      if (!_isCodaInternalCycle) {
       // \u2b21B:core.tool_loop:FIX:forced_lookup_derailing_screen_commands_20260709\u2b21
       // Founder-caught live, third layer of the same night's incident: even with the
       // extraction leak and the statelessness both fixed, "change background to
@@ -4208,37 +4237,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // assemble_bcw but never picked them. A build/code/consult request nudges the
       // coding lead. HINT not a rail, she keeps all tools. Named machinery (MACE, CODA,
       // cook-off, wonder games, BCW) or a plain build/code/ship ask routes here.
-      // ⬡B:core.tool_loop:FIX:codas_own_cycle_prompt_matched_its_own_named_nudge:20260728⬡
-      // Live tonight: CODA's own fixed autonomous-cycle instruction ("Run one autonomous
-      // CODA operational cycle...") IS _exactUserMessage for her internal deliberation
-      // calls (identity.user_message, set by finalizePublicTurn from her own runLead's
-      // operationalAsk() text), and it names herself: the bare word "coda" in her own
-      // prompt matches this regex's first alternative. That fired a FIRM nudge built for
-      // a human asking her to consult MACE about a named file ("you must call consult_mace
-      // FIRST... do not answer from your day, your schedule, or an old note instead"),
-      // aimed at her own report-on-my-own-cycle turn, which has no file or repo to hand
-      // consult_mace and cannot satisfy the instruction it was just given. This is cold
-      // keyword-matching a heuristic built for a human's first-contact chat message
-      // against her own machine-generated internal prompt -- never the case it was built
-      // for.
-      // ⬡B:core.tool_loop:FIX:mode_coding_alone_also_caught_two_real_human_doors:20260728⬡
-      // CAUGHT IN REVIEW by CATHY (Codex) before this widened further: the first cut of
-      // this exclusion keyed on council_context.mode==='coding' alone, on the claim that
-      // only CODA's own advisors/coding.js llm() sets that mode. False -- both
-      // routes/clair.console.routes.js's /clair/:hamUid/bcw door and
-      // routes/chat.bridge.routes.js's coding-mode chat bridge also set
-      // council_context.mode:'coding' for a REAL HUMAN asking her to consult MACE about a
-      // named file, and neither sets internal_deliberation. Matching on mode alone would
-      // have silently stripped the 20260719 consult_mace nudge (and its forced-execution
-      // safety net) from those two live builder doors, the exact regression this whole
-      // nudge exists to prevent. advisors/coding.js's llm() is the only caller that sets
-      // BOTH mode:'coding' AND internal_deliberation:true
-      // (councilContext:{mode:'coding', internal_deliberation:true}), so both are now
-      // required together; a real human's coding consult through any door keeps the nudge.
-      var _isCodaInternalCycle = !!(identity && identity.council_context &&
-        identity.council_context.mode === 'coding' &&
-        identity.council_context.internal_deliberation === true);
-      var _isCodingBuildQ = !_isCodaInternalCycle &&
+      // _isCodaInternalCycle is computed once, at the top of this whole nudge lane (see the
+      // FIX comment on entry to this block), and CODA's own internal deliberation never
+      // reaches this line at all. Kept here only as a defensive second check: named machinery
+      // (MACE, CODA, cook-off, wonder games, BCW) or a plain build/code/ship ask routes here
+      // for a real human.
+      var _isCodingBuildQ =
         /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
@@ -4378,6 +4382,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         msgs.push({ role: 'system', content:
           'This turn is about their surface -- their background, their screen, what they see. You hold your surface tools (set_background for the standing background, update_screen for the live glass). If they asked you to change what is behind everything or on their screen, actually do it this turn by calling the right tool; do not say you will get to it or that it is on the way, and do not answer as if you did something you did not call. Then confirm from what actually happened, reading back the real result, and speak it as A’NU -- the one who already handled it, warm, in full natural sentences the way a butler who knows them would, letting something you genuinely know about them show if it fits, never a flat status label. You still hold all your judgment; if it is genuinely not a surface change, do not force one.' });
         _stampStep('surface_wonder_nudge', 'screen_tools_available_she_decides');
+      }
       }
     }
     if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
