@@ -576,7 +576,7 @@ const READ_ONLY_METHODS = { GET:true, HEAD:true, OPTIONS:true };
 
 // The verdict, as a pure function of the three facts it depends on, so a test can drive every
 // combination without an HTTP server. Returns null when there is nothing to refuse.
-function worldIdTierRefusal(method, urlPath, via) {
+function worldIdTierRefusal(method, urlPath, via, sessionHamUid) {
   if (via !== TIER_WORLD_ID) return null;
   const path = String(urlPath || '').split('?')[0];
   for (const pattern of SIGN_IN_TIER_ONLY_PATHS) {
@@ -585,8 +585,28 @@ function worldIdTierRefusal(method, urlPath, via) {
     }
   }
   if (READ_ONLY_METHODS[String(method || '').toUpperCase()]) return null;
+  // ⬡B:core.ham_session_authorization:P1:my_own_exception_was_path_wide:20260728⬡
+  // CATHY (Codex) on #1301, and the defect is mine: the read-shaped POST exception I added was
+  // matched on the PATH SHAPE alone. routes/awa.routes.js POST /awa/:hamUid/canvas runs no
+  // session check of its own and reads by the ham in the path, so a world_id credential for
+  // world A could ask for world B's canvas and my exception waved it through. An exception that
+  // does not name WHOSE world it is for is not an exception, it is a hole with a pattern on it.
+  //
+  // So a read-shaped POST is allowed only for the world the credential itself names. When the
+  // path carries no world segment, or names a different one, it falls through to the refusal
+  // below rather than being allowed by shape.
+  //
+  // NOT FIXED HERE AND NOT MINE TO FIX QUIETLY: that handler authorizes nothing at all, and
+  // eleven of the thirteen routes in that file are the same. Measured live on both origins,
+  // 20260728: POST https://aibebase.onrender.com/awa/AAAA1111/canvas with NO credential returns
+  // 200 and a panel body. That is a live cross-world read predating this branch, it is far wider
+  // than this tier, and it is reported rather than patched inside an unrelated PR.
   for (const pattern of WORLD_ID_READ_SHAPED_POSTS) {
-    if (pattern.test(path)) return null;
+    if (!pattern.test(path)) continue;
+    const owner = normalizeHamUid(String(path).split('/')[2] || '');
+    const holder = normalizeHamUid(sessionHamUid || '');
+    if (owner && holder && owner === holder) return null;
+    return { status:403, reason:'sign_in_required_for_this' };
   }
   for (const pattern of WORLD_ID_MAY_WRITE_PATHS) {
     if (pattern.test(path)) return null;
@@ -623,17 +643,18 @@ function worldIdCredentialOn(req) {
     const verified = verifySessionToken(candidate);
     // Only a token that really verifies counts. An unsigned or expired string is not a
     // credential, and treating it as one would refuse requests that carry nothing at all.
-    if (verified.ok && verified.via === TIER_WORLD_ID) return true;
+    if (verified.ok && verified.via === TIER_WORLD_ID) return verified.hamUid;
   }
-  return false;
+  return null;
 }
 
 // Mounted on BOTH entry points, ahead of every route, so there is no door on either surface it
 // does not stand in front of. It judges nothing about callers who hold the full tier or no
 // credential at all: those requests reach exactly the gates they always did.
 function signInTierGuard(req, res, next) {
-  if (!worldIdCredentialOn(req)) return next();
-  const refusal = worldIdTierRefusal(req.method, req.path || req.url, TIER_WORLD_ID);
+  const worldIdHam = worldIdCredentialOn(req);
+  if (!worldIdHam) return next();
+  const refusal = worldIdTierRefusal(req.method, req.path || req.url, TIER_WORLD_ID, worldIdHam);
   if (!refusal) return next();
   res.status(refusal.status);
   if (typeof res.set === 'function') res.set('Cache-Control', 'private, no-store');
