@@ -13,7 +13,8 @@ harness into this session - read it before you touch anything. One board, all co
 - **Check IN before you work:** `POST /ccwa/<HAM_UID>/checkin` `{ coder, lineage, intent, touching }`
 - **Check OUT when done:** `POST /ccwa/<HAM_UID>/checkout` `{ coder, result, minutes, receipts }`
 - **Your Big-3 name:** `CODA` (A'NU's own coder), `CATHY` (ChatGPT / Codex), `CLAIR` (any Claude, chat or code), `GEMMA` (Gemini, chat or code). Carry your personal lineage in `lineage` (e.g. `FOUNDER>CLAUDIA`).
-- Source of record for the full protocol (one source, never twinned): the `anew` repo `docs/CCWA_COMMAND_CENTER_HANDSHAKE.md`, and the live board itself.
+- **Report to the founder in the flag format** (founder direct, 20260728, asked four times). Flags first, real emoji, one line each, no prose wall above them. 🟢 green done and live-verified with the receipt on the line (full URL plus status code, or merged PR link). 🟠 orange in flight, says what is running AND what is not done yet. ⚫ black blocked, names what blocks it and who can unblock it. 🔴 red is ONLY for what he must physically do himself (an env var on his own dashboard, a sign-in as himself, a real spend), written click-by-click for a non-coder on a phone: what to click, what he should see, what to type, how to save, whether to exit. A bare link is a violation. He does not make technical decisions: decide it yourself with documented reasoning or ask HER, never red-flag "which approach should we take." End every update with DONE or STALE; stale means go get work, never idle and never ask him for an assignment.
+- Source of record for the full protocol and the full flag rules (one source, never twinned): the `anew` repo `docs/CCWA_COMMAND_CENTER_HANDSHAKE.md` section "HOW THE FOUNDER WANTS UPDATES", and the live board itself.
 
 ## STANDING LAWS
 - **ENVOLVE** - always with the E. The I is always an E. Never display the scrambled form.
