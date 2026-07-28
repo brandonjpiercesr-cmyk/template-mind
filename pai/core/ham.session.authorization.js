@@ -6,6 +6,62 @@ const crypto = require('node:crypto');
 
 const COOKIE_NAME = 'anu_ham';
 const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
+
+// ⬡B:core.ham_session_authorization:BUILD:two_tiers_one_signer_because_a_typed_id_is_not_a_password:20260728⬡
+//
+// THE FOUNDER ORDER, 20260728, in his own words: "Nobody would ever have these keys unless I
+// gave it to them... I want them to be able to enter in that UID to get to their world. It
+// becomes their world. I absolutely want that. Add that back... If the sign-in link works it
+// works, but we have multiple ways, and UID is one of those."
+//
+// THE PROBLEM THAT MAKES THIS HARD, and it is not a hypothetical. PR #1275 closed a measured
+// P0: POST /os/wake/<anything> answered 200 plus a signed THIRTY DAY cookie for any string a
+// stranger could type, on both origins. RULINGS #1087 states the law it broke: "A public
+// per-HAM URL must never mint its own trusted session, and 'the page already trusts the URL'
+// is not an argument, it is the hole." Simply putting that behavior back would hand any
+// passer-by a permanent full trust credential for any world whose id they glimpse in a URL
+// bar, in every stranger's inherited world, forever. That is not a trade this estate can make.
+//
+// THE RESOLUTION, and it is the only one that serves both facts at once: A TYPED WORLD ID DOES
+// OPEN THE WORLD, AND WHAT IT OPENS IT WITH IS NOT THE SAME CREDENTIAL A SIGN-IN OPENS IT WITH.
+// There are now two tiers, and they are produced and verified by ONE signer in ONE file, which
+// is this one. There is no second session module and there is no second cookie.
+//
+//   sign_in    what the emailed HMAC link, the Google callback and the arrival invite code
+//              mint. Full trust, 30 days, unchanged in every byte. This is the credential
+//              every sensitive door in the estate has always meant when it said "a session".
+//
+//   world_id   what a typed world id mints. TWELVE HOURS, and marked as such INSIDE the signed
+//              payload, so the tier is a signed fact and not a claim a caller can edit. It
+//              opens the world's own surfaces and it is refused by every door that can spend,
+//              provision, change identity, or reach a human. See signInTierGuard below.
+//
+// WHY THE TIER IS IN THE SIGNED PAYLOAD RATHER THAN IN A SECOND COOKIE. A second cookie is a
+// second thing a caller controls, and "which cookie did you send" is not a question a security
+// boundary may ask a stranger. The payload is inside the MAC, so downgrading a world_id token
+// to a bare sign_in one, or pushing its expiry out, changes the bytes the MAC was computed over
+// and the token stops verifying at all. Tested in tests/world.id.opens.a.weaker.door.test.js.
+//
+// WHY THE SEPARATOR IS '~'. HAM_PATTERN admits A-Z, 0-9, dot, underscore, colon and hyphen and
+// nothing else, so a tilde can never occur inside a real world id. That means the split is
+// unambiguous and no world id can ever be typed in a way that forges a tier field. A legacy
+// payload has no tilde in it at all, which is exactly why every cookie already in a browser
+// keeps working and keeps its full trust.
+//
+// THE ENUMERATION SIGNAL, STATED PLAINLY RATHER THAN HIDDEN. Requirement four of this order is
+// that a string which is not a real world gets a refusal, so a real id and a made up id now
+// answer differently at the world id door. That IS an existence oracle for world ids, it is
+// inherent to being told "a typed id must open a real world and refuse a fake one", and it is
+// accepted with open eyes rather than papered over with a fake 200. It is written into
+// docs/RULINGS.md as an accepted cost, not as an oversight, so the next coder does not "fix"
+// it by making the door lie. What it leaks is which ids exist. What it does not leak, because
+// of the tier split below, is anything that costs money, sends anything to a human, or changes
+// who anybody is.
+const TIER_SIGN_IN = 'sign_in';
+const TIER_WORLD_ID = 'world_id';
+const TIER_SEPARATOR = '~';
+const WORLD_ID_MARK = 'w1';
+const WORLD_ID_TTL_SECONDS = 12 * 60 * 60;
 // ⬡B:core.ham_session_authorization:FIX:uppercasing_before_checking_let_case_folding_invent_a_world:20260726⬡
 // The SAME shape of the world ID pattern, but written to be tested against the input BEFORE
 // it is uppercased, which is the whole point of its existing.
@@ -46,12 +102,82 @@ function normalizeHamUid(value) {
   return HAM_PATTERN.test(hamUid) ? hamUid : null;
 }
 
+// The one place a MAC is computed, for both tiers. Whatever string is handed here is what the
+// signature covers, so a field that is not part of this string is not a signed fact.
+function macFor(payload) {
+  const secret = signingSecret();
+  if (!secret) return null;
+  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+}
+
+// THE FULL TRUST TIER, byte identical to what this function has always produced. The payload is
+// the bare normalized world id with no tier field in it, which is what makes every session
+// cookie already sitting in a real browser keep working and keep its full trust across this
+// change. A legacy token is a sign_in token; that is a decision, and it is the safe direction,
+// because the only things that could ever mint one are the emailed link, the OAuth callback,
+// the invite code and this server's own internal leg.
 function signHamSession(hamUid) {
   const normalized = normalizeHamUid(hamUid);
-  const secret = signingSecret();
-  if (!normalized || !secret) return null;
-  const mac = crypto.createHmac('sha256', secret).update(normalized).digest('hex');
+  const mac = normalized ? macFor(normalized) : null;
+  if (!normalized || !mac) return null;
   return normalized + '.' + mac;
+}
+
+// THE WEAKER TIER. Same signer, same secret, same cookie name, same verifier. Three differences
+// and every one of them is deliberate:
+//   1. the payload carries the tier mark, so the verifier knows this is a typed-id credential
+//      and the guard below can refuse it at the doors that matter;
+//   2. the payload carries an absolute expiry in whole seconds, enforced at verify time, so
+//      this credential dies on its own twelve hours later with nothing to revoke;
+//   3. it is minted only by core/world.id.entry.js, which proves the world EXISTS first.
+// Existing is not owning. That is precisely why this tier is weaker rather than equal.
+function signWorldIdSession(hamUid, opts) {
+  const normalized = normalizeHamUid(hamUid);
+  if (!normalized) return null;
+  const ttl = Math.max(60, Math.min(
+    Number((opts && opts.ttlSeconds) || WORLD_ID_TTL_SECONDS) || WORLD_ID_TTL_SECONDS,
+    WORLD_ID_TTL_SECONDS));
+  const nowSeconds = Math.floor(((opts && opts.now) || Date.now()) / 1000);
+  const payload = normalized + TIER_SEPARATOR + WORLD_ID_MARK + TIER_SEPARATOR + (nowSeconds + ttl);
+  const mac = macFor(payload);
+  if (!mac) return null;
+  return payload + '.' + mac;
+}
+
+// The ready made Set-Cookie value for the weaker tier, so no route file hand writes cookie
+// attributes for a credential whose whole point is that it is narrower than the other one. A
+// door that spelled its own Max-Age could silently grant thirty days again.
+function worldIdSessionCookie(hamUid, opts) {
+  const token = signWorldIdSession(hamUid, opts);
+  if (!token) return null;
+  const ttl = Math.max(60, Math.min(
+    Number((opts && opts.ttlSeconds) || WORLD_ID_TTL_SECONDS) || WORLD_ID_TTL_SECONDS,
+    WORLD_ID_TTL_SECONDS));
+  return COOKIE_NAME + '=' + encodeURIComponent(token)
+    + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + ttl;
+}
+
+// Reads a payload back into its parts and states the CANONICAL bytes the MAC must be checked
+// against. Returning the canonical form rather than re-serialising at the call site is what
+// stops a lenient parser from accepting one string and verifying a different one.
+function parseSessionPayload(payload) {
+  if (payload.indexOf(TIER_SEPARATOR) === -1) {
+    const hamUid = normalizeHamUid(payload);
+    if (!hamUid) return null;
+    return { hamUid:hamUid, via:TIER_SIGN_IN, expiresAt:null, canonical:hamUid };
+  }
+  const parts = payload.split(TIER_SEPARATOR);
+  if (parts.length !== 3) return null;
+  if (parts[1] !== WORLD_ID_MARK) return null;
+  if (!/^[0-9]{1,12}$/.test(parts[2])) return null;
+  const hamUid = normalizeHamUid(parts[0]);
+  if (!hamUid) return null;
+  return {
+    hamUid: hamUid,
+    via: TIER_WORLD_ID,
+    expiresAt: Number(parts[2]),
+    canonical: hamUid + TIER_SEPARATOR + WORLD_ID_MARK + TIER_SEPARATOR + parts[2]
+  };
 }
 
 function verifySessionToken(token) {
@@ -63,18 +189,25 @@ function verifySessionToken(token) {
   }
   const separator = raw.lastIndexOf('.');
   if (separator <= 0) return { ok:false, status:401, reason:'ham_session_invalid' };
-  const hamUid = normalizeHamUid(raw.slice(0, separator));
+  const parsed = parseSessionPayload(raw.slice(0, separator));
   const suppliedMac = raw.slice(separator + 1).toLowerCase();
-  if (!hamUid || !MAC_PATTERN.test(suppliedMac)) {
+  if (!parsed || !MAC_PATTERN.test(suppliedMac)) {
     return { ok:false, status:401, reason:'ham_session_invalid' };
   }
-  const expectedMac = crypto.createHmac('sha256', secret).update(hamUid).digest('hex');
+  const expectedMac = macFor(parsed.canonical);
   const supplied = Buffer.from(suppliedMac, 'hex');
-  const expected = Buffer.from(expectedMac, 'hex');
+  const expected = Buffer.from(String(expectedMac || ''), 'hex');
   if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
     return { ok:false, status:401, reason:'ham_session_invalid' };
   }
-  return { ok:true, hamUid:hamUid };
+  // THE EXPIRY IS CHECKED AFTER THE SIGNATURE, never before: an unsigned expiry is a number a
+  // stranger typed. Only the sign_in tier has no expiry here, and that is the pre-existing
+  // 30 day cookie lifetime the browser enforces, which is a separate question this change
+  // deliberately does not reopen.
+  if (parsed.via === TIER_WORLD_ID && !(parsed.expiresAt * 1000 > Date.now())) {
+    return { ok:false, status:401, reason:'world_id_session_expired' };
+  }
+  return { ok:true, hamUid:parsed.hamUid, via:parsed.via, expiresAt:parsed.expiresAt };
 }
 
 function cookieToken(cookieHeader) {
@@ -127,7 +260,8 @@ function authorizeSessionRequest(req) {
   if (!credential) return { ok:false, status:401, reason:'ham_session_required' };
   const verified = verifySessionToken(credential);
   if (!verified.ok) return verified;
-  return { ok:true, hamUid:verified.hamUid, kind:kind };
+  return { ok:true, hamUid:verified.hamUid, kind:kind, via:verified.via,
+    expiresAt:verified.expiresAt };
 }
 
 function authorizeHamRequest(req, expectedHamUid) {
@@ -138,7 +272,8 @@ function authorizeHamRequest(req, expectedHamUid) {
   if (verified.hamUid !== expected) {
     return { ok:false, status:403, reason:'ham_session_forbidden' };
   }
-  return { ok:true, hamUid:expected, kind:verified.kind };
+  return { ok:true, hamUid:expected, kind:verified.kind, via:verified.via,
+    expiresAt:verified.expiresAt };
 }
 
 // Signed-session authentication is the proof. Atmosphere then canonicalizes the
@@ -157,7 +292,8 @@ async function authorizeExactHamRequest(req, expectedHamUid, deps) {
   if (resolved !== session.hamUid) {
     return { ok:false, status:409, reason:'ham_uid_mismatch' };
   }
-  return { ok:true, hamUid:resolved, kind:session.kind, envelope:envelope };
+  return { ok:true, hamUid:resolved, kind:session.kind, via:session.via,
+    expiresAt:session.expiresAt, envelope:envelope };
 }
 
 // ⬡B:core.ham_session_authorization:WIRE:internal_callers_sign_the_same_session:20260725⬡
@@ -228,6 +364,121 @@ function requireAnyHamSession(req, res) {
   return authorized;
 }
 
+// ⬡B:core.ham_session_authorization:BUILD:the_tier_is_enforced_by_default_deny_not_by_memory:20260728⬡
+//
+// WHAT A world_id CREDENTIAL MAY DO, decided here, once, for the whole estate.
+//
+// The order this was built to says: "Anything that can spend, provision, change identity, or
+// reach a human still requires the full sign-in tier. Find those doors and gate them on the
+// tier, not on mere presence of a cookie... If you are unsure whether a door belongs in this
+// list, gate it (fail closed)."
+//
+// A HAND WRITTEN LIST OF DANGEROUS DOORS IS THE WRONG SHAPE AND THIS FILE ALREADY KNOWS IT.
+// scripts/check_entry_mount_symmetry.js says it about itself in its own header: "a gate that
+// guards a fixed pair guards that pair and nothing else, so every door added afterwards is
+// unguarded by construction." Fifty-one files in this repo read a signed session. Enumerating
+// the risky ones means a door added next week is open to a typed world id because nobody
+// remembered to add it, which is the exact defect shape docs/RULINGS.md keeps recording.
+//
+// SO THE POLICY IS INVERTED AND STATED AS ONE RULE: A TYPED WORLD ID GRANTS READING, NOT DOING.
+// Anything that changes state, which on this estate means any method other than GET, HEAD or
+// OPTIONS, is refused to a world_id credential unless it is on the short, explicit,
+// individually reasoned list below. A new spending door, a new outbound reach, a new
+// provisioning door, a new credential rotation: every one of them is refused the day it is
+// written, by construction, with nobody having to notice it exists. That is what fail closed
+// means, and it is the property a list can never have.
+//
+// THE LIST OF WRITES A TYPED WORLD ID MAY STILL MAKE, one line of reasoning each. These are
+// the only writes needed to open a world and stand in it. Nothing here moves money to a
+// recipient the person names, sends anything to a human, or changes who anybody is.
+//
+//   POST /auth/home/ham        the world id door itself. Refusing it would be refusing the
+//                              order this whole change exists to serve.
+//   POST /os/wake/:hamUid      the same door on the other surface, one shared implementation.
+//   POST /os/sleep             clears the cookie. Being able to leave is never a privilege.
+//   POST /auth/advisor/request asks for the emailed sign-in link. It is open to callers with
+//                              NO credential at all, so refusing it to a weaker one grants an
+//                              attacker nothing and would strand the one person it serves: a
+//                              reader who opened with a world id and now wants to sign in
+//                              properly. It also names no recipient the caller chooses, it
+//                              resolves the address through the bank.
+//   POST /door/where           the world page's own render decision, and the reason it is here
+//   POST /arrive/decide        rather than refused deserves the argument rather than a wave.
+//                              Both run the arrival wonder, which is a model call, which costs
+//                              money, and "anything that can spend" is on the refuse list. The
+//                              distinction being drawn is DIRECTED spend versus the cost of
+//                              rendering the page the person is already allowed to see. These
+//                              two doors take no recipient, no amount, no destination and no
+//                              free text; they answer "which surface does this world open on",
+//                              exactly once per page load, for the world the credential already
+//                              names. Refusing them makes requirement one of the order
+//                              impossible, because the world would not actually open. The
+//                              spend that IS refused is the spend a person aims: POST
+//                              /cara/chat and every voice and reach door are absent from this
+//                              list and are therefore closed to a typed world id.
+//
+// AND ONE PATH IS REFUSED IN EVERY METHOD, including GET, because reading it is already the
+// harm: /arrive/provision renders the host operator surface for creating worlds. Its own gate
+// compares the session to the env named host, and a world_id credential for the host's own
+// world would have satisfied that comparison. core/world.birth.js now checks the tier itself
+// as well, so this is defense in depth and not the only lock.
+const SIGN_IN_TIER_ONLY_PATHS = [
+  /^\/arrive\/provision(\/|$)/i
+];
+
+const WORLD_ID_MAY_WRITE_PATHS = [
+  /^\/auth\/home\/ham$/i,
+  /^\/auth\/advisor\/request$/i,
+  /^\/os\/wake\/[^/]+$/i,
+  /^\/os\/sleep$/i,
+  /^\/door\/where$/i,
+  /^\/arrive\/decide$/i
+];
+
+const READ_ONLY_METHODS = { GET:true, HEAD:true, OPTIONS:true };
+
+// The verdict, as a pure function of the three facts it depends on, so a test can drive every
+// combination without an HTTP server. Returns null when there is nothing to refuse.
+function worldIdTierRefusal(method, urlPath, via) {
+  if (via !== TIER_WORLD_ID) return null;
+  const path = String(urlPath || '').split('?')[0];
+  for (const pattern of SIGN_IN_TIER_ONLY_PATHS) {
+    if (pattern.test(path)) {
+      return { status:403, reason:'sign_in_required_for_this' };
+    }
+  }
+  if (READ_ONLY_METHODS[String(method || '').toUpperCase()]) return null;
+  for (const pattern of WORLD_ID_MAY_WRITE_PATHS) {
+    if (pattern.test(path)) return null;
+  }
+  return { status:403, reason:'sign_in_required_for_this' };
+}
+
+// Mounted on BOTH entry points, ahead of every route, so there is no door on either surface it
+// does not stand in front of. It judges nothing about callers who hold the full tier or no
+// credential at all: those requests reach exactly the gates they always did.
+function signInTierGuard(req, res, next) {
+  const session = authorizeSessionRequest(req);
+  if (!session.ok) return next();
+  const refusal = worldIdTierRefusal(req.method, req.path || req.url, session.via);
+  if (!refusal) return next();
+  res.status(refusal.status);
+  if (typeof res.set === 'function') res.set('Cache-Control', 'private, no-store');
+  return res.json({ ok:false, reason:refusal.reason,
+    stamp:'⬡B:core.ham_session_authorization:RESULT:world_id_tier_may_read_not_do:20260728⬡' });
+}
+
+// For a door that wants to state the requirement itself rather than lean on the guard above.
+// core/world.birth.js is the first caller and the reason this exists: a lock worth having is
+// worth having twice.
+function requireSignInTier(session) {
+  if (!session || !session.ok) return session || { ok:false, status:401, reason:'ham_session_required' };
+  if (session.via !== TIER_SIGN_IN) {
+    return { ok:false, status:403, reason:'sign_in_required_for_this' };
+  }
+  return session;
+}
+
 // ⬡B:core.ham_session_authorization:FIX:the_door_was_wide_and_every_room_was_narrow:20260726⬡
 // WHY THIS EXISTS. HAM_PATTERN above is the one shape a world ID has in this estate, and it
 // allows a dot and a colon: BDIF.ADVISOR is a real world. Thirteen page builders did not ask
@@ -255,10 +506,18 @@ function worldIdForPage(value) {
 
 module.exports = {
   COOKIE_NAME,
+  TIER_SIGN_IN,
+  TIER_WORLD_ID,
+  WORLD_ID_TTL_SECONDS,
   signingSecret,
   normalizeHamUid,
   worldIdForPage,
   signHamSession,
+  signWorldIdSession,
+  worldIdSessionCookie,
+  worldIdTierRefusal,
+  signInTierGuard,
+  requireSignInTier,
   verifySessionToken,
   sessionTokenFromRequest,
   forwardSessionHeaders,
