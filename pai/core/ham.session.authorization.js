@@ -594,13 +594,46 @@ function worldIdTierRefusal(method, urlPath, via) {
   return { status:403, reason:'sign_in_required_for_this' };
 }
 
+// ⬡B:core.ham_session_authorization:P1:a_junk_header_made_the_whole_wall_step_aside:20260728⬡
+// CATHY (Codex) on #1301, and this one was a real bypass, attacker controlled, one line long.
+//
+// authorizeSessionRequest treats an explicit Authorization header as AUTHORITATIVE and refuses
+// outright when it is malformed, deliberately, so an invalid bearer can never be downgraded to
+// a cookie riding beside it. That is correct for a door asking "who is this". It is the wrong
+// question for THIS guard, which asks "what can the credential on this request cause". The old
+// body read `if (!session.ok) return next()`, so sending a valid world_id COOKIE together with
+// any garbage Authorization header made the resolver say not-ok and made this wall wave the
+// request through. Downstream doors that read the cookie themselves, and there are some, then
+// accepted that same weak cookie and acted on it: POST /reminder/set verifies the cookie's HAM
+// and writes. Every refusal in this file was one junk header away from being skipped.
+//
+// THE FIX IS THE QUESTION, not a patch on the branch. The guard now looks for a world_id
+// credential ANYWHERE on the request, header or cookie, independently, and judges it. It cannot
+// be steered by precedence, because it no longer depends on precedence. A caller who genuinely
+// holds only the full tier is untouched, and a caller holding nothing valid still reaches the
+// gates it always did.
+function worldIdCredentialOn(req) {
+  const headers = (req && req.headers) || {};
+  const candidates = [
+    bearerToken(headers.authorization || headers.Authorization),
+    cookieToken(headers.cookie || headers.Cookie)
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const verified = verifySessionToken(candidate);
+    // Only a token that really verifies counts. An unsigned or expired string is not a
+    // credential, and treating it as one would refuse requests that carry nothing at all.
+    if (verified.ok && verified.via === TIER_WORLD_ID) return true;
+  }
+  return false;
+}
+
 // Mounted on BOTH entry points, ahead of every route, so there is no door on either surface it
 // does not stand in front of. It judges nothing about callers who hold the full tier or no
 // credential at all: those requests reach exactly the gates they always did.
 function signInTierGuard(req, res, next) {
-  const session = authorizeSessionRequest(req);
-  if (!session.ok) return next();
-  const refusal = worldIdTierRefusal(req.method, req.path || req.url, session.via);
+  if (!worldIdCredentialOn(req)) return next();
+  const refusal = worldIdTierRefusal(req.method, req.path || req.url, TIER_WORLD_ID);
   if (!refusal) return next();
   res.status(refusal.status);
   if (typeof res.set === 'function') res.set('Cache-Control', 'private, no-store');
