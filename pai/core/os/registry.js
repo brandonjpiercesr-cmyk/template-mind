@@ -107,21 +107,15 @@ const LIVE = [
 const PORTING = [
 ];
 
-// The canonical identity background set, the sealed house canon carried by
-// ccwa-core backgrounds.js (wet city, pink smoke and family). Never Unsplash,
-// never invented URLs.
-const BACKGROUNDS = [
-  { id: 'wet-city',        url: 'https://i.imgur.com/h8zNCw1.jpeg' },
-  { id: 'pink-smoke',      url: 'https://i.imgur.com/3RkebB2.jpeg' },
-  { id: 'nebula',          url: 'https://i.imgur.com/nLBRQ82.jpeg' },
-  { id: 'black-landscape', url: 'https://i.imgur.com/ZwVdgzN.jpeg' },
-  { id: 'motion',          url: 'https://i.imgur.com/3hG18cp.jpeg' },
-  { id: 'storm-clouds',    url: 'https://i.imgur.com/RRKjvgR.jpeg' },
-  { id: 'particle-lights', url: 'https://i.imgur.com/wLi9sGD.jpeg' },
-  { id: 'glass-windows',   url: 'https://i.imgur.com/Kjjs7nt.jpeg' },
-  { id: 'embers',          url: 'https://i.imgur.com/9HZYnlX.png'  },
-  { id: 'unity',           url: 'https://i.imgur.com/IJAeq7t.png'  }
-];
+// ⬡B:os.registry:FIX:the_signed_in_portal_reads_the_one_approved_roster:20260728⬡
+// This was its own ten-entry literal, described here as "the sealed house canon" on the
+// strength of a comment naming ccwa-core. It was a second hand-maintained copy, and on
+// 20260728 the founder saw what it was actually serving him: nebula, black-landscape, motion,
+// storm-clouds, particle-lights, embers and unity, none of which are his. It now reads
+// core/brand.js, the one place the approved set is decided. The shape is unchanged, so every
+// consumer of registry.backgrounds still receives {id, url} and nothing downstream moved.
+const brand = require('../brand.js');
+const BACKGROUNDS = brand.BACKGROUNDS.map(function (b) { return { id: b.id, url: b.url }; });
 
 function brainHeaders(profile) {
   const key = process.env.AIBE_BRAIN_KEY || '';
