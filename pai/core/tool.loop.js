@@ -815,6 +815,46 @@ function isArrivalDestinationBlock(parsed) {
     && /^(alive|cib|surface)$/i.test(parsed.destination.trim()));
 }
 
+// ⬡B:core.tool_loop:FIX:the_whole_guard_where_a_test_can_observe_its_answer:20260728⬡
+// Second Codex P2 on #1272, and a sharper mutation than the one I ran on myself. I proved my
+// test caught a broadened PREDICATE. The reviewer mutated the WIRING instead, changing the
+// call site to `false && isArrivalDestinationBlock(_rawParsed)`, and all six tests stayed
+// green while every real arrival block would again be overwritten. Exporting the predicate
+// was necessary and not sufficient: a test that never runs the branch cannot see the branch
+// disappear.
+//
+// So the whole transformation lives here now and the closure calls it. It takes the answer
+// and returns the answer the turn should carry, plus which branch ran and why, so a test
+// observes the ACTUAL RESULT rather than the shape of the source. Mutating the predicate,
+// the wiring, or the branch order all move a real assertion now.
+//
+// Behaviour is deliberately byte-for-byte what the in-closure version did: the same
+// leading-bracket test, the same JSON.parse in a try, the same three outcomes, the same two
+// stamp names, the same literals. Nothing about what a human receives changes here.
+function repairRawJsonAnswer(answer) {
+  var text = answer == null ? '' : String(answer);
+  if (!text || !/^[[{]/.test(text.trim())) return { answer: answer, stamp: null, why: null };
+  var parsed = null;
+  try { parsed = JSON.parse(text.trim()); } catch (eRawJ) { parsed = null; }
+  if (isArrivalDestinationBlock(parsed)) {
+    return { answer: answer, stamp: 'arrival_destination_answer_kept',
+      why: 'her arrival block is the contract for that surface, not a tool result leaking to a human' };
+  }
+  if (parsed && typeof parsed === 'object') {
+    var why = 'a tool result nearly went out as raw JSON instead of a sentence';
+    if (parsed.next_open_slots || parsed.upcoming_events !== undefined) {
+      var n = Array.isArray(parsed.next_open_slots) ? parsed.next_open_slots.length : 0;
+      return { answer: n > 0
+        ? 'Your calendar is open right now, ' + n + ' free half-hour blocks coming up. Want me to grab one?'
+        : 'Nothing open on your calendar in the window I checked, or it is genuinely clear with no slots computed yet -- tell me what you are trying to book and I will look closer.',
+        stamp: 'raw_json_answer_caught', why: why };
+    }
+    return { answer: 'I pulled that up, but I need to say it in words instead of handing you raw data. Ask me again and I will answer it properly.',
+      stamp: 'raw_json_answer_caught', why: why };
+  }
+  return { answer: answer, stamp: null, why: null };
+}
+
 // Keep the canonical PAI tool decision intact when the approved primary
 // provider changes. The caller owns whether tools exist and whether a nudge
 // selected provider-auto; this adapter only translates the resulting body.
@@ -5350,50 +5390,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // through the canonical mind under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Removing the
   // guard would ship raw JSON to the human; rerouting to re-synthesis cannot be verified here, so it
   // is contained by stamp only.
-  if (!_structuredReachPolicy&&finalAns && /^[\[{]/.test(finalAns.trim())) {
-    var _rawParsed = null;
-    try { _rawParsed = JSON.parse(finalAns.trim()); } catch (eRawJ) {}
-    // ⬡B:core.tool_loop:911:this_guard_was_silently_killing_the_one_arrival_portal:20260728⬡
-    // MEASURED LIVE 20260728, launch eve, three times in a row on the founder's own world,
-    // through /arrive/decide and /arrive/prewarm, after the tool-use outage above was cured:
-    //   ok:false no_destination_returned:short_reply_no_json
-    //   she_said: "I pulled that up, but I need to say it in words instead of handing you
-    //              raw data. Ask me again and I will answer it properly."
-    // That sentence is not hers. It is the literal on the line below, and this branch put it
-    // there. routes/arrive.routes.js's own 911 note (20260725) said three different things
-    // wear the reason `no_destination_returned` and nobody could tell them apart; this is
-    // which one it was, and it was never her stalling.
-    //
-    // THE COLLISION. This guard exists for a real incident and stays: a raw tool result once
-    // went out as an actual text message to the founder's phone, so an answer that parses as
-    // JSON is never sent to a human as-is. But the ARRIVAL is the one surface whose contract
-    // REQUIRES her to answer in JSON: she returns a destination block, cold code whitelists
-    // and transports her fields, and NOTHING raw ever reaches the glass. The guard could not
-    // tell those two apart, so it replaced her real choice with an apology and the one portal
-    // could never open. Two correct laws, one blind spot between them.
-    //
-    // THE EXEMPTION, deliberately the narrowest that closes it: an object carrying a
-    // `destination` naming one of the exactly three shapes the arrival contract defines
-    // (docs/specs/ui_contract.v1.md, routes/arrive.routes.js DESTINATIONS). That shape is the
-    // arrival's and nothing else's; a calendar payload, a tool result, or any other JSON is
-    // untouched and still repaired exactly as before. This is the same kind of shape check
-    // the branch below already makes for `next_open_slots`, kept narrower on purpose, and it
-    // authors no bytes: it only declines to overwrite hers.
-    var _arrivalDestination = isArrivalDestinationBlock(_rawParsed);
-    if (_arrivalDestination) {
-      _stampStep('arrival_destination_answer_kept',
-        'her arrival block is the contract for that surface, not a tool result leaking to a human');
-    } else if (_rawParsed && typeof _rawParsed === 'object') {
-      _stampStep('raw_json_answer_caught', 'a tool result nearly went out as raw JSON instead of a sentence');
-      if (_rawParsed.next_open_slots || _rawParsed.upcoming_events !== undefined) {
-        var _n = Array.isArray(_rawParsed.next_open_slots) ? _rawParsed.next_open_slots.length : 0;
-        finalAns = _n > 0
-          ? 'Your calendar is open right now, ' + _n + ' free half-hour blocks coming up. Want me to grab one?'
-          : 'Nothing open on your calendar in the window I checked, or it is genuinely clear with no slots computed yet -- tell me what you are trying to book and I will look closer.';
-      } else {
-        finalAns = 'I pulled that up, but I need to say it in words instead of handing you raw data. Ask me again and I will answer it properly.';
-      }
-    }
+  if (!_structuredReachPolicy) {
+    var _rawRepair = repairRawJsonAnswer(finalAns);
+    if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
+    finalAns = _rawRepair.answer;
   }
   // ⬡COLD:speak:become:PAI_OUTPUT_REPAIR_WONDER:20260723⬡
   // COLD-ANEW-REPORT-0076 stamped, needs-live-verification. This regex-detects a claimed
@@ -6434,4 +6434,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover,paiSeatUsable,isArrivalDestinationBlock}};
+  paiSeatFailover,paiSeatUsable,isArrivalDestinationBlock,repairRawJsonAnswer}};
