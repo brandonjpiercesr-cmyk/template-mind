@@ -209,20 +209,28 @@ try { seatMap = require('./seat.map.js'); } catch (eSeatMap) { seatMap = null; }
 // 3. The receipt named a model that was never called: the rungs returned a fixed
 //    model:'glm-5.2' / 'qwen3-235b' label whatever went out on the wire.
 //
-// THE RE-SEAT. A rung resolves the seat and sends what the seat funds. Defect 1 above, the
-// `opts.seat &&` that made the whole knob dead on the default path, is gone outright.
+// THE RE-SEAT. A rung resolves the seat and sends what the seat funds, full stop. There is no
+// model literal left in this file to drift.
 //
-// ⬡B:core.model_ladder:MERGE:two_lanes_cured_one_defect_and_only_one_cure_is_in_the_file:20260728⬡
-// AN EARLIER DRAFT OF THIS COMMENT SAID THERE IS NO MODEL LITERAL LEFT IN THIS FILE. There is,
-// and this note exists so the next reader is not told one thing by the prose and another by the
-// code four lines down. Two lanes found this same defect in the same window and cured it two
-// different ways: this one deleted the family test along with the literal, and the lane that
-// landed on main kept the family test and only deleted the `opts.seat &&`. Main's cure is the
-// one in the file, because the family test is doing separate and still-necessary work: this
-// ladder walks rungs of DIFFERENT families in sequence, so a GLM rung handed a non-GLM seat
-// model would feed one family's slug to another family's call. It refuses and falls back
-// instead. The remaining literal is that fallback's floor, reached only when a seat funds a
-// foreign family on this rung, and it is one env override away.
+// ⬡B:core.model_ladder:MERGE:the_family_test_looked_like_safety_and_was_the_bleed:20260728⬡
+// TWO LANES CURED THIS SAME DEFECT IN THE SAME WINDOW AND THE MERGE FIRST PICKED THE WRONG ONE.
+// Written down because the wrong one is the one that reads as careful. The other cure kept a
+// model-family test on each rung, on the reasoning that a ladder walking rungs of different
+// families must never feed one family's slug to another family's call:
+//   var glmModel = /^z-ai\/glm/i.test(candidate.model) ? candidate.model
+//     : (process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2');
+// That guard does not refuse the rung. It SUBSTITUTES a literal and then pays with the resolved
+// seat's own named key, so selecting `coda` or `c1_cellm` billed that seat for a model the seat
+// does not fund. The per-seat key exists precisely so a bleed traces to one seat; a foreign
+// model on that key breaks the other half of that promise, because the money stays attributable
+// and the spend stops being. FOUND BY CATHY (Codex) on #1286, against the funded-seat suite in
+// this same branch, which failed 3 of 7 under the family test and passes 7 of 7 without it.
+//
+// The premise behind the guard is also no longer true. These two rungs are not two model
+// families any more: `openRouterCandidate(name, false)` is the seat's PRIMARY and
+// `openRouterCandidate(name, true)` is the seat's DECLARED FAILOVER, both resolved from the one
+// seat map. Nothing can arrive at a rung from another family's seat, so there is nothing for a
+// family test to catch, and the function names are only names.
 //
 // GLM_OPENROUTER_MODEL and QWEN_MODEL were the
 // pre-seat-map way to pin these two rungs and they are SUPERSEDED, not deleted twice over:
@@ -288,8 +296,7 @@ async function tryOpenRouterGLM(system, user, opts) {
     // outage in ledger D12. The family check is the part that was always right and it stays:
     // a GLM rung still refuses a non-GLM seat model and falls back, so a ladder that tries
     // several families in sequence never feeds one family's slug to another's call.
-    var glmModel = /^z-ai\/glm/i.test(candidate.model) ? candidate.model :
-      (process.env.GLM_OPENROUTER_MODEL || 'z-ai/glm-5.2');
+    var glmModel = candidate.model;
     var body = { model: glmModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_openrouter_too:20260719⬡
@@ -354,10 +361,11 @@ async function tryQwen(system, user, opts) {
   var candidate = openRouterCandidate(ladderSeatName(opts), true);
   if (!candidate || alreadyAttempted(opts, candidate)) return null;
   try {
-    // Same defect, same cure as the GLM rung above: the resolved seat decides, not the call
-    // shape. This is the rung Codex's repro actually measured.
-    var qwenModel = /^qwen\//i.test(candidate.model) ? candidate.model :
-      (process.env.QWEN_MODEL || 'qwen/qwen3-235b-a22b');
+    // Same rule as the GLM rung above: this rung sends the model its resolved seat funds.
+    // `openRouterCandidate(name, true)` already asked seat.map for this seat's DECLARED
+    // FAILOVER, so what arrives here is a real second opinion the seat owns, not a family
+    // literal kept in this file.
+    var qwenModel = candidate.model;
     var body = { model: qwenModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
     // ⬡B:core.model_ladder:911:the_last_warm_rung_thought_itself_empty:20260726⬡
