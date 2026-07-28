@@ -5332,7 +5332,39 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (!_structuredReachPolicy&&finalAns && /^[\[{]/.test(finalAns.trim())) {
     var _rawParsed = null;
     try { _rawParsed = JSON.parse(finalAns.trim()); } catch (eRawJ) {}
-    if (_rawParsed && typeof _rawParsed === 'object') {
+    // ⬡B:core.tool_loop:911:this_guard_was_silently_killing_the_one_arrival_portal:20260728⬡
+    // MEASURED LIVE 20260728, launch eve, three times in a row on the founder's own world,
+    // through /arrive/decide and /arrive/prewarm, after the tool-use outage above was cured:
+    //   ok:false no_destination_returned:short_reply_no_json
+    //   she_said: "I pulled that up, but I need to say it in words instead of handing you
+    //              raw data. Ask me again and I will answer it properly."
+    // That sentence is not hers. It is the literal on the line below, and this branch put it
+    // there. routes/arrive.routes.js's own 911 note (20260725) said three different things
+    // wear the reason `no_destination_returned` and nobody could tell them apart; this is
+    // which one it was, and it was never her stalling.
+    //
+    // THE COLLISION. This guard exists for a real incident and stays: a raw tool result once
+    // went out as an actual text message to the founder's phone, so an answer that parses as
+    // JSON is never sent to a human as-is. But the ARRIVAL is the one surface whose contract
+    // REQUIRES her to answer in JSON: she returns a destination block, cold code whitelists
+    // and transports her fields, and NOTHING raw ever reaches the glass. The guard could not
+    // tell those two apart, so it replaced her real choice with an apology and the one portal
+    // could never open. Two correct laws, one blind spot between them.
+    //
+    // THE EXEMPTION, deliberately the narrowest that closes it: an object carrying a
+    // `destination` naming one of the exactly three shapes the arrival contract defines
+    // (docs/specs/ui_contract.v1.md, routes/arrive.routes.js DESTINATIONS). That shape is the
+    // arrival's and nothing else's; a calendar payload, a tool result, or any other JSON is
+    // untouched and still repaired exactly as before. This is the same kind of shape check
+    // the branch below already makes for `next_open_slots`, kept narrower on purpose, and it
+    // authors no bytes: it only declines to overwrite hers.
+    var _arrivalDestination = _rawParsed && typeof _rawParsed === 'object'
+      && typeof _rawParsed.destination === 'string'
+      && /^(alive|cib|surface)$/i.test(_rawParsed.destination.trim());
+    if (_arrivalDestination) {
+      _stampStep('arrival_destination_answer_kept',
+        'her arrival block is the contract for that surface, not a tool result leaking to a human');
+    } else if (_rawParsed && typeof _rawParsed === 'object') {
       _stampStep('raw_json_answer_caught', 'a tool result nearly went out as raw JSON instead of a sentence');
       if (_rawParsed.next_open_slots || _rawParsed.upcoming_events !== undefined) {
         var _n = Array.isArray(_rawParsed.next_open_slots) ? _rawParsed.next_open_slots.length : 0;
