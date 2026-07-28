@@ -12,8 +12,9 @@ harness into this session - read it before you touch anything. One board, all co
 - **Read** the wall: `GET https://aibebase.onrender.com/ccwa/harness` (JSON) or `/ccwa/board` (the human wall).
 - **Check IN before you work:** `POST /ccwa/<HAM_UID>/checkin` `{ coder, lineage, intent, touching }`
 - **Check OUT when done:** `POST /ccwa/<HAM_UID>/checkout` `{ coder, result, minutes, receipts }`
-- **Your Big-3 name:** `CODA` (A'NU's own coder), `CATHY` (ChatGPT / Codex), `CLAIR` (any Claude, chat or code). Carry your personal lineage in `lineage` (e.g. `FOUNDER>CLAUDIA`).
-- Source of record for the full protocol (one source, never twinned): the `anew` repo `docs/CCWA_COMMAND_CENTER_HANDSHAKE.md`, and the live board itself.
+- **Your Big-3 name:** `CODA` (A'NU's own coder), `CATHY` (ChatGPT / Codex), `CLAIR` (any Claude, chat or code), `GEMMA` (Gemini, chat or code). Carry your personal lineage in `lineage` (e.g. `FOUNDER>CLAUDIA`).
+- **Report to the founder in the flag format** (founder direct, 20260728, asked four times). Flags first, real emoji, one line each, no prose wall above them. 🟢 green done and live-verified with the receipt on the line (full URL plus status code, or merged PR link). 🟠 orange in flight, says what is running AND what is not done yet. ⚫ black blocked, names what blocks it and who can unblock it. 🔴 red is ONLY for what he must physically do himself (an env var on his own dashboard, a sign-in as himself, a real spend), written click-by-click for a non-coder on a phone: what to click, what he should see, what to type, how to save, whether to exit. A bare link is a violation. He does not make technical decisions: decide it yourself with documented reasoning or ask HER, never red-flag "which approach should we take." End every update with DONE or STALE; stale means go get work, never idle and never ask him for an assignment.
+- Source of record for the full protocol and the full flag rules (one source, never twinned): the `anew` repo `docs/CCWA_COMMAND_CENTER_HANDSHAKE.md` section "HOW THE FOUNDER WANTS UPDATES", and the live board itself.
 
 ## STANDING LAWS
 - **ENVOLVE** - always with the E. The I is always an E. Never display the scrambled form.
@@ -24,6 +25,12 @@ harness into this session - read it before you touch anything. One board, all co
 - **Everything is a wonder or part of one** - an LLM thinking with cold code, through the cycle, ACL-stamped. Cold code never decides to reach a human. No one-shot that bypasses the cycle. No ` - ` em dashes in output or code strings.
 - **Never fake a connection or mimic A'NU.** Only her real gate speaks for her (`POST /cara/chat`); `ok:false` over anything hollow.
 - **IDENTITY IS ENV-ONLY, NEVER A LITERAL (founder law, 20260722, non-negotiable).** This repo is the mind-template every world inherits, so it must be a TRUE ZERO: never hardcode a real person, no email, no phone, no HAM UID, no child's or family member's name, not even as a fallback default. A hardcoded person is a real human leaked into every stranger's deploy. Identity comes from env or the brain, never a literal. The `no-founder-pii` CI gate keeps this repo at zero and WILL fail your build. CODA, CATHY, CLAIR: you are on notice. Do not do this again.
+
+## FOUNDER STANDING ORDERS
+Source of record (one source, never twinned): the `anew` repo's own `CLAUDE.md`, the
+"FOUNDER STANDING ORDERS" section near the top. Read it there before you start here too - his
+live directives (usage economy, when to just decide vs. when to ask, demo-day priority) apply
+across every world, not just `anew`.
 
 ## WHERE THINGS ARE
 - Roadmap of record: `anew` repo `docs/roadmaps/ENVOLVE_CORONATION_ROADMAP_20260721.md`

@@ -157,13 +157,42 @@ function envUsd(key, dflt) {
 // the same way an override does not retarget `role`.
 var SEATS = {
   c1_cellm:    { role: 'C1 penny gate',        envModel: 'SEAT_C1_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C1_CELLM',    via: 'openrouter', capEnv:'SEAT_C1_CELLM_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
-  // Founder ruling 20260722 seated MiniMax-01 here (fresh, 1M ctx, ~$0.20/$1.10, clean JSON
-  // in ~3.7s), SUPERSEDED 20260728 by the live tool-use outage in the 911 comment above:
-  // that model has no tool-use endpoint and this is the seat every tool-carrying chat turn
-  // lands on. Re-seated on qwen3.5-flash-02-23 (tool-use yes, vision yes, 1M ctx,
-  // $0.07/$0.26 per M, cheaper than the pick it replaces). GLM-5.2 stays the failover.
+  // ⬡B:core.seat_map:911:the_everyday_organ_was_seated_on_the_one_model_that_cannot_call_a_tool:20260728⬡
+  // MEASURED LIVE 20260728, the day before the launch, on a real world through anu-anew.com,
+  // two separate doors, seconds apart, identical failure:
+  //   POST /cara/chat     -> ok:false  no_answer:pai_seat: "No endpoints found that support
+  //                          tool use. Try disabling update_screen."
+  //   POST /arrive/decide -> ok:false  no_answer:pai_seat: "No endpoints found that support
+  //                          tool use. Try disabling save_layout."
+  // She could not finish one turn on any surface the demo touches.
+  //
+  // THE CAUSE, read off the live OpenRouter model list rather than reasoned about: of every
+  // model in this map, `minimax/minimax-01` was the ONLY one whose supported_parameters lack
+  // `tools`. `core/tool.loop.js` `_paiSeatName()` binds EVERY non-voice, non-coding channel
+  // to this seat, which is CARA chat, the arrival portal, and every other demo surface, and
+  // the PAI cycle is a TOOL LOOP: it hands the seat `save_layout`, `update_screen` and their
+  // sisters on every turn. A tool-incapable model here is not slow, it is MUTE. The 20260722
+  // ruling that seated MiniMax measured speed and JSON cleanliness, both real and both still
+  // true; tool support was simply never part of the check.
+  //
+  // THE PICK, chosen against the live list on all four constraints at once, not two:
+  //   tools    REQUIRED, or she cannot answer at all (this outage).
+  //   vision   REQUIRED, this seat carries vision:true and tool.loop.js resolves the vision
+  //            turn through this same seat, so a text-only pick trades her voice for her eyes.
+  //            `z-ai/glm-5.2` was this seat's own declared failover and is text-only, so the
+  //            obvious swap was the wrong one.
+  //   cost     this is the highest-volume seat in the estate; penny hustle governs.
+  //   proven   already funded and already answering in this system.
+  // `qwen/qwen3.5-flash-02-23` is the only candidate that satisfies all four: tools YES,
+  // vision YES, 1M context, $0.07/$0.26 per M (CHEAPER than the MiniMax it replaces, $0.20/
+  // $1.10), and already carrying the C1, C4, and voice seats here. The failover moves to
+  // `x-ai/grok-4.5`, also tools+vision, so a miss escalates to a strong mind instead of
+  // falling to a text-only model that would break the vision turn.
+  //
+  // SEAT_C2_MODEL still overrides for an env-only re-seat with no deploy. Whoever sets it:
+  // the value MUST support BOTH tool use AND image input or one of these two outages returns.
   c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C2_ORGAN',    via: 'openrouter', capEnv:'SEAT_C2_ORGAN_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
-                 fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_C2_ORGAN', fallbackTools:true },
+                 fallbackModel: 'x-ai/grok-4.5', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_C2_ORGAN', fallbackTools:true },
   // Founder ruling 20260722: Grok 4.5 is the mind; GLM-5.2 is its failover. Grok is
   // closed-weight (xAI) and founder-lifted from the ban for this seat. Seated on C3
   // (the flagship mind) only, not the high-volume C2 organ, to keep the $2/$6-per-M
@@ -171,7 +200,18 @@ var SEATS = {
   c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
                  fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK', fallbackTools:true },
   c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
-  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', capEnv:'SEAT_CODA_DAILY_CAP_USD', dailyCapUsd:8, vision:true, tools:true },
+  // ⬡B:core.seat_map:FIX:codas_coder_invented_cap_was_stopping_her_on_demo_eve:20260728⬡
+  // Raised 8 to 40 on the founder's own direct instruction. He said he had raised the kimi
+  // cap, could not find SEAT_CODA_DAILY_CAP_USD to set it, and told this lane to do it. The
+  // env override is his to set and still wins whenever it is present; this only moves the
+  // fallback underneath it. MEASURED, not guessed: CODA cycled 465 times unattended overnight,
+  // spent through the 8 dollar fallback, and every deliberation since has held with
+  // openrouter_seat_daily_dollar_cap_reached on seat coda, so the coding department's own mind
+  // was stopped on the eve of the launch by a number no human ever chose. /coda/sensors/health
+  // reports this seat's cap as "chosen_by: a coder, not the founder", which is exactly what it
+  // was: a default invented in this file, never a decision. 40 restores a full day of real
+  // autonomous work with a real ceiling still under it.
+  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', capEnv:'SEAT_CODA_DAILY_CAP_USD', dailyCapUsd:40, vision:true, tools:true },
   deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', capEnv:'SEAT_DEPLOY_TOOL_DAILY_CAP_USD', dailyCapUsd:4, vision:false, tools:true },
   // FOUNDER 911 20260722: Ornith is RETIRED and RunPod is out entirely (the live
   // endpoint was failure-looping: 937 failures, 0 completions, billed GPU). The

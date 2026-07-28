@@ -352,6 +352,29 @@ function draftArgsFromMessage(message) {
   return { org:'' };
 }
 // ⬡B:core.tool_loop:MAP:data_reader_tools_executable_in_cold_code:20260719⬡
+// ⬡B:core.tool_loop:CONST:the_only_reader_a_soft_hint_may_decline:20260727⬡
+//
+// THE ALLOWLIST IS THE WHOLE SAFETY PROPERTY, so it is stated before the table it guards.
+//
+// The soft nudge path (tool_choice 'auto') tells her "call it if it helps, but you hold all
+// your tools; use your judgment". Honouring that literally, for every data reader, was wrong
+// and was caught in review by CATHY (Codex) at P1 the same day it was written. The soft path
+// also selects get_budget_summary for a finance turn (line ~4105) and calendar_read for a day
+// question (line ~4115). Letting those be declined means she can answer "how much have I got
+// left" from a guess instead of from his real budget, and "am I free Thursday" by inventing
+// availability. Money and current events are exactly what must never be guessed.
+//
+// So the default is FAIL CLOSED and this is the single named exception. find_in_brain is a
+// "would an old note help here" lookup, not a source of owned or current fact; declining it on
+// a plain greeting is judgment working correctly, and forcing it is what deleted a real answer.
+// Everything else in the table below reads owned or current data, where a missing read makes
+// the answer a fabrication rather than merely unadorned. find_identity_evidence is absent on
+// purpose and stays fail-closed: silence over a confident guess about who he is.
+//
+// Adding a name here removes a grounding guarantee. Do not add one without a reason as
+// specific as this paragraph.
+var OPTIONAL_SOFT_READERS = { find_in_brain: true };
+
 // Deterministic data-reader tools that cold code can execute directly when the
 // model refuses to emit a forced tool_choice. Each maps the raw user message to
 // the tool's args. Used only to ground an answer in REAL data, never to fabricate.
@@ -716,6 +739,59 @@ function _flattenTurnText(content) {
     }).map(function (part) { return part.text; }).join(' ');
   }
   return '';
+}
+
+// ⬡B:core.tool_loop:911:the_seat_failover_rule_itself_where_a_test_can_reach_it:20260728⬡
+// The ORDER-AND-CHOICE half of the seat failover, deliberately at module scope and taking
+// its attempt function as an argument, so the rule can be proven by a test without standing
+// up a whole cycle. The transport half (fetch, headers, spend guard) stays in the closure
+// where it belongs. Independently flagged P1 by the Codex reviewer on #1258, same finding.
+//
+// THE RULE, in one place:
+//   1. Try the primary. If it answered, that is the answer. A working turn never reaches
+//      line two, which is what makes this change unable to break a cycle that works today.
+//   2. It failed. With no declared fallback, return the primary's own failure: cold code
+//      never invents a model to try.
+//   3. Try the declared fallback exactly once. No loop, no ladder, no third guess.
+//   4. If the fallback ALSO failed, return the PRIMARY's failure, not the fallback's. The
+//      first wall is the true cause; reporting the second would send whoever debugs this
+//      chasing a model that was only ever a rescue attempt.
+// ⬡B:core.tool_loop:FIX:a_200_with_nothing_in_it_is_a_failure_too:20260728⬡
+// Second Codex P1 on #1258, and correct: the first version of this rule treated ONLY an
+// `.error` envelope as failure. OpenRouter also answers HTTP 200 carrying `{choices:[]}`,
+// a null choice, or a choice whose message has neither content nor tool_calls. Every one of
+// those is as useless to a turn as an error is, and the old predicate called them success,
+// so the fallback was skipped and the caller dropped through to the text-only ladder,
+// losing exactly the tool-and-vision recovery this whole change exists to provide.
+//
+// So the question is not "did it error", it is "can this turn be continued with what came
+// back". A usable answer carries real content or a real tool call. Anything else fails over.
+// This is deliberately generous about SHAPE (a string content, an array of content parts, or
+// tool_calls all count) and strict about EMPTINESS, because inventing a rescue for a model
+// that did answer would be the opposite mistake.
+function paiSeatUsable(result) {
+  if (!result || result.error) return false;
+  var choices = Array.isArray(result.choices) ? result.choices : null;
+  if (!choices || !choices.length) return false;
+  for (var i = 0; i < choices.length; i++) {
+    var message = choices[i] && choices[i].message;
+    if (!message) continue;
+    if (typeof message.content === 'string' && message.content.trim()) return true;
+    if (Array.isArray(message.content) && message.content.length) return true;
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length) return true;
+  }
+  return false;
+}
+async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
+  var primary = await attempt(primaryCandidate);
+  if (paiSeatUsable(primary)) return primary;
+  if (!fallbackCandidate) return primary;
+  var recovered = await attempt(fallbackCandidate);
+  // The rescue only wins if it actually carries an answer. If it does not, the caller gets
+  // the PRIMARY's own result back, byte for byte, so every downstream path (the hollow-answer
+  // repair, the ladder, the named silent wall) sees exactly what it saw before this change.
+  if (!paiSeatUsable(recovered)) return primary;
+  return recovered;
 }
 
 // Keep the canonical PAI tool decision intact when the approved primary
@@ -3259,16 +3335,42 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     text = text.replace(/[^A-Za-z0-9._:-]+/g, '_').replace(/^_+|_+$/g, '');
     return text.slice(0, 120);
   }
-  async function _callPaiProvider(requestBody, seatName) {
-    var candidate = _paiSeatCandidate(seatName);
-    if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
-    try {
-      if (!require('./spend.guard.js').allow('text')) {
-        return {error:{code:'daily_spend_ceiling_reached',seat:candidate.seat.seat}};
-      }
-    } catch (ePaiSpend) {
-      return {error:{code:'spend_guard_unavailable',seat:candidate.seat.seat}};
-    }
+  // ⬡B:core.tool_loop:911:every_declared_failover_was_dead_configuration_on_her_main_path:20260728⬡
+  // FOUND 20260728 while curing the outage that muted her the day before the launch. The
+  // cause of THAT outage was one seat model without tool support (see core/seat.map.js), but
+  // the reason a single bad model could take down every surface at once is here: this door
+  // called the PRIMARY seat and nothing else. `seatMap.fallback()` was never called anywhere
+  // in this file. The failovers sitting in the seat map for c2_organ, c3_mind and judge, each
+  // one deliberately chosen and dated by a founder ruling, were dead configuration on the one
+  // path that carries every chat and every arrival. The map promised a safety net that the
+  // code never strung.
+  //
+  // So the net is strung, and deliberately ONLY on the error path: the fallback is attempted
+  // exclusively when the primary has ALREADY failed, which means this can convert a failed
+  // turn into an answered one and can never change a turn that was going to succeed. A cycle
+  // that works today takes byte-identical actions after this change.
+  //
+  // What does NOT fail over, on purpose:
+  //   daily_spend_ceiling_reached  a ceiling is a decision about money, not a broken seat.
+  //                                Retrying on another model spends more against the very
+  //                                wall that just said stop. It stands.
+  //   pai_seat_key_missing         the fallback bills the same named key (fallbackKeyEnv), so
+  //                                a missing key is missing for both. Nothing to try.
+  //   a seat with no declared fallback   silence over a guess: cold code never invents a model.
+  // Every other failure (a provider error payload, an HTTP failure, a thrown request) is a
+  // seat that could not answer, which is exactly what a failover exists for.
+  //
+  // The receipt stays honest: a served fallback stamps `_provider` with the fallback seat's
+  // own name (`<seat>.fallback`), so telemetry and the model_rung_result bead say which model
+  // actually spoke, never the one that was asked first.
+  function _paiFallbackCandidate(name) {
+    if (!seatMap || typeof seatMap.fallback !== 'function') return null;
+    var fb = seatMap.fallback(name || _paiSeatName());
+    if (!fb || fb.provider !== 'openrouter') return null;
+    var key = seatMap.resolveKey(fb);
+    return key ? { seat:fb, key:key } : null;
+  }
+  async function _attemptPaiSeat(requestBody, candidate) {
     var providerBody = primaryProviderBody(requestBody,
       requestBody && requestBody.messages || [], candidate.seat.model);
     try {
@@ -3291,6 +3393,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return {error:{code:'pai_seat_request_failed',seat:candidate.seat.seat,
         detail:String(ePaiProvider&&ePaiProvider.message||ePaiProvider).slice(0,160)}};
     }
+  }
+  async function _callPaiProvider(requestBody, seatName) {
+    var candidate = _paiSeatCandidate(seatName);
+    if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
+    try {
+      if (!require('./spend.guard.js').allow('text')) {
+        return {error:{code:'daily_spend_ceiling_reached',seat:candidate.seat.seat}};
+      }
+    } catch (ePaiSpend) {
+      return {error:{code:'spend_guard_unavailable',seat:candidate.seat.seat}};
+    }
+    return paiSeatFailover(function (c) { return _attemptPaiSeat(requestBody, c); },
+      candidate, _paiFallbackCandidate(seatName));
   }
   async function callPAIPlain(sys, user, maxTokens) {
     var messages = sys ? [{role:'system',content:sys},{role:'user',content:user}] : user;
@@ -3628,8 +3743,25 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // ⬡B:tool.loop:NUDGE:nash_routing_20260711⬡ cold keyword router: a sports
   // question MUST reach NASH; the model was answering "no real-time access"
   // instead of deploying the wonder it already has.
+  // ⬡B:core.tool_loop:FIX:nash_tested_the_whole_armory_not_the_actual_ask:20260728⬡
+  // Live, found reading CODA's own CYCLE_STEP trail: her real deliberation calls kept
+  // failing closed with required_tool_call_missing: nash_sports on turns that were never
+  // about sports at all -- GitHub check-run reconciliation, drain-pass status, business
+  // plan search. Root cause: this test ran against `message`, the FULL deliberation input
+  // (system prompt plus her entire armory: BCW, operational evidence, repo evidence, tens
+  // of thousands of characters), not the actual words anyone asked. That armory routinely
+  // contains the bare word "score" or "scores" in an unrelated sense (a CI/test/CANON
+  // grading score, a confidence score), which alone satisfies this regex and forces a
+  // sports tool she has no reason to call, burning her call budget on a demand she cannot
+  // satisfy. The 20260719 fix immediately below this block (see its own comment,
+  // "intent_detection_uses_raw_words_not_fusion_wrapped_message") already established that
+  // every cold intent check in this file must read _exactUserMessage, the real raw words,
+  // never the fused/armory-wrapped `message` -- this one nudge was missed. Switched to the
+  // same raw words every other nudge already reads; a real "did the Lakers win" question
+  // still contains its own trigger words in _exactUserMessage, so the real NASH routing is
+  // unchanged for an actual sports question, on any channel.
   var _nashNeeded = !_structuredReachPolicy && !_reachIncidentIntake &&
-    /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|score|scores|playoffs?|game (to)?night|did .{1,40}(win|lose|beat)|final score)\b/i.test(message);
+    /\b(lakers|celtics|warriors|knicks|nba|nfl|mlb|nhl|wnba|score|scores|playoffs?|game (to)?night|did .{1,40}(win|lose|beat)|final score)\b/i.test(_exactUserMessage);
   if (_nashNeeded) {
     msgs.push({role:'system',content:'NASH is standing by. For this question you MUST call the nash_sports tool first (pick the league) and answer from its scoreboard. Never say you lack real-time access; you have NASH.'});
   }
@@ -4100,6 +4232,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }
     }
     else if (iter===1) {
+      // \u2b21B:core.tool_loop:FIX:the_whole_consumer_nudge_lane_read_her_own_evidence_as_an_ask:20260728\u2b21
+      // Live tonight, twice, two different tools: CODA's own internal deliberation carries
+      // identity.user_message set from her runLead's operationalAsk() -- either her fixed
+      // "Run one autonomous CODA operational cycle..." head, OR (interactive mode) that head
+      // PLUS spendStanding()'s real, varying cost-evidence prose appended to it. That
+      // evidence prose is real content about her own spend, budget, and daily counter --
+      // ordinary words like "today" (the counter-reset recommendation) or her own name
+      // ("coda") show up in it naturally. Every classifier below this line was built to
+      // read a human's first-contact chat message, not her own machinery report, and each
+      // one that matches fires a nudge (soft or, since the 20260727 read-tools-fail-closed
+      // fix, effectively hard for most readers) at a turn that has no real day/sports/lookup
+      // question to answer and no reason to call the tool it is being told to call. Found
+      // live via her CYCLE_STEP trail: _isCodingBuildQ matched "coda" in her own prompt
+      // (consult_mace nudge, fixed first); _isDayQ matched "today" in her own spend evidence
+      // (calendar_read nudge, found chasing this one). Both are the same bug class, and nothing
+      // in this lane can distinguish a third one from a fourth by inspection alone. Rather than
+      // patch each regex as it is caught, the whole lane is skipped for exactly her own internal
+      // deliberation: identity.council_context.mode==='coding' AND internal_deliberation===true
+      // together is the one signal only advisors/coding.js's own llm() sets
+      // (councilContext:{mode:'coding', internal_deliberation:true}); CAUGHT IN REVIEW by
+      // CATHY (Codex): mode alone also matches two real human doors
+      // (routes/clair.console.routes.js's /clair/:hamUid/bcw, routes/chat.bridge.routes.js's
+      // coding-mode chat bridge), neither of which sets internal_deliberation, so both fields
+      // are required together. She already carries her real evidence inline in her own armory;
+      // none of these consumer lookups are for her.
+      var _isCodaInternalCycle = !!(identity && identity.council_context &&
+        identity.council_context.mode === 'coding' &&
+        identity.council_context.internal_deliberation === true);
+      if (!_isCodaInternalCycle) {
       // \u2b21B:core.tool_loop:FIX:forced_lookup_derailing_screen_commands_20260709\u2b21
       // Founder-caught live, third layer of the same night's incident: even with the
       // extraction leak and the statelessness both fixed, "change background to
@@ -4168,7 +4329,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // assemble_bcw but never picked them. A build/code/consult request nudges the
       // coding lead. HINT not a rail, she keeps all tools. Named machinery (MACE, CODA,
       // cook-off, wonder games, BCW) or a plain build/code/ship ask routes here.
-      var _isCodingBuildQ = /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
+      // _isCodaInternalCycle is computed once, at the top of this whole nudge lane (see the
+      // FIX comment on entry to this block), and CODA's own internal deliberation never
+      // reaches this line at all. Kept here only as a defensive second check: named machinery
+      // (MACE, CODA, cook-off, wonder games, BCW) or a plain build/code/ship ask routes here
+      // for a real human.
+      var _isCodingBuildQ =
+        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
@@ -4307,6 +4474,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         msgs.push({ role: 'system', content:
           'This turn is about their surface -- their background, their screen, what they see. You hold your surface tools (set_background for the standing background, update_screen for the live glass). If they asked you to change what is behind everything or on their screen, actually do it this turn by calling the right tool; do not say you will get to it or that it is on the way, and do not answer as if you did something you did not call. Then confirm from what actually happened, reading back the real result, and speak it as A’NU -- the one who already handled it, warm, in full natural sentences the way a butler who knows them would, letting something you genuinely know about them show if it fits, never a flat status label. You still hold all your judgment; if it is genuinely not a surface change, do not force one.' });
         _stampStep('surface_wonder_nudge', 'screen_tools_available_she_decides');
+      }
       }
     }
     if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
@@ -4629,12 +4797,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // does any read the router genuinely marked required. What changes is only the case the
       // rule never meant to cover: a soft hint she was invited to decline.
       //
-      // Fail closed only where the read was genuinely demanded, or where guessing would be a
-      // guess about who he is.
+      // TOO BROAD ON THE FIRST WRITING, caught in review by CATHY (Codex) at P1 before it
+      // shipped. Honouring the decline for EVERY data reader also honoured it for
+      // get_budget_summary on a finance turn and calendar_read on a day question, both of which
+      // reach this branch with tool_choice still 'auto'. That would let her answer about his
+      // money, and about whether he is free, from a guess. The default is therefore fail
+      // closed, and OPTIONAL_SOFT_READERS above is the one named exception, with the reasoning
+      // for it written where the list lives.
+      var _readWasDemanded = (body.tool_choice === 'required');
+      var _declinable = !_readWasDemanded && OPTIONAL_SOFT_READERS[_requiredToolName] === true;
       if (retryMsg&&retryMsg.tool_calls&&retryMsg.tool_calls.length) {
         msg=retryMsg;
-      } else if (DATA_READER_TOOLS[_requiredToolName]
-                 && (body.tool_choice === 'required' || _requiredToolName === 'find_identity_evidence')) {
+      } else if (DATA_READER_TOOLS[_requiredToolName] && !_declinable) {
         _stampStep('required_tool_call_missing', _requiredToolName);
         return {ok:false,reason:'required_tool_call_missing',blocked_by:_requiredToolName,
           ham:hamObj,cycleId:_cycleId,requestId:_requestId,
@@ -5158,7 +5332,39 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (!_structuredReachPolicy&&finalAns && /^[\[{]/.test(finalAns.trim())) {
     var _rawParsed = null;
     try { _rawParsed = JSON.parse(finalAns.trim()); } catch (eRawJ) {}
-    if (_rawParsed && typeof _rawParsed === 'object') {
+    // ⬡B:core.tool_loop:911:this_guard_was_silently_killing_the_one_arrival_portal:20260728⬡
+    // MEASURED LIVE 20260728, launch eve, three times in a row on the founder's own world,
+    // through /arrive/decide and /arrive/prewarm, after the tool-use outage above was cured:
+    //   ok:false no_destination_returned:short_reply_no_json
+    //   she_said: "I pulled that up, but I need to say it in words instead of handing you
+    //              raw data. Ask me again and I will answer it properly."
+    // That sentence is not hers. It is the literal on the line below, and this branch put it
+    // there. routes/arrive.routes.js's own 911 note (20260725) said three different things
+    // wear the reason `no_destination_returned` and nobody could tell them apart; this is
+    // which one it was, and it was never her stalling.
+    //
+    // THE COLLISION. This guard exists for a real incident and stays: a raw tool result once
+    // went out as an actual text message to the founder's phone, so an answer that parses as
+    // JSON is never sent to a human as-is. But the ARRIVAL is the one surface whose contract
+    // REQUIRES her to answer in JSON: she returns a destination block, cold code whitelists
+    // and transports her fields, and NOTHING raw ever reaches the glass. The guard could not
+    // tell those two apart, so it replaced her real choice with an apology and the one portal
+    // could never open. Two correct laws, one blind spot between them.
+    //
+    // THE EXEMPTION, deliberately the narrowest that closes it: an object carrying a
+    // `destination` naming one of the exactly three shapes the arrival contract defines
+    // (docs/specs/ui_contract.v1.md, routes/arrive.routes.js DESTINATIONS). That shape is the
+    // arrival's and nothing else's; a calendar payload, a tool result, or any other JSON is
+    // untouched and still repaired exactly as before. This is the same kind of shape check
+    // the branch below already makes for `next_open_slots`, kept narrower on purpose, and it
+    // authors no bytes: it only declines to overwrite hers.
+    var _arrivalDestination = _rawParsed && typeof _rawParsed === 'object'
+      && typeof _rawParsed.destination === 'string'
+      && /^(alive|cib|surface)$/i.test(_rawParsed.destination.trim());
+    if (_arrivalDestination) {
+      _stampStep('arrival_destination_answer_kept',
+        'her arrival block is the contract for that surface, not a tool result leaking to a human');
+    } else if (_rawParsed && typeof _rawParsed === 'object') {
       _stampStep('raw_json_answer_caught', 'a tool result nearly went out as raw JSON instead of a sentence');
       if (_rawParsed.next_open_slots || _rawParsed.upcoming_events !== undefined) {
         var _n = Array.isArray(_rawParsed.next_open_slots) ? _rawParsed.next_open_slots.length : 0;
@@ -6208,4 +6414,5 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // ⬡B:core.tool_loop:WIRE:the_bounds_and_the_progress_stop_are_testable:20260726⬡ A guard
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
-  _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit}};
+  _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
+  paiSeatFailover,paiSeatUsable}};
