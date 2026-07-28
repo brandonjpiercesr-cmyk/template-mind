@@ -756,12 +756,41 @@ function _flattenTurnText(content) {
 //   4. If the fallback ALSO failed, return the PRIMARY's failure, not the fallback's. The
 //      first wall is the true cause; reporting the second would send whoever debugs this
 //      chasing a model that was only ever a rescue attempt.
+// ⬡B:core.tool_loop:FIX:a_200_with_nothing_in_it_is_a_failure_too:20260728⬡
+// Second Codex P1 on #1258, and correct: the first version of this rule treated ONLY an
+// `.error` envelope as failure. OpenRouter also answers HTTP 200 carrying `{choices:[]}`,
+// a null choice, or a choice whose message has neither content nor tool_calls. Every one of
+// those is as useless to a turn as an error is, and the old predicate called them success,
+// so the fallback was skipped and the caller dropped through to the text-only ladder,
+// losing exactly the tool-and-vision recovery this whole change exists to provide.
+//
+// So the question is not "did it error", it is "can this turn be continued with what came
+// back". A usable answer carries real content or a real tool call. Anything else fails over.
+// This is deliberately generous about SHAPE (a string content, an array of content parts, or
+// tool_calls all count) and strict about EMPTINESS, because inventing a rescue for a model
+// that did answer would be the opposite mistake.
+function paiSeatUsable(result) {
+  if (!result || result.error) return false;
+  var choices = Array.isArray(result.choices) ? result.choices : null;
+  if (!choices || !choices.length) return false;
+  for (var i = 0; i < choices.length; i++) {
+    var message = choices[i] && choices[i].message;
+    if (!message) continue;
+    if (typeof message.content === 'string' && message.content.trim()) return true;
+    if (Array.isArray(message.content) && message.content.length) return true;
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length) return true;
+  }
+  return false;
+}
 async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   var primary = await attempt(primaryCandidate);
-  if (!(primary && primary.error)) return primary;
+  if (paiSeatUsable(primary)) return primary;
   if (!fallbackCandidate) return primary;
   var recovered = await attempt(fallbackCandidate);
-  if (recovered && recovered.error) return primary;
+  // The rescue only wins if it actually carries an answer. If it does not, the caller gets
+  // the PRIMARY's own result back, byte for byte, so every downstream path (the hollow-answer
+  // repair, the ladder, the named silent wall) sees exactly what it saw before this change.
+  if (!paiSeatUsable(recovered)) return primary;
   return recovered;
 }
 
@@ -6354,4 +6383,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover}};
+  paiSeatFailover,paiSeatUsable}};
