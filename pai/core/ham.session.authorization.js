@@ -489,11 +489,37 @@ function requireAnyHamSession(req, res) {
 //   GET /seated/api/status    same shape, a boolean off an env var.
 //   GET /vara/call/status     reads a worker health endpoint, mints nothing.
 //   GET /stream/live/:token   CONSUMES a credential rather than issuing one.
+// ⬡B:core.ham_session_authorization:FIX:a_get_can_spend_through_a_helper_it_calls:20260728⬡
+// CATHY (Codex) again, and the third variation on one lesson, so the lesson is the entry rather
+// than the route. My first sweep read handler BODIES for the spelling of a side effect. My
+// second read every app.get and judged what each handler does. Both stop at the handler, and a
+// handler that calls one function can spend and write without either word appearing in it:
+//   GET /os/sports/:hamUid -> nashWonder() -> deliberate() and markTold()
+// A model call and a dedup bead, on a page refresh. The third sweep followed one level of
+// indirection, indexing every core/ and wonders/ module by whether IT spends or writes and
+// flagging any GET handler that requires one, which is how the CRM twin below was found before
+// a reviewer had to find it.
+//
+// THE LINE I DREW, and it is a coder's to draw rather than the founder's, so it is written
+// down. This tier's promise is that it cannot spend and cannot mint. Both entries added here
+// call a MODEL: real money, aimed by a page load. The sweep also flagged surfaces that write a
+// cache, a history row or a telemetry bead while rendering something this tier is supposed to
+// open (context fusion, nura history). Those stay open. They spend nothing, they write only
+// inside the world the credential already names, and closing them would break the one thing the
+// founder actually asked for, which is that a typed world id opens the world. Reachability has
+// already been the failure four times on this branch; refusing everything is not the safe
+// direction, it is a different way to be wrong.
+//
+// Verified rather than assumed, and named so nobody re-flags them: /geer/barrier/status and
+// /health/deep matched only because their FILES contain a write helper their GET never reaches,
+// and the clair console and wonder wall matched on crypto's own hmac update().
 const SIGN_IN_TIER_ONLY_PATHS = [
   /^\/arrive\/provision(\/|$)/i,
   /^\/vara\/convai\/url(\/|$)/i,
   /^\/cara\/files\/[^/]+\/download(\/|$)/i,
-  /^\/clair\/[^/]+\/files\/download(\/|$)/i
+  /^\/clair\/[^/]+\/files\/download(\/|$)/i,
+  /^\/os\/sports\/[^/]+(\/|$)/i,
+  /^\/os\/crm\/[^/]+\/contact\/[^/]+\/insight(\/|$)/i
 ];
 
 // ⬡B:core.ham_session_authorization:FIX:the_wall_blocked_the_upgrade_the_page_advertised:20260728⬡
