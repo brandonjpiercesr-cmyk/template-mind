@@ -53,6 +53,36 @@ test('a Wonder Games GLM contestant on the RunPod rung is exempt from the produc
   assert.equal(result.model, 'glm-5.2');
 });
 
+// ⬡B:tests.model_ladder_runpod_contestant:TEST:an_omitted_override_must_not_leave_the_contestant_with_no_model:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P2, fresh evidence beyond the exemption
+// fix above: with GLM_RUNPOD_MODEL simply UNSET (the common, supported shape, since this
+// rung used to bake 'glm-5.2' as its own default on exactly this configuration),
+// `_rpModel` was falsy and this rung returned null before the contestant check even ran,
+// so a Wonder Games GLM contestant with no explicit env override still submitted empty
+// content and dropped out of its own game.
+test('a Wonder Games GLM contestant with GLM_RUNPOD_MODEL unset still resolves its own seat model', async function () {
+  clearProviderEnv();
+  process.env.GLM_RUNPOD_URL = 'https://glm.example.test';
+  process.env.GLM_RUNPOD_KEY = 'runpod-key';
+  process.env.GLM_PROVIDER_ORDER = 'runpod';
+  const seatModel = require('../pai/core/seat.map.js').seat('wonder_games_glm').model;
+  let calls = 0;
+  global.fetch = async function (url, opts) {
+    calls += 1;
+    assert.equal(JSON.parse(opts.body).model, seatModel, 'the contestant seat\'s own model must be sent, not an empty/omitted one');
+    return { ok: true, json: async () => ({ choices: [{ message: { content: '{"approved":true,"reason":"contestant judged"}' } }] }) };
+  };
+
+  const result = await ladder.deliberate('system', 'user', {
+    json: true, max_tokens: 40, temperature: 0, timeout: 20,
+    order: ['glm'], seat: 'wonder_games_glm'
+  });
+
+  assert.equal(calls, 1, 'the exempt contestant seat must actually reach the RunPod rung even with no override set');
+  assert.ok(result, 'the contestant must not be refused for lacking an explicit env override');
+  assert.equal(result.model, seatModel);
+});
+
 test('a non-contestant caller is still refused GLM-5.2 on the RunPod rung', async function () {
   clearProviderEnv();
   process.env.GLM_RUNPOD_URL = 'https://glm.example.test';

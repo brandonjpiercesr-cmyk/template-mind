@@ -181,8 +181,22 @@ async function tryRunPodGLM(system, user, opts) {
     // with GLM_PROVIDER_ORDER=runpod that seat had no route to its own supported model at
     // all, submitting empty content and dropping out of its own game. Same contestant test
     // seat.map.js already uses, applied here too.
+    // ⬡B:core.model_ladder:FIX:an_omitted_override_left_the_contestant_with_no_model_at_all:20260729⬡
+    // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P2, fresh evidence beyond the fix
+    // above: with GLM_RUNPOD_MODEL simply unset (the supported, common case, since this
+    // rung used to default to 'glm-5.2' on exactly that configuration), `_rpModel` is
+    // falsy and this returned null before the contestant check even ran, so a Wonder
+    // Games GLM contestant with no explicit env override still submitted empty content.
+    // A contestant is exempt from the BAN, but was never meant to be exempt from HAVING
+    // a model; resolved from the seat's own declared model (already exempt from the ban
+    // by isContestantSeat(), same source contestantBuild() itself pays the key through),
+    // never a literal reconstructed in this file.
     var _rpModel = process.env.GLM_RUNPOD_MODEL;
     var _rpIsContestant = /^(cookoff_|wonder_games_)/.test(String(opts.seat || ''));
+    if (!_rpModel && _rpIsContestant && seatMap) {
+      var _rpContestantSeat = seatMap.seat(opts.seat);
+      _rpModel = _rpContestantSeat && _rpContestantSeat.model;
+    }
     if (!_rpModel || !seatMap || (!_rpIsContestant && seatMap.isBannedProductionModel(_rpModel))) return null;
     var body = { model: _rpModel, messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
