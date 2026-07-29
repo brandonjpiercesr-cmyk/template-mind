@@ -602,6 +602,13 @@ const SIGN_IN_TIER_ONLY_PATHS = [
 // test as every other entry on this list: it proves a credential the weaker tier cannot forge
 // before it mints anything, so allowing it is not a loosening.
 const WORLD_ID_MAY_WRITE_PATHS = [
+  // ⬡B:core.ham_session_authorization:AIRCODE:typed_world_turn_wakes_the_wonder:20260729⬡
+  // Banana Pepper doctrine correction: a typed world credential identifies one exact HAM.
+  // POST /turn does not let cold code choose an action for that HAM. The route takes identity
+  // only from the verified session, resolves the same atmosphere, and hands the bounded message
+  // to runPAI, where the Wonder LLM deliberates and controls its tools. Allowing this one door
+  // restores the demo-day check-in path without allowing a caller to name or act as another HAM.
+  /^\/turn\/?$/i,
   /^\/auth\/home\/ham\/?$/i,
   /^\/auth\/advisor\/request\/?$/i,
   /^\/auth\/advisor\/resolve\/?$/i,
