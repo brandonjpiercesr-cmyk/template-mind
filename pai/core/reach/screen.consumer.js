@@ -9,12 +9,15 @@
 //   1. Screen delivery happens ONLY while a live SSE session for that HAM is connected.
 //      Nobody watching = nothing pushed, no queue, no backlog, no spam-on-reconnect
 //      beyond the wire's own short replay buffer. Command Center remains the durable record.
-//   2. Only decisions whose chosen exit is COMMAND_CENTER or higher (EMAIL, TEXT) mirror
-//      to the screen. LOGFUL stays logged-only; OPUS_REVIEW is not a user surface.
+//   2. Only a decision a MIND put on this surface reaches it: the exit it chose is
+//      COMMAND_CENTER, which is this surface, or it explicitly said this also belongs on a
+//      live screen. Superseded 20260726: a cold ['COMMAND_CENTER','EMAIL','TEXT'] array used
+//      to make that call, which meant cold code was mirroring a text into his line of sight.
 //   3. Idempotent per decision bead: one screen delivery each, stamped, checked before push.
-//   4. HOLLOW-REPLY: no real summary = skip silently. Never a canned holding card.
-// The anti-gaslight property: this cannot originate content or urgency. It can only mirror
-// what Overseer already decided, to a screen the founder is actively looking at.
+//   4. HOLLOW-REPLY: no line she wrote = skip silently. Never a canned holding card, and
+//      never the stamped summary, which is a machine string with the exit name in it.
+// The anti-gaslight property: this cannot originate content or urgency. Every word that
+// reaches the screen was written by a mind, to a screen the founder is actively looking at.
 'use strict';
 // ⬡B:core.reach.screen.consumer:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
@@ -30,8 +33,23 @@ const tiers = require('../safety/tier.model');
 const wireLog = require('../stream/wire.log');
 const brain = require('../brain.client');
 
+const worldContextOrgan = require('./world.context.WONDER.organ.20260726.js');
+
 const BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
-const SCREEN_EXITS = ['COMMAND_CENTER', 'EMAIL', 'TEXT'];
+
+// ⬡B:core.reach.screen_consumer:GUARD:the_screen_is_a_surface_a_mind_chose:20260726⬡
+// SUPERSEDES `const SCREEN_EXITS = ['COMMAND_CENTER','EMAIL','TEXT']`. That array was cold
+// code deciding that a finding routed to TEXT or EMAIL should ALSO appear on a screen the
+// founder is looking at, which is a second reach nobody ruled on. The screen is a reach
+// surface, and the only thing allowed to put something on it is the ruling already stamped
+// in the decision bead: either the mind chose COMMAND_CENTER, which IS this surface, or it
+// explicitly said this finding also belongs on a live screen. A decision that fell to the
+// cold floor because no model answered chose nothing, so it surfaces nothing.
+function screenIsTheDecidedSurface(content) {
+  if (!content || typeof content !== 'object') return false;
+  if (content.decided_by !== 'llm') return false;
+  return content.exit === 'COMMAND_CENTER' || content.live_screen === true;
+}
 
 function rh() { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() }; }
 
@@ -107,20 +125,25 @@ async function runScreenPass(opts) {
     if (!hasLiveSession(d.ham_uid)) continue;
 
     let content = {}; try { content = typeof d.content === 'string' ? JSON.parse(d.content) : (d.content || {}); } catch (e) {}
-    // Conservative trigger 2: CC-and-above exits only.
-    if (SCREEN_EXITS.indexOf(content.exit) === -1) continue;
-    // Conservative trigger 4: hollow-skip.
-    const summary = String(d.summary || '').trim();
-    if (!summary) continue;
+    // Conservative trigger 2: the mind put this on this surface, or nothing does.
+    if (!screenIsTheDecidedSurface(content)) continue;
+    // Conservative trigger 4: hollow-skip. The card carries the line A'NU wrote for this
+    // finding, not the stamped summary, which is a bracket-block with the exit name and a
+    // confidence number in it and was never meant for a person to read. No line she wrote
+    // means no card: silence over a machine string dressed up as her voice.
+    const worldLine = String(content.world_line || '').trim();
+    if (!worldLine) continue;
     // Conservative trigger 3: idempotent per decision.
     const deliverySource = 'screen.delivery.' + d.id;
     const already = await brain.readBead({ source: 'eq.' + deliverySource, select: 'source', limit: '1' }).catch(function () { return []; });
     if (already && already.length) continue;
 
     const surfaceId = 'overseer_' + d.id;
-    const create = vocab.createSurface(surfaceId, { region: 'overseer', title: '[' + content.exit + '] Overseer' });
+    // The title is left empty on purpose. A title is content, and cold code writing
+    // "[TEXT] Overseer" across the top of his screen is cold code speaking.
+    const create = vocab.createSurface(surfaceId, { region: 'overseer', title: '' });
     const update = vocab.updateComponents(surfaceId, [
-      { type: 'card', importance: d.importance, exit: content.exit, confidence: content.confidence_used, text: summary },
+      { type: 'card', importance: d.importance, exit: content.exit, confidence: content.confidence_used, text: worldLine },
       { type: 'lineage', organ: content.lineage && content.lineage.organ_source }
     ]);
     const r1 = gatedPush(d.ham_uid, function (dir) { return registry.pushToHam(d.ham_uid, 'directive', dir); }, create, 'screen_consumer');
@@ -131,7 +154,7 @@ async function runScreenPass(opts) {
     await brain.writeBead({
       hamUid: d.ham_uid, agentGlobal: 'WIRE', source: deliverySource, type: 'SCREEN_DELIVERY',
       content: { exit: content.exit, surfaceId: surfaceId, organ: content.lineage && content.lineage.organ_bead },
-      summary: '[SCREEN] mirrored ' + content.exit + ' decision to live screen: ' + summary.slice(0, 80),
+      summary: '[SCREEN] mirrored ' + content.exit + ' decision to live screen: ' + worldLine.slice(0, 80),
       importance: 4,
       edges: [{ type: 'delivers', target: 'exit.decision.' + d.id }]
     }).catch(function () {});
@@ -150,41 +173,35 @@ function hasLiveSession(hamUid) {
 
 // ---- Phase 6: world context on connect. Composed from the brain, pushed as the first
 // real surface when a session opens, so the screen wakes already knowing the world. ----
-async function composeWorldContext(hamUid) {
+// \u2b21B:core.reach.screen_consumer:GUARD:the_rail_is_judged_not_filtered:20260726\u2b21
+// SUPERSEDES the cold rail. What used to live here: a frozen list of ten stamp types, an
+// importance threshold, a regex that cut bracket-blocks out of the middle of a sentence, a
+// second regex denylist of build words, a 20-character cutoff, and a hardcoded map from
+// stamp type to a label the founder reads. Every one of those was cold code deciding what
+// he sees when he sits down, and writing the words. The rail is a reach surface.
+// Now: cold code reads the candidate rows, which is a fact, and the organ decides which of
+// them belong in front of him and writes each line. No mind, no rail. Silence over a
+// filtered husk.
+async function composeWorldContext(hamUid, opts) {
   if (!_bu() || !_bk()) return null;
-  // \u2b21B:core.reach.screen_consumer:FIX:world_rail_is_his_life_not_machine_20260712\u2b21
-  // Founder: the WORLD RIGHT NOW rail was showing EXIT_DECISION/Opus/build machinery
-  // that means nothing to him. It should be HIS life: reminders, advisor updates,
-  // things worth knowing today. Repointed to person-facing stamp types only, read
-  // dynamically from HIS record (nothing hardcoded). Internal build stamps
-  // (EXIT_DECISION, MILESTONE, DOCTRINE, RALLY, AUDIT, SYNC, RESPEC) are excluded.
+  // Read broadly and judge narrowly. The read is bounded for cost and recency only; it
+  // carries no opinion about which kinds of thing are worth his attention.
   const rows = await fetch(_bu() + '/rest/v1/' + _tbl() + '?select=summary,stamp_type,importance,created_at'
     + '&ham_uid=eq.' + encodeURIComponent(hamUid)
-    + '&stamp_type=in.(REMINDER,ADVISOR,BRIEF,NUDGE,INSIGHT,ALERT,TASK,CALENDAR,EMAIL,LIFE)&importance=gte.4'
-    + '&order=created_at.desc&limit=6', { headers: rh() })
+    + '&order=created_at.desc&limit=24', { headers: rh() })
     .then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
-  if (!rows.length) return null; // hollow-skip: nothing for him today, so no rail at all
-  // \u2b21B:core.reach.screen_consumer:FIX:world_context_speaks_human_20260711\u2b21 same
-  // law as /os/world: bracket-blocks and telemetry husks never reach the founder's
-  // rail; if nothing human survives, no card at all (hollow-skip, never plumbing).
-  const items = [];
-  rows.forEach(function (r) {
-    var t = String(r.summary || '');
-    t = t.replace(/\[[^\]]*\]/g, ' ').replace(/\b(conf|air|tasks|healed|recon|EANEW|EXIT|OPUS|CLAIR|seat|builds):[^\s]*/gi, ' ').replace(/\s+/g, ' ').trim();
-    if (/HEAL|RESPEC|CANON|\.js\b|shipped with|hold\(s\)|agents?\/|core\/|routes?\/|FOR PAI|friction signal|self-review|no-tool|silent turn|real fix|advisors?\/|CANEW|station\(s\)|repeating the same failure/i.test(String(r.summary||''))) return; if (t.length < 20) return; // husk, nothing human left
-    // a friendly label instead of the raw stamp_type
-    var label = ({ REMINDER: 'Reminder', ADVISOR: 'From your advisors', BRIEF: 'Worth knowing', NUDGE: 'A nudge', INSIGHT: 'Insight', ALERT: 'Heads up', TASK: 'To do', CALENDAR: 'On your calendar', EMAIL: 'In your inbox', LIFE: 'Your world' })[r.stamp_type] || 'Worth knowing';
-    items.push({ type: 'context_item', kind: label, importance: r.importance, text: t.slice(0, 140) });
-  });
-  if (!items.length) return null;
+  if (!rows.length) return null; // nothing on record, so no rail at all
+
+  const ruling = await worldContextOrgan.composeRail(rows, opts || {});
+  if (!ruling || !ruling.ok || !ruling.items.length) return null; // hollow-skip, never canned
   return {
-    create: vocab.createSurface('world_context', { region: 'context', title: 'World right now' }),
-    update: vocab.updateComponents('world_context', items)
+    create: vocab.createSurface('world_context', { region: 'context', title: '' }),
+    update: vocab.updateComponents('world_context', ruling.items)
   };
 }
 
-async function pushWorldContext(hamUid, sessionId) {
-  const ctx = await composeWorldContext(hamUid);
+async function pushWorldContext(hamUid, sessionId, opts) {
+  const ctx = await composeWorldContext(hamUid, opts);
   if (!ctx) return { ok: false, reason: 'no_context' };
   const toSession = function (dir) { return registry.pushToSession(sessionId, 'directive', dir); };
   const r1 = gatedPush(hamUid, toSession, ctx.create, 'connect_context');
@@ -192,4 +209,4 @@ async function pushWorldContext(hamUid, sessionId) {
   return gatedPush(hamUid, toSession, ctx.update, 'connect_context');
 }
 
-module.exports = { runScreenPass, composeWorldContext, pushWorldContext, gatedPush, hasLiveSession, checkInterruptionBudget };
+module.exports = { runScreenPass, composeWorldContext, pushWorldContext, gatedPush, hasLiveSession, checkInterruptionBudget, screenIsTheDecidedSurface };

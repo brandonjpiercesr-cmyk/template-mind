@@ -24,7 +24,7 @@ const ABA_SERVER_URL = process.env.ABA_SERVER_URL || 'https://dnzwyufdzafcwnjaqb
 const ABA_SERVER_SRK = process.env.ABA_SERVER_SERVICE_ROLE_KEY;
 const NYLAS_KEY      = process.env.NYLAS_PRODUCTION_KEY || process.env.NYLAS_API_KEY;
 // ⬡B:core.schedule.logic:FIX:calendar_grant_lives_on_production_not_sandbox:20260714⬡
-// Found live tonight: the founder's real calendar grant (anu@anu-anew.com, verified valid)
+// Found live tonight: the owner's real calendar grant (env-driven, verified valid)
 // only resolves against the PRODUCTION Nylas key, not NYLAS_API_KEY (sandbox), which other
 // systems in this codebase depend on staying sandbox for their own grants (BDIF/GMG/etc).
 // So this file prefers NYLAS_PRODUCTION_KEY specifically for calendar ops and never

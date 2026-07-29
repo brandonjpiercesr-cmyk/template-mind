@@ -106,7 +106,7 @@ var PIECES = {
       if (!unread.length) return null; // honest: nothing surfaced when the inbox is clear
       return { type: 'email', title: 'Your inbox', items: unread.map(function (m) {
         return { from: String(m.from || 'someone').slice(0, 80), subject: String(m.subject || '(no subject)').slice(0, 120),
-          snippet: String(m.snippet || m.preview || '').slice(0, 200), grant: m.grant || null, id: m.id || null };
+          snippet: String(m.snippet || m.preview || '').slice(0), grant: m.grant || null, id: m.id || null };
       }) };
     },
   },

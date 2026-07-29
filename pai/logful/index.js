@@ -1,4 +1,13 @@
 // ⬡B:logful.index:WIRE:funneled_20260713⬡
+// ⬡B:logful.index:911:the_backbone_date_was_frozen_at_20260630:20260726⬡
+// Every bead LOGFUL has ever written carried the literal date 20260630, hand-typed
+// into the acl_stamp below, so the whole memory-of-work backbone claimed to have
+// been stamped on one day in June no matter when it actually ran. A stamp whose date
+// is a constant cannot be traced, which is the exact opposite of what the backbone
+// is for. The date now comes from the one canonical stamp builder
+// (pai/core/brain.client.js buildStamp), which is also where the four-colon law is
+// held, so LOGFUL and every other writer share one stamp source instead of two.
+var _brainStamp = require('../core/brain.client.js').buildStamp;
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
 function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
@@ -50,7 +59,7 @@ async function logfulStore(entry) {
   var bead = {
     ham_uid: hamUid,
     agent_global: agent,
-    acl_stamp: '⬡B:logful.' + String(entryType).toLowerCase() + ':RESULT:stored:20260630⬡',
+    acl_stamp: _brainStamp('logful.' + String(entryType).toLowerCase(), 'RESULT', 'stored'),
     stamp_type: entry.stampType || 'RESULT', // ⬡B:logful.index:FIX:optional_stamp_type:20260703⬡ CHATTER and others opt in via entry.stampType; every existing caller that never sets it keeps getting RESULT exactly as before, nothing here changes for them.
     source: 'logful.' + String(entryType).toLowerCase() + '.' + ts,
     content: content,

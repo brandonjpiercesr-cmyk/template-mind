@@ -1,0 +1,16 @@
+{
+  "note": "SHA-256 of founder PII tokens (lowercased). Plaintext is never stored. The guard hashes code tokens and matches against these. Add a hash to extend; never add plaintext.",
+  "algo": "sha256-lowercased",
+  "hashes": {
+    "d66efd8d833209b81e327862d9ab49e9bacb3f32248bef7b23416d561b48780f": "***…(26)",
+    "0070d75aa6fbf032e54f33c4eb7779e490cc2b4853876f583d34e81897d7746e": "***…(10)",
+    "7f04d9b40a94e0d54e7a8d11ec168c834ef646494d6d10fe223d68efa764173b": "+**…(12)",
+    "600995d1f5b1ffc18e22f70bc3793eb11767983aaadbae2dc8110a910226f9b6": "***…(11)",
+    "031f962af5c531fd0d46273be82f3be5ffbf98ad5662a17941be74bb2cd4eb39": "***…(8)",
+    "d9b4c0e1e8e4323c0112f70f313692563a03af772e532f67f1c577e0f76ca4b0": "***…(8)",
+    "12d799a76a4c1c05ee7ef445f88046b5c2057e0e3d446dfab1fd16be66bd26e2": "***…(8)",
+    "7abbf81b35a242bb4ba147717dad3b4e032fe99a3713b2ca8f8ffebe6b924946": "***…(9)",
+    "89b3d4f59392d466b8ab11e2d55faf92b9cbb1c2136789e9030db7954c7b4b7d": "***…(8)",
+    "fc52fabe94c0e037d2df4498e87481a6438960c9f73d517584a7a5c564535ac4": "***…(6)"
+  }
+}

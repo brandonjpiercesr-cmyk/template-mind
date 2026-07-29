@@ -21,7 +21,7 @@ function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
 function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
 function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
-const { findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames } = require('./find.js');
+const { findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments } = require('./find.js');
 const identityProvenance = require('./identity.provenance.js');
 
 // A HAM may have several identifier events (device links, OMI links, aliases).
@@ -121,15 +121,36 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // detection (no LLM) pre-loads the real records into the wall so the answer is
   // already present -- the model never has to guess a filter.
   var _isWonderGamesQ = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/.test(_q);
+  // ⬡B:core.fcw.builder:FIX:she_contradicted_what_he_told_her_himself:20260725⬡ FOUNDER-CAUGHT,
+  // demo-critical. He told her his Saturday plan through her own live gate. She received it and
+  // confirmed the specifics back to him, with a committed cycle receipt. Hours later, asked where
+  // things stood, she said his day was open with no meetings locked in. He told her, she agreed,
+  // then she contradicted him. Root cause, verified in the code and not guessed: the capture side
+  // already worked (core/synthesize.js's memory keeper stamps a MEMORY bead with his exact words
+  // every turn a person hands something over) but NOTHING read it back. No wall contributor
+  // queried stamp_type MEMORY, and 'memory.gifted.' had exactly one reference in the entire repo,
+  // the write itself. The gift was captured and buried in the same breath, so by the next cycle
+  // the only thing she still held about his day was a cold calendar read that knew nothing about
+  // it. So the calendar did not override what he told her; what he told her was never on the wall
+  // to be overridden. This is the read-back: always on, in the same parallel allSettled batch as
+  // its five siblings, so it costs no extra latency, no clock and no LLM (C0, a brain FIND). No
+  // env flag, because a capture-and-surface repair on an existing path should simply be correct.
+  // Cold code CAPTURES and SURFACES this evidence and labels what it is. It never decides what
+  // his day means and it never speaks: A'NU reads it and A'NU answers (granddaddy-911).
   var _batch = [
     findIdentity(hamUid),
     findAgentJDs(hamUid),
     findContext(hamUid, 5),
-    findRecentResults(5),
+    findRecentResults(hamUid, 5),
     findDoctrine(hamUid, 3),
-    findPersonProfile(hamUid)
+    findPersonProfile(hamUid),
+    // Guarded call: find.js was once replaced wholesale by a 50-line stub (the 8B lobotomy,
+    // core/find.js:8), which turned every finder into undefined and broke every turn on every
+    // channel. A missing finder must degrade this one contributor to unavailable, never throw
+    // the whole wall away.
+    (typeof findStatedCommitments === 'function' ? findStatedCommitments(hamUid, 6) : Promise.resolve(null))
   ];
-  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile'];
+  var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'statedPlans'];
   var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1;
   if (_namedAgentGlobals.length) {
     _namedAgentsIdx = _batch.length;
@@ -153,6 +174,14 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var recent = _results[3].status === 'fulfilled' ? _results[3].value : null;
   var doctrine = _results[4].status === 'fulfilled' ? _results[4].value : null;
   var profile = _results[5].status === 'fulfilled' ? _results[5].value : null;
+  // ⬡B:core.fcw.builder:GUARD:a_failed_plans_read_is_not_an_empty_day:20260725⬡ An unavailable
+  // read is not evidence that they told her nothing. Keep the two states apart: a fulfilled read
+  // may represent a genuinely empty set, a rejected one may only report itself unavailable. Cold
+  // code never converts either one into a claim about their day.
+  var _statedOk = _results[6] && _results[6].status === 'fulfilled' && _results[6].value;
+  var _stated = _statedOk ? _results[6].value : null;
+  var _statedRows = (_stated && Array.isArray(_stated.beads)) ? _stated.beads.slice(0, 6) : [];
+  var _statedAvailable = !!_statedOk;
 
   // Build identity summary
   var hamName = 'Unknown';
@@ -259,9 +288,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
       var body = '';
       try {
         var c = typeof b.content === 'string' ? b.content : JSON.stringify(b.content || '');
-        body = c.slice(0, 500);
+        body = c.slice(0);
       } catch(e) {}
-      return '[' + (b.stamp_type||'?') + '] ' + (b.summary||'').slice(0,120) + (body ? '\n  ' + body : '');
+      return '[' + (b.stamp_type||'?') + '] ' + (b.summary||'').slice(0) + (body ? '\n  ' + body : '');
     }).join('\n');
   }
 
@@ -280,13 +309,63 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var _capLine = '';
   try { _capLine = await require('./capabilities.js').capabilityLine(); } catch (eCap) {}
 
-  // Assemble system prompt -- butler voice, no internal names leaked
+  // Assemble system prompt -- the ONE A'NU voice, no internal names leaked.
+  // \u2b21B:core.fcw.builder:FIX:generate_through_the_one_persona_voice_not_a_thin_inline_copy:20260721\u2b21
+  // This system prompt is what she actually GENERATES from, so the voice here is the voice the
+  // founder hears. It used to carry a thin inline "warm and direct life assistant" copy while the
+  // rich butler doctrine lived unused in core/persona.js -- a violation of persona's own standing
+  // rule that every composer builds THROUGH the one voice, and the reason her replies came out flat
+  // and occasionally signed off with a courtesy line. Now the one VOICE (JARVIS-butler, already
+  // handled it, no courtesy sign-off, no machinery talk, coffee-shop test) drives generation
+  // directly, so warmth and honesty are the persona doing the work, not a per-file tone string.
+  // \u2b21B:core.fcw.builder:FIX:inbox_zero_drafts_are_the_founders_voice_not_the_butler_persona:20260722\u2b21
+  // Founder-caught: an inbox-zero draft reply came out condescending and mansplaining ("you deserve
+  // more than a quick skim... that is the part most people skip") because it was generated through
+  // A'NU's serving-butler VOICE with the founder as HAM context -- an assistant speaking TO him,
+  // aimed at a peer. But an inbox-zero DRAFT is the ONE case where the output is not A'NU speaking:
+  // it is A'NU GHOSTWRITING an email the founder will send FROM HIS OWN account to another person, in
+  // HIS voice. So for that surface only, the persona is swapped for a ghostwriter frame. Gated on the
+  // DRAFT surface, not the whole channel (Codex): composeHerReport also runs on channel inbox_zero
+  // (surface inbox_zero_report) and must keep A'NU's own advisor voice speaking TO the founder.
+  var _izSurface = '';
+  try { _izSurface = String((identity && identity.council_context && identity.council_context.surface) || ''); } catch (eSurf) { _izSurface = ''; }
+  var _isDraftSurface = String(channel || '') === 'inbox_zero' && _izSurface === 'inbox_zero_draft';
+  var _anuVoice = '';
+  if (_isDraftSurface) {
+    _anuVoice = 'You are ghostwriting an email that ' + (hamName || 'the account owner')
+      + ' will send FROM HIS OWN email account to another person. Write it in HIS voice, as if he wrote it himself: warm, direct, real, peer to peer. You are NOT an assistant and you are NOT speaking to him; you ARE him, writing to someone else. Do not explain, over-affirm, praise, or coach the recipient, and never write anything condescending or that reads as talking down to them; match the real relationship and the tone of the moment. Full natural sentences, no em dashes, no hollow AI phrases, no assistant framing, no "I already handled it" narration.';
+  } else {
+    try { _anuVoice = require('./persona.js').VOICE; } catch (eVoice) { _anuVoice = "You are A\u2019NU, a warm, sharp butler in the spirit of JARVIS, a Black woman, never Siri. You speak in full natural sentences, you already did the work and lead with what you handled, you never sign off with a courtesy line, you never use em dashes or hollow AI phrases."; }
+  }
+  // ⬡B:core.fcw.builder:FIX:she_knows_their_local_time_not_utc:20260725⬡ Founder-caught,
+  // demo-critical: A'NU said "you're up early, 3:17am" reading the SERVER clock (UTC) when he
+  // is Eastern. She had NO grounded sense of the person's now, so her conversational time fell
+  // through to the machine's UTC. His law: "HAMS have time zones and it's never UTC." This is
+  // the primary fix -- every cycle's wall now carries THIS ham's real local time, resolved
+  // through the one shared resolver (founder -> FOUNDER_TZ env, any ham -> their own stored
+  // zone, documented default only if truly unknown, never UTC, never a per-person literal).
+  //
+  // ⬡B:core.fcw.builder:FIX:time_is_for_correctness_not_for_an_opener:20260725⬡ SAME DAY
+  // CORRECTION, founder-caught again. The first version of this block told her to note
+  // "whether they are up early or late, a fitting greeting", and that instruction became a
+  // factory for atmospheric openers ("Good morning, Boss. The house is still, and you're
+  // already up and moving."). He called it a riddle and asked for the point first. She agreed
+  // in her own cycle: "Cut the sky, cut the hour, but don't cut the care." The clock stays,
+  // because reading UTC to an Eastern person was the real bug; the instruction to PERFORM the
+  // hour is gone. Time is for correctness now, never for a greeting.
+  var _hamTz = 'America/New_York', _hamLocalNow = '';
+  try {
+    _hamTz = await require('./ham.timezone.js').resolveHamTimezone(hamUid);
+    _hamLocalNow = new Intl.DateTimeFormat('en-US', { timeZone: _hamTz,
+      weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date());
+  } catch (eTz) { _hamLocalNow = ''; }
   var systemPrompt = [
-    'You are A\u2019NU, a warm and direct life assistant. You speak as a trusted friend who knows things.',
-    'You never use em dashes. You never use hollow AI phrases ("Certainly!", "Of course!", "Great question!").',
-    'You speak in plain sentences. Coffee Shop Test: say it how you would say it out loud to a friend.',
+    _anuVoice,
     '',
     'HAM CONTEXT:',
+    (_hamLocalNow
+      ? ('THEIR LOCAL TIME RIGHT NOW: ' + _hamLocalNow + ' (their timezone, ' + _hamTz + '). This is THIS person’s own clock, never the server’s and never UTC. Use it for CORRECTNESS, when the hour actually changes the answer: what is due, what is late, what already happened, whether a thing can still be done today. Do NOT open with it, do NOT announce the hour back to them, and do NOT narrate the mood of their day. Different HAMs live in different zones, so this is theirs specifically.')
+      : ''),
     'Name: ' + hamName,
     (_hamTitle ? ('Address them as "' + _hamTitle + '" when it lands naturally (a greeting, a sign-off, a direct address). This is their title in this context. Use it like a person would, not on every line.') : ''),
     (function(){
@@ -296,8 +375,67 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
         var pb = profile && profile.beads && profile.beads[0];
         if (!pb) return '';
         var body = typeof pb.content === 'string' ? pb.content : JSON.stringify(pb.content || '');
-        return 'WHO THIS IS (know them, speak from this naturally, never recite it as a file):\n' + body.slice(0, 1200);
+        return 'WHO THIS IS (know them, speak from this naturally, never recite it as a file):\n' + body.slice(0);
       } catch(e) { return ''; }
+    })(),
+    (function(){
+      // ⬡B:core.fcw.builder:WIRE:stated_plans_survive_into_a_later_cycle:20260725⬡
+      // The read-back, rendered. This is the ONLY thing on this wall that carries what the
+      // person said to her in their own words, so it gets its own labeled section instead of
+      // being flattened into RECENT CONTEXT below, where every row is cut to a 100-character
+      // summary. The MINUTES rows that DO reach that section summarize to pure machinery
+      // ("Received message from X. Tools used: none. Responded in 1200ms"), which is why the
+      // conversation record was technically on the wall and still told her nothing.
+      // Each line is dated in honest "they told you N hours ago" terms, the same decay
+      // language context.fusion.js and the find results already use, so she can tell a plan
+      // stated this morning from one stated last month and never assert a stale one as now.
+      // Cold code presents the evidence and its age. It does not rank, resolve, expire, or
+      // interpret it, and it never writes her answer.
+      try {
+        if (!_statedAvailable) {
+          return 'WHAT THEY TOLD YOU: this part of your memory could not be read on this turn, so you '
+            + 'do not know right now whether they have told you anything about their plans. That is an '
+            + 'unavailable read, NOT an empty one. Say plainly that you cannot see it if it matters, and '
+            + 'never treat this silence as proof that their day is empty.';
+        }
+        if (!_statedRows.length) return '';
+        var lines = _statedRows.map(function (b) {
+          var words = '', when = (b && b.created_at) ? String(b.created_at) : '';
+          try {
+            var c = b && b.content;
+            if (typeof c === 'string') c = JSON.parse(c);
+            if (c && typeof c === 'object') {
+              words = String(c.their_words || c.gist || c.words || '');
+              if (c.kept_at) when = String(c.kept_at);
+            }
+          } catch (e) { words = ''; }
+          if (!words) words = String((b && b.summary) || '');
+          words = words.replace(/^\[MEMORY, given to me\]\s*/i, '').trim();
+          if (!words) return '';
+          var age = '';
+          var mins = when ? Math.round((Date.now() - Date.parse(when)) / 60000) : NaN;
+          if (Number.isFinite(mins) && mins >= 0) {
+            age = mins < 90 ? (mins + ' minutes ago')
+              : (mins < 2880 ? (Math.round(mins / 60) + ' hours ago')
+              : (Math.round(mins / 1440) + ' days ago'));
+          }
+          return '- ' + (age ? '(they told you this ' + age + ') ' : '(no timestamp on this one) ') + words;
+        }).filter(function (line) { return !!line; });
+        if (!lines.length) return '';
+        return 'WHAT THEY TOLD YOU DIRECTLY, in their own words, kept at the moment they said it:\n'
+          + lines.join('\n') + '\n'
+          + 'These are things this person SAID TO YOU. They are not calendar entries and most of them '
+          + 'will never appear on any calendar, and they are every bit as real as what is on one. When '
+          + 'they ask about their day, their plans, what is going on, or where things stand, your answer '
+          + 'is the UNION of the calendar and this list, never the calendar alone. NEVER contradict '
+          + 'something they told you themselves, and never call their day open, clear, free, or empty '
+          + 'while anything here still stands: they will know instantly that you lost what they said, '
+          + 'and it is the one thing that breaks trust fastest. Read the age on each line: if one has '
+          + 'already passed, or they have since changed or cancelled it, say that plainly rather than '
+          + 'repeating it as still true. This list is only what got captured, so it is never proof that '
+          + 'nothing ELSE exists either. Do not recite it back as a file. Just know it, the way someone '
+          + 'who was listening would.';
+      } catch (e) { return ''; }
     })(),
     'Trust tier: ' + hamTier,
     'Channel: ' + (channel || 'unknown'),
@@ -345,6 +483,18 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'NEVER narrate internal machinery to the human: never mention trust tiers, HAM, ham context,',
     'channels by internal name, the brain, beads, FIND, or resolution status. A friend does not',
     'recite your file on them; they just know you.',
+    // ⬡B:core.fcw.builder:LAW:a_real_persons_name_is_never_the_answer_to_who_are_you:20260729⬡
+    // Measured live 20260729: asked "who is this and prove it?", she answered with a real
+    // person's full legal name, his title, and his company. Nothing in this codebase held
+    // that name as a literal; it arrived here the way identity is supposed to arrive, and
+    // she repeated it because nothing said not to. The env only identity law is about a
+    // human not being leaked, and source discipline alone never achieved that. This repo is
+    // the mind every world inherits, so the law has to be in the wall a NEW world is born
+    // with, not patched into one world after its owner has already been named to a stranger.
+    // One source for the wording, pai/core/real.name.boundary.js, which also holds the cold
+    // check on the way out, so the rule she is told and the rule she is held to are the same
+    // bytes.
+    require('./real.name.boundary.js').WALL_LINE,
     'ABSOLUTE HONESTY RULE: you have no memories beyond what is in your brain context above.',
     'This includes ATTRIBUTION: if they quote or paste text back at you and ask who said it,',
     'you do not actually know unless it is clearly attributed in your context. Guessing and',
@@ -397,7 +547,11 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     context: !!(context && context.beads && context.beads.length),
     recent: !!(recent && recent.beads && recent.beads.length),
     doctrine: !!(doctrine && doctrine.beads && doctrine.beads.length),
-    profile: !!(profile && profile.beads && profile.beads.length)
+    profile: !!(profile && profile.beads && profile.beads.length),
+    // The trace that makes THIS failure traceable next time: if she ever again contradicts
+    // something the person told her, this flag says whether what they told her was on the wall
+    // at that moment or not.
+    statedPlans: !!_statedRows.length
   };
   var empties = Object.keys(contributors).filter(function (k) { return !contributors[k]; });
   try {
@@ -415,7 +569,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
           acl_stamp: '\u2b21B:core.fcw.builder:MINUTES:wall_built:' + _wm + '\u2b21',
           source: 'ham_' + String(hamUid).toLowerCase() + '.fcw.build.' + _wm,
           content: JSON.stringify({
-            entrance: { hamUid: String(hamUid).toUpperCase(), channel: channel || null, question: String(question || '').slice(0, 120), gateIdentity: !!identity },
+            entrance: { hamUid: String(hamUid).toUpperCase(), channel: channel || null, question: String(question || '').slice(0), gateIdentity: !!identity },
             exit: { ok: true, contributors: contributors, contributorsResolved: Object.keys(contributors).length - empties.length, ms: (Date.now() - t0) },
             note: empties.length ? ('Memory Bank wall assembled with EMPTY contributors: ' + empties.join(', ') + ' -- if she answered wrong on this turn, start here')
                                   : 'Memory Bank wall assembled with all contributors present'
@@ -434,6 +588,10 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     agents: agentJDs ? agentJDs.beads : [],
     context: allContext,
     named_agent_records: _namedAgentRecords,
+    // ⬡B:core.fcw.builder:WIRE:stated_plans_are_receipts_not_just_prompt_text:20260725⬡
+    // Returned as real rows, not only as prompt prose, so a later cycle, a grader, or a
+    // trace-back can see exactly what she was holding about this person's day.
+    stated_plans: { available: _statedAvailable, count: _statedRows.length, records: _statedRows },
     identity_evidence: _identityEvidence,
     identity_record: ib || null,
     contributors: contributors,

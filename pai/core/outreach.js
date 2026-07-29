@@ -287,6 +287,9 @@ const RUNPOD_KEY = process.env.RUNPOD_API_KEY;
 const ORNITH_MODEL = process.env.ORNITH_MODEL || 'maxwell1500/ornith-35b:Q4_K_M';
 
 async function callOrnith(system, userContent, maxTokens) {
+  // ⬡B:core.outreach:KILL:ornith_retired_founder_911:20260722⬡ FOUNDER 911: Ornith
+  // retired, RunPod out. Null falls to the next provider exactly like a timeout.
+  if (process.env.ORNITH_ENABLED !== 'on') return null;
   if (!ORNITH_URL || !RUNPOD_KEY) return null;
   try {
     const payload = { input: { mode: 'chat', model: ORNITH_MODEL,
@@ -429,7 +432,7 @@ async function placeCall(toPhone, callReason, councilResult, options) {
       deliveryTarget:{ kind:'phone', value:toPhone },
       sessionId:handoffSessionId, expiresAt:handoffExpiresAt,
       nonce:handoffNonce, purpose:'initial_message' };
-    dv.call_reason = String(callReason).slice(0, 300);
+    dv.call_reason = String(callReason).slice(0);
     dv.initial_message = String(callReason);
     dv.initial_message_receipt_digest = providerProof.receipt_digest;
     dv.initial_message_authorization = require('./pai.outbound.authorization.js')
@@ -1209,7 +1212,7 @@ function safeLearningFact(row){
   if(stamp==='CORRECTION'){
     var raw=row.content;
     if(raw&&typeof raw!=='string')try{raw=JSON.stringify(raw);}catch(eRaw){raw='';}
-    content=String(raw||'').slice(0,1200);
+    content=String(raw||'').slice(0);
   }
   else{
     var parsed={};try{parsed=JSON.parse(row.content||'{}');}catch(e){}
@@ -1301,7 +1304,7 @@ function safeDecisionFeedbackFact(row,hamUid){
   return{id:row.id||row.source,source:row.source,
     stamp_type:'REACH_DECISION_FEEDBACK',
     summary:'Verified Command Center feedback on a prior REACH decision',
-    content:JSON.stringify(projection).slice(0,1800),created_at:row.created_at,
+    content:JSON.stringify(projection).slice(0),created_at:row.created_at,
     importance:7};
 }
 
@@ -2317,7 +2320,7 @@ async function composeDigest(facts) {
       // Real Command Center note instead of a text -- routine activity is
       // still logged somewhere real, it just does not interrupt him for it.
       const ccM = out.match(/CC_SUMMARY:\s*([\s\S]+)/i);
-      var ccNote = ccM ? ccM[1].trim().slice(0, 300) : 'Routine day, nothing requiring attention.';
+      var ccNote = ccM ? ccM[1].trim().slice(0) : 'Routine day, nothing requiring attention.';
       // \u2b21B:core.outreach:WIRE:chatter_report_upgrade:20260710\u2b21
       // Kill the lot-of-nothing: enrich the digest into a real report -- what moved,
       // what she sees, one number that matters. Additive; falls back to ccNote.
@@ -2449,7 +2452,7 @@ async function stampGroundingCheckFailure(reason, heldMessage) {
         acl_stamp: '\u2b21B:core.outreach:GAP_FLAGS:grounding_check_failed_held:' + ymd() + '\u2b21',
         source: 'outreach.digest.grounding_failed.' + Date.now(),
         summary: '[GAP_FLAGS] Digest grounding check failed, message HELD not sent -- ' + reason,
-        content: JSON.stringify({ reason: reason, held_message: (heldMessage || '').slice(0, 300) }),
+        content: JSON.stringify({ reason: reason, held_message: (heldMessage || '').slice(0) }),
         importance: 7
       })
     });

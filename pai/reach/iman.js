@@ -27,9 +27,23 @@ var WORLD_KEY_ENV = {
   'mh_action':  'NYLAS_PRODUCTION_KEY',
 };
 
+// ⬡B:reach.iman:FIX:grant_env_name_both_orders_universal:20260723⬡
+// Founder-caught 20260723: the grant env name drifted between two conventions,
+// NYLAS_<WORLD>_GRANT and NYLAS_GRANT_<WORLD>, so a grant set one way read as
+// "no grant for world" the other, silently disabling Mediators/BDIF/MH Action.
+// Resolve BOTH orders, and derive the world name generically so ANY world works,
+// not only the four seeded in the map (the 847392 universality test). The explicit
+// map stays first for exact back-compat; the generic orders are the fallback.
 function resolveGrant(world) {
-  var envKey = WORLD_GRANT_ENV[world];
-  return envKey ? (process.env[envKey] || null) : null;
+  var W = String(world || '').toUpperCase();
+  var candidates = [];
+  if (WORLD_GRANT_ENV[world]) candidates.push(WORLD_GRANT_ENV[world]);
+  if (W) { candidates.push('NYLAS_' + W + '_GRANT'); candidates.push('NYLAS_GRANT_' + W); }
+  for (var i = 0; i < candidates.length; i++) {
+    var v = process.env[candidates[i]];
+    if (v && String(v).trim()) return String(v).trim();
+  }
+  return null;
 }
 
 function resolveKey(world) {
@@ -62,10 +76,10 @@ function resolveAnuProductionSender() {
 // calendar module needs ({grantId, keyEnv, from, world}). Additive, per-world,
 // EBC firewall intact -- resolves ONLY the world passed in, never cross-grant.
 var WORLD_FROM = {
-  'gmg':        process.env.NYLAS_GMG_FROM_EMAIL       || 'brandon@globalmajoritygroup.com',
-  'bdif':       process.env.NYLAS_BDIF_FROM_EMAIL      || 'brandon@briandawkins.com',
-  'mediators':  process.env.NYLAS_MEDIATORS_FROM_EMAIL || 'brandon@mediatorsfoundation.org',
-  'mh_action':  process.env.NYLAS_MH_ACTION_FROM_EMAIL || 'bpierce@mhaction.org',
+  'gmg':        process.env.NYLAS_GMG_FROM_EMAIL,
+  'bdif':       process.env.NYLAS_BDIF_FROM_EMAIL,
+  'mediators':  process.env.NYLAS_MEDIATORS_FROM_EMAIL,
+  'mh_action':  process.env.NYLAS_MH_ACTION_FROM_EMAIL,
 };
 function getGrant(world) {
   var grantId = resolveGrant(world);
@@ -176,7 +190,7 @@ async function downloadAttachment(world, messageId, attachmentId, contentType) {
   var readable = /text\/|json|csv|xml|html|markdown/i.test(ct);
   if (!readable) return { ok: true, readable: false, content_type: ct, text: null };
   var text = await r.text().catch(function(){ return null; });
-  return { ok: true, readable: true, content_type: ct, text: text ? text.slice(0, 8000) : null };
+  return { ok: true, readable: true, content_type: ct, text: text ? text.slice(0) : null };
 }
 
 // FIX 20260706: the advisor was drafting replies to inbound threads Brandon had
@@ -211,6 +225,86 @@ async function alreadyRepliedOnThread(world, threadId, sinceEpochSeconds) {
   var sinceEpoch = sinceEpochSeconds || 0;
   var replyAfter = sentMsgs.find(function(m) { return (m.date || 0) > sinceEpoch; });
   return { ok: true, replied: !!replyAfter, matchedMessageId: replyAfter ? replyAfter.id : null, checkedCount: sentMsgs.length };
+}
+
+// ⬡B:reach.iman:WIRE:create_draft_not_send_for_inbox_zero:20260721⬡
+// Save a reply as a real DRAFT in the world's own Drafts folder, and DO NOT SEND it.
+// The founder opens his own mailbox and the draft is sitting there, threaded to the
+// original, ready for him to read, edit, and hit send himself. This is NOT the outbound
+// send boundary: Nylas POST /drafts only stores a draft on the account, nothing leaves
+// the mailbox, so it never touches the PAI send council or REACH_SEND_MODE. It is the
+// exact "she did the work, I just send it" surface, and it keeps the hard line, because
+// a draft is not a send. EBC-walled to the one world's grant, threaded when a real
+// thread_id + reply_to_message_id are given so the draft lands inside the conversation.
+// ⬡B:reach.iman:FIX:plaintext_body_renders_as_html_so_the_signature_mashed_into_one_line:20260722⬡
+// Founder-caught: the composed reply and its signature carry real newlines, but Nylas /drafts treats
+// the `body` field as HTML, so every newline collapsed to a space and the whole sign-off rendered as
+// one mashed line: the sign-off, the sender's name, the address and the number all ran together on
+// a single row instead of stacking. The example is described rather than quoted, because quoting a
+// real signature would bake that person into every inherited world. Callers that hand us a
+// PLAINTEXT body ask for bodyIsPlaintext:true; we HTML-escape it and turn newlines into <br> so the
+// draft renders with the line breaks the writer intended. Callers already sending HTML are untouched.
+function _plaintextToHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n/g, '<br>\n');
+}
+
+// List drafts on a world's grant, optionally filtered to one thread. Read-only.
+async function listDrafts(world, opts) {
+  opts = opts || {};
+  var grant = resolveGrant(world), key = resolveKey(world);
+  if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
+  var url = 'https://api.us.nylas.com/v3/grants/' + grant + '/drafts?limit=50';
+  if (opts.thread_id) url += '&thread_id=' + encodeURIComponent(String(opts.thread_id));
+  try {
+    var r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' }, signal: AbortSignal.timeout(15000) });
+    var data = await r.json().catch(function(){ return {}; });
+    if (r.status >= 200 && r.status < 300) return { ok: true, drafts: (data && data.data) || [] };
+    return fail('draft_list_' + r.status);
+  } catch (e) { return fail('draft_list_unreachable'); }
+}
+
+// Delete one draft by id. Used to keep a thread to a single current draft.
+async function deleteDraft(world, draftId) {
+  var grant = resolveGrant(world), key = resolveKey(world);
+  if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
+  if (!draftId) return fail('draft_id_required');
+  try {
+    var r = await fetch('https://api.us.nylas.com/v3/grants/' + grant + '/drafts/' + encodeURIComponent(String(draftId)), {
+      method: 'DELETE', headers: { 'Authorization': 'Bearer ' + key, 'Accept': 'application/json' }, signal: AbortSignal.timeout(15000) });
+    if (r.status >= 200 && r.status < 300) return { ok: true, deleted: draftId };
+    return fail('draft_delete_' + r.status);
+  } catch (e) { return fail('draft_delete_unreachable'); }
+}
+
+async function createDraft(world, opts) {
+  opts = opts || {};
+  var grant = resolveGrant(world);
+  var key   = resolveKey(world);
+  if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
+  var to = normalizeRecipients(opts.to);
+  if (!to || !to.length) return fail('draft_recipient_invalid');
+  if (typeof opts.body !== 'string' || !/\S/.test(opts.body)) return fail('draft_body_invalid');
+  var bodyOut = opts.bodyIsPlaintext ? _plaintextToHtml(opts.body) : opts.body;
+  var payload = { to: to, subject: String(opts.subject || '').slice(0, 400), body: bodyOut };
+  // Thread the draft into the real conversation when the caller has the ids.
+  if (opts.thread_id) payload.thread_id = String(opts.thread_id);
+  if (opts.reply_to_message_id) payload.reply_to_message_id = String(opts.reply_to_message_id);
+  try {
+    var r = await fetch('https://api.us.nylas.com/v3/grants/' + grant + '/drafts', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(15000)
+    });
+    var data = await r.json().catch(function(){ return {}; });
+    if (r.status >= 200 && r.status < 300) {
+      var d = data && data.data || {};
+      return { ok: true, draftId: d.id || null, threadId: d.thread_id || opts.thread_id || null, world: world, sent: false };
+    }
+    return fail('draft_create_' + r.status, { detail: JSON.stringify(data).slice(0, 200) });
+  } catch (e) { return fail('draft_create_unreachable'); }
 }
 
 // ⬡B:reach.iman:GUARD:one_committed_pai_boundary_for_every_provider_send:20260715⬡
@@ -249,10 +343,113 @@ function normalizeRecipients(to) {
   return normalized;
 }
 
-function exactRawRequestClaim(subject, body) {
+function exactRawRequestClaim(subject, body, attachmentManifest) {
   // JSON is used only as a lossless request claim: both strings, including
   // whitespace and Unicode, are recoverable byte-for-byte from this one value.
-  return JSON.stringify({ subject: subject, body: body });
+  // ⬡B:reach.iman:BUILD:the_attachment_is_part_of_what_the_council_approves:20260726⬡
+  // When there are no attachments the claim is byte-identical to what it always
+  // was, so every previously-committed effect key and receipt still resolves.
+  if (!attachmentManifest || !attachmentManifest.length) {
+    return JSON.stringify({ subject: subject, body: body });
+  }
+  return JSON.stringify({ subject: subject, body: body, attachments: attachmentManifest });
+}
+
+// ⬡B:reach.iman:BUILD:outbound_attachments_ride_the_committed_artifact:20260726⬡
+// Founder doctrine, said plainly: "you build the PowerPoint, but you send the PDF,
+// because the PowerPoint will be landscape, the design will be off, a PDF protects
+// it", and then he clicks the attachment to confirm it renders. IMAN could not put
+// a single byte of a file on an outbound message: providerSend built a body of
+// { subject, body, to } and nothing else, and send() had no attachments parameter.
+// This is that lane, and it is bound to the council, not bolted on after it: the
+// MANIFEST (filename, mime, byte count, sha256) enters the lossless request claim
+// BEFORE the cycle runs, so the mind approves the attachment along with the words,
+// and the same manifest enters the artifact that mints the effect key, so the
+// 100-year no-duplicate claim covers what was attached and not only what was said.
+// Two ways to hand a file in, no third:
+//   { filename, content_type, base64 }  bytes the caller already holds
+//   { filename, content_type, key }     an object key in the two-way file lane
+//                                       (core/clair.files.store.js), the same lane
+//                                       the founder uploads into and downloads from
+var ATTACHMENT_MAX_BYTES = 3 * 1024 * 1024;   // Nylas inlines base64 on the JSON send path
+var ATTACHMENT_TOTAL_MAX_BYTES = 10 * 1024 * 1024;
+var ATTACHMENT_MAX_COUNT = 10;
+// His law made mechanical: a deck never leaves as a deck. This is a deterministic
+// fact about a file, not a judgment about content, so cold code may hold it.
+var PRESENTATION_EXT = /\.(pptx?|key|odp)$/i;
+var PRESENTATION_MIME = /(powerpoint|presentation)/i;
+
+function attachmentDigest(buffer) {
+  try { return crypto.createHash('sha256').update(buffer).digest('hex'); }
+  catch (eDigest) { return null; }
+}
+
+async function normalizeAttachments(list) {
+  if (list === undefined || list === null) return { ok: true, attachments: [], manifest: [] };
+  if (!Array.isArray(list)) return fail('attachments_invalid');
+  if (!list.length) return { ok: true, attachments: [], manifest: [] };
+  if (list.length > ATTACHMENT_MAX_COUNT) return fail('attachment_count_exceeded');
+  var attachments = [], manifest = [], total = 0;
+  for (var i = 0; i < list.length; i++) {
+    var a = list[i];
+    if (!a || typeof a !== 'object') return fail('attachment_invalid');
+    var filename = typeof a.filename === 'string' ? a.filename.trim() : '';
+    if (!filename || filename.length > 200 || /[\r\n\0\/\\]/.test(filename)) {
+      return fail('attachment_filename_invalid');
+    }
+    var contentType = typeof a.content_type === 'string' && a.content_type.trim()
+      ? a.content_type.trim()
+      : (typeof a.mime === 'string' && a.mime.trim() ? a.mime.trim() : 'application/octet-stream');
+    if (/[\r\n\0]/.test(contentType) || contentType.length > 160) return fail('attachment_content_type_invalid');
+    if (PRESENTATION_EXT.test(filename) || PRESENTATION_MIME.test(contentType)) {
+      return fail('presentation_must_ship_as_pdf:' + filename);
+    }
+    var bytes = null;
+    if (typeof a.base64 === 'string' && a.base64.trim()) {
+      try { bytes = Buffer.from(a.base64, 'base64'); } catch (eDecode) { bytes = null; }
+      if (!bytes || !bytes.length) return fail('attachment_bytes_invalid:' + filename);
+    } else if (typeof a.key === 'string' && a.key.trim()) {
+      var fetched;
+      try { fetched = await require('../core/clair.files.store.js').getObject(a.key.trim()); }
+      catch (eStore) { return fail('attachment_file_lane_unreachable:' + filename); }
+      if (!fetched || fetched.ok !== true || !fetched.bytes || !fetched.bytes.length) {
+        return fail((fetched && fetched.reason) || 'attachment_file_lane_miss', { filename: filename });
+      }
+      bytes = fetched.bytes;
+      if (contentType === 'application/octet-stream' && fetched.content_type) contentType = fetched.content_type;
+      if (PRESENTATION_EXT.test(filename) || PRESENTATION_MIME.test(contentType)) {
+        return fail('presentation_must_ship_as_pdf:' + filename);
+      }
+    } else {
+      return fail('attachment_source_required:' + filename);
+    }
+    if (bytes.length > ATTACHMENT_MAX_BYTES) return fail('attachment_too_large:' + filename);
+    total += bytes.length;
+    if (total > ATTACHMENT_TOTAL_MAX_BYTES) return fail('attachment_total_too_large');
+    var sha = attachmentDigest(bytes);
+    if (!sha) return fail('attachment_digest_uncertain:' + filename);
+    attachments.push({ filename: filename, content_type: contentType,
+      content: bytes.toString('base64') });
+    manifest.push({ filename: filename, content_type: contentType,
+      bytes: bytes.length, sha256: sha });
+  }
+  return { ok: true, attachments: attachments, manifest: manifest };
+}
+
+function parseApprovedEmail(answer) {
+  if (typeof answer !== 'string' || answer.slice(0, 9) !== 'Subject: ' || answer.indexOf('\0') !== -1) return null;
+  var lfAt = answer.indexOf('\n\n');
+  var crlfAt = answer.indexOf('\r\n\r\n');
+  var at = -1, separator = '';
+  if (crlfAt >= 0 && (lfAt < 0 || crlfAt < lfAt)) { at = crlfAt; separator = '\r\n\r\n'; }
+  else if (lfAt >= 0) { at = lfAt; separator = '\n\n'; }
+  if (at < 0) return null;
+  var header = answer.slice(0, at);
+  if (header.indexOf('\r') !== -1 || header.indexOf('\n') !== -1 || header.slice(0, 9) !== 'Subject: ') return null;
+  var approvedSubject = header.slice(9);
+  var approvedBody = answer.slice(at + separator.length);
+  if (!/\S/.test(approvedSubject) || !/\S/.test(approvedBody)) return null;
+  return { subject: approvedSubject, body: approvedBody };
 }
 
 function parseApprovedEmail(answer) {
@@ -323,21 +520,86 @@ async function requireClearKillSwitch(hamUid) {
   }
 }
 
+// ⬡B:reach.iman:FIX:the_round_that_goes_to_him_never_carries_the_word_test:20260726⬡
+// FOUNDER LAW, said three separate ways inside one doctrine: "a test email NEVER
+// contains the word test"; "when I say in test emails, as you know, never have
+// tests in them, they're to the person, to me, the subject, and then the real
+// email"; and the reason, from his own experience, that writing the word into his
+// system has broken things. This one function broke it three times in one return:
+// a display name of Founder with the word in parentheses, a subject prefixed with
+// the words A NEW and the word, and a requiredApprovedSubjectPrefix that made the
+// prefix MANDATORY against the council-approved subject, so a clean subject was a
+// hard failure. It shipped into the mind-template every inherited world starts from.
+//
+// HIS ACTUAL SPEC for this round: it goes TO HIM, from the right client address,
+// with the REAL subject, the REAL words and the REAL attachment. "I don't want no
+// forward. I want to read this as if you had made a mistake and sent it to Will
+// without my permission. But then I want to be relieved to say, whew, no, this is
+// the actual one to me." So the envelope redirects the ADDRESS and nothing else.
+// The display name carries the real intended recipient, which is what makes it read
+// like the mistake, and the address underneath is his own, which is the relief.
+// Not one byte of copy is added anywhere.
+function intendedDisplayName(to) {
+  var values = Array.isArray(to) ? to : [to];
+  for (var i = 0; i < values.length; i++) {
+    var v = values[i];
+    if (v && typeof v === 'object') {
+      if (typeof v.name === 'string' && v.name.trim()) return v.name.trim();
+      if (typeof v.email === 'string' && v.email.trim()) return v.email.trim();
+    } else if (typeof v === 'string' && v.trim()) {
+      return v.trim();
+    }
+  }
+  return '';
+}
+
 function founderTestEnvelope(to, subject, opts) {
   var sendMode = process.env.REACH_SEND_MODE || 'PAUSED';
   var founderTest = !!(opts && opts.founderTest) || sendMode === 'FOUNDER_TEST';
   if (!founderTest && sendMode !== 'LIVE') return fail('REACH_SEND_MODE is ' + sendMode, { blocked: true });
-  if (!founderTest) return { ok: true, to: to, subject: subject };
+  if (!founderTest) return { ok: true, to: to, subject: subject, founderTest: false };
   var founderEmail = process.env.FOUNDER_TEST_EMAIL || '';
   if (!founderEmail) return fail('founder_test_email_not_set');
-  // Prefixing is intentionally BEFORE the request claim and council. The
-  // provider never adds or changes it after approval.
+  var displayName = intendedDisplayName(to).replace(/[\r\n\0]/g, ' ').trim().slice(0, 120);
   return {
     ok: true,
-    to: [{ email: founderEmail, name: 'Founder (test)' }],
-    subject: '[A NEW test] ' + subject,
-    requiredApprovedSubjectPrefix: '[A NEW test] '
+    to: [{ email: founderEmail, name: displayName }],
+    subject: subject,
+    intendedRecipients: normalizeRecipients(to),
+    founderTest: true
   };
+}
+
+// ⬡B:reach.iman:GUARD:no_system_added_test_marker_on_any_outbound:20260726⬡
+// The deterministic half of the same law, and the supersession of the deleted
+// requiredApprovedSubjectPrefix: instead of REQUIRING the word, the boundary now
+// REFUSES a system-added one. This never judges HIS words. A real email may
+// legitimately say the word (a blood test, a math test, a pilot test) and cold code
+// does not get to silence that. It judges only what the SYSTEM did: the round to him
+// may not change the caller's subject by a single byte, and a display name the
+// system sets may not carry the word.
+var TEST_WORD = /\btest(s|ed|ing)?\b/i;
+// An address is an address, not copy. Anything address-shaped comes out before the
+// words are judged, so a real .test domain or a name that is just an email address
+// is never mistaken for the marker he forbade.
+function displayNameCarriesTestWord(name) {
+  var s = String(name || '')
+    .replace(/[^\s<>()]+@[^\s<>()]+/g, ' ')
+    .replace(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi, ' ');
+  return TEST_WORD.test(s);
+}
+function requireNoSystemTestMarker(rawSubject, envelope, recipients) {
+  if (envelope.subject !== rawSubject) {
+    return fail('test_round_altered_the_subject', { blocked: true });
+  }
+  if (envelope.founderTest === true) {
+    for (var i = 0; i < (recipients || []).length; i++) {
+      if (displayNameCarriesTestWord(recipients[i].name)) {
+        return fail('test_word_in_system_display_name', { blocked: true });
+      }
+    }
+  }
+  return { ok: true };
 }
 
 function verifiedCompactProof(council, pai, expected) {
@@ -352,7 +614,7 @@ function verifiedCompactProof(council, pai, expected) {
 }
 
 async function finalizeApprovedEmail(input) {
-  var claim = exactRawRequestClaim(input.subject, input.body);
+  var claim = exactRawRequestClaim(input.subject, input.body, input.attachmentManifest);
   var deliberation = 'Finalize one outbound email through A\u2019NU\u2019s full PAI council. ' +
     'Treat the lossless raw request below as a draft, not as permission to send. ' +
     'Return exactly one RFC822-like artifact in this form: Subject: <approved subject>, then one blank line, then the approved body. ' +
@@ -406,9 +668,28 @@ async function finalizeApprovedEmail(input) {
   if (!approved) return fail('approved_email_artifact_invalid', {
     requestId: rid, cycleId: pai.cycleId, councilProof: proof
   });
-  if (input.requiredApprovedSubjectPrefix &&
-      approved.subject.slice(0, input.requiredApprovedSubjectPrefix.length) !== input.requiredApprovedSubjectPrefix) {
-    return fail('founder_test_prefix_not_approved', {
+  // ⬡B:reach.iman:FIX:the_council_may_not_add_the_word_either:20260726⬡
+  // Supersedes founder_test_prefix_not_approved, which REQUIRED the word test in
+  // the approved subject and so enforced the exact thing the doctrine forbids.
+  // The law is now the inverse and it is scoped so it can never silence a real
+  // email that legitimately says the word: the hold fires only when the council
+  // ADDED it to a draft subject that did not carry it.
+  if (input.founderTest === true && TEST_WORD.test(approved.subject) && !TEST_WORD.test(input.subject)) {
+    return fail('council_added_a_test_marker_to_the_subject', {
+      blocked: true, requestId: rid, cycleId: pai.cycleId, councilProof: proof
+    });
+  }
+  // ⬡B:reach.iman:GUARD:approved_bytes_are_the_founder_approved_bytes:20260726⬡
+  // The approve-and-fire lane hands the founder-approved artifact back through a
+  // fresh council bound to the REAL recipient, because no committed receipt may be
+  // redirected to a target it never authorized and no send may skip the cycle. His
+  // law for that second round is that THE IDENTICAL THING fires. If the second
+  // council returns different words, that is an honest ok:false, never a different
+  // email going out under an approval he gave to other bytes.
+  if (input.requireExactApprovedArtifact &&
+      (approved.subject !== input.requireExactApprovedArtifact.subject ||
+       approved.body !== input.requireExactApprovedArtifact.body)) {
+    return fail('approved_bytes_changed_after_founder_approval', {
       blocked: true, requestId: rid, cycleId: pai.cycleId, councilProof: proof
     });
   }
@@ -454,8 +735,14 @@ async function providerSend(input) {
   // Council can take time. Re-read the shared switch at the provider edge.
   var edgeKill = await requireClearKillSwitch(input.hamUid);
   if (!edgeKill.ok) return edgeKill;
-  var artifact = JSON.stringify({ subject:input.approved.subject,
-    body:input.approved.body });
+  // The artifact mints the effect key, so the attachment manifest belongs in it:
+  // the 100-year no-duplicate claim then covers WHAT WAS ATTACHED, not only what
+  // was said. With no attachments the string is byte-identical to what it always
+  // was, so every effect key already claimed still resolves to the same value.
+  var artifact = (input.attachmentManifest && input.attachmentManifest.length)
+    ? JSON.stringify({ subject:input.approved.subject, body:input.approved.body,
+        attachments:input.attachmentManifest })
+    : JSON.stringify({ subject:input.approved.subject, body:input.approved.body });
   var deliverySaga = require('../core/reach/provider.delivery.saga.js');
   var providerDelivery = deliverySaga.normalizeProvenance(input.providerDelivery);
   var autonomousReach = !!providerDelivery;
@@ -501,6 +788,10 @@ async function providerSend(input) {
   try {
     var providerBody = { subject: input.approved.subject,
       body: input.approved.body, to: input.to };
+    // The attachment the founder clicks on. These are the exact normalized bytes
+    // whose sha256 already entered both the council claim and the effect artifact,
+    // so nothing can be swapped in between approval and the provider.
+    if (input.attachments && input.attachments.length) providerBody.attachments = input.attachments;
     if (trackingLabel) providerBody.tracking_options = {
       label:trackingLabel, opens:true, links:false, thread_replies:true
     };
@@ -564,6 +855,13 @@ async function sendThroughCommittedBoundary(config) {
   if (!testEnvelope.ok) return testEnvelope;
   var recipients = normalizeRecipients(testEnvelope.to);
   if (!recipients) return fail('email_recipient_invalid');
+  var marker = requireNoSystemTestMarker(config.subject, testEnvelope, recipients);
+  if (!marker.ok) return marker;
+  // Attachments normalize BEFORE the council so the manifest is part of the claim
+  // the mind approves, and an unreadable or oversized file is an honest ok:false
+  // instead of a silently attachment-less send.
+  var files = await normalizeAttachments(config.opts && config.opts.attachments);
+  if (!files.ok) return files;
   var finalized = await finalizeApprovedEmail({
     hamUid: identity.hamUid,
     envelope: identity.envelope,
@@ -572,7 +870,9 @@ async function sendThroughCommittedBoundary(config) {
     to: recipients,
     world: config.world,
     sender: config.sender,
-    requiredApprovedSubjectPrefix: testEnvelope.requiredApprovedSubjectPrefix || null,
+    founderTest: testEnvelope.founderTest === true,
+    attachmentManifest: files.manifest,
+    requireExactApprovedArtifact: config.requireExactApprovedArtifact || null,
     opts: config.opts
   });
   if (!finalized.ok) return finalized;
@@ -580,12 +880,18 @@ async function sendThroughCommittedBoundary(config) {
     approved: finalized.approved, councilResult:finalized._councilResult,
     hamUid:identity.hamUid, requestId:finalized.requestId, cycleId:finalized.cycleId,
     councilProof:finalized.councilProof,
+    attachments:files.attachments, attachmentManifest:files.manifest,
     providerDelivery:config.opts && config.opts.providerDelivery,
     requireExactHamTarget:config.requireExactHamTarget === true });
   var proofResult = { requestId: finalized.requestId, cycleId: finalized.cycleId,
     councilProof: finalized.councilProof,
     approvedSubject:finalized.approved.subject,
-    approvedBody:finalized.approved.body };
+    approvedBody:finalized.approved.body,
+    attachmentManifest:files.manifest,
+    // What the round was really addressed to, carried out so the approve-and-fire
+    // lane can record it. Present only on the round that went to him.
+    intendedRecipients:testEnvelope.intendedRecipients || null,
+    founderTest:testEnvelope.founderTest === true };
   if (!provider.ok) return fail(provider.reason, Object.assign({}, proofResult,
     provider.status === undefined ? {} : { status: provider.status },
     provider.providerAccepted ? { providerAccepted:true,
@@ -607,13 +913,17 @@ async function sendThroughCommittedBoundary(config) {
 }
 
 // Send outbound. Grant and key resolve only by world, with no silent fallback.
+// opts.attachments carries files the founder will click on, either as
+// { filename, content_type, base64 } or as { filename, key } pointing into the
+// two-way file lane. See normalizeAttachments.
 async function send(to, subject, body, world, opts) {
   if (!world) return fail('world_required_no_silent_fallback');
   var grant = resolveGrant(world);
   var key = resolveKey(world);
   if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
   return sendThroughCommittedBoundary({ to: to, subject: subject, body: body, world: world,
-    opts: opts || {}, grant: grant, key: key, sender: world });
+    opts: opts || {}, grant: grant, key: key, sender: world,
+    requireExactApprovedArtifact: (opts && opts.requireExactApprovedArtifact) || null });
 }
 
 // Explicit internal identity, same mandatory council and provider boundary.
@@ -638,7 +948,8 @@ async function sendToHam(hamUid, exactEmail, subject, body, world, opts) {
   if (!grant || !key) return fail('no_nylas_config_for_world:' + world);
   return sendThroughCommittedBoundary({ to:recipient, subject:subject, body:body,
     world:world, opts:Object.assign({}, opts || {}, { hamUid:hamUid }),
-    grant:grant, key:key, sender:world, requireExactHamTarget:true });
+    grant:grant, key:key, sender:world, requireExactHamTarget:true,
+    requireExactApprovedArtifact: (opts && opts.requireExactApprovedArtifact) || null });
 }
 
 // ⬡B:reach.iman:WIRE:one_reach_council_email_provider:20260717⬡
@@ -657,6 +968,14 @@ async function sendCommittedToHam(hamUid, exactEmail, artifact, world, authoriza
   if (!world) return fail('world_required_no_silent_fallback');
   if (typeof hamUid !== 'string' || !hamUid.trim()) return fail('ham_uid_required');
   if (typeof artifact !== 'string' || !artifact.trim()) return fail('approved_email_artifact_invalid');
+  // This seam sends bytes a DIFFERENT council already committed, and that receipt
+  // authorized an artifact with no attachment in it. Attaching a file here would
+  // put something on the wire that no cycle ever approved, so it is refused by
+  // name rather than silently dropped. Attachments ride send() and sendToHam(),
+  // where the manifest enters the claim before the mind rules on it.
+  if (opts && Array.isArray(opts.attachments) && opts.attachments.length) {
+    return fail('attachments_not_authorized_on_committed_artifact_path');
+  }
   var recipient = normalizeRecipients(exactEmail);
   if (!recipient || recipient.length !== 1) return fail('email_recipient_invalid');
   var sender = resolveAnuProductionSender();
@@ -720,7 +1039,12 @@ async function sendCommittedToHam(hamUid, exactEmail, artifact, world, authoriza
 module.exports = { send: send, sendFromClaudette: sendFromClaudette,
   sendToHam: sendToHam, sendCommittedToHam:sendCommittedToHam, listEmails: listEmails,
   alreadyRepliedOnThread: alreadyRepliedOnThread, getGrant: getGrant,
-  getThread: getThread, downloadAttachment: downloadAttachment,
+  getThread: getThread, downloadAttachment: downloadAttachment, createDraft: createDraft,
+  listDrafts: listDrafts, deleteDraft: deleteDraft,
   resolveGrant: resolveGrant, resolveKey: resolveKey,
   resolveAnuProductionSender:resolveAnuProductionSender,
-  _test:{ providerSend:providerSend, requireExactRecipientOwnership:requireExactRecipientOwnership } };
+  founderTestEnvelope:founderTestEnvelope,
+  normalizeAttachments:normalizeAttachments,
+  _test:{ providerSend:providerSend, requireExactRecipientOwnership:requireExactRecipientOwnership,
+    requireNoSystemTestMarker:requireNoSystemTestMarker,
+    exactRawRequestClaim:exactRawRequestClaim } };

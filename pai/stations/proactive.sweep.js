@@ -1,79 +1,138 @@
-// ⬡B:pai.stations.proactive.sweep:BUILD:the_proactive_department_actually_fires_each_tick_per_cadence:20260719⬡
-// THE MISSING WIRE. The proactive agents (DAWN, HUNCH, BURST, GHOST, PRESS, SAGE) were all
-// built but NOTHING on the autonomous tick called them -- they were shelf-ware. This sweep is
-// the one place the department actually FIRES, per each agent's real cadence, driven by the
-// autonomous cycle (cycle.runner tick), not a timer any single agent owns.
-//
-// It is deliberately thin and cold-gated: it consumes NOW for the moment, then calls each
-// agent only when its cadence says so. Every call is guarded and fails open, so one agent's
-// stumble never breaks the sweep or the tick. Each agent already declares its own output
-// surface (Command Center via outreach, DAWN delivery, etc.), composes through the one voice,
-// and closes its own exit/rally loop -- the sweep just decides WHO runs THIS tick.
-//
-// Cadence (env-tunable), matched to the founder's real doctrine:
-//   HUNCH  -- every tick during waking hours (its own reconcile+compose loop is cheap-gated)
-//   DAWN   -- once in the morning window (DAWN itself pref-gates + per-ham-per-day dedups)
-//   PRESS  -- a few times a day (interval)
-//   SAGE   -- infrequently (long-horizon; its own window guard makes it near-noop otherwise)
-//   GHOST  -- overnight (its own graveyard-hour check gates it) + wake handoff at wake hour
-//   BURST  -- every tick (its own very-high urgency bar means it is silent unless real)
+// ⬡B:pai.stations.proactive_sweep:WONDER:consumed_signal_dispatch_only:20260725⬡
+'use strict';
 
-var nowStation = require('./now.station.js');
+// This dispatcher does not decide that a station is due. The prior hour-modulo gates made
+// cold clock code purchase HUNCH, PRESS, and SAGE judgments, and every generic cycle tick
+// fanned out across the whole department. A governed cycle signal now names each station.
+// Calls without both the signal lineage and its proven consumption receipt fail closed.
 
-function tryMod(p){ try { return require(p); } catch(e){ return null; } }
-function envInt(k, d){ var v=parseInt(process.env[k],10); return isFinite(v)?v:d; }
+const ALLOWED = Object.freeze([
+  'burst', 'ghost_monitor', 'ghost_handoff', 'dawn', 'hunch', 'press', 'sage'
+]);
 
-function wakingHours(moment){
-  var h = moment.hour_24;
-  return h >= envInt('PROACTIVE_WAKE_START', 7) && h < envInt('PROACTIVE_WAKE_END', 22);
-}
-function inMorningWindow(moment){
-  var h = moment.hour_24;
-  return h >= envInt('DAWN_WINDOW_START', 6) && h < envInt('DAWN_WINDOW_END', 10);
-}
-// simple interval gate keyed on the hour, so PRESS/SAGE do not run every single tick
-function onInterval(moment, everyHours){
-  return (moment.hour_24 % Math.max(1, everyHours)) === 0;
+function parseContent(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return null;
+  try { return JSON.parse(value); } catch (error) { return null; }
 }
 
-// The sweep. Returns a small record of who ran, for the tick log. Never throws.
-async function sweep(hamUid){
-  var ran = [];
-  var moment;
-  try { moment = await nowStation.assembleNow(hamUid); }
-  catch(e){ return { ran: [], error: 'now_failed' }; }
-
-  // BURST -- every tick; its own high bar keeps it silent unless something is truly urgent
-  try { var burst = tryMod('./burst.station.js');
-    if (burst && burst.sweep){ var b = await burst.sweep(hamUid); if (b && b.alerts && b.alerts.length) ran.push('BURST:'+b.alerts.length); } } catch(e){}
-
-  // GHOST -- overnight monitor + wake handoff; both self-gate on the clock
-  try { var ghost = tryMod('./ghost.station.js');
-    if (ghost){
-      if (ghost.monitorOvernight){ var g = await ghost.monitorOvernight(hamUid); if (g && g.graveyard) ran.push('GHOST:watch'); }
-      if (ghost.wakeHandoff){ var w = await ghost.wakeHandoff(hamUid); if (w && w.handed_off) ran.push('GHOST:handoff'); }
-    } } catch(e){}
-
-  // DAWN -- morning window only; DAWN itself pref-gates, sleep-guards, and per-day dedups
-  try { if (inMorningWindow(moment)){ var dawn = tryMod('./dawn.station.js');
-    if (dawn && dawn.buildBriefing){ var d = await dawn.buildBriefing(hamUid); if (d && d.briefing) ran.push('DAWN:briefing'); } } } catch(e){}
-
-  // HUNCH -- every waking tick; its reconcile(close/nudge/drop) + compose loop is cheap-gated
-  try { if (wakingHours(moment)){ var hunch = tryMod('./hunch.station.js');
-    if (hunch && hunch.sweep){ var h = await hunch.sweep(hamUid); if (h && h.tips && h.tips.length) ran.push('HUNCH:'+h.tips.length);
-      if (h && h.reconciled && (h.reconciled.closed||h.reconciled.dropped||h.reconciled.nudged)) ran.push('HUNCH:reconciled'); } } } catch(e){}
-
-  // PRESS -- a few times a day
-  try { if (wakingHours(moment) && onInterval(moment, envInt('PRESS_EVERY_HOURS', 4))){ var press = tryMod('./press.station.js');
-    if (press && press.surfaceNews){ var p = await press.surfaceNews(hamUid); if (p && p.items && p.items.length) ran.push('PRESS:'+p.items.length); } } } catch(e){}
-
-  // SAGE -- infrequent long-horizon; its own window guard makes off-cadence a near-noop
-  try { if (onInterval(moment, envInt('SAGE_EVERY_HOURS', 12))){ var sage = tryMod('./sage.station.js');
-    if (sage && sage.assess){ var sg = await sage.assess(hamUid);
-      if (sg && sg.observations && sg.observations.length) ran.push('SAGE:'+sg.observations.length);
-      if (sg && sg.reconciled && sg.reconciled.closed) ran.push('SAGE:reconciled'); } } } catch(e){}
-
-  return { ran: ran, at: moment.now_iso };
+async function verifyConsumption(hamUid, signalSource, consumedSource, requestedTargets, suppliedBrain) {
+  const brain = suppliedBrain || require('../core/brain.client.js');
+  const rows = await brain.readBead({
+    select: 'ham_uid,stamp_type,source,content',
+    ham_uid: 'eq.' + String(hamUid),
+    stamp_type: 'eq.AUTONOMOUS_CYCLE_CONSUMED',
+    source: 'eq.' + String(consumedSource),
+    limit: '2'
+  });
+  if (!Array.isArray(rows)) return false;
+  return rows.some(function (row) {
+    const content = parseContent(row.content);
+    return String(row.ham_uid || '').toUpperCase() === String(hamUid).toUpperCase() &&
+      row.stamp_type === 'AUTONOMOUS_CYCLE_CONSUMED' && row.source === consumedSource &&
+      content && content.signal_source === signalSource && Array.isArray(content.targets) &&
+      requestedTargets.every(function (target) { return content.targets.includes(target); });
+  });
 }
 
-module.exports = { sweep: sweep };
+function load(path) {
+  try { return require(path); } catch (error) { return null; }
+}
+
+function normalizeTargets(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > ALLOWED.length) return null;
+  const targets = [];
+  for (const raw of value) {
+    const target = String(raw || '').trim().toLowerCase();
+    if (!ALLOWED.includes(target)) return null;
+    if (!targets.includes(target)) targets.push(target);
+  }
+  return targets.length ? targets : null;
+}
+
+function createSweep(dependencies) {
+  dependencies = dependencies || {};
+  const moduleLoader = dependencies.load || load;
+  const nowStation = dependencies.nowStation || require('./now.station.js');
+  const consumptionVerifier = dependencies.verifyConsumption || function (hamUid, signalSource, consumedSource, targets) {
+    return verifyConsumption(hamUid, signalSource, consumedSource, targets, dependencies.brain);
+  };
+
+  return async function sweep(hamUid, options) {
+    options = options || {};
+    if (!hamUid) return { ok: false, ran: [], reason: 'ham_missing' };
+    if (!options.signalSource || !options.consumedSource) {
+      return { ok: false, ran: [], reason: 'consumption_proof_missing' };
+    }
+    const targets = normalizeTargets(options.targets);
+    if (!targets) return { ok: false, ran: [], reason: 'targets_invalid' };
+    let proven = false;
+    try { proven = await consumptionVerifier(hamUid, options.signalSource, options.consumedSource, targets); }
+    catch (error) { proven = false; }
+    if (!proven) return { ok: false, ran: [], reason: 'consumption_unproven' };
+
+    const attempted = [];
+    const ran = [];
+    const errors = {};
+    let momentPromise = null;
+    function moment() {
+      if (!momentPromise) momentPromise = nowStation.assembleNow(hamUid);
+      return momentPromise;
+    }
+    async function invoke(target, path, method, args, describe) {
+      attempted.push(target);
+      try {
+        const station = moduleLoader(path);
+        if (!station || typeof station[method] !== 'function') {
+          errors[target] = 'station_unavailable';
+          return;
+        }
+        const output = await station[method].apply(station, args);
+        ran.push(describe ? describe(output) : target);
+      } catch (error) {
+        errors[target] = error.message || 'station_failed';
+      }
+    }
+
+    for (const target of targets) {
+      if (target === 'burst') {
+        await invoke(target, './burst.station.js', 'sweep', [hamUid, { moment: await moment() }],
+          function (value) { return 'BURST:' + ((value && value.alerts && value.alerts.length) || 0); });
+      } else if (target === 'ghost_monitor') {
+        await invoke(target, './ghost.station.js', 'monitorOvernight', [hamUid, { moment: await moment() }],
+          function (value) { return value && value.graveyard ? 'GHOST:watch' : 'GHOST:quiet'; });
+      } else if (target === 'ghost_handoff') {
+        await invoke(target, './ghost.station.js', 'wakeHandoff', [hamUid, { moment: await moment() }],
+          function (value) { return value && value.handed_off ? 'GHOST:handoff' : 'GHOST:no_handoff'; });
+      } else if (target === 'dawn') {
+        await invoke(target, './dawn.station.js', 'buildBriefing', [hamUid],
+          function (value) { return value && value.briefing ? 'DAWN:briefing' : 'DAWN:quiet'; });
+      } else if (target === 'hunch') {
+        await invoke(target, './hunch.station.js', 'sweep', [hamUid, { moment: await moment() }],
+          function (value) { return 'HUNCH:' + ((value && value.tips && value.tips.length) || 0); });
+      } else if (target === 'press') {
+        const pressInputs = options.inputs && options.inputs.press;
+        const interests = pressInputs && Array.isArray(pressInputs.interests) ? pressInputs.interests : undefined;
+        await invoke(target, './press.station.js', 'surfaceNews', [hamUid, interests, { moment: await moment() }],
+          function (value) { return 'PRESS:' + ((value && value.items && value.items.length) || 0); });
+      } else if (target === 'sage') {
+        await invoke(target, './sage.station.js', 'assess', [hamUid, { moment: await moment() }],
+          function (value) { return 'SAGE:' + ((value && value.observations && value.observations.length) || 0); });
+      }
+    }
+
+    return {
+      ok: Object.keys(errors).length === 0,
+      ran: ran,
+      attempted: attempted,
+      errors: errors,
+      signal_source: options.signalSource,
+      consumed_source: options.consumedSource
+    };
+  };
+}
+
+const sweep = createSweep();
+
+module.exports = { sweep: sweep, createSweep: createSweep, normalizeTargets: normalizeTargets,
+  verifyConsumption:verifyConsumption, ALLOWED: ALLOWED };

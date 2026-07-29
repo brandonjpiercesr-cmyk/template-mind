@@ -15,14 +15,14 @@
 var SANDBOX_GRANTS = JSON.parse(process.env.NYLAS_GRANT_MAP || '{}') /* grant map lives in env, never literals */;
 var PRODUCTION_GRANTS = JSON.parse(process.env.NYLAS_GRANT_MAP || '{}') /* production grants also from env */;
 // \u2b21B:core.nylasKeys:WIRE:anu_grant_env_driven_20260711\u2b21
-// A'NU's own mailbox migration (aba@gmg -> anu@anu-anew.com). The sandbox app is
-// full (5/5), so the new grant lives on the PRODUCTION app. Its ID is env-driven
-// (NYLAS_ANU_GRANT) so it is recognized the instant the founder creates the grant
-// via OAuth -- no code edit needed at switch time, just the env var. Reads the
-// production key like every other production grant.
+// The primary mailbox grant is env-driven. Its ID (NYLAS_ANU_GRANT) and its address
+// (NYLAS_ANU_MAILBOX) both come from this world's own env, so it is recognized the instant the
+// owner creates the grant via OAuth, no code edit at switch time, and no address is baked into the
+// shared template (founder-PII leak-guard law: identity is env-only, per-world).
 (function () {
   var anuGrant = process.env.NYLAS_ANU_GRANT;
-  if (anuGrant) PRODUCTION_GRANTS[String(anuGrant).toLowerCase()] = 'anu@anu-anew.com';
+  var anuMailbox = process.env.NYLAS_ANU_MAILBOX || '';
+  if (anuGrant && anuMailbox) PRODUCTION_GRANTS[String(anuGrant).toLowerCase()] = anuMailbox;
 })();
 
 function keyForGrant(grantId) {

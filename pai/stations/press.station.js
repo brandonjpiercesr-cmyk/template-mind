@@ -27,11 +27,39 @@ function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_
 // Cheap external scan. Uses the OpenRouter web plugin through the boundary (never a rogue
 // host). Returns raw candidate headlines; the relevance judgment happens after, in the
 // organ. Fails open (empty) so a scan hiccup yields a quiet tick, never an error.
+// ⬡B:press.scan:SEAT:the_scan_stops_spending_the_shared_wallet_anonymously:20260725⬡
+// FOUNDER 20260725, his words: "Why the fuck are we using a shared key. Remove it. And code
+// everything (run this deep extensive audit) towards the per seat model. Bitch it helps us
+// audit bleeds and switch shit easy! Per key isn't a backup it's a necessary!"
+//
+// One shared OPENROUTER_API_KEY answered 401 that morning and took her whole voice down for
+// hours while ten funded per-seat keys sat alive and untouched. The bigger half of his point
+// is ATTRIBUTION: PRESS scans on a tick, so it is exactly the kind of quiet, repeating spend
+// that a shared wallet hides.
+//
+// PRESS has no seat of its own in pai/core/seat.map.js yet, and that paired map is not this
+// file's to invent. PRESS therefore requires an explicitly named seat and that seat's own
+// key. It never falls through to a shared wallet. Missing seat, missing named key, or a
+// non-OpenRouter seat returns zero candidates and zero spend.
+var _seatMap = require('../core/seat.map.js');
+function pressScanConfig() {
+  var name = String(process.env.PRESS_SCAN_SEAT || '').trim();
+  if (!name) return null;
+  var s = _seatMap.seat(name);
+  if (!s || s.provider !== 'openrouter' || !s.keyEnv) return null;
+  var key = _seatMap.sanitizeKey(process.env[s.keyEnv]);
+  if (!key) return null;
+  return { seat:s.seat, key:key, model:String(process.env.PRESS_SCAN_MODEL || s.model || '').trim() };
+}
 async function scanExternal(interests) {
   try {
-    var q = 'latest news ' + (interests || []).slice(0, 5).join(', ');
+    var clean=(Array.isArray(interests)?interests:[]).map(function(v){return String(v||'').trim();}).filter(Boolean).slice(0,5);
+    if (!clean.length) return [];
+    var config=pressScanConfig();
+    if (!config || !config.model) return [];
+    var q = 'latest news ' + clean.join(', ');
     var body = {
-      model: process.env.PRESS_SCAN_MODEL || 'qwen/qwen3-235b-a22b',
+      model: config.model,
       messages: [{ role: 'user', content:
         'List up to 6 recent, real news headlines relevant to: ' + q +
         '. One per line, headline then " -- " then a one-line why. Only real, recent items.' }],
@@ -46,9 +74,10 @@ async function scanExternal(interests) {
     var endpoint = 'https://openrouter.ai/api/v1/chat/completions';
     try { var pb = require('../core/provider.boundary.js');
       if (pb && pb.isBannedChatCall && pb.isBannedChatCall(endpoint)) return []; } catch (e) {}
+    try { require('../core/provider.boundary.js').install(); } catch (eInstall) { return []; }
     var r = await fetch(endpoint, {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + process.env.OPENROUTER_API_KEY, 'Content-Type': 'application/json' },
+      headers: { Authorization: 'Bearer ' + config.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
     }).then(function (x) { return x.json(); });
     var txt = (((r.choices || [])[0] || {}).message || {}).content || '';
@@ -78,25 +107,29 @@ async function judgeRelevance(hamUid, moment, candidates, alreadySeen) {
 }
 
 // Entrance. Surface the news that matters for this HAM right now. Consumes NOW.
-async function surfaceNews(hamUid, interests) {
-  var moment = await nowStation.assembleNow(hamUid);      // consume NOW, no twin
+async function surfaceNews(hamUid, interests, options) {
+  options=options||{};
+  var chosen=Array.isArray(interests)?interests:defaultInterests();
+  chosen=chosen.map(function(v){return String(v||'').trim();}).filter(Boolean).slice(0,5);
+  if (!chosen.length) return { moment:null, items:[], reason:'interests_unconfigured' };
+  var moment = options.moment || await nowStation.assembleNow(hamUid);      // consume NOW, no twin
   var seen = await recentlySurfaced(hamUid);
-  var candidates = await scanExternal(interests || defaultInterests());
+  var candidates = await scanExternal(chosen);
   var items = await judgeRelevance(hamUid, moment, candidates, seen);
   for (var i = 0; i < items.length; i++) { stampItem(hamUid, items[i], moment).catch(function () {}); }
   return { moment: moment, items: items };  // items may be [] -- silence over noise
 }
 
 function defaultInterests() {
-  // The HAM's real domains, env-configurable. Not generic headlines.
-  return (process.env.PRESS_INTERESTS ||
-    'AI, nonprofit fundraising, sports Lakers').split(',').map(function (s) { return s.trim(); });
+  // True-zero template: interests come from the world or the triggering signal.
+  return String(process.env.PRESS_INTERESTS || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
 }
 
 async function recentlySurfaced(hamUid) {
   try {
     var url = _bu() + '/rest/v1/' + _tbl() +
-      '?select=summary&source=ilike.press.station.item.' + String(hamUid).toLowerCase() + '*' +
+      '?select=summary&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '&source=ilike.press.station.item.' + encodeURIComponent(String(hamUid).toLowerCase()) + '*' +
       '&order=id.desc&limit=20';
     var r = await fetch(url, { headers: {
       apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema()
@@ -125,4 +158,5 @@ async function stampItem(hamUid, item, moment) {
   } catch (e) { /* best-effort notes */ }
 }
 
-module.exports = { surfaceNews: surfaceNews, scanExternal: scanExternal, judgeRelevance: judgeRelevance };
+module.exports = { surfaceNews: surfaceNews, scanExternal: scanExternal, judgeRelevance: judgeRelevance,
+  pressScanConfig:pressScanConfig, defaultInterests:defaultInterests };

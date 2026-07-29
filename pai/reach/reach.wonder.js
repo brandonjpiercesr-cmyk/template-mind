@@ -183,7 +183,7 @@ async function deliberateAggregate(report, fetchFn) {
     const data = response && response.ok ? await response.json() : null;
     return data && data.choices && data.choices[0] && data.choices[0].message &&
       typeof data.choices[0].message.content === 'string'
-      ? data.choices[0].message.content.trim().slice(0, 800) : '';
+      ? data.choices[0].message.content.trim().slice(0) : '';
   } catch (e) { return ''; }
 }
 

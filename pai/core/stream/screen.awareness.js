@@ -28,10 +28,21 @@ function BU_PUBLIC() { return process.env.SELF_BASE_URL || 'https://aibebase.onr
 const reflex = require('./reflex');
 const consumer = require('../reach/screen.consumer');
 
-// The canonical identity backgrounds. Mirrors the shared repo list
-// (aba-shared/packages/ccwa-core/src/backgrounds.js) by id; the frontend resolves
-// ids to its own canonical URLs, so no URL and no invention lives here.
-const BACKGROUND_IDS = ['black-landscape','nebula','storm-clouds','glass-windows','motion','mountain-snow','particle-lights','wet-city','beach','embers','pink-smoke','unity','three-goats'];
+// ⬡B:stream.screen_awareness:FIX:she_can_only_name_an_approved_background:20260728⬡
+// This was its own thirteen-id literal, and it is the list SHE READS: promptAddendum offers it
+// to the mind as the menu of ids she may choose from, and applyScreenBlock validates her
+// answer against it. So the longest unapproved list in this repo was also the one actively
+// teaching her to ask for a nebula, in the template every world inherits. It now reads
+// pai/core/brand.js, so the menu she is offered and the set every surface can actually paint
+// are the same five by construction, and an id no door can render is an id she is never shown.
+//
+// NOT A WHOLESALE GRAFT. This file and its anew counterpart genuinely differ on main, on an
+// unrelated 20260725 change (_osHeaders, the signed session the screen pieces carry to the OS
+// doors) that has not landed here yet. Only this one declaration was changed on both sides, so
+// nothing unrelated was dragged across and the real divergence stays visible to whoever lands
+// it properly. This file is not in the pai-sync-check manifest; pai/core/os/registry.js is, and
+// that one IS byte-identical with anew.
+const BACKGROUND_IDS = require('../brand.js').BACKGROUND_IDS;
 
 function hasLiveScreen(hamUid) {
   return consumer.hasLiveSession(hamUid);
@@ -90,10 +101,26 @@ function extract(answer) {
   // (```json {...}```) instead -- a different, untagged format the extractor never
   // matched, so the entire raw fence rendered as her spoken words. Catching that shape
   // too so a format drift can never leak raw JSON onto the glass again.
-  if (!m) m = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/i);
+  let fenceOnly = false;
+  if (!m) { m = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/i); fenceOnly = true; }
   if (!m) return { answer: text, block: null };
   let block = null;
   try { block = JSON.parse(m[1]); } catch (e) { block = null; }
+  // ⬡B:core.stream.screen_awareness:FIX:non_screen_json_fence_is_her_answer_not_a_block:20260725⬡
+  // FOUNDER-CAUGHT fragment replies ("the right words", "to"): the 20260714 fence
+  // drift catcher treated EVERY fenced {...} as a screen block and spliced it out
+  // of the answer, so a short ruling whose substance lived in a JSON code fence
+  // (routine on the coding/consult channels) lost its whole body and shipped only
+  // the prose fragment around the fence. The explicit [[SCREEN ...]] tag keeps its
+  // hard splice (tagged bytes must never reach eyes, parseable or not), but an
+  // untagged fence is only a screen block when it PARSES and actually carries a
+  // screen-block field; any other fenced JSON is her real answer and stays intact.
+  if (fenceOnly) {
+    const SCREEN_KEYS = ['background', 'preset', 'skywrite', 'voice', 'cards', 'pieces'];
+    const screenShaped = !!block && typeof block === 'object' && !Array.isArray(block) &&
+      SCREEN_KEYS.some(function (key) { return Object.prototype.hasOwnProperty.call(block, key); });
+    if (!screenShaped) return { answer: text, block: null };
+  }
   const cleaned = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).replace(/\s{2,}/g, ' ').trim();
   return { answer: cleaned, block: block };
 }
@@ -184,7 +211,7 @@ async function push(hamUid, block, options) { // ⬡B async: pulls real live pie
           comps.push({ type: 'email_draft',
             to: isRealValue(em.to) ? String(em.to).slice(0, 120) : '',
             subject: isRealValue(em.subject) ? String(em.subject).slice(0, 160) : '',
-            body: isRealValue(em.body) ? String(em.body).slice(0, 4000) : '' });
+            body: isRealValue(em.body) ? String(em.body).slice(0) : '' });
         }
       }
       // chart: real finite numbers only; a series item that is not a number is dropped,

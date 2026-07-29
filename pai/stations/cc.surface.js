@@ -24,7 +24,7 @@ async function surfaceToCommandCenter(hamUid, agent, title, body, kind, importan
       stamp_type: 'CC_NOTE',
       source: 'cc.note.' + String(hamUid).toLowerCase() + '.' + Date.now(),
       summary: '[CC NOTE] ' + String(title || body || '').slice(0, 120),
-      content: JSON.stringify({ kind: kind || 'note', title: String(title||'').slice(0,160), body: String(body||'').slice(0,4000), origin: agent }),
+      content: JSON.stringify({ kind: kind || 'note', title: String(title||'').slice(0,160), body: String(body||'').slice(0), origin: agent }),
       importance: isFinite(importance) ? importance : 5,
       spawned_by: String(agent||'anew').toLowerCase() + '.cc.' + hamUid
     };

@@ -309,7 +309,7 @@ function roleClaimText(row, subject) {
   var subject = escapeRegex(normalizeText(subject)).replace(/\s+/g, '\\s+');
   var selfDescription = new RegExp("(?:\\bi\\s*(?:am|'m)|\\bthis\\s+is|\\bmy\\s+(?:name|role)\\s+is)[^.!?\\n]{0,120}" +
     subject + "(?=$|[^A-Za-z0-9_])", 'i');
-  return selfDescription.test(question) ? question.slice(0, 1800) : '';
+  return selfDescription.test(question) ? question.slice(0) : '';
 }
 
 function definitionKind(row, subject) {
@@ -346,7 +346,7 @@ function boundedStoredRecord(row, subject, kind, claimText) {
     stamp_type: row && row.stamp_type == null ? null : String(row.stamp_type).slice(0, 120),
     source: row && row.source == null ? null : String(row.source).slice(0, 260),
     summary: String(row && row.summary || '').slice(0, 700),
-    content: String(content || '').slice(0, 1800),
+    content: String(content || '').slice(0),
     created_at: row && row.created_at == null ? null : String(row.created_at).slice(0, 80)
   };
 }
@@ -420,7 +420,7 @@ function buildLedger(input) {
       origin: 'bound_role_context',
       name: String(item && item.name || '').slice(0, 120),
       source: String(item && item.source || '').slice(0, 180),
-      text: String(item && item.text || '').slice(0, 4000),
+      text: String(item && item.text || '').slice(0),
       evidence_digest: item && item.evidence_digest || null
     };
   });

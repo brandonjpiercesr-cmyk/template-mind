@@ -1,0 +1,4 @@
+node_modules/
+
+# Claude Code personal/local overrides (permission grants) — not shared config
+.claude/settings.local.json

@@ -110,7 +110,7 @@ function buildNamedEvidenceRelay(namedEvidence) {
       var original = String(item && item.text || '').trim();
       var matchScore = Number(item && item.match_score);
       if (!original || !Number.isFinite(matchScore) || matchScore <= 0) return null;
-      var text = original.slice(0, 2200);
+      var text = original.slice(0);
       if (namedContextContradictions(text, [item]).length) return null;
       return {
         text: text,
@@ -460,7 +460,7 @@ async function runLead(ask, hamUid, options) {
     : '';
   var armory = [
     founder && founder.ok ? founder.fcx : '',
-    bcw && bcw.ok ? bcw.bcw.slice(0, 9000) : '',
+    bcw && bcw.ok ? bcw.bcw.slice(0) : '',
     'LIVE SPAN EVIDENCE:\n' + (evidenceLines(spanRows) || '[none returned; say so and do not rank the roadmap yourself]'),
     'LIVE DEPARTMENT RECEIPTS:\n' + state.drainPasses.concat(state.canon).join('\n'),
     'LIVE REPOSITORY READ FROM PAI read_own_code:\n' + (repoEvidence || '[not supplied; do not claim file placement]'),
@@ -523,8 +523,8 @@ async function runLead(ask, hamUid, options) {
     acl_stamp: '\u2b21B:advisors.coding:DECISION:coda_lead:' + ymd() + '\u2b21',
     source: decisionSource,
     summary: '[CODA LEAD] ' + out.slice(0, 170) + (out.length > 170 ? '...' : ''),
-    content: JSON.stringify({ question: question.slice(0, 2000),
-      questionDigest:questionDigest, answer: out.slice(0, 5000),
+    content: JSON.stringify({ question: question.slice(0),
+      questionDigest:questionDigest, answer: out.slice(0),
       evidence: { repository: repositoryProved, spanRows: spanRows.length,
         bcw: !!(bcw && bcw.ok), bcwPacks: bcw && bcw.packs || null,
         questionBound:questionBoundEvidence.map(function (item) {
@@ -581,7 +581,7 @@ async function runLead(ask, hamUid, options) {
     }
   } catch (eS) {}
   if (!decisionStamped) return { ok: false, reason: 'decision_not_persisted',
-    answer: out.slice(0, 5000), lead: CODING_RELAY.lead, relay:CODING_RELAY,
+    answer: out.slice(0), lead: CODING_RELAY.lead, relay:CODING_RELAY,
     question:question, questionDigest:questionDigest,
     relayContractVerified:true, evidenceRelay:verifiedLead.evidenceRelay === true,
     evidenceMode:verifiedLead.evidenceMode || null,
@@ -594,7 +594,7 @@ async function runLead(ask, hamUid, options) {
     decisionSource:decisionSource,
     evidence: { repository: repositoryProved,
       spanRows: spanRows.length, bcw: !!(bcw && bcw.ok), decisionStamped: false } };
-  return { ok: true, answer: out.slice(0, 5000), lead: CODING_RELAY.lead,
+  return { ok: true, answer: out.slice(0), lead: CODING_RELAY.lead,
     question:question, questionDigest:questionDigest,
     relay:CODING_RELAY, relayContractVerified:true,
     evidenceRelay:verifiedLead.evidenceRelay === true,
@@ -651,9 +651,9 @@ async function runCycle(intent, hamUid, rawAsk) {
     // actually surfaces; summary kept short on purpose as a preview, with an
     // honest ellipsis when it's genuinely cut.
     summary: '[CODING ADVISOR] ' + out.slice(0, 170) + (out.length > 170 ? '...' : ''),
-    content: JSON.stringify({ intent: ask, text: out.slice(0, 4000), answer: out.slice(0, 4000), stateRead: state.drainPasses.length + ' drain receipts' }),
+    content: JSON.stringify({ intent: ask, text: out.slice(0), answer: out.slice(0), stateRead: state.drainPasses.length + ' drain receipts' }),
     importance: 6 }) }).catch(function () {});
-  return { ok: true, answer: out.slice(0, 500) };
+  return { ok: true, answer: out.slice(0) };
 }
 
 module.exports = { runCycle: runCycle, runLead: runLead,

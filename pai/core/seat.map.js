@@ -1,0 +1,478 @@
+// ⬡B:core.seat_map:MODULE:one_source_llm_seat_assignment:20260721⬡
+'use strict';
+// THE ONE SOURCE for which model and which named key sits in each LLM seat.
+//
+// Founder-ratified 20260721; A'NU cross-approved live (cycle
+// DC499D0C.1784653552513.960dhn, "Proceed"). Every seat is env-driven so a
+// re-seat or a key swap is an env change plus a deploy, never a code edit per
+// repo. This file is byte-identical across anew (core/) and template-mind
+// (pai/core/), so every world and every chat reads one source. ANYHAM: no
+// identity, no personal fact, no hardcoded HAM here.
+//
+// seat(name) returns { role, model, provider, keyEnv, via }.
+// keyEnv names the PER-FUNCTION OpenRouter key so a bleed traces to the exact
+// seat instead of one shared wallet; two seats on the same model carry two
+// different keyEnv names on purpose. resolveKey(seat) reads that named key and
+// nothing else. Missing ownership fails closed instead of spending from a
+// shared wallet or another function's seat.
+//
+// Model picks were verified live against OpenRouter 20260721:
+//   - qwen/qwen3.5-flash-02-23  fast seat, ~3-6s, cheapest
+//   - qwen/qwen3-235b-a22b-2507 judge, 2-4s clean strict JSON (the thinking
+//                               variant timed out at 90s and was rejected)
+//   - moonshotai/kimi-k3        CODA coding adviser
+//   - qwen/qwen3-coder          deploy/tool seat, clean tool calls
+//   - z-ai/glm-5.2              C2/C3 failover, CANON, advisors on OpenRouter
+//
+// Founder ruling 20260724: Together is retired from every load-bearing seat (its
+// account bled and ran dry). GLM-5.2 now runs on OpenRouter (slug z-ai/glm-5.2,
+// per-seat key) so the same model quality carries the CANON, advisor, and failover
+// seats through the metered per-key path, never the shared Together wallet. Together
+// stays only as an env-overridable option, wired nowhere by default.
+// SEAT_CODA_MODEL may be set to a cheaper deepseek slug and SEAT_DEPLOY_MODEL to a
+// gemini slug via env once the exact OpenRouter slug is confirmed live (do not bake
+// an unverified slug: a wrong model id fails the seat silently).
+
+function env(key, dflt) {
+  var v = process.env[key];
+  return (v && String(v).trim()) ? String(v).trim() : dflt;
+}
+
+// ⬡B:core.seat_map:911:a_capability_flag_that_survives_a_re_seat_is_a_lie_with_a_deploy_behind_it:20260728⬡
+// Read live from OpenRouter's public catalog on 20260728, no auth required, per model, so the
+// next lane can re-derive every row here instead of trusting this one:
+//   curl -s https://openrouter.ai/api/v1/models
+//   tools  -> supported_parameters contains "tools"
+//   vision -> architecture.input_modalities contains "image"
+// `minimax/minimax-01` is the only model this house has ever seated whose
+// supported_parameters is [max_tokens, temperature, top_p] with no tool use at all.
+//
+// WHY THIS TABLE EXISTS AND NOT JUST THE PER-SEAT FLAGS. Both flags below describe a seat's
+// BAKED DEFAULT. That was honest while a re-seat was rare, and it stops being honest the
+// moment somebody actually uses the env knob this file advertises: the fastest mitigation for
+// the outage above is SEAT_C2_MODEL=z-ai/glm-5.2 on the live service, one minute, no deploy,
+// and GLM-5.2 is text-only. The seat would have gone on publishing vision:true from its baked
+// row, and core/tool.loop.js attaches an uploaded image ONLY when the seat says it reads
+// pixels, so the one-minute cure for the tool outage would have quietly started posting
+// image parts to a model that cannot take them. A flag that cannot survive the exact
+// operation it exists to support is not a fact, it is a stale label.
+// So capability is answered about the model that will ACTUALLY be called: the table when the
+// resolved slug is one this file has verified, the seat's declared flag when the resolved slug
+// IS the baked default, and false when a world overrides to a slug nobody here has checked.
+// Unverified is not capable. Failing closed costs at most an image left as text or a tool
+// array withheld; failing open costs the turn, which is the whole 911 above.
+var MODEL_CAPABILITY = {
+  'qwen/qwen3.5-flash-02-23':  { tools:true,  vision:true  },
+  'minimax/minimax-01':        { tools:false, vision:true  },
+  'z-ai/glm-5.2':              { tools:true,  vision:false },
+  'x-ai/grok-4.5':             { tools:true,  vision:true  },
+  'x-ai/grok-build-0.1':       { tools:true,  vision:true  },
+  'moonshotai/kimi-k3':        { tools:true,  vision:true  },
+  'qwen/qwen3-coder':          { tools:true,  vision:false },
+  'qwen/qwen3-235b-a22b':      { tools:true,  vision:false },
+  'qwen/qwen3-235b-a22b-2507': { tools:true,  vision:false },
+  'deepseek/deepseek-v3.2':    { tools:true,  vision:false }
+};
+
+// resolvedModel is what this call will really send; bakedModel and declared are what the seat
+// row says about its own default. Never guesses: an unknown override is false, not inherited.
+function capability(kind, resolvedModel, bakedModel, declared) {
+  var known = MODEL_CAPABILITY[resolvedModel];
+  if (known) return !!known[kind];
+  return resolvedModel === bakedModel ? !!declared : false;
+}
+
+function envUsd(key, dflt) {
+  var raw = process.env[key];
+  if (raw === undefined || raw === '') return dflt;
+  var text = String(raw).trim();
+  if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,4})?$/.test(text)) return null;
+  var value = Number(text);
+  return Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
+}
+
+// role, default model (env-overridable per seat), transport provider, the
+// per-function named key env and telemetry via label. Dollar caps are not
+// represented here: OpenRouter usage is observable, but this process cannot
+// atomically enforce a per-key USD limit, so publishing one would be false.
+//
+// ⬡B:core.seat_map:911:the_everyday_seat_was_the_one_model_that_cannot_hold_a_tool:20260728⬡
+// LIVE OUTAGE, reproduced twice against the running world on 20260728, 100% deterministic:
+// a chat turn that needs no tool answered normally, seven stages, committed. A chat turn
+// that carries tools ("how many months until I have saved 3600") came back
+//   ok:false  no_answer:pai_seat:_message_:_No_endpoints_found_that_support_tool_use.
+// The whole turn, not a degraded one. Root cause, verified by hand against OpenRouter's own
+// roster the same day (GET /api/v1/models, supported_parameters, per model, never assumed):
+// of every model seated in this file, `minimax/minimax-01` was the ONLY one with no
+// tool-use-capable endpoint. It was seated on `c2_organ`, which core/tool.loop.js's
+// _paiSeatName() routes EVERY non-voice, non-coding channel to, and the founder's own
+// 20260726 law is that she holds her tools for the whole run. So the everyday chat seat was
+// the one seat whose entire job the seated model structurally could not do, and OpenRouter
+// rejected the request outright rather than answering without tools.
+//
+// The seat's declared GLM-5.2 failover did not save it: that failover is consulted by
+// core/model.router.js and the judge, not by tool.loop's completion door, which resolves
+// seat() once and returns the provider error. Fixing that door is a tool.loop.js change and
+// that file belongs to another lane; it is reported, not taken, and it is the reason this
+// fix lands here, on the one source that actually decides which model leaves.
+//
+// THE RE-SEAT, and the founder ruling it supersedes. The 20260722 ruling picked MiniMax-01
+// on four stated criteria: fresh, strong, cheap, clean fast JSON, 1M context. Tool use was
+// not among them because nobody had the fact. `qwen/qwen3.5-flash-02-23` satisfies every one
+// of those criteria that a re-seat can still honor and regresses nothing measured against
+// what was live: tool use no (dead) -> yes, vision yes -> yes (the 20260727 image handoff
+// keeps working), 1M context -> 1M context, and $0.20/$1.10 per M -> $0.07/$0.26 per M,
+// CHEAPER than the model it replaces, which is the penny hustle read of the law rather than
+// a coder buying a bigger mind. Every price and capability here is from OpenRouter's live
+// roster on 20260728, not memory. The GLM-5.2 failover the founder declared for this seat is
+// untouched and still carries the bigger mind when the primary misses.
+// STATED PLAINLY, not buried: this seats the C2 organ on the same model slug as the C1 penny
+// gate, so the two tiers now differ by key, cap and role rather than by model. That is a real
+// doctrine cost. It is the founder's to weigh, and it is one env var either way, with no code
+// change and no deploy of this file: SEAT_C2_MODEL=z-ai/glm-5.2 buys back the bigger mind at
+// 8x the input price and loses vision on this seat; SEAT_C2_MODEL=minimax/minimax-01 restores
+// his original pick and re-breaks every tool-carrying turn.
+//
+// ⬡B:core.seat_map:WIRE:tool_use_capability_is_a_confirmed_fact_not_a_guess:20260728⬡
+// `tools` states whether THIS seat's baked default model has a tool-use-capable endpoint,
+// checked live against OpenRouter's own roster (GET /api/v1/models, supported_parameters
+// contains `tools`) on 20260728, per model, never inferred from a family name. Same contract
+// as `vision` directly below, including its caveat: it reflects the BAKED DEFAULT only, so a
+// SEAT_*_MODEL env override to a different slug does not retarget this flag any more than it
+// retargets `role`. `fallbackTools` says the same thing about the seat's declared failover,
+// because a failover that cannot carry tools is no failover for a tool-carrying seat.
+// Verified false for exactly one model this file has ever seated, `minimax/minimax-01`, which
+// is why the row above exists.
+//
+// ⬡B:core.seat_map:WIRE:vision_capability_is_a_confirmed_fact_not_a_guess:20260727⬡
+// `vision` states whether THIS seat's baked default model accepts an image_url
+// message part. Checked live against OpenRouter's own model roster (GET
+// /api/v1/models, architecture.input_modalities) on 20260727, per model, not
+// assumed from a model family name: qwen3.5-flash-02-23, minimax-01, grok-4.5,
+// kimi-k3 and grok-build-0.1 all confirmed image-capable; glm-5.2, qwen3-coder,
+// qwen3-235b-a22b(-2507) and deepseek-v3.2 confirmed text-only. A seat with no
+// vision model anywhere in this file was never given one; this only says which
+// EXISTING picks already read pixels. Reflects the baked default only -- an
+// SEAT_*_MODEL env override to a different slug does not retarget this flag,
+// the same way an override does not retarget `role`.
+var SEATS = {
+  c1_cellm:    { role: 'C1 penny gate',        envModel: 'SEAT_C1_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C1_CELLM',    via: 'openrouter', capEnv:'SEAT_C1_CELLM_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  // ⬡B:core.seat_map:911:the_everyday_organ_was_seated_on_the_one_model_that_cannot_call_a_tool:20260728⬡
+  // MEASURED LIVE 20260728, the day before the launch, on a real world through anu-anew.com,
+  // two separate doors, seconds apart, identical failure:
+  //   POST /cara/chat     -> ok:false  no_answer:pai_seat: "No endpoints found that support
+  //                          tool use. Try disabling update_screen."
+  //   POST /arrive/decide -> ok:false  no_answer:pai_seat: "No endpoints found that support
+  //                          tool use. Try disabling save_layout."
+  // She could not finish one turn on any surface the demo touches.
+  //
+  // THE CAUSE, read off the live OpenRouter model list rather than reasoned about: of every
+  // model in this map, `minimax/minimax-01` was the ONLY one whose supported_parameters lack
+  // `tools`. `core/tool.loop.js` `_paiSeatName()` binds EVERY non-voice, non-coding channel
+  // to this seat, which is CARA chat, the arrival portal, and every other demo surface, and
+  // the PAI cycle is a TOOL LOOP: it hands the seat `save_layout`, `update_screen` and their
+  // sisters on every turn. A tool-incapable model here is not slow, it is MUTE. The 20260722
+  // ruling that seated MiniMax measured speed and JSON cleanliness, both real and both still
+  // true; tool support was simply never part of the check.
+  //
+  // THE PICK, chosen against the live list on all four constraints at once, not two:
+  //   tools    REQUIRED, or she cannot answer at all (this outage).
+  //   vision   REQUIRED, this seat carries vision:true and tool.loop.js resolves the vision
+  //            turn through this same seat, so a text-only pick trades her voice for her eyes.
+  //            `z-ai/glm-5.2` was this seat's own declared failover and is text-only, so the
+  //            obvious swap was the wrong one.
+  //   cost     this is the highest-volume seat in the estate; penny hustle governs.
+  //   proven   already funded and already answering in this system.
+  // `qwen/qwen3.5-flash-02-23` is the only candidate that satisfies all four: tools YES,
+  // vision YES, 1M context, $0.07/$0.26 per M (CHEAPER than the MiniMax it replaces, $0.20/
+  // $1.10), and already carrying the C1, C4, and voice seats here. The failover moves to
+  // `x-ai/grok-4.5`, also tools+vision, so a miss escalates to a strong mind instead of
+  // falling to a text-only model that would break the vision turn.
+  //
+  // SEAT_C2_MODEL still overrides for an env-only re-seat with no deploy. Whoever sets it:
+  // the value MUST support BOTH tool use AND image input or one of these two outages returns.
+  c2_organ:    { role: 'C2 deliberation organ',envModel: 'SEAT_C2_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C2_ORGAN',    via: 'openrouter', capEnv:'SEAT_C2_ORGAN_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
+                 fallbackModel: 'x-ai/grok-4.5', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_C2_ORGAN', fallbackTools:true },
+  // Founder ruling 20260722: Grok 4.5 is the mind; GLM-5.2 is its failover. Grok is
+  // closed-weight (xAI) and founder-lifted from the ban for this seat. Seated on C3
+  // (the flagship mind) only, not the high-volume C2 organ, to keep the $2/$6-per-M
+  // Grok off the everyday workhorse. verified live 20260722.
+  c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
+                 fallbackModel: 'qwen/qwen3-235b-a22b-2507', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK', fallbackTools:true },
+  c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  // ⬡B:core.seat_map:FIX:codas_coder_invented_cap_was_stopping_her_on_demo_eve:20260728⬡
+  // Raised 8 to 40 on the founder's own direct instruction. He said he had raised the kimi
+  // cap, could not find SEAT_CODA_DAILY_CAP_USD to set it, and told this lane to do it. The
+  // env override is his to set and still wins whenever it is present; this only moves the
+  // fallback underneath it. MEASURED, not guessed: CODA cycled 465 times unattended overnight,
+  // spent through the 8 dollar fallback, and every deliberation since has held with
+  // openrouter_seat_daily_dollar_cap_reached on seat coda, so the coding department's own mind
+  // was stopped on the eve of the launch by a number no human ever chose. /coda/sensors/health
+  // reports this seat's cap as "chosen_by: a coder, not the founder", which is exactly what it
+  // was: a default invented in this file, never a decision. 40 restores a full day of real
+  // autonomous work with a real ceiling still under it.
+  // ⬡B:core.seat_map:FIX:founder_pick_grok_4.5_over_kimi_for_the_coda_seat:20260729⬡
+  // Founder direct 20260729: no Kimi, no GLM-5.2, no Ornith as a production seat pick
+  // (fable/opus already never were), unless a seat is a Wonder Games or cook-off
+  // CONTESTANT, where model diversity is the point of the contest. CODA's own seat is
+  // not a contestant, so Kimi is out here; Grok 4.5 is the founder's stated first
+  // choice and is already confirmed tools:true, vision:true against the live
+  // OpenRouter roster (MODEL_CAPABILITY above). keyEnv is left as OR_KEY_CODA_KIMI on
+  // purpose: it names an already-provisioned credential, not a model, and renaming it
+  // would require the founder to set a brand new env var on Render for no functional
+  // gain, which is exactly the kind of busywork he told every lane tonight to stop
+  // creating for him.
+  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', capEnv:'SEAT_CODA_DAILY_CAP_USD', dailyCapUsd:40, vision:true, tools:true },
+  deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', capEnv:'SEAT_DEPLOY_TOOL_DAILY_CAP_USD', dailyCapUsd:4, vision:false, tools:true },
+  // FOUNDER 911 20260722: Ornith is RETIRED and RunPod is out entirely (the live
+  // endpoint was failure-looping: 937 failures, 0 completions, billed GPU). The
+  // judge seat moves to its own proven reliability pick: qwen3-235b (2-4s clean
+  // strict JSON, verified) on OpenRouter, with Kimi K3 as the failover so a qwen
+  // miss never leaves a contest ungraded. No RunPod anywhere in this map.
+  // judge's declared failover is no longer Kimi (founder ban, 20260729; this seat judges
+  // contestants, it is not itself a contestant). Grok 4.5 replaces it: confirmed
+  // tools:true against the live roster, same as every other seat re-picked tonight.
+  judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'qwen/qwen3-235b-a22b-2507',provider: 'openrouter', keyEnv: 'OR_KEY_JUDGE_QWEN', via: 'openrouter', capEnv:'SEAT_JUDGE_DAILY_CAP_USD', dailyCapUsd:4, vision:false, tools:true,
+                 fallbackModel: 'x-ai/grok-4.5', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_JUDGE_QWEN', fallbackTools:true },
+  // Founder ban 20260729: no GLM-5.2 as a production seat pick outside a Wonder Games /
+  // cook-off contestant slot. CANON and advisors are graders/thinkers, not contestants,
+  // so both move to Grok 4.5, the founder's stated first choice, confirmed tools:true
+  // and vision:true against the live OpenRouter roster (MODEL_CAPABILITY above); the
+  // seat's own vision flag is corrected from false to true to match, the same rule this
+  // file already states for GLM-5.2 vs. the models that replace it here.
+  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', capEnv:'SEAT_CANON_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', capEnv:'SEAT_ADVISORS_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  // ⬡B:core.seat_map:WIRE:the_ladders_second_rung_is_a_declared_failover_not_a_literal:20260728⬡
+  // core/model.ladder.js walks two OpenRouter rungs on this one seat. Its second rung used to
+  // carry a model slug hardcoded in that file (`qwen/qwen3-235b-a22b`, $0.455/$1.82 per M),
+  // which is a second hand-maintained copy of a decision this file owns. Declared here as a
+  // real failover so the ladder resolves it the same way every other seat resolves one, and
+  // moved to the -2507 build this file already trusts for the judge seat (verified live
+  // 20260721, 2-4s clean strict JSON) which is also $0.09/$0.55 per M and 262k context: five
+  // times cheaper than the literal it replaces, on a model this house has already proved.
+  // ⬡B:core.seat_map:911:three_dollars_on_the_seat_that_generates_the_whole_seated_experience:20260728⬡
+  // MEASURED LIVE 20260728, launch eve, and traced end to end rather than reasoned about.
+  // POST /seer/native/day/advance answered 503 on a real world: DAY ONE of SEATED did not
+  // generate at all. A named-failure fix landed first so the door would stop saying one word,
+  // and the next live read named it exactly: `no_rung_answered`, meaning modelLadder.deliberate
+  // returned null with NO rung having answered.
+  //
+  // WHY THAT LANDS HERE. core/model.ladder.js `deliberate` defaults its order to 'glm,qwen' and
+  // resolves BOTH rungs through `opts.seat || MODEL_LADDER_SEAT || 'deliberation'`, so the two
+  // rungs that look like redundancy are ONE seat wearing two model names. When this seat refuses,
+  // there is no second opinion, there is silence. Verified against the live service rather than
+  // assumed: OR_KEY_MODEL_LADDER is set (so it is not a missing credential), MODEL_LADDER_ORDER
+  // and MODEL_LADDER_SEAT are unset (so the defaults above are what actually run),
+  // SEAT_DELIBERATION_DAILY_CAP_USD is unset (so THIS number is the live ceiling), the daily call
+  // ceiling was nowhere near tripped (1 of 3000 used), and ANTHROPIC_BACKUP_FLOOR is unset, so
+  // nothing catches the fall when this one seat closes.
+  //
+  // Three dollars a day was a coder default, never a decision: /coda/sensors/health reports this
+  // seat as "chosen_by: a coder, not the founder". It is also the GENERAL ladder, shared across
+  // the estate, so on a day the whole system spent 19.99 USD it is drained by ordinary traffic
+  // long before anyone opens SEATED, and then the founder's flagship experience is dead with no
+  // error a human could read. That is the same shape as the CODA seat cap cured earlier today.
+  //
+  // 25 is sized to the job, not invented: it must carry every scene generation in the experience
+  // AND the general deliberation of the rest of the estate on the same key. The env override
+  // remains the founder's and still wins whenever it is present; this only moves the fallback.
+  // NOT DONE HERE, named rather than hidden: the single-seat-no-floor design is the deeper
+  // defect, and turning on ANTHROPIC_BACKUP_FLOOR is a real spend decision that belongs to its
+  // own lane, not to a launch-eve edit.
+  // Founder ban 20260729: no GLM-5.2 as a production pick. The general ladder moves to
+  // Grok 4.5 (confirmed tools:true, vision:true), Qwen stays as its declared failover,
+  // already the founder's own stated second choice and already proven on this seat.
+  deliberation:{ role: 'general deliberation ladder',envModel:'SEAT_LADDER_MODEL',model:'x-ai/grok-4.5',           provider:'openrouter', keyEnv:'OR_KEY_MODEL_LADDER',  via:'openrouter', capEnv:'SEAT_DELIBERATION_DAILY_CAP_USD', dailyCapUsd:25, vision:true, tools:true,
+                 fallbackModel:'qwen/qwen3-235b-a22b-2507', fallbackProvider:'openrouter', fallbackKeyEnv:'OR_KEY_MODEL_LADDER', fallbackTools:true },
+  voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', capEnv:'SEAT_VOICE_FAST_DAILY_CAP_USD', dailyCapUsd:3, vision:true, tools:true },
+  runaway_sweep:{ role:'runaway SHADOW judge', envModel:'RUNAWAY_SWEEP_MODEL', model:'qwen/qwen3.5-flash-02-23', provider:'openrouter',keyEnv:'OR_KEY_RUNAWAY_SWEEP',via:'openrouter', capEnv:'SEAT_RUNAWAY_SWEEP_DAILY_CAP_USD', dailyCapUsd:1, vision:true, tools:true },
+  wonder_games_glm:  { role: 'Wonder Games GLM contestant',  envModel:'WONDER_GAMES_GLM_MODEL',  model:'z-ai/glm-5.2',       provider:'openrouter',keyEnv:'OR_KEY_WONDER_GAMES_GLM', via:'openrouter', capEnv:'SEAT_WONDER_GAMES_GLM_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  wonder_games_qwen: { role: 'Wonder Games Qwen contestant', envModel:'WONDER_GAMES_QWEN_MODEL', model:'qwen/qwen3-235b-a22b',provider:'openrouter',keyEnv:'OR_KEY_WONDER_GAMES_QWEN',via:'openrouter', capEnv:'SEAT_WONDER_GAMES_QWEN_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  cookoff_kimi:     { role: 'cook-off Kimi contestant',     envModel: 'COOKOFF_KIMI_MODEL',     model: 'moonshotai/kimi-k3',     provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_KIMI',     via: 'openrouter', capEnv:'SEAT_COOKOFF_KIMI_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  cookoff_qwen:     { role: 'cook-off Qwen contestant',     envModel: 'COOKOFF_QWEN_MODEL',     model: 'qwen/qwen3-coder',       provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_QWEN',     via: 'openrouter', capEnv:'SEAT_COOKOFF_QWEN_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  cookoff_glm:      { role: 'cook-off GLM contestant',      envModel: 'COOKOFF_GLM_MODEL',      model: 'z-ai/glm-5.2',           provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GLM',      via: 'openrouter', capEnv:'SEAT_COOKOFF_GLM_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  cookoff_deepseek: { role: 'cook-off DeepSeek contestant', envModel: 'COOKOFF_DEEPSEEK_MODEL', model: 'deepseek/deepseek-v3.2', provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_DEEPSEEK', via: 'openrouter', capEnv:'SEAT_COOKOFF_DEEPSEEK_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+  cookoff_grok:     { role: 'cook-off Grok contestant',     envModel: 'COOKOFF_GROK_MODEL',     model: 'x-ai/grok-build-0.1',    provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GROK',     via: 'openrouter', capEnv:'SEAT_COOKOFF_GROK_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true }
+};
+
+// ⬡B:core.seat_map:FIX:a_banned_env_override_still_won_at_the_one_resolver:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1. "env truth wins" was written as an
+// absolute, and a deployment setting SEAT_CODA_MODEL (or any SEAT_*_MODEL /
+// SEAT_*_MODEL_FALLBACK) to Kimi, GLM-5.2, Ornith, Opus, or Fable would have been
+// honored here unchecked, on the one seat every production, non-contestant caller
+// resolves through, which defeats the entire ban this file's own guard exists to hold.
+// A Wonder Games / cook-off CONTESTANT seat is exempt, same as everywhere else tonight;
+// a banned override on any other seat is treated exactly like a banned JUDGE_MODEL
+// override already is in core/judge.js: as if it were never set, falling back to the
+// seat's own baked, already-verified-compliant default rather than silently spending it.
+function isContestantSeat(name) { return /^(cookoff_|wonder_games_)/.test(String(name || '')); }
+
+// Resolve a seat, reading its model fresh from env each call (env truth wins;
+// the baked default is only the floor). Unknown seat returns null, never a guess.
+function seat(name) {
+  var d = SEATS[name];
+  if (!d) return null;
+  var isContestant = isContestantSeat(name);
+  var resolvedModel = env(d.envModel, d.model);
+  if (!isContestant && isBannedProductionModel(resolvedModel)) resolvedModel = d.model;
+  // ⬡B:core.seat_map:FIX:hasFallback_compared_the_raw_override_not_the_normalized_one:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P2: this compared the RAW
+  // SEAT_*_MODEL_FALLBACK env read against resolvedModel, but fallback() below compares
+  // the same value AFTER normalizing a banned override back to the baked default. A
+  // banned fallback override (SEAT_C2_MODEL_FALLBACK=glm-5.2 with SEAT_C2_MODEL already
+  // at the baked default) reported hasFallback:true here while fallback() itself
+  // normalized to the baked default and returned null (no real failover), so the two
+  // exported facts contradicted each other. Normalized the same way here so they agree.
+  var resolvedFallback = d.fallbackModel ? env(d.envModel + '_FALLBACK', d.fallbackModel) : null;
+  if (resolvedFallback && !isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
+  return {
+    seat: name,
+    role: d.role,
+    model: resolvedModel,
+    provider: d.provider,
+    keyEnv: d.keyEnv,
+    via: d.via,
+    dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd),
+    capEnv: d.capEnv,
+    // Honest to the same rule as fallback() below: a fallback that resolves to the
+    // primary's own model is not a fallback, so this seat reports that it has none.
+    // Compared against `resolvedModel`, not the raw env read, so a banned override
+    // corrected above cannot make this fact disagree with the model field beside it.
+    hasFallback: !!(d.fallbackModel && resolvedFallback !== resolvedModel),
+    // Both answered about `resolvedModel`, the model this call will really send, not
+    // about the row's baked default. A caller that sends an image part to a seat this
+    // says is not vision-capable, or a tools array to a seat this says cannot hold one,
+    // is choosing a request the provider will refuse; that is the caller's call to make,
+    // and this file's job is only to tell it the truth about the model it is about to use.
+    vision: capability('vision', resolvedModel, d.model, d.vision),
+    tools: capability('tools', resolvedModel, d.model, d.tools)
+  };
+}
+
+// The failover seat for a primary that carries one (Grok mind -> GLM-5.2, Ornith
+// judge -> qwen3-235b). Returns null when the seat has no fallback, so a caller
+// tries the primary, and only on empty/failure resolves fallback() and retries.
+//
+// ⬡B:core.seat_map:FIX:a_fallback_that_equals_the_primary_is_not_a_fallback:20260726⬡
+// Found 20260726 while answering "KIMI is the judge of the shareholders report, but KIMI is
+// only the judge FAILOVER." That part is pure config: SEAT_JUDGE_MODEL seats the primary and
+// SEAT_JUDGE_MODEL_FALLBACK seats the failover, so the founder action is a straight swap of
+// two env values, no code change. But swapping only the FIRST one is a real trap this file
+// had: SEAT_JUDGE_MODEL=moonshotai/kimi-k3 leaves the baked fallback at moonshotai/kimi-k3
+// too, and the "failover" then retries the identical model on the identical key, which is not
+// a failover, it is the same call twice at twice the price. Same trap on every seat that
+// carries a fallback. Comparing two resolved model slugs is a fact, not a judgment, so cold
+// code may state it: when they are the same string, this seat has no failover and says so,
+// and the caller stops after one honest attempt instead of paying for a phantom second one.
+// ⬡B:core.seat_map:FIX:a_banned_fallback_override_still_won_too:20260729⬡
+// Same fix as seat() above, on the same finding: SEAT_*_MODEL_FALLBACK could set a
+// banned model on a non-contestant seat's failover and it would have been honored here
+// unchecked. Treated the same way: a banned override is as if it were never set.
+function fallback(name) {
+  var d = SEATS[name];
+  if (!d || !d.fallbackModel) return null;
+  var isContestant = isContestantSeat(name);
+  var resolvedPrimary = env(d.envModel, d.model);
+  if (!isContestant && isBannedProductionModel(resolvedPrimary)) resolvedPrimary = d.model;
+  var resolvedFallback = env(d.envModel + '_FALLBACK', d.fallbackModel);
+  if (!isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
+  if (resolvedFallback === resolvedPrimary) return null;
+  return {
+    seat: name + '.fallback',
+    role: d.role + ' (fallback)',
+    model: resolvedFallback,
+    provider: d.fallbackProvider,
+    keyEnv: d.fallbackKeyEnv,
+    via: d.fallbackProvider,
+    dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd),
+    capEnv: d.capEnv,
+    hasFallback: false,
+    // Same rule as the primary: answered about the failover model that will really be
+    // called, so a SEAT_*_MODEL_FALLBACK re-seat cannot inherit a stale capability claim.
+    tools: capability('tools', resolvedFallback, d.fallbackModel, d.fallbackTools),
+    vision: capability('vision', resolvedFallback, d.fallbackModel, false)
+  };
+}
+
+// The API key for a seat is exactly its per-function named key. No completion
+// call may borrow a shared provider key or another seat's key.
+// ⬡B:core.seat_map:911:a_key_pasted_with_a_newline_is_not_a_broken_key_it_is_a_broken_paste:20260725⬡
+// FOUND LIVE 20260725: two funded seats, deploy_tool and judge, were refusing every call
+// with an illegal Authorization header. Both keys were PRESENT and correct; each carried a
+// stray newline or space from being pasted into the env box. The bleed board called those
+// seats dead and the shared key stayed alive to cover them, all because of invisible
+// whitespace.
+//
+// A founder pasting a key into a web form should never have to know that. Nothing about a
+// trailing newline is a decision, a policy, or a judgment; it is a paste artifact, and cold
+// code is allowed to clean a paste artifact because it decides nothing by doing so. So the
+// ONE SOURCE cleans it once, here, and every seat in every repo inherits the cure.
+//
+// Bounded on purpose: trim surrounding whitespace, and strip one matching pair of wrapping
+// quotes (some env UIs add them). Nothing inside the key is touched, so a key that is
+// genuinely wrong still fails honestly instead of being silently "repaired" into a different
+// wrong key.
+function sanitizeKey(raw) {
+  if (raw == null) return '';
+  var v = String(raw).trim();
+  if (v.length > 1 && ((v[0] === '"' && v[v.length - 1] === '"') || (v[0] === "'" && v[v.length - 1] === "'"))) {
+    v = v.slice(1, -1).trim();
+  }
+  return v;
+}
+
+function resolveKey(s) {
+  if (!s) return '';
+  return sanitizeKey(process.env[s.keyEnv]);
+}
+
+function seatNames() { return Object.keys(SEATS); }
+
+// ⬡B:core.seat_map:LAW:no_fable_no_opus_no_kimi_no_glm_no_ornith_on_a_production_non_contestant_seat:20260729⬡
+// Founder direct 20260729: "no fable, no opus, no kimi, no glm 5.2 no ornith, unless some
+// are in wonder games!" The one exemption is a Wonder Games / cook-off CONTESTANT (or its
+// judge) seat, where model diversity, or a separate judge, is the whole point. Fable and
+// Opus never appeared as a hardcoded literal on any production seat here, but that is not
+// the same as this pattern covering them: a DYNAMIC override read from an env var at
+// runtime (JUDGE_MODEL, for one) is invisible to a static grep, so all five banned
+// families are checked here, not only the two that happened to be baked-model literals.
+// This is the ONE source for that check: tests/seat.map.test.js's regression guard and
+// any direct caller that resolves a model OUTSIDE the normal seat() path (an env-only A/B
+// override, for example) both call this rather than each keeping their own copy of the
+// pattern, the same lesson this file has already applied to every other duplicated
+// decision.
+// ⬡B:core.seat_map:FIX:a_provider_prefixed_pattern_missed_the_bare_id_shape:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: requiring the OpenRouter
+// prefix (`moonshotai/kimi`, `z-ai/glm-5.2`) or the `claude-` prefix (`claude-opus`,
+// `claude-fable`) let a bare, unqualified id through unmatched: `isBannedProductionModel
+// ('kimi-k3')`, `('glm-5.2')` and `('opus-4-8')` all returned false. An unqualified id is
+// a real shape in this estate (`GLM_RUNPOD_MODEL` itself defaults to the bare `'glm-5.2'`,
+// no provider prefix at all), and this helper exists specifically to validate an ARBITRARY
+// env override, which can be typed in any shape an operator chooses, not only the exact
+// spelling a seat happens to bake. Matching the bare family keyword, the same style this
+// file's own sibling guard already uses for other banned providers (`deepseek`, `gemini`,
+// `groq`, no prefix required either), closes this without needing to enumerate every
+// prefix a family could ever be spelled with.
+var BANNED_PRODUCTION_MODEL = /(kimi|glm-5\.2|ornith|opus|fable)/i;
+function isBannedProductionModel(model) { return BANNED_PRODUCTION_MODEL.test(String(model || '')); }
+
+// ⬡B:core.seat_map:FIX:the_raw_together_callers_never_validated_their_own_env_override:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1. Every direct Together caller this
+// PR migrated off the banned baked default (core/outreach.js, core/survey.js,
+// core/interview.js, board/compose.js, board/grounding.js, management/dion.js,
+// management/think.js, management/messages/iman/inbound.js, core/session.wonder.js,
+// core/overseer/confidence.validator.js, core/journal.followthrough.js,
+// core/logful.enrich.js) still read `process.env.TOGETHER_MODEL` UNVALIDATED: a live
+// deployment env var left at (or reset to) `zai-org/GLM-5.2` would still win, because
+// `X || default` only ever falls to the default when X is absent, never when X is
+// banned. This is the one place that fact gets checked, so twelve call sites do not
+// each need their own copy of it.
+function safeModelOverride(envValue, safeDefault) {
+  var v = String(envValue || '').trim();
+  if (v && !isBannedProductionModel(v)) return v;
+  return safeDefault;
+}
+
+module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
+  isBannedProductionModel: isBannedProductionModel, safeModelOverride: safeModelOverride,
+  _test:{envUsd:envUsd} };
