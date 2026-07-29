@@ -428,3 +428,57 @@ test('ROUND 4: an employment claim needs her in the SAME sentence', function () 
     { personName: READER, env: {}, assistantName: "A'NU" }),
   'and the claim about her still holds');
 });
+
+// ⬡B:tests.no_real_name_in_a_chat_answer:FIX:a_guard_that_fails_open_on_exception_is_not_a_guard:20260729⬡
+// FOUNDER, live, screenshotted 20260729, second occurrence of the exact leak this file exists
+// to stop: two turns failed blind, a third produced a real answer that named him as this
+// world's owner. Both call sites of this module inside pai/core/tool.loop.js caught any
+// exception from violation() and let the answer through unexamined ("a broken guard must never
+// silence a real answer"), which is backwards for a privacy boundary. This pins the fix at the
+// source text: extracts each try/catch around the real call site (not a hand-copied stand-in)
+// and proves that a thrown exception now resolves to a truthy, named block reason instead of a
+// falsy pass-through.
+const TOOL_LOOP_PATH = path.join(__dirname, '..', 'pai', 'core', 'tool.loop.js');
+
+function extractCatchBlock(src, tryMarker) {
+  const start = src.indexOf(tryMarker);
+  assert.notEqual(start, -1, 'expected try block marker not found, source shape changed: ' + tryMarker);
+  const catchIdx = src.indexOf('catch (', start);
+  assert.notEqual(catchIdx, -1, 'expected a catch block after the try marker');
+  const braceStart = src.indexOf('{', catchIdx);
+  let depth = 0, i = braceStart;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) { i++; break; } }
+  }
+  return src.slice(catchIdx, i);
+}
+
+test('the pre-council name-boundary catch block fails closed, not open', function () {
+  const src = fs.readFileSync(TOOL_LOOP_PATH, 'utf8');
+  const catchSrc = extractCatchBlock(src,
+    'var _nameLeak = realNameBoundary.violation(_proofQuestion, finalAns,');
+  assert.doesNotMatch(catchSrc, /must never silence a real answer/,
+    'the old fail-open reasoning must be gone from the pre-council checkpoint');
+  const fn = new Function('__err',
+    'var _nameLeak; try { throw __err; } ' + catchSrc + ' return _nameLeak;');
+  const result = fn(new Error('simulated guard failure'));
+  assert.ok(result, 'a thrown exception from the name-boundary check must resolve to a ' +
+    'truthy (blocking) reason, never fall through silently');
+  assert.equal(result, 'name_boundary_check_failed_fail_closed');
+});
+
+test('the post-council name-boundary catch block fails closed, not open', function () {
+  const src = fs.readFileSync(TOOL_LOOP_PATH, 'utf8');
+  const catchSrc = extractCatchBlock(src,
+    '_postCouncilNameLeak = realNameBoundary.violation(_proofQuestion, finalAns,');
+  assert.doesNotMatch(catchSrc, /_postCouncilNameLeak = null;\s*}/,
+    'the old fail-open reset to null must be gone from the post-council checkpoint');
+  const fn = new Function('__err',
+    'var _postCouncilNameLeak = null; try { throw __err; } ' + catchSrc +
+    ' return _postCouncilNameLeak;');
+  const result = fn(new Error('simulated guard failure'));
+  assert.ok(result, 'a thrown exception from the post-council check must resolve to a ' +
+    'truthy (blocking) reason, never reset to null');
+  assert.equal(result, 'name_boundary_check_failed_fail_closed');
+});

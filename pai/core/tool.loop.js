@@ -5823,14 +5823,25 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // the cold check that it held, at the same pre council seam every other answer boundary
     // uses, so a failure here is NAMED and handed back to the mind to rewrite once. Cold code
     // never edits her sentence, it only refuses to let this one out unexamined.
+    // ⬡B:core.tool_loop:FIX:a_leak_guard_that_fails_open_is_not_a_guard:20260729⬡
+    // FOUNDER, live, screenshotted 20260729, second occurrence: the exact leak this guard
+    // exists to stop reached him anyway, after two prior turns both ended in the same blind
+    // "something broke" default. The guard's own catch block read "a broken guard must never
+    // silence a real answer" and swallowed any exception, letting finalAns through UNCHECKED.
+    // That reasoning is right for an ordinary formatting pass and backwards for a privacy
+    // boundary: every other stage in this pipeline degrades toward showing something, this one
+    // exists to refuse. An exception here means the check could not prove the answer safe, and
+    // an unproven answer is treated the same as a caught one.
     try {
       var _nameLeak = realNameBoundary.violation(_proofQuestion, finalAns,
         { personName:hamObj && hamObj.name, env:process.env,
           assistantName:CANONICAL_ASSISTANT_NAME });
-      if (_nameLeak) {
-        return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,reason:_nameLeak};
-      }
-    } catch (eNameBoundary) { /* a broken guard must never silence a real answer */ }
+    } catch (eNameBoundary) {
+      _nameLeak = 'name_boundary_check_failed_fail_closed';
+    }
+    if (_nameLeak) {
+      return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,reason:_nameLeak};
+    }
     if (!isHumanFacingAnswer(finalAns)) {
       return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
         reason:'hollow_protocol_after_preparation'};
@@ -6085,11 +6096,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // so the receipt says which boundary stopped it.
   if (!_structuredReachPolicy) {
     var _postCouncilNameLeak = null;
+    // ⬡B:core.tool_loop:FIX:a_leak_guard_that_fails_open_is_not_a_guard:20260729⬡
+    // Same correction as the pre council seam above, applied here: an exception from the
+    // check is no longer treated as "nothing to report." It is treated as "could not prove
+    // this answer safe," which for a privacy boundary is the same as catching a real one.
     try {
       _postCouncilNameLeak = realNameBoundary.violation(_proofQuestion, finalAns,
         { personName:hamObj && hamObj.name, env:process.env,
           assistantName:CANONICAL_ASSISTANT_NAME });
-    } catch (ePostName) { _postCouncilNameLeak = null; }
+    } catch (ePostName) {
+      _postCouncilNameLeak = 'name_boundary_check_failed_fail_closed';
+    }
     if (_postCouncilNameLeak) {
       _stampStep('outbound_council_blocked', _postCouncilNameLeak);
       return {ok:false,reason:_postCouncilNameLeak,blocked_by:'A\'NU',ham:hamObj,
