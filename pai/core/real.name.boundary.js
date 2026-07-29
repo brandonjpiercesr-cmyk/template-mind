@@ -49,8 +49,9 @@
 //      claim away from the name and cleared it. Honorifics and initials are masked first.
 //   3. Accented, ALL CAPS, all lowercase and apostrophed names all escaped a title case
 //      regex. The creator rule no longer reads case at all: it reads what follows "by" and
-//      asks whether that phrase is a company, a role, or her own name. Anything else is a
-//      person, however it is spelled.
+//      asks whether that phrase is a company, a role, a department, or her own name. A phrase
+//      that is none of those, carrying a given name AND a family name, is a person however it
+//      is spelled.
 //   4. Two title cased words were read as a human, so "your Digital Butler", "Wonder Games"
 //      and "New York" were all refused on the exact turn this guard exists to protect, and
 //      with one repair attempt before silence that could have broken who-are-you outright.
@@ -63,6 +64,22 @@
 //      question itself.
 //   6. The post council answer was never rechecked. That one is not fixed here, it is fixed
 //      at the caller (core/tool.loop.js), because this module cannot see the council.
+//
+// ⬡B:core.real_name_boundary:FIX:a_rule_per_sentence_shape_meets_a_new_sentence_forever:20260729⬡
+// CODEX REVIEW, third round, seven more, and the reviewer named the real problem rather than
+// only its instances: the failures kept arriving because the subject test matched a fixed
+// SENTENCE SHAPE. "I was created and built by <person>" broke it. "I was recently created by
+// <person>" broke it. Same claim, different sentence, and there is no end to sentences. So it
+// stopped reading shape: stripFiller() removes connectives, adverbs and the making verbs from
+// the window before the frame, and whatever is left has to BE her. Those words cannot change
+// who a claim is about, which is why removing them is safe and why one rule now covers the
+// shapes nobody has written yet. The rest of that round: contracted challenges ("who's
+// this?"), every marked name scanned instead of only the first (clearing the reader's own
+// name made it stop looking, and the second name shipped), the identity lookahead anchored so
+// a qualifier has to END the question, departments and functions no longer defaulting to
+// HUMAN, an unmarked human needing a given AND a family name, role phrases never recorded as
+// a person in any capitalization, and honorific periods kept masked through the whole
+// analysis so a phrase is not cut at the honorific.
 //
 // ZERO I/O, zero requires, pure functions, so it can never be the thing that makes a turn
 // hang or fail. A test pins that.
