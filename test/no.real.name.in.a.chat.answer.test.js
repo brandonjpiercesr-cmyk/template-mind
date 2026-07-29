@@ -482,3 +482,29 @@ test('the post-council name-boundary catch block fails closed, not open', functi
     'truthy (blocking) reason, never reset to null');
   assert.equal(result, 'name_boundary_check_failed_fail_closed');
 });
+
+// ⬡B:tests.no_real_name_in_a_chat_answer:FIX:the_fail_closed_reason_survived_one_checkpoint_and_died_at_the_next:20260729⬡
+// CODEX on anew#1371, correct: name_boundary_check_failed_fail_closed does not start with
+// 'named_', so the SEPARATE terminal-mapping ternary a few lines after the catch block (the
+// one that decides what a preparation failure becomes on its way out) rewrote it to the
+// anonymous 'hollow_protocol_answer', undoing the fail-closed fix on exactly the path where
+// violation() throws on both the initial draft and its one repair attempt. This extracts the
+// real terminal-mapping expression (not a hand-copied stand-in) and proves it now preserves
+// the fail-closed reason instead of collapsing it.
+test('the terminal preparation-failure mapping preserves the fail-closed reason, not just named_ reasons', function () {
+  const src = fs.readFileSync(TOOL_LOOP_PATH, 'utf8');
+  const marker = 'var _terminalReason = /^answer_was_only_screen_block|^emptied_after_model/.test(';
+  const start = src.indexOf(marker);
+  assert.notEqual(start, -1, 'expected terminal-mapping marker not found, source shape changed');
+  const semiIdx = src.indexOf(';', src.indexOf('hollow_protocol_answer', start));
+  const stmt = src.slice(start, semiIdx + 1);
+  const fn = new Function('_terminalPreparationReason', '_namedSilentWall',
+    stmt + ' return _terminalReason;');
+  const namedSilentWallStub = function (reason) { return reason; };
+  assert.equal(fn('name_boundary_check_failed_fail_closed', namedSilentWallStub),
+    'name_boundary_check_failed_fail_closed',
+    'the fail-closed reason must survive the terminal mapping, not collapse to hollow_protocol_answer');
+  assert.equal(fn('named_a_real_person_as_the_creator_or_owner_say_what_you_do_not_who_made_you',
+    namedSilentWallStub), 'named_a_real_person_as_the_creator_or_owner_say_what_you_do_not_who_made_you');
+  assert.equal(fn('some_other_unnamed_failure', namedSilentWallStub), 'hollow_protocol_answer');
+});
