@@ -400,6 +400,56 @@ function configuredIdentityNames(env) {
   return names;
 }
 
+// ⬡B:core.real_name_boundary:LAW:a_law_about_source_code_is_not_a_law_about_who_gets_named:20260729⬡
+// PROTECTED RELATIVES. The 20260729 leak was the world's own owner named to a stranger; the
+// same shape reaches any other real, private person this world's family never wants named to
+// someone outside it, not only the owner. The rule above already answers "who reads it and
+// what do they learn about a real person" for the owner; this answers the identical question
+// for everyone else the family configures the same way.
+//
+// SAME NO LITERALS LAW AS THE REST OF THIS FILE. Nobody's name is written here, and it cannot
+// be: this ships in the mind template every world inherits, so a name written here would bury
+// one family's private relative in every stranger's deploy, the exact defect this file exists
+// to close. A world names its own protected relatives in its own env, never in source.
+//
+// ONE DIFFERENCE FROM THE OWNER CHECK, and it is deliberate, not an oversight: a relative is
+// very often protected by a GIVEN NAME ALONE ("Pam"), not a two part legal name, because that
+// is how family actually refers to family. personShapedIdentity() requires two tokens because
+// an owner is configured with a full name and a bare common word would over-refuse; that
+// guard is wrong for a first name on purpose here, so this is its own function rather than a
+// shared one, and the file states the trade out loud rather than hiding it: a short common
+// first name costs more false positives, and this gate is already allowed to be wrong in only
+// the over-refusing direction (see the file header). A relative named with a two word phrase
+// ("Aunt Pam") does not need separate handling: the single given name form already matches
+// inside it on the padded, word bounded search in violation(), because that search is a
+// substring test, not a whole phrase equality test.
+function protectedRelativeShapedName(raw) {
+  var value = String(raw == null ? '' : raw).trim();
+  if (!value) return false;
+  if (namesNobody(value)) return false;
+  var tokens = value.split(/\s+/);
+  return tokens.every(function (token) {
+    return new RegExp('^\\p{Lu}(?:\\.|[\\p{L}\\p{M}\'’-]{0,24}\\.?,?)$', 'u').test(token);
+  });
+}
+
+// Reads FAMILY_PROTECTED_<n>_NAME (any number, so a second or third relative is one env line,
+// never a code change). The FAMILY_ prefix is not invented for this file: scripts/checks/
+// no-founder-pii.js's own IDENTITY_ENV_RE already treats FAMILY_*NAME as identity bearing, so
+// a live value configured here is already covered by that guard's hash learning too, one
+// shape of identity env, not a second hand maintained one.
+function configuredProtectedRelativeNames(env) {
+  var source = env || (typeof process !== 'undefined' && process.env) || {};
+  var names = [];
+  Object.keys(source).forEach(function (key) {
+    if (!/^FAMILY_PROTECTED_\d+_NAME$/.test(key)) return;
+    if (!protectedRelativeShapedName(source[key])) return;
+    var value = canon(source[key]);
+    if (value) names.push(value);
+  });
+  return names;
+}
+
 // A creator or owner claim ABOUT HER that names somebody. Reads the words before the frame to
 // decide whether the claim is about her at all, then reads the phrase after it and asks the
 // only question that matters: is that a company, a role, her own name, or a human.
@@ -523,6 +573,18 @@ function violation(question, answer, options) {
     return 'named_the_person_who_owns_this_world_to_someone_who_is_not_them';
   }
 
+  // 1b. Any other real person this world's family configured as never-named, on every
+  //     channel and every question, same as the owner above and for the same reason: this is
+  //     the one place a real human's name can be kept from ever reaching a stranger, so it
+  //     cannot depend on what was asked. Exempted only when the name IS the own name of
+  //     whoever is being spoken to, the same self-hearing-their-own-name carve out as above.
+  var protectedRelatives = configuredProtectedRelativeNames(opts.env);
+  for (var pr = 0; pr < protectedRelatives.length; pr++) {
+    if (haystack.indexOf(' ' + protectedRelatives[pr] + ' ') === -1) continue;
+    if (isOwnName(protectedRelatives[pr], ownForms)) continue;
+    return 'named_a_private_family_member_to_someone_who_is_not_family';
+  }
+
   // 2. A claim about who made or owns her, plus a real person's name, anywhere in the answer.
   //    No subject parsing: two signals in one answer is the violation. The making verb still
   //    has to point at her ("<verb> by", her as the direct object, "my creator"), which is
@@ -578,7 +640,10 @@ var WALL_LINE = 'NEVER NAME ANOTHER REAL PERSON AS YOUR CREATOR OR OWNER. The on
   + 'name you may say is the name of the person you are speaking to. Whoever created, owns, '
   + 'built, or runs you is never named to anyone, not even to them, and not when someone '
   + 'challenges you to prove who you are. Answer that with what you are and what you do for '
-  + 'the person in front of you.';
+  + 'the person in front of you. The same holds for any other real, private person this '
+  + 'world has marked as never to be named to someone outside the family: do not say their '
+  + 'name, on any topic, to anyone but the person you are speaking to if it happens to be '
+  + 'their own name.';
 
 module.exports = {
   IDENTITY_CHALLENGE: IDENTITY_CHALLENGE,
@@ -589,6 +654,7 @@ module.exports = {
   splitSentences: splitSentences,
   identityChallenge: function (question) { return IDENTITY_CHALLENGE.test(String(question || '')); },
   configuredIdentityNames: configuredIdentityNames,
+  configuredProtectedRelativeNames: configuredProtectedRelativeNames,
   markedPersonNames: markedPersonNames,
   personNamesAnywhere: personNamesAnywhere,
   violation: violation,
