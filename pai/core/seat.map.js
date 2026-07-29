@@ -295,12 +295,36 @@ var SEATS = {
   cookoff_grok:     { role: 'cook-off Grok contestant',     envModel: 'COOKOFF_GROK_MODEL',     model: 'x-ai/grok-build-0.1',    provider: 'openrouter', keyEnv: 'OR_KEY_COOKOFF_GROK',     via: 'openrouter', capEnv:'SEAT_COOKOFF_GROK_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true }
 };
 
+// ⬡B:core.seat_map:FIX:a_banned_env_override_still_won_at_the_one_resolver:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1. "env truth wins" was written as an
+// absolute, and a deployment setting SEAT_CODA_MODEL (or any SEAT_*_MODEL /
+// SEAT_*_MODEL_FALLBACK) to Kimi, GLM-5.2, Ornith, Opus, or Fable would have been
+// honored here unchecked, on the one seat every production, non-contestant caller
+// resolves through, which defeats the entire ban this file's own guard exists to hold.
+// A Wonder Games / cook-off CONTESTANT seat is exempt, same as everywhere else tonight;
+// a banned override on any other seat is treated exactly like a banned JUDGE_MODEL
+// override already is in core/judge.js: as if it were never set, falling back to the
+// seat's own baked, already-verified-compliant default rather than silently spending it.
+function isContestantSeat(name) { return /^(cookoff_|wonder_games_)/.test(String(name || '')); }
+
 // Resolve a seat, reading its model fresh from env each call (env truth wins;
 // the baked default is only the floor). Unknown seat returns null, never a guess.
 function seat(name) {
   var d = SEATS[name];
   if (!d) return null;
+  var isContestant = isContestantSeat(name);
   var resolvedModel = env(d.envModel, d.model);
+  if (!isContestant && isBannedProductionModel(resolvedModel)) resolvedModel = d.model;
+  // ⬡B:core.seat_map:FIX:hasFallback_compared_the_raw_override_not_the_normalized_one:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P2: this compared the RAW
+  // SEAT_*_MODEL_FALLBACK env read against resolvedModel, but fallback() below compares
+  // the same value AFTER normalizing a banned override back to the baked default. A
+  // banned fallback override (SEAT_C2_MODEL_FALLBACK=glm-5.2 with SEAT_C2_MODEL already
+  // at the baked default) reported hasFallback:true here while fallback() itself
+  // normalized to the baked default and returned null (no real failover), so the two
+  // exported facts contradicted each other. Normalized the same way here so they agree.
+  var resolvedFallback = d.fallbackModel ? env(d.envModel + '_FALLBACK', d.fallbackModel) : null;
+  if (resolvedFallback && !isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
   return {
     seat: name,
     role: d.role,
@@ -312,8 +336,9 @@ function seat(name) {
     capEnv: d.capEnv,
     // Honest to the same rule as fallback() below: a fallback that resolves to the
     // primary's own model is not a fallback, so this seat reports that it has none.
-    hasFallback: !!(d.fallbackModel &&
-      env(d.envModel + '_FALLBACK', d.fallbackModel) !== env(d.envModel, d.model)),
+    // Compared against `resolvedModel`, not the raw env read, so a banned override
+    // corrected above cannot make this fact disagree with the model field beside it.
+    hasFallback: !!(d.fallbackModel && resolvedFallback !== resolvedModel),
     // Both answered about `resolvedModel`, the model this call will really send, not
     // about the row's baked default. A caller that sends an image part to a seat this
     // says is not vision-capable, or a tools array to a seat this says cannot hold one,
@@ -339,11 +364,19 @@ function seat(name) {
 // carries a fallback. Comparing two resolved model slugs is a fact, not a judgment, so cold
 // code may state it: when they are the same string, this seat has no failover and says so,
 // and the caller stops after one honest attempt instead of paying for a phantom second one.
+// ⬡B:core.seat_map:FIX:a_banned_fallback_override_still_won_too:20260729⬡
+// Same fix as seat() above, on the same finding: SEAT_*_MODEL_FALLBACK could set a
+// banned model on a non-contestant seat's failover and it would have been honored here
+// unchecked. Treated the same way: a banned override is as if it were never set.
 function fallback(name) {
   var d = SEATS[name];
   if (!d || !d.fallbackModel) return null;
-  if (env(d.envModel + '_FALLBACK', d.fallbackModel) === env(d.envModel, d.model)) return null;
+  var isContestant = isContestantSeat(name);
+  var resolvedPrimary = env(d.envModel, d.model);
+  if (!isContestant && isBannedProductionModel(resolvedPrimary)) resolvedPrimary = d.model;
   var resolvedFallback = env(d.envModel + '_FALLBACK', d.fallbackModel);
+  if (!isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
+  if (resolvedFallback === resolvedPrimary) return null;
   return {
     seat: name + '.fallback',
     role: d.role + ' (fallback)',
@@ -395,5 +428,51 @@ function resolveKey(s) {
 
 function seatNames() { return Object.keys(SEATS); }
 
+// ⬡B:core.seat_map:LAW:no_fable_no_opus_no_kimi_no_glm_no_ornith_on_a_production_non_contestant_seat:20260729⬡
+// Founder direct 20260729: "no fable, no opus, no kimi, no glm 5.2 no ornith, unless some
+// are in wonder games!" The one exemption is a Wonder Games / cook-off CONTESTANT (or its
+// judge) seat, where model diversity, or a separate judge, is the whole point. Fable and
+// Opus never appeared as a hardcoded literal on any production seat here, but that is not
+// the same as this pattern covering them: a DYNAMIC override read from an env var at
+// runtime (JUDGE_MODEL, for one) is invisible to a static grep, so all five banned
+// families are checked here, not only the two that happened to be baked-model literals.
+// This is the ONE source for that check: tests/seat.map.test.js's regression guard and
+// any direct caller that resolves a model OUTSIDE the normal seat() path (an env-only A/B
+// override, for example) both call this rather than each keeping their own copy of the
+// pattern, the same lesson this file has already applied to every other duplicated
+// decision.
+// ⬡B:core.seat_map:FIX:a_provider_prefixed_pattern_missed_the_bare_id_shape:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: requiring the OpenRouter
+// prefix (`moonshotai/kimi`, `z-ai/glm-5.2`) or the `claude-` prefix (`claude-opus`,
+// `claude-fable`) let a bare, unqualified id through unmatched: `isBannedProductionModel
+// ('kimi-k3')`, `('glm-5.2')` and `('opus-4-8')` all returned false. An unqualified id is
+// a real shape in this estate (`GLM_RUNPOD_MODEL` itself defaults to the bare `'glm-5.2'`,
+// no provider prefix at all), and this helper exists specifically to validate an ARBITRARY
+// env override, which can be typed in any shape an operator chooses, not only the exact
+// spelling a seat happens to bake. Matching the bare family keyword, the same style this
+// file's own sibling guard already uses for other banned providers (`deepseek`, `gemini`,
+// `groq`, no prefix required either), closes this without needing to enumerate every
+// prefix a family could ever be spelled with.
+var BANNED_PRODUCTION_MODEL = /(kimi|glm-5\.2|ornith|opus|fable)/i;
+function isBannedProductionModel(model) { return BANNED_PRODUCTION_MODEL.test(String(model || '')); }
+
+// ⬡B:core.seat_map:FIX:the_raw_together_callers_never_validated_their_own_env_override:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1. Every direct Together caller this
+// PR migrated off the banned baked default (core/outreach.js, core/survey.js,
+// core/interview.js, board/compose.js, board/grounding.js, management/dion.js,
+// management/think.js, management/messages/iman/inbound.js, core/session.wonder.js,
+// core/overseer/confidence.validator.js, core/journal.followthrough.js,
+// core/logful.enrich.js) still read `process.env.TOGETHER_MODEL` UNVALIDATED: a live
+// deployment env var left at (or reset to) `zai-org/GLM-5.2` would still win, because
+// `X || default` only ever falls to the default when X is absent, never when X is
+// banned. This is the one place that fact gets checked, so twelve call sites do not
+// each need their own copy of it.
+function safeModelOverride(envValue, safeDefault) {
+  var v = String(envValue || '').trim();
+  if (v && !isBannedProductionModel(v)) return v;
+  return safeDefault;
+}
+
 module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
+  isBannedProductionModel: isBannedProductionModel, safeModelOverride: safeModelOverride,
   _test:{envUsd:envUsd} };

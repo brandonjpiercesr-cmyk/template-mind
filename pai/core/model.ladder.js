@@ -161,7 +161,20 @@ async function tryRunPodGLM(system, user, opts) {
     // Pin English hard on this rung so its output is always usable and never bleeds
     // the turn to OpenRouter. English-only prepend, caller's system content preserved.
     var _rpSystem = outputGuard.englishSystem(system);
-    var body = { model: process.env.GLM_RUNPOD_MODEL || 'glm-5.2', messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
+    // ⬡B:core.model_ladder:FIX:the_glm_runpod_rung_is_a_banned_model_by_definition_now:20260729⬡
+    // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1: this rung's bare literal default
+    // ('glm-5.2', no provider prefix) was never covered by the earlier prefix-only ban check,
+    // and GLM_RUNPOD_MODEL was read unvalidated regardless. Founder ban 20260729: GLM-5.2 is
+    // not a production pick on ANY transport, RunPod included, and this whole rung's one job
+    // is running GLM on a dedicated RunPod pod, so there is no compliant model left for it to
+    // serve unless an operator explicitly re-seats it to something else; no banned literal is
+    // ever constructed here to begin with, so there is nothing for the repo-wide guard
+    // (tests/no.banned.production.model.literal.anywhere.test.js) to find, and nothing to
+    // refuse after the fact. Already dormant by default (GLM_RUNPOD_URL unset); this closes
+    // it even if that URL is ever set again.
+    var _rpModel = process.env.GLM_RUNPOD_MODEL;
+    if (!_rpModel || !seatMap || seatMap.isBannedProductionModel(_rpModel)) return null;
+    var body = { model: _rpModel, messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
     // ⬡B:core.model_ladder:FIX:runpod_honors_an_explicit_tight_caller_timeout:20260719⬡
     // The 45s floor here was the council's 42-48s latency and the slow half of the
@@ -177,7 +190,7 @@ async function tryRunPodGLM(system, user, opts) {
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runpodKey }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'glm-5.2', via: 'runpod' } : null;
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: _rpModel, via: 'runpod' } : null;
   } catch (e) { return null; }
 }
 // Every OpenRouter rung resolves one exact functional seat. The seat supplies
@@ -324,7 +337,17 @@ async function tryOrnith(system, user, opts) {
   try {
     var base = url.replace(/\/+$/, '');
     var full = /\/(chat\/)?completions$/.test(base) ? base : (/\/openai\/v1$/.test(base) ? base + '/chat/completions' : base + '/openai/v1/chat/completions');
-    var body = Object.assign({ model: process.env.ORNITH_MODEL || 'ornith', messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }] }, outputGuard.ornithSampling(opts.max_tokens, false));
+    // ⬡B:core.model_ladder:FIX:ornith_is_a_founder_banned_family_by_name_now:20260729⬡
+    // Founder ban 20260729: Ornith is a named banned family on any transport. This
+    // whole rung's one job is calling Ornith, so there is no compliant model left for
+    // it to serve unless an operator explicitly re-seats ORNITH_MODEL to something
+    // else non-banned; no banned literal ('ornith') is ever constructed here to begin
+    // with, mirroring the tryRunPodGLM fix just above, so the repo-wide guard
+    // (tests/no.banned.production.model.literal.anywhere.test.js) has nothing to find
+    // and nothing to refuse after the fact.
+    var _ornithModel = process.env.ORNITH_MODEL;
+    if (!_ornithModel || !seatMap || seatMap.isBannedProductionModel(_ornithModel)) return null;
+    var body = Object.assign({ model: _ornithModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }] }, outputGuard.ornithSampling(opts.max_tokens, false));
     // Ornith is called through its OpenAI-compatible chat-completions surface.
     // response_format is that surface's compatible JSON-mode request; ordinary
     // deliberations keep their existing request shape.
@@ -348,7 +371,7 @@ async function tryOrnith(system, user, opts) {
     // accepted rather than falling through, but returning it raw would have
     // handed that CJK reasoning trace straight to a human. Scrubbed like every
     // other rung, not a new behaviour, a missed one.
-    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: 'ornith', via: process.env.ORNITH_VIA || 'openrouter' } : null;
+    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: _ornithModel, via: process.env.ORNITH_VIA || 'openrouter' } : null;
   } catch (e) { return null; }
 }
 // The seat's declared failover rung. Named `qwen` because that is what the default
@@ -423,7 +446,13 @@ async function tryAnthropicBackup(system, user, opts) {
   if (process.env.ANTHROPIC_BACKUP_FLOOR !== 'on') return null;
   var key = process.env.ANTHROPIC_LADDER_API_KEY;
   if (!key) return null;
-  var model = process.env.ANTHROPIC_LADDER_MODEL || 'claude-haiku-4-5';
+  // ⬡B:core.model_ladder:FIX:the_anthropic_floor_read_its_override_raw:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1: ANTHROPIC_LADDER_MODEL was read
+  // with a raw `||`, the exact vulnerable shape already fixed at every TOGETHER_MODEL/
+  // CANON_MODEL call site this same PR; ANTHROPIC_LADDER_MODEL=claude-fable-5 (or
+  // claude-opus-4-8) would have reached this floor unchecked. Routed through the same
+  // shared validator.
+  var model = seatMap ? seatMap.safeModelOverride(process.env.ANTHROPIC_LADDER_MODEL, 'claude-haiku-4-5') : 'claude-haiku-4-5';
   try {
     var r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
