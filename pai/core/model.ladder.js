@@ -446,7 +446,13 @@ async function tryAnthropicBackup(system, user, opts) {
   if (process.env.ANTHROPIC_BACKUP_FLOOR !== 'on') return null;
   var key = process.env.ANTHROPIC_LADDER_API_KEY;
   if (!key) return null;
-  var model = process.env.ANTHROPIC_LADDER_MODEL || 'claude-haiku-4-5';
+  // ⬡B:core.model_ladder:FIX:the_anthropic_floor_read_its_override_raw:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1: ANTHROPIC_LADDER_MODEL was read
+  // with a raw `||`, the exact vulnerable shape already fixed at every TOGETHER_MODEL/
+  // CANON_MODEL call site this same PR; ANTHROPIC_LADDER_MODEL=claude-fable-5 (or
+  // claude-opus-4-8) would have reached this floor unchecked. Routed through the same
+  // shared validator.
+  var model = seatMap ? seatMap.safeModelOverride(process.env.ANTHROPIC_LADDER_MODEL, 'claude-haiku-4-5') : 'claude-haiku-4-5';
   try {
     var r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },

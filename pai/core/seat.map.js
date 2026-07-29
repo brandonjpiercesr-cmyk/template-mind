@@ -312,8 +312,19 @@ function isContestantSeat(name) { return /^(cookoff_|wonder_games_)/.test(String
 function seat(name) {
   var d = SEATS[name];
   if (!d) return null;
+  var isContestant = isContestantSeat(name);
   var resolvedModel = env(d.envModel, d.model);
-  if (!isContestantSeat(name) && isBannedProductionModel(resolvedModel)) resolvedModel = d.model;
+  if (!isContestant && isBannedProductionModel(resolvedModel)) resolvedModel = d.model;
+  // ⬡B:core.seat_map:FIX:hasFallback_compared_the_raw_override_not_the_normalized_one:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P2: this compared the RAW
+  // SEAT_*_MODEL_FALLBACK env read against resolvedModel, but fallback() below compares
+  // the same value AFTER normalizing a banned override back to the baked default. A
+  // banned fallback override (SEAT_C2_MODEL_FALLBACK=glm-5.2 with SEAT_C2_MODEL already
+  // at the baked default) reported hasFallback:true here while fallback() itself
+  // normalized to the baked default and returned null (no real failover), so the two
+  // exported facts contradicted each other. Normalized the same way here so they agree.
+  var resolvedFallback = d.fallbackModel ? env(d.envModel + '_FALLBACK', d.fallbackModel) : null;
+  if (resolvedFallback && !isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
   return {
     seat: name,
     role: d.role,
@@ -327,8 +338,7 @@ function seat(name) {
     // primary's own model is not a fallback, so this seat reports that it has none.
     // Compared against `resolvedModel`, not the raw env read, so a banned override
     // corrected above cannot make this fact disagree with the model field beside it.
-    hasFallback: !!(d.fallbackModel &&
-      env(d.envModel + '_FALLBACK', d.fallbackModel) !== resolvedModel),
+    hasFallback: !!(d.fallbackModel && resolvedFallback !== resolvedModel),
     // Both answered about `resolvedModel`, the model this call will really send, not
     // about the row's baked default. A caller that sends an image part to a seat this
     // says is not vision-capable, or a tools array to a seat this says cannot hold one,
