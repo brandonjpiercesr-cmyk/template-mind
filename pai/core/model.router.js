@@ -43,17 +43,29 @@ var PROVIDERS = {
       c4_watch: process.env.GROQ_MODEL_C1 || 'openai/gpt-oss-20b'
     }
   },
-  together: {
-    endpoint: 'https://api.together.xyz/v1/chat/completions',
-    keyEnv: 'TOGETHER_API_KEY',
-    models: {
-      c1_gate:  process.env.TOGETHER_MODEL || 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
-      c2_organ: process.env.TOGETHER_MODEL || 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
-      c2_deep:  process.env.TOGETHER_MODEL || 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
-      c3_mind:  process.env.TOGETHER_MODEL || 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
-      c4_watch: process.env.TOGETHER_MODEL || 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8'
-    }
-  },
+  // ⬡B:core.model.router:FIX:this_legacy_fallback_read_together_model_raw_unguarded:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: resolve()'s legacy chain
+  // (armed when a named seat has no routable key and the caller passes allowFallback)
+  // reads this map's model straight through, but every one of these five slots read
+  // TOGETHER_MODEL raw with `||`, the exact vulnerable shape already fixed at every
+  // TOGETHER_MODEL call site on the anew side (core/outreach.js and eleven others,
+  // anew#1346): a deployment with TOGETHER_MODEL=zai-org/GLM-5.2 still set would have
+  // sent that founder-banned model on this fallback path, and exporting
+  // safeModelOverride() from core/seat.map.js (already required below as `seatMap`)
+  // does nothing for a caller that never invokes it. Routed through the same shared
+  // validator, one read instead of five repeated raw ones.
+  together: (function () {
+    var togetherModel = require('./seat.map.js').safeModelOverride(
+      process.env.TOGETHER_MODEL, 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8');
+    return {
+      endpoint: 'https://api.together.xyz/v1/chat/completions',
+      keyEnv: 'TOGETHER_API_KEY',
+      models: {
+        c1_gate: togetherModel, c2_organ: togetherModel, c2_deep: togetherModel,
+        c3_mind: togetherModel, c4_watch: togetherModel
+      }
+    };
+  })(),
   anthropic_bleed: {
     endpoint: 'https://api.anthropic.com/v1/messages',
     // L3 BLEED: two live backup keys, one per category, live-tested 20260706.
