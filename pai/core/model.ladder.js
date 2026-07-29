@@ -191,11 +191,23 @@ async function tryRunPodGLM(system, user, opts) {
     // a model; resolved from the seat's own declared model (already exempt from the ban
     // by isContestantSeat(), same source contestantBuild() itself pays the key through),
     // never a literal reconstructed in this file.
+    // ⬡B:core.model_ladder:FIX:the_seats_openrouter_slug_is_a_foreign_id_on_runpod:20260729⬡
+    // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P2, fresh evidence beyond the fix
+    // above: the seat's declared model is an OpenRouter-format slug ('z-ai/glm-5.2'), the
+    // format this seat normally speaks on its usual (OpenRouter) transport. RunPod's own
+    // integration (routes/cookoff.routes.js's own runpod runner) has always used the bare
+    // provider-native id ('glm-5.2', no prefix) for this exact model on this exact
+    // transport. Sending the OpenRouter slug to RunPod is a foreign, unrecognized model id
+    // there, so the contestant would pass the null check above and still submit empty
+    // content once RunPod itself rejects it. Stripped to the bare id RunPod actually
+    // speaks, derived from the seat's slug at runtime rather than a second hardcoded
+    // 'glm-5.2' literal in this file.
     var _rpModel = process.env.GLM_RUNPOD_MODEL;
     var _rpIsContestant = /^(cookoff_|wonder_games_)/.test(String(opts.seat || ''));
     if (!_rpModel && _rpIsContestant && seatMap) {
       var _rpContestantSeat = seatMap.seat(opts.seat);
-      _rpModel = _rpContestantSeat && _rpContestantSeat.model;
+      var _rpContestantModel = _rpContestantSeat && _rpContestantSeat.model;
+      _rpModel = _rpContestantModel && _rpContestantModel.replace(/^[^/]+\//, '');
     }
     if (!_rpModel || !seatMap || (!_rpIsContestant && seatMap.isBannedProductionModel(_rpModel))) return null;
     var body = { model: _rpModel, messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
