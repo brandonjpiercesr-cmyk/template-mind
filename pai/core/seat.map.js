@@ -408,7 +408,19 @@ function seatNames() { return Object.keys(SEATS); }
 // override, for example) both call this rather than each keeping their own copy of the
 // pattern, the same lesson this file has already applied to every other duplicated
 // decision.
-var BANNED_PRODUCTION_MODEL = /(moonshotai\/kimi|z-ai\/glm-5\.2|ornith|claude-opus|claude-fable)/i;
+// ⬡B:core.seat_map:FIX:a_provider_prefixed_pattern_missed_the_bare_id_shape:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: requiring the OpenRouter
+// prefix (`moonshotai/kimi`, `z-ai/glm-5.2`) or the `claude-` prefix (`claude-opus`,
+// `claude-fable`) let a bare, unqualified id through unmatched: `isBannedProductionModel
+// ('kimi-k3')`, `('glm-5.2')` and `('opus-4-8')` all returned false. An unqualified id is
+// a real shape in this estate (`GLM_RUNPOD_MODEL` itself defaults to the bare `'glm-5.2'`,
+// no provider prefix at all), and this helper exists specifically to validate an ARBITRARY
+// env override, which can be typed in any shape an operator chooses, not only the exact
+// spelling a seat happens to bake. Matching the bare family keyword, the same style this
+// file's own sibling guard already uses for other banned providers (`deepseek`, `gemini`,
+// `groq`, no prefix required either), closes this without needing to enumerate every
+// prefix a family could ever be spelled with.
+var BANNED_PRODUCTION_MODEL = /(kimi|glm-5\.2|ornith|opus|fable)/i;
 function isBannedProductionModel(model) { return BANNED_PRODUCTION_MODEL.test(String(model || '')); }
 
 module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
