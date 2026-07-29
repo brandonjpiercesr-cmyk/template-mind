@@ -172,8 +172,18 @@ async function tryRunPodGLM(system, user, opts) {
     // (tests/no.banned.production.model.literal.anywhere.test.js) to find, and nothing to
     // refuse after the fact. Already dormant by default (GLM_RUNPOD_URL unset); this closes
     // it even if that URL is ever set again.
+    // ⬡B:core.model_ladder:FIX:the_ban_forgot_its_own_contestant_exemption:20260729⬡
+    // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P2: this commit's own stated intent
+    // exempts Wonder Games/cook-off contestants from the production ban (core/seat.map.js's
+    // isContestantSeat(), already checked by seat()/fallback()), but this unconditional
+    // return null applied the ban regardless of who was asking. contestantBuild() passes
+    // opts.seat:'wonder_games_glm' precisely to run GLM as the graded contestant it is, and
+    // with GLM_PROVIDER_ORDER=runpod that seat had no route to its own supported model at
+    // all, submitting empty content and dropping out of its own game. Same contestant test
+    // seat.map.js already uses, applied here too.
     var _rpModel = process.env.GLM_RUNPOD_MODEL;
-    if (!_rpModel || !seatMap || seatMap.isBannedProductionModel(_rpModel)) return null;
+    var _rpIsContestant = /^(cookoff_|wonder_games_)/.test(String(opts.seat || ''));
+    if (!_rpModel || !seatMap || (!_rpIsContestant && seatMap.isBannedProductionModel(_rpModel))) return null;
     var body = { model: _rpModel, messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
     // ⬡B:core.model_ladder:FIX:runpod_honors_an_explicit_tight_caller_timeout:20260719⬡
