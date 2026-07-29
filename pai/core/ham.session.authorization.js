@@ -589,10 +589,23 @@ const SIGN_IN_TIER_ONLY_PATHS = [
 // themselves is believed. It is the same shape as /auth/advisor/request and the emailed link,
 // and it is the shape every upgrade door must have: it proves a credential the weaker tier
 // cannot forge BEFORE it mints anything. A door that merely writes something is not eligible.
+// ⬡B:core.ham_session_authorization:P2:the_wall_blocked_the_invite_code_upgrade_too:20260729⬡
+// CATHY (Codex) on #1301, the same shape as the Google resolver fix just above: a visitor who
+// already holds a world_id cookie (they typed one world's id earlier, or arrived via any of the
+// weak-tier doors) hits the wall on GET /arrival and lands on the invite form, exactly as
+// intended, but POSTing that form to /arrival/invite/verify was refused before the handler ever
+// ran, because that path was on no allow list. routes/arrival.invite.routes.js:101-133 verifies
+// a real secret CODE against the roster (invite.verifyInviteCode) BEFORE it ever calls
+// signHamSession, and refuses with the identical byte-for-byte reason for a wrong code, a code
+// issued to somebody else, a malformed code or an empty body, so nothing the caller says about
+// themselves is believed and a weak session in hand buys no shortcut through it. Same eligibility
+// test as every other entry on this list: it proves a credential the weaker tier cannot forge
+// before it mints anything, so allowing it is not a loosening.
 const WORLD_ID_MAY_WRITE_PATHS = [
   /^\/auth\/home\/ham\/?$/i,
   /^\/auth\/advisor\/request\/?$/i,
   /^\/auth\/advisor\/resolve\/?$/i,
+  /^\/arrival\/invite\/verify\/?$/i,
   /^\/os\/wake\/[^/]+\/?$/i,
   /^\/os\/sleep\/?$/i,
   /^\/door\/where\/?$/i,
@@ -708,27 +721,67 @@ function worldIdTierRefusal(method, urlPath, via, sessionHamUid) {
 // answers WHO IS THIS for a door deciding whether to serve, and its refusal to downgrade an
 // explicit bearer to a cookie beside it is correct there and must stay. Two questions, two
 // functions, one implementation each.
+//
+// ⬡B:core.ham_session_authorization:P2:same_tier_precedence_still_hid_a_second_world:20260729⬡
+// CATHY (Codex) on #1301, fresh evidence past the mixed-tier fix above: strongest-first has
+// nothing to prefer between two credentials of the SAME tier, so a world_id BEARER for world A
+// beside a world_id COOKIE for world B was still reduced to whichever carrier the loop reached
+// first (the bearer, always, since it is checked before the cookie), silently. A caller sending
+// a bearer for A while POSTing /os/wake/A read that as "everything held belongs to A" and
+// overwrote B's cookie with a fresh one for A, instead of the cross-world 403 the mixing case is
+// supposed to get. This does not touch the mixed-tier case one comment up: a full sign_in still
+// wins outright over a weak token for a DIFFERENT world, on purpose, because that is not two
+// worlds mixed, it is one real credential and one token that should not have been sent. Only
+// when NEITHER carrier is full tier and the two verified world_id credentials name different
+// worlds is this an actual conflict, and it is reported as one (hamUid:null) rather than
+// resolved, so every caller's existing "hamUid !== ham" refusal already catches it for free.
+//
+// ⬡B:core.ham_session_authorization:P2:two_full_sessions_had_the_identical_hole:20260729⬡
+// CATHY (Codex) on #1301, fresh evidence past the same-tier world_id conflict two comments up:
+// the same reduction problem exists one tier higher. A sign_in BEARER for world A beside a
+// sign_in COOKIE for world B was reduced to whichever carrier the loop reached first (the
+// bearer, checked before the cookie), so /os/wake/A saw no conflict and overwrote B's real
+// thirty day cookie with a fresh one for A. Two full credentials disagreeing on hamUid is the
+// exact "two people, one browser" shape the mixed-tier comment above says is NOT this case,
+// because there both credentials are the SAME question answered twice, at the SAME strength,
+// and strongest-first has nothing left to prefer between them. Reported as a conflict the same
+// way the weak-tier case is, before ever looking at whether a weaker credential is also present.
 function heldSessionOn(req) {
   const headers = (req && req.headers) || {};
   const candidates = [
     bearerToken(headers.authorization || headers.Authorization),
     cookieToken(headers.cookie || headers.Cookie)
   ];
-  let weaker = null;
+  const verified = [];
   for (const candidate of candidates) {
     if (!candidate) continue;
-    const verified = verifySessionToken(candidate);
+    const v = verifySessionToken(candidate);
     // Only a token that really verifies counts. An unsigned or expired string is not a
     // credential, and treating it as one would refuse requests that carry nothing at all.
-    if (!verified.ok) continue;
-    // Strongest wins outright, so a weak token cannot be used to hide a full one that is also
-    // present. Otherwise remember the weak one and keep looking.
-    if (verified.via === TIER_SIGN_IN) {
-      return { ok:true, hamUid:verified.hamUid, via:TIER_SIGN_IN, expiresAt:verified.expiresAt };
-    }
-    if (!weaker) weaker = { ok:true, hamUid:verified.hamUid, via:verified.via, expiresAt:verified.expiresAt };
+    if (v.ok) verified.push(v);
   }
-  return weaker || { ok:false };
+  const fulls = verified.filter(function (v) { return v.via === TIER_SIGN_IN; });
+  if (fulls.length) {
+    const distinctFullHams = {};
+    fulls.forEach(function (v) { distinctFullHams[v.hamUid] = true; });
+    if (Object.keys(distinctFullHams).length > 1) {
+      return { ok:true, conflict:true, hamUid:null, via:null };
+    }
+    const full = fulls[0];
+    return { ok:true, hamUid:full.hamUid, via:TIER_SIGN_IN, expiresAt:full.expiresAt };
+  }
+  if (verified.length > 1) {
+    const distinctHams = {};
+    verified.forEach(function (v) { distinctHams[v.hamUid] = true; });
+    if (Object.keys(distinctHams).length > 1) {
+      return { ok:true, conflict:true, hamUid:null, via:null };
+    }
+  }
+  if (verified.length) {
+    const only = verified[0];
+    return { ok:true, hamUid:only.hamUid, via:only.via, expiresAt:only.expiresAt };
+  }
+  return { ok:false };
 }
 
 // ⬡B:core.ham_session_authorization:P1:strongest_first_is_the_wrong_reduction_for_a_guard:20260728⬡
