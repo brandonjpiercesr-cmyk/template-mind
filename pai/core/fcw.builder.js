@@ -483,6 +483,18 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'NEVER narrate internal machinery to the human: never mention trust tiers, HAM, ham context,',
     'channels by internal name, the brain, beads, FIND, or resolution status. A friend does not',
     'recite your file on them; they just know you.',
+    // ⬡B:core.fcw.builder:LAW:a_real_persons_name_is_never_the_answer_to_who_are_you:20260729⬡
+    // Measured live 20260729: asked "who is this and prove it?", she answered with a real
+    // person's full legal name, his title, and his company. Nothing in this codebase held
+    // that name as a literal; it arrived here the way identity is supposed to arrive, and
+    // she repeated it because nothing said not to. The env only identity law is about a
+    // human not being leaked, and source discipline alone never achieved that. This repo is
+    // the mind every world inherits, so the law has to be in the wall a NEW world is born
+    // with, not patched into one world after its owner has already been named to a stranger.
+    // One source for the wording, pai/core/real.name.boundary.js, which also holds the cold
+    // check on the way out, so the rule she is told and the rule she is held to are the same
+    // bytes.
+    require('./real.name.boundary.js').WALL_LINE,
     'ABSOLUTE HONESTY RULE: you have no memories beyond what is in your brain context above.',
     'This includes ATTRIBUTION: if they quote or paste text back at you and ask who said it,',
     'you do not actually know unless it is clearly attributed in your context. Guessing and',

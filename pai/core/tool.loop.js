@@ -49,6 +49,11 @@ var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
 var outputGuard = require('./model.output.guard.js');
+// ⬡B:core.tool.loop:WIRE:the_env_only_identity_law_reaches_model_output_too:20260729⬡
+// The founder law "identity is env only, never a literal" was enforced over source code and
+// nowhere else, so a name could be perfectly env resolved and still be spoken to a stranger.
+// Measured live 20260729 on an identity challenge. This module holds the outgoing half.
+var realNameBoundary = require('./real.name.boundary.js');
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
@@ -3758,7 +3763,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     };
     systemPrompt += '\nCURRENT IDENTITY PROOF (server-owned for this exact turn): ' +
       JSON.stringify(_runtimeIdentityEvidence) +
-      '\nAnswer the identity questions directly from this binding. Explain that the person is known through their resolved private account/world and stored identity record, and that you are A\'NU because this request is executing inside A\'NU\'s canonical PAI pathway. Do not expose internal identifiers or claim biometric, legal, or real-world proof beyond this binding.';
+      realNameBoundary.systemInstruction();
   }
   // ⬡B:core.tool_loop:GROUND:current_turn_proof_before_draft:20260715⬡
   // Drafting necessarily precedes council commit and STAMP readback. Ground only
@@ -5808,6 +5813,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
         reason:'false_current_turn_failure_claim_after_preparation'};
     }
+    // ⬡B:core.tool_loop:GUARD:no_real_persons_name_reaches_a_reader:20260729⬡
+    // A prompt is not a gate. The instruction above tells her not to name a person; this is
+    // the cold check that it held, at the same pre council seam every other answer boundary
+    // uses, so a failure here is NAMED and handed back to the mind to rewrite once. Cold code
+    // never edits her sentence, it only refuses to let this one out unexamined.
+    try {
+      var _nameLeak = realNameBoundary.violation(_proofQuestion, finalAns,
+        { personName:hamObj && hamObj.name, env:process.env });
+      if (_nameLeak) {
+        return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,reason:_nameLeak};
+      }
+    } catch (eNameBoundary) { /* a broken guard must never silence a real answer */ }
     if (!isHumanFacingAnswer(finalAns)) {
       return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
         reason:'hollow_protocol_after_preparation'};
@@ -5847,7 +5864,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         : _terminalPreparationReason === 'shadow_scrubbed_to_empty'
           ? 'shadow_scrubbed_to_empty'
           : _terminalPreparationReason.indexOf('false_current_turn_failure_claim') === 0
-            ? 'false_current_turn_failure_claim' : 'hollow_protocol_answer';
+            ? 'false_current_turn_failure_claim'
+            // Same law as the two lines above, applied to the name boundary: silence over a
+            // leaked human, but a silence that says which boundary held it, so this never
+            // becomes another anonymous 'hollow_protocol_answer' in the receipts.
+            : _terminalPreparationReason.indexOf('named_') === 0
+              ? _terminalPreparationReason : 'hollow_protocol_answer';
       return {ok:false,reason:_terminalReason,ham:hamObj,cycleId:_cycleId,
         requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
         _dbg:_cycleFailure||null};
