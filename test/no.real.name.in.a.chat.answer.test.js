@@ -114,6 +114,19 @@ test('the retired wording that leaked the machinery is gone from the identity bi
       'a prompt is not a gate: the cold check must run before council');
   });
 
+test('BYPASS 6: the boundary runs again on the bytes that actually ship', function () {
+  const loop = fs.readFileSync(path.join(__dirname, '..', 'pai', 'core', 'tool.loop.js'), 'utf8');
+  const calls = loop.split('realNameBoundary.violation(').length - 1;
+  assert.strictEqual(calls, 2,
+    'the council is not a pass through: it replaces finalAns with its own answer, so a clean '
+    + 'draft can acquire a name inside a model backed stage. Checking only the draft is a '
+    + 'check on bytes nobody reads.');
+  const postIndex = loop.indexOf('_postCouncilNameLeak');
+  const councilIndex = loop.indexOf('finalAns = _council.answer;');
+  assert.ok(postIndex > councilIndex && councilIndex !== -1,
+    'the second check must sit AFTER the council answer is adopted, not before it');
+});
+
 test('the wall every channel generates from carries the same law, from the same bytes',
   function () {
     const wall = fs.readFileSync(path.join(__dirname, '..', 'pai', 'core', 'fcw.builder.js'), 'utf8');
@@ -145,4 +158,100 @@ test('a world that degraded its identity env to a ROLE is not held forever', fun
     'I answer to the founder of this world and I keep it running for you.',
     { personName: READER, env: roleEnv }), null,
   'a role in the answer is a role, and it ships');
+});
+
+// ── THE NINE WAYS ROUND THE FIRST DETECTOR (Codex review, 20260729) ─────────────────────
+// Every one of these returned null before the rewrite. Each is written as the reviewer wrote
+// it, so a regression reads as the exact bypass it re-opens.
+
+test('BYPASS 1: a creator claim with no first person pronoun', function () {
+  ['A\'NU was created by Harriet Vole.',
+    'This assistant was created by Harriet Vole.',
+    'This system was built by Harriet Vole.'].forEach(function (answer) {
+    assert.ok(boundary.violation('what do you do?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }),
+    'a claim about her needs no pronoun to be a claim about her: ' + answer);
+  });
+});
+
+test('BYPASS 2: an honorific must not split the claim away from the name', function () {
+  ['I was created by Dr. Harriet Vole.',
+    'I was built by Prof. Harriet Vole.',
+    'I was made by Mr. Vole.'].forEach(function (answer) {
+    assert.ok(boundary.violation('who are you?', answer, { personName: READER, env: {} }),
+      'a period after an honorific is not the end of a sentence: ' + answer);
+  });
+});
+
+test('BYPASS 3: names are not always title case ASCII', function () {
+  ['I was created by HARRIET VOLE.',
+    'I was created by harriet vole.',
+    'I was created by Mary O\'Connor.',
+    'I was created by José García.',
+    'I was created by Anne-Marie Vole.'].forEach(function (answer) {
+    assert.ok(boundary.violation('who made you?', answer, { personName: READER, env: {} }),
+      'the creator rule reads the claim, never the spelling: ' + answer);
+  });
+});
+
+test('BYPASS 4: two title cased words are not evidence of a human', function () {
+  ['I am A\'NU, your Digital Butler.',
+    'I run the Wonder Games for this world.',
+    'I am here, operating from New York, whenever you need me.'].forEach(function (answer) {
+    assert.strictEqual(boundary.violation('who are you?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }), null,
+    'this guard must not break the one answer it exists to protect: ' + answer);
+  });
+});
+
+test('BYPASS 5: an ordinary question that merely starts with the same words', function () {
+  assert.strictEqual(boundary.identityChallenge('what are you doing with Harriet Vole?'), false,
+    '"what are you doing with" is not a challenge to who she is');
+  assert.strictEqual(boundary.violation('what are you doing with Harriet Vole?',
+    'I am drafting the Thursday note for Harriet J. Vole right now.',
+    { personName: READER, env: {} }), null,
+  'and the perfectly good answer to it must ship');
+  assert.strictEqual(boundary.identityChallenge('what are you?'), true,
+    'anchored, it is still the challenge it always was');
+});
+
+test('BYPASS 7: what is your name is the plainest identity challenge there is', function () {
+  ['what\'s your name?', 'What is your name?', 'tell me your name',
+    'do you have a name?', 'what should I call you?'].forEach(function (question) {
+    assert.strictEqual(boundary.identityChallenge(question), true, question);
+  });
+  assert.ok(boundary.violation("what's your name?",
+    'I am A\'NU. Harriet J. Vole set me up for you.', { personName: READER, env: {} }),
+  'and a third party named in the answer to it is refused');
+});
+
+test('BYPASS 8: the same claim said forwards', function () {
+  ['Harriet Vole created me.',
+    'Harriet Vole built me to run this world.',
+    'Harriet Vole is my owner.',
+    'Dr. Harriet Vole runs me.'].forEach(function (answer) {
+    assert.ok(boundary.violation('who are you?', answer, { personName: READER, env: {} }),
+      'active voice is the same leak: ' + answer);
+  });
+});
+
+test('BYPASS 8b: active voice must not swallow ordinary subjects', function () {
+  ['You created me for exactly this.',
+    'The team that built me kept it simple.',
+    'A whole company of people built me.'].forEach(function (answer) {
+    assert.strictEqual(boundary.violation('who are you?', answer,
+      { personName: READER, env: {} }), null,
+    'a subject that names nobody is not a leak: ' + answer);
+  });
+});
+
+test('the answer she should give still ships, on every one of these questions', function () {
+  const good = 'I am A\'NU. I hold your world in one place, I remember what you tell me, and '
+    + 'I can act on it. I know it is you because this space is yours and your own record is '
+    + 'right here in front of me.';
+  ["who's this and prove it?", 'who are you?', 'what is your name?', 'what are you?',
+    'who made you?', 'prove it'].forEach(function (question) {
+    assert.strictEqual(boundary.violation(question, good,
+      { personName: READER, env: ENV, assistantName: "A'NU" }), null, question);
+  });
 });

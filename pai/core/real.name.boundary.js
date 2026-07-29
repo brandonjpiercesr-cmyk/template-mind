@@ -36,57 +36,174 @@
 // FOUNDER_*_NAME style env of THIS world), so it protects the owner of whichever world it
 // wakes up in and never carries the owner of the world it was written in.
 //
+// ⬡B:core.real_name_boundary:FIX:six_ways_around_the_first_detector:20260729⬡
+// CODEX REVIEW of the first version, all six real, all closed here, and the shape of every
+// one of them is the same: the first detector reasoned about SPELLING when it should have
+// reasoned about the CLAIM.
+//   1. The creator check required a first person pronoun, so "A'NU was created by <person>"
+//      and "This assistant was created by <person>" walked straight through. The subject test
+//      is now a SUBJECT test: any way of referring to her counts, and it is read from the
+//      words BEFORE the frame rather than from anywhere in the sentence, which is what makes
+//      "<person> works for <person>" correctly none of this module's business.
+//   2. Sentence splitting broke on honorifics, so "I was created by Dr. <person>" split the
+//      claim away from the name and cleared it. Honorifics and initials are masked first.
+//   3. Accented, ALL CAPS, all lowercase and apostrophed names all escaped a title case
+//      regex. The creator rule no longer reads case at all: it reads what follows "by" and
+//      asks whether that phrase is a company, a role, or her own name. Anything else is a
+//      person, however it is spelled.
+//   4. Two title cased words were read as a human, so "your Digital Butler", "Wonder Games"
+//      and "New York" were all refused on the exact turn this guard exists to protect, and
+//      with one repair attempt before silence that could have broken who-are-you outright.
+//      Outside a creator claim the detector now needs a real PERSON MARKER (an honorific, a
+//      middle initial, a generational suffix) or a match against this world's own configured
+//      owner. A bare two word proper noun is not enough, and that limit is stated out loud
+//      below rather than papered over.
+//   5. "what are you doing with <person>?" was read as an identity challenge. Both open
+//      questions are now anchored so they only match when nothing follows them but the
+//      question itself.
+//   6. The post council answer was never rechecked. That one is not fixed here, it is fixed
+//      at the caller (core/tool.loop.js), because this module cannot see the council.
+//
 // ZERO I/O, zero requires, pure functions, so it can never be the thing that makes a turn
 // hang or fail. A test pins that.
 'use strict';
 
-// A challenge to who she is or who they are. This is the scope where NO third party may be
-// named at all. Deliberately does not include "how do you know", which is asked about
-// ordinary facts a hundred times a day and legitimately answers with other people's names
-// ("you told me your accountant is ...").
-var IDENTITY_CHALLENGE = /\bwho\s+(?:are|r)\s+(?:you|u)\b|\bwho\s+am\s+i\b|\bwho\s+is\s+this\b|\bwhat\s+are\s+you\b|\bprove\s+(?:it|who|yourself)\b|\bwho\s+(?:made|created|built|owns?|runs?|designed|programmed)\s+you\b|\bare\s+you\s+real\b/i;
+// A challenge to who she is or who they are. This is the scope where a third party may not be
+// named at all. Deliberately does not include "how do you know", which is asked about ordinary
+// facts a hundred times a day and legitimately answers with other people's names ("you told me
+// your accountant is ..."). "who are you" and "what are you" are ANCHORED: they only count
+// when the question ends there, so "what are you doing with <someone>" stays an ordinary turn.
+var OPEN_TAIL = '(?=\\s*(?:[?.!,;]|$|and\\b|then\\b|really\\b|exactly\\b|anyway\\b))';
+var IDENTITY_CHALLENGE = new RegExp(
+  '\\bwho\\s+(?:are|r)\\s+(?:you|u)\\b' + OPEN_TAIL
+  + '|\\bwhat\\s+are\\s+you\\b' + OPEN_TAIL
+  + '|\\bwho\\s+am\\s+i\\b' + OPEN_TAIL
+  + '|\\bwho\\s+is\\s+this\\b' + OPEN_TAIL
+  + '|\\bprove\\s+(?:it|who|yourself|that)\\b'
+  + '|\\bwho\\s+(?:made|created|built|owns?|runs?|designed|programmed)\\s+you\\b'
+  + '|\\bare\\s+you\\s+real\\b'
+  // "What's your name?" is the plainest identity challenge there is and the first version
+  // did not fire on it at all, so an answer to it could name anybody.
+  + '|\\bwhat(?:\\s+is|\\s+are|[\'’]s|s)?\\s+your\\s+name\\b'
+  + '|\\btell\\s+me\\s+your\\s+name\\b'
+  + '|\\bdo\\s+you\\s+have\\s+a\\s+name\\b'
+  + '|\\bwhat\\s+(?:do|should)\\s+(?:i|we)\\s+call\\s+you\\b', 'i');
 
 // A claim about who made or owns HER. Checked on EVERY answer, in every channel, not only on
 // an identity challenge, because "created by <a real person>" is the leak itself no matter
-// what question produced it.
-//
-// Two deliberate narrowings, both from thinking about what an ordinary day of conversation
-// actually contains. Only "by" and never "for": "I built this list for Harriet Vole" is a
-// kindness she performed, not a statement of who owns her, and holding it would make this
-// guard a nuisance that someone eventually turns off. And the sentence must be ABOUT HER
-// (SELF_REFERENCE below): "Harriet Vole works for Tobias Renfrew" is a fact about two other
-// people and is none of this module's business.
-var CREATOR_FRAME = /\b(?:created|built|made|designed|developed|programmed|founded|invented|owned|operated)\s+by\b|\bmy\s+(?:creator|maker|builder|founder|owner|author|developer|boss)\b|\bthe\s+(?:creator|founder|owner|maker|author)\s+of\s+(?:me|this|us)\b|\b(?:belong|work|report)s?\s+(?:to|for)\b/i;
+// what question produced it. Only "by", never "for": "I built this list for <someone>" is a
+// kindness she performed, not a statement of who owns her, and a guard that holds ordinary
+// sentences is a guard somebody eventually turns off.
+var CREATOR_FRAME = new RegExp(
+  '(?:created|built|made|designed|developed|programmed|founded|invented|owned|operated|'
+  + 'authored|written|trained)\\s+by\\s+'
+  + '|(?:creator|maker|builder|founder|owner|author|developer|boss)\\s+(?:is|was)\\s+'
+  + '|(?:belongs?|belonged|reports?|reported|works?|worked)\\s+(?:to|for)\\s+', 'i');
 
-var SELF_REFERENCE = /\b(?:i|i'm|im|me|my|myself|mine)\b/i;
+// THE SAME CLAIM SAID FORWARDS. The frame above is passive only, so "<person> created me"
+// walked straight past a rule built to catch "created by <person>". Here the person is the
+// SUBJECT and she is the object, so the phrase to judge is the one BEFORE the frame, not
+// after it. Two shapes cover it: a making verb taking her as its object, and "<somebody> is
+// my creator".
+var HER_AS_OBJECT = '(?:me|us|myself|ourselves|this\\s+(?:assistant|butler|system|service|'
+  + 'world|mind)|a[\'’`]?\\s?n[ue]w?)';
+var ACTIVE_CREATOR_FRAME = new RegExp(
+  '\\s(?:created|built|made|designed|developed|programmed|founded|invented|trained|coded|'
+  + 'wrote|owns|own|runs|run|operates|operate)\\s+' + HER_AS_OBJECT + '\\b'
+  + '|\\s(?:is|was|are|were)\\s+(?:my|our)\\s+(?:creator|maker|builder|founder|owner|author|'
+  + 'developer|boss)\\b', 'i');
 
-// A trailing word that makes a capitalized pair an organization rather than a person.
-var ORG_TAIL = /^(?:enterprise|enterprises|inc|llc|ltd|plc|corp|corporation|company|co|group|lab|labs|system|systems|technology|technologies|holding|holdings|partner|partners|venture|ventures|foundation|institute|university|college|school|studio|studios|solution|solutions|industry|industries|media|works|agency|team|department|division|service|services|network|networks|bank|capital|academy|association|society|council|committee|board|trust|fund|press|books|records|project|projects|platform|software|digital|consulting|advisors|associates)$/i;
+// Any way of referring to HER. The creator rule fires only when the thing being claimed about
+// is her, and this is read from the words immediately before the frame. Nothing here is a
+// person: these are product and role words, never identity.
+var SELF_NOUN = '(?:i|i[\'’]m|im|we|it|this|that)'
+  + '|(?:this|the|your|our)\\s+(?:assistant|butler|system|service|world|mind|app|platform|thing|one)'
+  + '|a[\'’`]?\\s?n[ue]w?';
+// Auxiliaries and adverbs that may sit between the subject and the claim without changing who
+// the claim is about. Anything else between them means the subject is not her.
+var LINKING = '(?:was|were|is|are|am|be|been|being|has|have|had|got|get|gets|also|originally|'
+  + 'first|actually|really|indeed|then|only|just|apparently|entirely|largely)';
+var ASSISTANT_SUBJECT = new RegExp(
+  '^\\s*(?:' + SELF_NOUN + ')\\b\\s*(?:' + LINKING + '\\b\\s*)*$', 'i');
+// ⬡B:core.real_name_boundary:FIX:the_subject_test_read_a_pronoun_not_a_subject:20260729⬡
+// The first version anchored the pronoun immediately before the frame, so "I WAS created by"
+// failed its own test and "A'NU was created by <person>" was never about her at all. It now
+// reads the trailing clause and asks whether that clause IS her, which both catches the ways
+// of naming her and keeps "I told <person> she works for <person>" out, because "told" is not
+// a linking word and that clause is therefore not her.
+var SELF_REFERENCE = new RegExp('\\b(?:i|i[\'’]m|im|me|my|myself|mine|we|us|our|'
+  + 'this\\s+(?:assistant|butler|system|service|world|mind))\\b', 'i');
 
-// A courtesy title in front of a single capitalized word is a person just as surely as two
-// capitalized words are.
-var TITLED_NAME = /\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Rev|Hon|Madam)\.?\s+[A-Z][a-z]{1,20}\b/;
+// A trailing word that makes a phrase an organization rather than a person.
+var ORG_TAIL = new RegExp('^(?:enterprise|enterprises|inc|llc|ltd|plc|corp|corporation|company|'
+  + 'co|group|lab|labs|system|systems|technology|technologies|holding|holdings|partner|partners|'
+  + 'venture|ventures|foundation|institute|university|college|school|studio|studios|solution|'
+  + 'solutions|industry|industries|media|works|agency|team|department|division|service|services|'
+  + 'network|networks|bank|capital|academy|association|society|council|committee|board|trust|'
+  + 'fund|press|books|records|project|projects|platform|software|digital|consulting|advisors|'
+  + 'associates|collective|guild|union|alliance|labs\\.|gmbh|sarl|bv|ag|nv|pty|llp)$', 'i');
 
-// Two to four capitalized tokens, allowing a middle initial and a generational suffix.
-var NAME_SHAPE = /[A-Z][a-z]{1,20}(?:\s+(?:[A-Z]\.|[A-Z][a-z]{1,20}(?:-[A-Z][a-z]{1,20})?)){1,3}(?:,?\s+(?:Sr|Jr|II|III|IV)\.?)?/g;
+// Words a SAFE answer to "who made you" is allowed to be built from: articles, pronouns,
+// role nouns, and the ordinary nouns of a description. A phrase made only of these names
+// nobody. Anything with a word outside this set, in any case, accented or not, is treated as
+// a person, which is the correct default for this one question.
+var SAFE_ANSWER_WORDS = new RegExp('^(?:the|a|an|and|or|of|in|at|on|to|for|with|by|from|'
+  + 'this|that|these|those|my|your|our|their|its|his|her|no|not|nobody|no-one|noone|anyone|'
+  + 'someone|somebody|people|person|persons|human|humans|folks|family|staff|crew|group|team|'
+  + 'teams|company|business|shop|engineer|engineers|developer|developers|designer|designers|'
+  + 'builder|builders|maker|makers|creator|creators|founder|founders|owner|owners|author|'
+  + 'authors|boss|bosses|writer|writers|coder|coders|programmer|programmers|world|worlds|'
+  + 'system|systems|service|services|estate|house|home|place|here|there|you|yourself|me|'
+  + 'myself|us|them|it|itself|who|whom|whose|work|works|hand|hands|design|purpose|code|'
+  + 'software|one|ones|many|few|several|whole|same|own|behind|serve|serves|serving|run|runs|'
+  + 'running|behalf|account|side)$', 'i');
+
+// PERSON MARKERS. Outside a creator claim, a proper noun alone is not evidence of a human:
+// "Wonder Games", "New York" and "Digital Butler" are all two title cased words. A marker is.
+var HONORIFIC = '(?:Mr|Mrs|Ms|Miss|Mx|Dr|Prof|Sir|Rev|Hon|Madam|Lady|Lord|Fr|Sr\\.|Capt|Sgt)';
+var NAME_TOKEN = '\\p{Lu}[\\p{L}\\p{M}\'’\\u2019-]{1,24}';
+var TITLED_NAME = new RegExp('\\b' + HONORIFIC + '\\.?\\s+' + NAME_TOKEN, 'u');
+// A middle initial between two name tokens: <given> <initial>. <family>.
+var INITIALLED_NAME = new RegExp('\\b' + NAME_TOKEN + '\\s+\\p{Lu}\\.\\s+' + NAME_TOKEN, 'u');
+// A generational suffix after one or more name tokens: <given> <family> Sr.
+// The examples in this file are written as placeholders on purpose. An invented
+// person in a comment is still a person shaped literal in the mind template every
+// world inherits, and no-founder-pii is right to refuse it.
+var SUFFIXED_NAME = new RegExp('\\b' + NAME_TOKEN + '(?:\\s+' + NAME_TOKEN + ')*'
+  + ',?\\s+(?:Sr|Jr|II|III|IV|PhD|MD|Esq)\\b\\.?', 'u');
+
+// Honorifics and single letter initials end in a period and are NOT the end of a sentence.
+// Splitting on them is what let "I was created by Dr. <person>" clear the creator rule.
+var SENTENCE_SAFE_DOT = new RegExp('\\b(?:' + HONORIFIC.slice(3, -1) + '|St|Jr|Sr|vs|etc|'
+  + '\\p{Lu})\\.', 'gu');
+var DOT_MASK = '\u0001';
 
 function canon(value) {
   return String(value == null ? '' : value)
+    .normalize('NFD').replace(/\p{M}+/gu, '')
     .toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// Lower the first letter of every sentence so an ordinary opener ("Your world is ...") can
-// never be read as the first half of somebody's name. A single capital letter followed by a
-// period is a middle initial, not the end of a sentence, so it is left alone: without that
-// exception a name written the way people actually write it would break in half and escape.
-function neutralizeSentenceStarts(text) {
-  return String(text || '').replace(/(^|[^A-Z][.!?)\]]\s+|\n\s*)([A-Z])/g,
-    function (whole, lead, letter) { return lead + letter.toLowerCase(); });
+function splitSentences(text) {
+  var masked = String(text || '').replace(SENTENCE_SAFE_DOT, function (whole) {
+    return whole.slice(0, -1) + DOT_MASK;
+  });
+  return masked.split(/(?<=[.!?])\s+/).map(function (part) {
+    return part.split(DOT_MASK).join('.');
+  });
 }
 
-function organizationName(candidate) {
-  var parts = String(candidate).split(/\s+/);
-  return ORG_TAIL.test(String(parts[parts.length - 1] || '').replace(/[.,]/g, ''));
+function organizationPhrase(candidate) {
+  var parts = String(candidate).trim().split(/\s+/);
+  return ORG_TAIL.test(String(parts[parts.length - 1] || '').replace(/[.,;:]/g, ''));
+}
+
+function namesNobody(candidate) {
+  var tokens = String(candidate).trim().split(/\s+/)
+    .map(function (t) { return t.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, ''); })
+    .filter(function (t) { return t.length > 0; });
+  if (!tokens.length) return true;
+  return tokens.every(function (t) { return SAFE_ANSWER_WORDS.test(t); });
 }
 
 // Every real name resolved for THIS turn that belongs to the person being spoken to. Their
@@ -102,6 +219,7 @@ function ownNameForms(personName) {
 function isOwnName(candidate, ownForms) {
   var c = canon(candidate);
   if (!c) return true;
+  if (!ownForms.length) return false;
   for (var i = 0; i < ownForms.length; i++) {
     if (ownForms[i] === c) return true;
     if (c.indexOf(ownForms[i]) !== -1 && ownForms[i].indexOf(' ') !== -1) return true;
@@ -114,23 +232,26 @@ function isOwnName(candidate, ownForms) {
   return tokens.every(function (t) { return ownForms.indexOf(t) !== -1; });
 }
 
-// Person shaped names in a piece of text, minus organizations and minus the name of the
-// person being spoken to. Returns COUNTS and SHAPES, never the names themselves, because
-// what this function returns travels into logs, receipts, and a repair instruction, and a
-// leak detector that carries the leak is not a detector.
-function thirdPartyNames(text, ownForms) {
+// Names carrying a real person marker, minus the person being spoken to. Returns SHAPES,
+// never the names themselves, because what this returns travels into logs, receipts, and a
+// repair instruction, and a leak detector that carries the leak is not a detector.
+//
+// HONEST LIMIT, stated rather than hidden, the same way no-founder-pii states its own: a
+// plain two word proper noun with no honorific, no middle initial and no suffix is NOT
+// detected here, because at that point a human and a product are the same seven characters
+// and refusing both would break the answer this guard exists to protect. What covers the one
+// person who actually matters is the configured owner check in violation(), which is exact
+// and case and accent insensitive, plus the creator rule, which needs no marker at all.
+function markedPersonNames(text, ownForms) {
   var found = [];
-  var scan = neutralizeSentenceStarts(text);
-  var titled = TITLED_NAME.exec(scan);
-  if (titled && !isOwnName(titled[0].replace(/^\S+\.?\s+/, ''), ownForms)) found.push('titled');
-  NAME_SHAPE.lastIndex = 0;
-  var match;
-  while ((match = NAME_SHAPE.exec(scan))) {
-    var candidate = match[0].trim();
-    if (organizationName(candidate)) continue;
-    if (isOwnName(candidate, ownForms)) continue;
-    found.push('name');
-  }
+  [TITLED_NAME, INITIALLED_NAME, SUFFIXED_NAME].forEach(function (pattern, index) {
+    var match = pattern.exec(String(text || ''));
+    if (!match) return;
+    var candidate = String(match[0]).replace(new RegExp('^' + HONORIFIC + '\\.?\\s+', 'i'), '');
+    if (organizationPhrase(candidate)) return;
+    if (isOwnName(candidate, ownForms)) return;
+    found.push(['titled', 'initialled', 'suffixed'][index]);
+  });
   return found;
 }
 
@@ -148,7 +269,7 @@ function personShapedIdentity(raw) {
   var tokens = value.split(/\s+/);
   if (tokens.length < 2) return false;
   return tokens.every(function (token) {
-    return /^[A-Z](?:\.|[A-Za-z'’-]{0,24}\.?,?)$/.test(token);
+    return new RegExp('^\\p{Lu}(?:\\.|[\\p{L}\\p{M}\'’-]{0,24}\\.?,?)$', 'u').test(token);
   });
 }
 
@@ -165,18 +286,90 @@ function configuredIdentityNames(env) {
   return names;
 }
 
+// A creator or owner claim ABOUT HER that names somebody. Reads the words before the frame to
+// decide whether the claim is about her at all, then reads the phrase after it and asks the
+// only question that matters: is that a company, a role, her own name, or a human.
+var PHRASE_BREAK = /[,;:.!?]|\band\b|\bbut\b|\bwho\b|\bwhich\b|\bthat\b|\bbecause\b|\bso\b/i;
+
+// Is this trailing clause HER. Read as a whole clause, never as a pronoun sighting somewhere
+// in the sentence, which is the difference between "I was created by <person>" and
+// "I told <person> she works for <person>".
+function subjectIsHer(clause, assistantPattern) {
+  var value = String(clause || '').trim();
+  if (!value) return false;
+  if (ASSISTANT_SUBJECT.test(value)) return true;
+  if (!assistantPattern) return false;
+  var stripped = value.replace(assistantPattern, ' ').trim();
+  return stripped === '' || new RegExp('^(?:' + LINKING + '\\b\\s*)+$', 'i').test(stripped);
+}
+
+function phraseIsAPerson(phrase, assistantPattern) {
+  var value = String(phrase || '').trim();
+  if (!value) return false;
+  if (assistantPattern && assistantPattern.test(value)) return false;
+  if (SELF_REFERENCE.test(value)) return false;
+  if (organizationPhrase(value)) return false;
+  if (namesNobody(value)) return false;
+  return true;
+}
+
+function creatorClaimNamesAPerson(text, assistantPattern) {
+  var sentences = splitSentences(text);
+  for (var s = 0; s < sentences.length; s++) {
+    var sentence = sentences[s];
+
+    // PASSIVE: "<she> was created by <phrase>". The claim has to be about HER, read from the
+    // words before the frame, which is what keeps "<person> works for <person>" out of it.
+    var rest = sentence;
+    var offset = 0;
+    for (;;) {
+      var frame = CREATOR_FRAME.exec(rest);
+      if (!frame) break;
+      var before = sentence.slice(0, offset + frame.index);
+      var after = rest.slice(frame.index + frame[0].length);
+      offset += frame.index + frame[0].length;
+      rest = after;
+      var beforeParts = before.split(PHRASE_BREAK);
+      var subjectClause = beforeParts[beforeParts.length - 1];
+      if (!subjectIsHer(subjectClause, assistantPattern)) continue;
+      if (phraseIsAPerson(String(after).split(PHRASE_BREAK)[0], assistantPattern)) return true;
+    }
+
+    // ACTIVE: "<phrase> created me", "<phrase> is my owner". Here the person is the subject,
+    // so the phrase to judge is the trailing one BEFORE the frame. An empty or clause-only
+    // subject ("the team that built me") names nobody and is left alone.
+    var activeRest = sentence;
+    var activeOffset = 0;
+    for (;;) {
+      var active = ACTIVE_CREATOR_FRAME.exec(activeRest);
+      if (!active) break;
+      var subjectText = sentence.slice(0, activeOffset + active.index);
+      activeOffset += active.index + active[0].length;
+      activeRest = activeRest.slice(active.index + active[0].length);
+      var parts = subjectText.split(PHRASE_BREAK);
+      if (phraseIsAPerson(parts[parts.length - 1], assistantPattern)) return true;
+    }
+  }
+  return false;
+}
+
 // THE BOUNDARY. Returns null when the answer is clean, or a bounded, name free reason code
 // when it is not. The code is written so a model reading it in the repair instruction knows
 // exactly what to change without ever being told the name again.
 //
 //   question   the exact words the person asked this turn
-//   answer     the drafted answer, after preparation, before council
-//   options    { personName, env }
+//   answer     the drafted answer, at any boundary, before or after council
+//   options    { personName, env, assistantName }
 function violation(question, answer, options) {
   var text = String(answer || '');
   if (!text) return null;
   var opts = options || {};
   var ownForms = ownNameForms(opts.personName);
+  var assistantPattern = null;
+  if (opts.assistantName) {
+    var escaped = String(opts.assistantName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assistantPattern = new RegExp('\\b' + escaped + '\\b', 'i');
+  }
 
   // 1. This world's own configured owner, named to anyone who is not that person. This is
   //    the exact leak that was measured, and it holds on every channel and every question.
@@ -188,22 +381,17 @@ function violation(question, answer, options) {
     return 'named_the_person_who_owns_this_world_to_someone_who_is_not_them';
   }
 
-  // 2. A creator, owner, or maker claim that names a person. Every channel, every question,
-  //    and with NO exception for the person being spoken to: "who made you" is answered with
-  //    what she is and what she does, never with a human, not even the human asking. The
-  //    check is per sentence so an ordinary name elsewhere in the same answer is untouched.
-  var sentences = text.split(/(?<=[.!?])\s+/);
-  for (var s = 0; s < sentences.length; s++) {
-    if (!CREATOR_FRAME.test(sentences[s])) continue;
-    if (!SELF_REFERENCE.test(sentences[s])) continue;
-    if (thirdPartyNames(sentences[s], []).length) {
-      return 'named_a_real_person_as_the_creator_or_owner_say_what_you_do_not_who_made_you';
-    }
+  // 2. A creator, owner, or maker claim about her that names a person. Every channel, every
+  //    question, and with NO exception for the person being spoken to: "who made you" is
+  //    answered with what she is and what she does, never with a human, not even the human
+  //    asking.
+  if (creatorClaimNamesAPerson(text, assistantPattern)) {
+    return 'named_a_real_person_as_the_creator_or_owner_say_what_you_do_not_who_made_you';
   }
 
-  // 3. An identity challenge answered with any third party's name at all.
+  // 3. An identity challenge answered with a marked third party name.
   if (IDENTITY_CHALLENGE.test(String(question || '')) &&
-      thirdPartyNames(text, ownForms).length) {
+      markedPersonNames(text, ownForms).length) {
     return 'named_a_real_person_who_is_not_the_one_you_are_speaking_to';
   }
   return null;
@@ -239,8 +427,11 @@ module.exports = {
   CREATOR_FRAME: CREATOR_FRAME,
   WALL_LINE: WALL_LINE,
   canon: canon,
+  splitSentences: splitSentences,
   identityChallenge: function (question) { return IDENTITY_CHALLENGE.test(String(question || '')); },
   configuredIdentityNames: configuredIdentityNames,
+  markedPersonNames: markedPersonNames,
+  creatorClaimNamesAPerson: creatorClaimNamesAPerson,
   violation: violation,
   systemInstruction: systemInstruction
 };
