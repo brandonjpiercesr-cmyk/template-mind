@@ -5885,7 +5885,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
             // Same law as the two lines above, applied to the name boundary: silence over a
             // leaked human, but a silence that says which boundary held it, so this never
             // becomes another anonymous 'hollow_protocol_answer' in the receipts.
-            : _terminalPreparationReason.indexOf('named_') === 0
+            // ⬡B:core.tool_loop:FIX:the_fail_closed_reason_was_not_a_named_reason:20260729⬡
+            // CODEX, correct, on this same PR: 'name_boundary_check_failed_fail_closed' does
+            // not start with 'named_', so a violation() exception surviving both the initial
+            // draft and its one repair attempt was rewritten to the anonymous
+            // 'hollow_protocol_answer' right here, one step after the fail-closed fix above
+            // set it, defeating the fix on exactly the path it exists for.
+            : (_terminalPreparationReason.indexOf('named_') === 0 ||
+                _terminalPreparationReason === 'name_boundary_check_failed_fail_closed')
               ? _terminalPreparationReason : 'hollow_protocol_answer';
       return {ok:false,reason:_terminalReason,ham:hamObj,cycleId:_cycleId,
         requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
