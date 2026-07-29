@@ -395,5 +395,22 @@ function resolveKey(s) {
 
 function seatNames() { return Object.keys(SEATS); }
 
+// ⬡B:core.seat_map:LAW:no_fable_no_opus_no_kimi_no_glm_no_ornith_on_a_production_non_contestant_seat:20260729⬡
+// Founder direct 20260729: "no fable, no opus, no kimi, no glm 5.2 no ornith, unless some
+// are in wonder games!" The one exemption is a Wonder Games / cook-off CONTESTANT (or its
+// judge) seat, where model diversity, or a separate judge, is the whole point. Fable and
+// Opus never appeared as a hardcoded literal on any production seat here, but that is not
+// the same as this pattern covering them: a DYNAMIC override read from an env var at
+// runtime (JUDGE_MODEL, for one) is invisible to a static grep, so all five banned
+// families are checked here, not only the two that happened to be baked-model literals.
+// This is the ONE source for that check: tests/seat.map.test.js's regression guard and
+// any direct caller that resolves a model OUTSIDE the normal seat() path (an env-only A/B
+// override, for example) both call this rather than each keeping their own copy of the
+// pattern, the same lesson this file has already applied to every other duplicated
+// decision.
+var BANNED_PRODUCTION_MODEL = /(moonshotai\/kimi|z-ai\/glm-5\.2|ornith|claude-opus|claude-fable)/i;
+function isBannedProductionModel(model) { return BANNED_PRODUCTION_MODEL.test(String(model || '')); }
+
 module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
+  isBannedProductionModel: isBannedProductionModel,
   _test:{envUsd:envUsd} };
