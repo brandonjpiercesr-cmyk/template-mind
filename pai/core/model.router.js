@@ -31,32 +31,36 @@
 // path. A caller that genuinely wants the last-resort fallback (real user
 // text, no other option) must now say so explicitly via allowFallback:true.
 
+// ⬡B:core.model.router:FIX:every_provider_block_read_its_override_raw_and_two_baked_defaults_were_themselves_banned:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: safeModelOverride() only
+// validates its FIRST argument (the override); passing a banned value as the SAFE
+// DEFAULT itself defeats it entirely. Two of this file's own baked defaults were
+// exactly that: anthropic_bleed.c3_mind defaulted to 'claude-opus-4-8' (Opus, one of
+// the five founder-banned families, baked in as the "safe" floor) and
+// openrouter.c2_organ/c2_deep defaulted to 'z-ai/glm-5.2' (GLM-5.2, banned, left over
+// from the 20260721 DeepSeek scrub that swapped one banned family for another).
+// Fixed alongside the raw GROQ_MODEL_*/ANTHROPIC_MODEL_*/OPENROUTER_MODEL_* override
+// reads Codex named on the groq block (same vulnerable `||` shape already fixed on
+// TOGETHER_MODEL): every provider block's baked default is now a genuinely non-banned
+// model, and every override is validated the same way, through the one shared
+// safeModelOverride(), reused rather than re-derived per block.
+var _modelRouterSeatMap = require('./seat.map.js');
+function _providerModel(envVal, safeDefault) { return _modelRouterSeatMap.safeModelOverride(envVal, safeDefault); }
+
 var PROVIDERS = {
   groq: {
     endpoint: 'https://api.groq.com/openai/v1/chat/completions',
     keyEnv: 'GROQ_API_KEY',
     models: {
-      c1_gate:  process.env.GROQ_MODEL_C1 || 'openai/gpt-oss-20b',
-      c2_organ: process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b',
-      c2_deep:  process.env.GROQ_MODEL_C2_DEEP || 'openai/gpt-oss-120b',
-      c3_mind:  process.env.GROQ_MODEL_C3 || process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b',
-      c4_watch: process.env.GROQ_MODEL_C1 || 'openai/gpt-oss-20b'
+      c1_gate:  _providerModel(process.env.GROQ_MODEL_C1, 'openai/gpt-oss-20b'),
+      c2_organ: _providerModel(process.env.GROQ_MODEL_C2, 'openai/gpt-oss-120b'),
+      c2_deep:  _providerModel(process.env.GROQ_MODEL_C2_DEEP, 'openai/gpt-oss-120b'),
+      c3_mind:  _providerModel(process.env.GROQ_MODEL_C3, _providerModel(process.env.GROQ_MODEL_C2, 'openai/gpt-oss-120b')),
+      c4_watch: _providerModel(process.env.GROQ_MODEL_C1, 'openai/gpt-oss-20b')
     }
   },
-  // ⬡B:core.model.router:FIX:this_legacy_fallback_read_together_model_raw_unguarded:20260729⬡
-  // CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: resolve()'s legacy chain
-  // (armed when a named seat has no routable key and the caller passes allowFallback)
-  // reads this map's model straight through, but every one of these five slots read
-  // TOGETHER_MODEL raw with `||`, the exact vulnerable shape already fixed at every
-  // TOGETHER_MODEL call site on the anew side (core/outreach.js and eleven others,
-  // anew#1346): a deployment with TOGETHER_MODEL=zai-org/GLM-5.2 still set would have
-  // sent that founder-banned model on this fallback path, and exporting
-  // safeModelOverride() from core/seat.map.js (already required below as `seatMap`)
-  // does nothing for a caller that never invokes it. Routed through the same shared
-  // validator, one read instead of five repeated raw ones.
   together: (function () {
-    var togetherModel = require('./seat.map.js').safeModelOverride(
-      process.env.TOGETHER_MODEL, 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8');
+    var togetherModel = _providerModel(process.env.TOGETHER_MODEL, 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8');
     return {
       endpoint: 'https://api.together.xyz/v1/chat/completions',
       keyEnv: 'TOGETHER_API_KEY',
@@ -75,11 +79,13 @@ var PROVIDERS = {
     keyEnv: 'ANTHROPIC_BACKUP_C2_SONNET5',
     keyEnvByTier: { c1: 'ANTHROPIC_BACKUP_C0C1_HAIKU', c4: 'ANTHROPIC_BACKUP_C0C1_HAIKU', c3: 'ANTHROPIC_BACKUP_OPUS_C3' },
     models: {
-      c1_gate:  process.env.ANTHROPIC_MODEL_HAIKU || 'claude-haiku-4-5',
-      c2_organ: process.env.ANTHROPIC_MODEL_SONNET || 'claude-sonnet-4-6',
-      c2_deep:  process.env.ANTHROPIC_MODEL_SONNET || 'claude-sonnet-4-6',
-      c3_mind:  process.env.ANTHROPIC_MODEL_OPUS || 'claude-opus-4-8',
-      c4_watch: process.env.ANTHROPIC_MODEL_HAIKU || 'claude-haiku-4-5'
+      c1_gate:  _providerModel(process.env.ANTHROPIC_MODEL_HAIKU, 'claude-haiku-4-5'),
+      c2_organ: _providerModel(process.env.ANTHROPIC_MODEL_SONNET, 'claude-sonnet-4-6'),
+      c2_deep:  _providerModel(process.env.ANTHROPIC_MODEL_SONNET, 'claude-sonnet-4-6'),
+      // Opus is a founder-banned family on any transport; the C3 floor here is the
+      // same non-banned Sonnet already carrying C2 in this block, not Opus.
+      c3_mind:  _providerModel(process.env.ANTHROPIC_MODEL_OPUS, 'claude-sonnet-4-6'),
+      c4_watch: _providerModel(process.env.ANTHROPIC_MODEL_HAIKU, 'claude-haiku-4-5')
     }
   },
   openrouter: {
@@ -97,13 +103,16 @@ var PROVIDERS = {
       // OpenRouter host, so the host-level provider gate never catches it -- a live
       // ENV override was the only thing standing between the founder and a banned
       // fallback. Per founder doctrine ("fix what reaches the cap, not the cap"),
-      // the wiring itself must never fall back to a banned provider: defaults are
-      // now the approved open-weight GLM, so an unset env can never wake DeepSeek.
-      c1_gate:  process.env.OPENROUTER_MODEL_C1 || 'meta-llama/llama-3.1-8b-instruct',
-      c2_organ: process.env.OPENROUTER_MODEL_C2 || 'z-ai/glm-5.2',
-      c2_deep:  process.env.OPENROUTER_MODEL_C2_DEEP || 'z-ai/glm-5.2',
-      c3_mind:  process.env.OPENROUTER_MODEL_C3 || 'qwen/qwen-2.5-72b-instruct',
-      c4_watch: process.env.OPENROUTER_MODEL_C1 || 'meta-llama/llama-3.1-8b-instruct'
+      // the wiring itself must never fall back to a banned provider.
+      // ⬡B:core.model.router:FIX:the_20260721_scrub_traded_one_banned_family_for_another:20260729⬡
+      // GLM-5.2 was itself founder-banned 20260729; c2_organ/c2_deep's baked default
+      // is now qwen3-235b, the same non-banned open-weight swap-in used across the
+      // rest of this estate's 20260729 model repick.
+      c1_gate:  _providerModel(process.env.OPENROUTER_MODEL_C1, 'meta-llama/llama-3.1-8b-instruct'),
+      c2_organ: _providerModel(process.env.OPENROUTER_MODEL_C2, 'qwen/qwen3-235b-a22b-2507'),
+      c2_deep:  _providerModel(process.env.OPENROUTER_MODEL_C2_DEEP, 'qwen/qwen3-235b-a22b-2507'),
+      c3_mind:  _providerModel(process.env.OPENROUTER_MODEL_C3, 'qwen/qwen-2.5-72b-instruct'),
+      c4_watch: _providerModel(process.env.OPENROUTER_MODEL_C1, 'meta-llama/llama-3.1-8b-instruct')
     }
   }
 };

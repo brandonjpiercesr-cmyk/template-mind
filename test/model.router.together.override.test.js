@@ -85,3 +85,63 @@ test('a real, non-banned ANEW_MODEL_<TIER> override still wins on resolve()', fu
     assert.equal(resolved.model, 'meta-llama/Llama-3.3-70B-Instruct', 'a real override is not the ban, it must still win');
   });
 });
+
+// ⬡B:tests.model_router_together_override:TEST:every_provider_blocks_own_default_and_override_are_sanitized_too:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: GROQ_MODEL_C1/C2 (and
+// their siblings on the anthropic_bleed/openrouter blocks) read raw, and two of this
+// file's own BAKED defaults were themselves a founder-banned family
+// (anthropic_bleed.c3_mind: 'claude-opus-4-8'; openrouter.c2_organ/c2_deep:
+// 'z-ai/glm-5.2', a leftover from the 20260721 DeepSeek scrub that swapped one banned
+// family for another). safeModelOverride() only ever validates its override argument;
+// passing a banned value AS the safe default defeats it regardless.
+test('GROQ_MODEL_C1/C2 raw overrides are refused when founder-banned, real overrides still win', function () {
+  const savedC1 = process.env.GROQ_MODEL_C1, savedC2 = process.env.GROQ_MODEL_C2;
+  try {
+    process.env.GROQ_MODEL_C1 = 'claude-opus-4-8';
+    process.env.GROQ_MODEL_C2 = 'moonshotai/kimi-k3';
+    let router = freshRouter();
+    assert.doesNotMatch(router.PROVIDERS.groq.models.c1_gate, /opus/i, 'a banned GROQ_MODEL_C1 override is refused');
+    assert.doesNotMatch(router.PROVIDERS.groq.models.c2_organ, /kimi/i, 'a banned GROQ_MODEL_C2 override is refused');
+    process.env.GROQ_MODEL_C1 = 'llama-3.1-70b-versatile';
+    router = freshRouter();
+    assert.equal(router.PROVIDERS.groq.models.c1_gate, 'llama-3.1-70b-versatile', 'a real override still wins');
+  } finally {
+    if (savedC1 === undefined) delete process.env.GROQ_MODEL_C1; else process.env.GROQ_MODEL_C1 = savedC1;
+    if (savedC2 === undefined) delete process.env.GROQ_MODEL_C2; else process.env.GROQ_MODEL_C2 = savedC2;
+    freshRouter();
+  }
+});
+
+test('the anthropic_bleed C3 floor is no longer baked to Opus, and a banned override is refused', function () {
+  const saved = process.env.ANTHROPIC_MODEL_OPUS;
+  try {
+    delete process.env.ANTHROPIC_MODEL_OPUS;
+    let router = freshRouter();
+    assert.doesNotMatch(router.PROVIDERS.anthropic_bleed.models.c3_mind, /opus/i,
+      'the baked C3 default is not Opus, a founder-banned family, even with no override set');
+    process.env.ANTHROPIC_MODEL_OPUS = 'claude-opus-4-8';
+    router = freshRouter();
+    assert.doesNotMatch(router.PROVIDERS.anthropic_bleed.models.c3_mind, /opus/i,
+      'an explicit ANTHROPIC_MODEL_OPUS override naming Opus is refused too');
+  } finally {
+    if (saved === undefined) delete process.env.ANTHROPIC_MODEL_OPUS; else process.env.ANTHROPIC_MODEL_OPUS = saved;
+    freshRouter();
+  }
+});
+
+test('the openrouter C2 defaults are no longer baked to GLM-5.2, and a banned override is refused', function () {
+  const saved = process.env.OPENROUTER_MODEL_C2;
+  try {
+    delete process.env.OPENROUTER_MODEL_C2;
+    let router = freshRouter();
+    assert.doesNotMatch(router.PROVIDERS.openrouter.models.c2_organ, /glm-5\.2/i,
+      'the baked openrouter C2 default is not GLM-5.2, a founder-banned family, even with no override set');
+    process.env.OPENROUTER_MODEL_C2 = 'z-ai/glm-5.2';
+    router = freshRouter();
+    assert.doesNotMatch(router.PROVIDERS.openrouter.models.c2_organ, /glm-5\.2/i,
+      'an explicit OPENROUTER_MODEL_C2 override naming GLM-5.2 is refused too');
+  } finally {
+    if (saved === undefined) delete process.env.OPENROUTER_MODEL_C2; else process.env.OPENROUTER_MODEL_C2 = saved;
+    freshRouter();
+  }
+});
