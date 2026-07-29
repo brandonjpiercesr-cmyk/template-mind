@@ -431,15 +431,27 @@ function requireAnyHamSession(req, res) {
 //                              Both run the arrival wonder, which is a model call, which costs
 //                              money, and "anything that can spend" is on the refuse list. The
 //                              distinction being drawn is DIRECTED spend versus the cost of
-//                              rendering the page the person is already allowed to see. These
-//                              two doors take no recipient, no amount, no destination and no
-//                              free text; they answer "which surface does this world open on",
-//                              exactly once per page load, for the world the credential already
-//                              names. Refusing them makes requirement one of the order
-//                              impossible, because the world would not actually open. The
+//                              rendering the page the person is already allowed to see. The
 //                              spend that IS refused is the spend a person aims: POST
 //                              /cara/chat and every voice and reach door are absent from this
 //                              list and are therefore closed to a typed world id.
+//
+// ⬡B:core.ham_session_authorization:P1:i_asserted_no_free_text_without_reading_the_branch:20260728⬡
+// WHAT STOOD HERE SAID these two doors "take no recipient, no amount, no destination and no
+// free text" and answer "exactly once per page load". CATHY (Codex) on #1301 read the handler.
+// That is true of the PLAIN ARRIVAL and false of a TAP: routes/arrive.routes.js takes caller
+// authored body.event and body.fields, folds them into a prompt through buildArrivalMessage,
+// and spends on it through ringGate, and its own comment says a tap "is always a new decision",
+// so it repeats as often as somebody likes. A caller who knew only a world id could aim
+// arbitrary follow-up turns, indefinitely, through the one exception I had written a paragraph
+// defending. Third time tonight I recorded a verification I had not performed, and the shape is
+// always the same: I checked the branch that matched my expectation.
+//
+// THE REFUSAL CANNOT LIVE ON THIS LIST. This wall judges a method and a path, and the plain
+// arrival and the tap are both POST /arrive/decide; the difference is in the body, which this
+// wall never sees. So the entry stays and the refusal lives at the door, in
+// routes/arrive.routes.js, which is the only place that can tell them apart. Removing the entry
+// instead would close the arrival itself and break requirement one of the founder's order.
 //
 // AND SOME PATHS ARE REFUSED IN EVERY METHOD, INCLUDING GET.
 //
@@ -534,6 +546,35 @@ const SIGN_IN_TIER_ONLY_PATHS = [
   /^\/os\/crm\/[^/]+\/contact\/[^/]+\/insight(\/|$)/i,
   /^\/geer\/barrier\/status(\/|$)/i
 ];
+
+// ⬡B:core.ham_session_authorization:WIRE:the_awa_write_paths_are_already_covered_by_default_deny:20260728⬡
+// CLAIR.AWAGATE2 offered this list a better home for the seven AWA write paths its lane guards
+// locally, and reported POST /awa/<world>/apply, the one AWA door that REACHES A HUMAN, as
+// proving exact-HAM without consulting the tier. I added it here, then mutation tested the entry
+// and it came back GREEN: removing it changed nothing, because this tier is DEFAULT DENY on
+// every state change and that POST is on no allow list. The wall already refused it. The entry
+// was removed rather than kept as belt and braces, because a redundant lock reads as the reason
+// a thing is safe and the next coder then edits the real one without noticing.
+//
+// The mutation is the finding. Without it I would have shipped a comment and a test claiming to
+// have closed a gap that was already closed, which is the same false-verification defect this
+// file already carries one correction for tonight. The guard that matters is the test beside
+// this file asserting apply is refused BY DEFAULT DENY, so it goes red if anybody ever adds it
+// to the write allow list.
+//
+// On the wider offer, refused with a reason rather than left hanging.
+//
+// This list is METHOD BLIND on purpose: an entry here refuses every verb, which is exactly right
+// for a path whose mere reading is the harm. Six of those seven share a path with a READ this
+// tier is supposed to have. /awa/<world>/pipeline/status is a GET that returns a board and a
+// POST that overrides a card. Putting that path here would refuse the board, and a typed world
+// id that opens a world showing nothing is the founder's own requirement broken to close a hole
+// that was already closed. Their local, method-aware check is the RIGHT place for those six, and
+// two locks on a write path is the safe direction anyway.
+//
+// And /awa/<world>/apply needs no entry at all, per the mutation above: default deny already
+// keeps this tier's own stated promise there, that a typed world id "buys no spend, no outbound
+// message to a person, and no identity change".
 
 // ⬡B:core.ham_session_authorization:FIX:the_wall_blocked_the_upgrade_the_page_advertised:20260728⬡
 // CATHY (Codex) on #1301, and this one was caused by the fix directly above it, which is the
