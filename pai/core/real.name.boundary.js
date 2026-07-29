@@ -136,12 +136,29 @@ function thirdPartyNames(text, ownForms) {
 
 // Any identity name this world configured in its own env. Resolved at call time, never
 // captured, never a default, never written down here.
+//
+// The value has to LOOK like a person before it is treated as one. The identity env is
+// allowed to hold a ROLE instead of a human ("the founder", "the account owner"), which is
+// the degrade the no-founder-pii guard explicitly asks for, and a world configured that way
+// would otherwise have every answer containing the words "the founder" held forever. Every
+// token capitalized, or an initial, is the discriminator: a role written by a person is not.
+function personShapedIdentity(raw) {
+  var value = String(raw == null ? '' : raw).trim();
+  if (!value) return false;
+  var tokens = value.split(/\s+/);
+  if (tokens.length < 2) return false;
+  return tokens.every(function (token) {
+    return /^[A-Z](?:\.|[A-Za-z'’-]{0,24}\.?,?)$/.test(token);
+  });
+}
+
 function configuredIdentityNames(env) {
   var source = env || (typeof process !== 'undefined' && process.env) || {};
   var names = [];
   Object.keys(source).forEach(function (key) {
     if (!/NAME$/.test(key)) return;
     if (!/^(?:FOUNDER|OWNER|WORLD_OWNER|PRINCIPAL)_/.test(key)) return;
+    if (!personShapedIdentity(source[key])) return;
     var value = canon(source[key]);
     if (value && value.indexOf(' ') !== -1) names.push(value);
   });

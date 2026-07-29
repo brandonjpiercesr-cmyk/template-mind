@@ -133,3 +133,16 @@ test('the boundary carries no names of its own and does no I/O', function () {
   assert.deepStrictEqual(boundary.configuredIdentityNames(ENV), ['marguerite ashdown'],
     'it learns this world\'s owner at call time, from env, and never keeps one');
 });
+
+test('a world that degraded its identity env to a ROLE is not held forever', function () {
+  // no-founder-pii explicitly asks a world to degrade to a role rather than a person when it
+  // cannot resolve one. A world configured that way must not have every answer containing the
+  // words "the founder" refused for the rest of its life.
+  const roleEnv = { FOUNDER_DISPLAY_NAME: 'the founder' };
+  assert.deepStrictEqual(boundary.configuredIdentityNames(roleEnv), [],
+    'a role is not a person and must never become one');
+  assert.strictEqual(boundary.violation('who are you?',
+    'I answer to the founder of this world and I keep it running for you.',
+    { personName: READER, env: roleEnv }), null,
+  'a role in the answer is a role, and it ships');
+});
