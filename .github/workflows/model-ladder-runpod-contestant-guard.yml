@@ -1,0 +1,24 @@
+name: model-ladder-runpod-contestant-guard
+# ⬡B:ci.model_ladder_runpod_contestant_guard:BUILD:the_regression_lock_had_nothing_wiring_it_in:20260729⬡
+# Same gap Codex found on anew#1371, closed here too: test/model.ladder.runpod.contestant.test.js
+# proves a Wonder Games/cook-off GLM contestant on the RunPod rung actually resolves and submits
+# a model instead of dropping out of its own game empty, but no workflow referenced it and this
+# repo has no general test-discovery script.
+#
+# No npm install: pai/core/model.ladder.js and pai/core/seat.map.js are Node builtins plus
+# in-repo source only.
+on:
+  pull_request:
+    branches: [ main ]
+jobs:
+  model-ladder-runpod-contestant-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: A Wonder Games RunPod contestant resolves a real model, never submits empty
+        run: node --test test/model.ladder.runpod.contestant.test.js
