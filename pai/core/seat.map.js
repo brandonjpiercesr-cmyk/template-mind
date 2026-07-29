@@ -198,7 +198,7 @@ var SEATS = {
   // (the flagship mind) only, not the high-volume C2 organ, to keep the $2/$6-per-M
   // Grok off the everyday workhorse. verified live 20260722.
   c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
-                 fallbackModel: 'z-ai/glm-5.2', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK', fallbackTools:true },
+                 fallbackModel: 'qwen/qwen3-235b-a22b-2507', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK', fallbackTools:true },
   c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
   // ⬡B:core.seat_map:FIX:codas_coder_invented_cap_was_stopping_her_on_demo_eve:20260728⬡
   // Raised 8 to 40 on the founder's own direct instruction. He said he had raised the kimi
@@ -211,17 +211,37 @@ var SEATS = {
   // reports this seat's cap as "chosen_by: a coder, not the founder", which is exactly what it
   // was: a default invented in this file, never a decision. 40 restores a full day of real
   // autonomous work with a real ceiling still under it.
-  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'moonshotai/kimi-k3',       provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', capEnv:'SEAT_CODA_DAILY_CAP_USD', dailyCapUsd:40, vision:true, tools:true },
+  // ⬡B:core.seat_map:FIX:founder_pick_grok_4.5_over_kimi_for_the_coda_seat:20260729⬡
+  // Founder direct 20260729: no Kimi, no GLM-5.2, no Ornith as a production seat pick
+  // (fable/opus already never were), unless a seat is a Wonder Games or cook-off
+  // CONTESTANT, where model diversity is the point of the contest. CODA's own seat is
+  // not a contestant, so Kimi is out here; Grok 4.5 is the founder's stated first
+  // choice and is already confirmed tools:true, vision:true against the live
+  // OpenRouter roster (MODEL_CAPABILITY above). keyEnv is left as OR_KEY_CODA_KIMI on
+  // purpose: it names an already-provisioned credential, not a model, and renaming it
+  // would require the founder to set a brand new env var on Render for no functional
+  // gain, which is exactly the kind of busywork he told every lane tonight to stop
+  // creating for him.
+  coda:        { role: 'coding adviser (CODA)',envModel: 'SEAT_CODA_MODEL',    model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_CODA_KIMI',   via: 'openrouter', capEnv:'SEAT_CODA_DAILY_CAP_USD', dailyCapUsd:40, vision:true, tools:true },
   deploy_tool: { role: 'deploy/tool seat',     envModel: 'SEAT_DEPLOY_MODEL',  model: 'qwen/qwen3-coder',         provider: 'openrouter', keyEnv: 'OR_KEY_DEPLOY_QWEN', via: 'openrouter', capEnv:'SEAT_DEPLOY_TOOL_DAILY_CAP_USD', dailyCapUsd:4, vision:false, tools:true },
   // FOUNDER 911 20260722: Ornith is RETIRED and RunPod is out entirely (the live
   // endpoint was failure-looping: 937 failures, 0 completions, billed GPU). The
   // judge seat moves to its own proven reliability pick: qwen3-235b (2-4s clean
   // strict JSON, verified) on OpenRouter, with Kimi K3 as the failover so a qwen
   // miss never leaves a contest ungraded. No RunPod anywhere in this map.
+  // judge's declared failover is no longer Kimi (founder ban, 20260729; this seat judges
+  // contestants, it is not itself a contestant). Grok 4.5 replaces it: confirmed
+  // tools:true against the live roster, same as every other seat re-picked tonight.
   judge:       { role: 'wonder + cookoff judge',envModel: 'SEAT_JUDGE_MODEL',  model: 'qwen/qwen3-235b-a22b-2507',provider: 'openrouter', keyEnv: 'OR_KEY_JUDGE_QWEN', via: 'openrouter', capEnv:'SEAT_JUDGE_DAILY_CAP_USD', dailyCapUsd:4, vision:false, tools:true,
-                 fallbackModel: 'moonshotai/kimi-k3', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_JUDGE_QWEN', fallbackTools:true },
-  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', capEnv:'SEAT_CANON_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
-  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'z-ai/glm-5.2',             provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', capEnv:'SEAT_ADVISORS_DAILY_CAP_USD', dailyCapUsd:2, vision:false, tools:true },
+                 fallbackModel: 'x-ai/grok-4.5', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_JUDGE_QWEN', fallbackTools:true },
+  // Founder ban 20260729: no GLM-5.2 as a production seat pick outside a Wonder Games /
+  // cook-off contestant slot. CANON and advisors are graders/thinkers, not contestants,
+  // so both move to Grok 4.5, the founder's stated first choice, confirmed tools:true
+  // and vision:true against the live OpenRouter roster (MODEL_CAPABILITY above); the
+  // seat's own vision flag is corrected from false to true to match, the same rule this
+  // file already states for GLM-5.2 vs. the models that replace it here.
+  canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', capEnv:'SEAT_CANON_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', capEnv:'SEAT_ADVISORS_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
   // ⬡B:core.seat_map:WIRE:the_ladders_second_rung_is_a_declared_failover_not_a_literal:20260728⬡
   // core/model.ladder.js walks two OpenRouter rungs on this one seat. Its second rung used to
   // carry a model slug hardcoded in that file (`qwen/qwen3-235b-a22b`, $0.455/$1.82 per M),
@@ -259,7 +279,10 @@ var SEATS = {
   // NOT DONE HERE, named rather than hidden: the single-seat-no-floor design is the deeper
   // defect, and turning on ANTHROPIC_BACKUP_FLOOR is a real spend decision that belongs to its
   // own lane, not to a launch-eve edit.
-  deliberation:{ role: 'general deliberation ladder',envModel:'SEAT_LADDER_MODEL',model:'z-ai/glm-5.2',             provider:'openrouter', keyEnv:'OR_KEY_MODEL_LADDER',  via:'openrouter', capEnv:'SEAT_DELIBERATION_DAILY_CAP_USD', dailyCapUsd:25, vision:false, tools:true,
+  // Founder ban 20260729: no GLM-5.2 as a production pick. The general ladder moves to
+  // Grok 4.5 (confirmed tools:true, vision:true), Qwen stays as its declared failover,
+  // already the founder's own stated second choice and already proven on this seat.
+  deliberation:{ role: 'general deliberation ladder',envModel:'SEAT_LADDER_MODEL',model:'x-ai/grok-4.5',           provider:'openrouter', keyEnv:'OR_KEY_MODEL_LADDER',  via:'openrouter', capEnv:'SEAT_DELIBERATION_DAILY_CAP_USD', dailyCapUsd:25, vision:true, tools:true,
                  fallbackModel:'qwen/qwen3-235b-a22b-2507', fallbackProvider:'openrouter', fallbackKeyEnv:'OR_KEY_MODEL_LADDER', fallbackTools:true },
   voice_fast:  { role: 'voice reasoning',      envModel: 'SEAT_VOICE_MODEL',   model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_VOICE_QWEN',  via: 'openrouter', capEnv:'SEAT_VOICE_FAST_DAILY_CAP_USD', dailyCapUsd:3, vision:true, tools:true },
   runaway_sweep:{ role:'runaway SHADOW judge', envModel:'RUNAWAY_SWEEP_MODEL', model:'qwen/qwen3.5-flash-02-23', provider:'openrouter',keyEnv:'OR_KEY_RUNAWAY_SWEEP',via:'openrouter', capEnv:'SEAT_RUNAWAY_SWEEP_DAILY_CAP_USD', dailyCapUsd:1, vision:true, tools:true },
