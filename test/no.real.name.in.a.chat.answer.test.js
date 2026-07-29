@@ -200,14 +200,28 @@ test('BYPASS 3: names are not always title case ASCII', function () {
   });
 });
 
-test('BYPASS 4: two title cased words are not evidence of a human', function () {
+test('BYPASS 4: the product words this world calls itself are not humans', function () {
   ['I am A\'NU, your Digital Butler.',
     'I run the Wonder Games for this world.',
-    'I am here, operating from New York, whenever you need me.'].forEach(function (answer) {
+    'Your Command Center is up to date.'].forEach(function (answer) {
     assert.strictEqual(boundary.violation('who are you?', answer,
       { personName: READER, env: {}, assistantName: "A'NU" }), null,
     'this guard must not break the one answer it exists to protect: ' + answer);
   });
+});
+
+test('ACCEPTED COST: a place name on an identity turn over refuses, deliberately', function () {
+  // Round four traded precision for coverage on purpose. A plain run of capitalized words now
+  // reads as a name unless a role, department, product or company word excludes it, and
+  // geography cannot be enumerated. So this over refuses, and the cost is one repair pass and
+  // an answer that says less, never a crash and never a wrong answer. Under refusing a real
+  // human's name is worse. This test exists so the trade is a decision on the record rather
+  // than a surprise to whoever meets it next.
+  assert.ok(boundary.violation('who are you?',
+    'I am here, operating from New York, whenever you need me.',
+    { personName: READER, env: {}, assistantName: "A'NU" }),
+  'if this ever ships clean, someone widened the detector; check they did not also widen it '
+  + 'past a real human');
 });
 
 test('BYPASS 5: an ordinary question that merely starts with the same words', function () {
@@ -324,4 +338,93 @@ test('ROUND 3: not everything that is not a company is a human', function () {
       { personName: READER, env: {}, assistantName: "A'NU" }),
     'and a human is still a human, however spelled: ' + answer);
   });
+});
+
+// ── ROUND FOUR (Codex, 20260729): stop parsing English, count co-occurrence ────────────────
+// The reviewer stopped reporting instances and named the pattern: every P1 for two rounds was
+// a new way to phrase "X created me" getting past clause level parsing, and that tail was
+// lengthening, not closing. So the subject parsing is gone. These pin the six that were open
+// and the ordinary sentences that must survive its removal.
+
+test('ROUND 4: a possessive subject is a subject', function () {
+  ['My creator is Harriet Vole.', 'Our developer is Harriet Vole.',
+    'My builder was Dr. Harriet Vole.'].forEach(function (answer) {
+    assert.ok(boundary.violation('who made you?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }), answer);
+  });
+});
+
+test('ROUND 4: her own name in the clause does not launder a human in it', function () {
+  ['I was created by Dr. Harriet Vole at A\'NU.',
+    'Harriet Vole at A\'NU created me.',
+    'A\'NU was built by Harriet Vole.'].forEach(function (answer) {
+    assert.ok(boundary.violation('what do you do?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }),
+    'the assistant name is stripped per token, never exempting the whole phrase: ' + answer);
+  });
+});
+
+test('ROUND 4: any tense, any auxiliary, any voice', function () {
+  ['Harriet Vole did create me.', 'Harriet Vole does run me.',
+    'Harriet Vole will build me a better one.',
+    'Harriet Vole has trained me.'].forEach(function (answer) {
+    assert.ok(boundary.violation('who are you?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }), answer);
+  });
+});
+
+test('ROUND 4: an introductory clause no longer defeats it', function () {
+  ['As I said, I was created by Harriet Vole.',
+    'I can confirm that I was created by Harriet Vole.',
+    'I learned that I was created by Harriet Vole.',
+    'To be clear about this, I was created by Harriet Vole.',
+    'Honestly, and I have said this before, I was created by Harriet Vole.'
+  ].forEach(function (answer) {
+    assert.ok(boundary.violation('who made you?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }),
+    'reported three times in three phrasings, which is what a real shape looks like: ' + answer);
+  });
+});
+
+test('ROUND 4: a substring is not a name', function () {
+  const env = { FOUNDER_DISPLAY_NAME: 'Ann Lee' };
+  assert.strictEqual(boundary.violation('what is on thursday?',
+    'Joann Lee confirmed the meeting.', { personName: READER, env: env }), null,
+  'a configured owner called Ann Lee must not match inside Joann Lee');
+  assert.ok(boundary.violation('what is on thursday?',
+    'Ann Lee confirmed the meeting.', { personName: READER, env: env }),
+  'and the real one still does');
+});
+
+test('ROUND 4: the titled capture runs to the end of the name', function () {
+  // The capture stopped at one token, so "Dr. <given> <family>" was read as the given name
+  // alone. When the reader shares that given name, the exemption then released a different
+  // person's surname.
+  assert.ok(boundary.violation("who's this?", 'Dr. Tobias Vole set this up.',
+    { personName: 'Tobias Renfrew', env: {} }),
+  'sharing a first name with the reader is not being the reader');
+});
+
+test('ROUND 4: the making verb still has to point at HER', function () {
+  // This one lexical test is what keeps the broader rule from refusing an ordinary day.
+  ['I made a reservation for Harriet Vole this morning.',
+    'Harriet Vole built the deck last spring.',
+    'I built that list for Harriet Vole and sent it over.',
+    'Harriet Vole wrote the note you asked about.',
+    'Harriet Vole runs the Thursday meeting.'].forEach(function (answer) {
+    assert.strictEqual(boundary.violation('what happened?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }), null,
+    'a making verb with an object that is not her is not a claim about who owns her: ' + answer);
+  });
+});
+
+test('ROUND 4: an employment claim needs her in the SAME sentence', function () {
+  assert.strictEqual(boundary.violation('did you send harriet the list?',
+    'I built that list this morning. Harriet Vole works for Tobias Renfrew, so he is copied.',
+    { personName: READER, env: {}, assistantName: "A'NU" }), null,
+  'a fact about two other people is not this module\'s business, even in an answer that '
+  + 'says "I" somewhere else');
+  assert.ok(boundary.violation('who do you answer to?', 'I work for Harriet Vole.',
+    { personName: READER, env: {}, assistantName: "A'NU" }),
+  'and the claim about her still holds');
 });
