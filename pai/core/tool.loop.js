@@ -54,6 +54,11 @@ var outputGuard = require('./model.output.guard.js');
 // nowhere else, so a name could be perfectly env resolved and still be spoken to a stranger.
 // Measured live 20260729 on an identity challenge. This module holds the outgoing half.
 var realNameBoundary = require('./real.name.boundary.js');
+// The one name the assistant answers to, in one place. The name boundary needs it to tell
+// "A'NU was created by <a person>" (a claim about her, and a leak) from a sentence about
+// somebody else, and the identity binding below already needed it. It is a product name and
+// never a person, so it is not identity under the env only law.
+var CANONICAL_ASSISTANT_NAME = "A'NU";
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
@@ -3755,7 +3760,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       ham_uid:String(hamUid || '').toUpperCase(),
       request_id:_requestId,
       cycle_id:_cycleId,
-      assistant:{ name:"A'NU", source:'fcw.canonical_assistant' },
+      assistant:{ name:CANONICAL_ASSISTANT_NAME, source:'fcw.canonical_assistant' },
       human:{ name:String(hamObj.name).slice(0, 160),
         source:String(fcw.identity_record.source || '').slice(0, 260),
         row_id:fcw.identity_record.id == null ? null : fcw.identity_record.id,
@@ -5820,7 +5825,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // never edits her sentence, it only refuses to let this one out unexamined.
     try {
       var _nameLeak = realNameBoundary.violation(_proofQuestion, finalAns,
-        { personName:hamObj && hamObj.name, env:process.env });
+        { personName:hamObj && hamObj.name, env:process.env,
+          assistantName:CANONICAL_ASSISTANT_NAME });
       if (_nameLeak) {
         return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,reason:_nameLeak};
       }
@@ -6063,6 +6069,33 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     _stampStep('outbound_council_blocked', 'council_answer_hollow_protocol');
     return {ok:false,reason:'council_answer_hollow_protocol',blocked_by:'STAMP',ham:hamObj,
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+  }
+  // ⬡B:core.tool_loop:GUARD:the_name_boundary_holds_on_the_bytes_that_actually_ship:20260729⬡
+  // CODEX REVIEW. The pre council check above runs on the DRAFT, and the council is not a
+  // pass through: META_COMMENTARY, WRIT and the healer are model backed stages, and the line
+  // directly above this one replaces finalAns with the council's own answer. A draft that was
+  // clean could therefore acquire a real person's name inside the council and ship anyway,
+  // which made the whole guard a check on bytes nobody reads. It runs again here, on the
+  // exact bytes that leave.
+  //
+  // AND IT REFUSES INSTEAD OF REPAIRING, unlike the pre council seam. The council has already
+  // committed; there is no honest way to hand these bytes back for a rewrite without running
+  // the whole cycle again. Silence is the floor this estate already chose for a held answer,
+  // and a leaked human is exactly what the floor is for. The reason is named, not anonymous,
+  // so the receipt says which boundary stopped it.
+  if (!_structuredReachPolicy) {
+    var _postCouncilNameLeak = null;
+    try {
+      _postCouncilNameLeak = realNameBoundary.violation(_proofQuestion, finalAns,
+        { personName:hamObj && hamObj.name, env:process.env,
+          assistantName:CANONICAL_ASSISTANT_NAME });
+    } catch (ePostName) { _postCouncilNameLeak = null; }
+    if (_postCouncilNameLeak) {
+      _stampStep('outbound_council_blocked', _postCouncilNameLeak);
+      return {ok:false,reason:_postCouncilNameLeak,blocked_by:'A\'NU',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+        ms:Date.now()-t0};
+    }
   }
   var _stampProof = _committedCouncil.stamp_proof;
   // ⬡B:core.tool.loop:WIRE:the_memory_keeper_on_the_one_common_exit:20260726⬡
