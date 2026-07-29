@@ -498,6 +498,18 @@ async function deliberate(system, user, options) {
     runpod: function (o) { return tryRunPodGLM(system, user, o); },
     openrouter: function (o) { return tryOpenRouterGLM(system, user, o); } };
   var glmChain = glmSeq.filter(function (n) { return typeof glmRunners[n] === 'function'; });
+  // ⬡B:core.model_ladder:FIX:a_named_seat_is_openrouter_only_or_it_is_not_named:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON #1289, P2, reproduced live: with GLM_PROVIDER_ORDER
+  // including 'runpod', or ANTHROPIC_BACKUP_FLOOR='on' with a key present, a named-seat call
+  // still reached tryRunPodGLM (GLM_RUNPOD_KEY) or tryAnthropicBackup (ANTHROPIC_LADDER_API_KEY),
+  // neither of which consults opts.seat at all, so advisor work billed a foreign key even after
+  // the fail-closed fix above. Every seat in core/seat.map.js is provider:'openrouter'; RunPod
+  // and Anthropic are shared infrastructure floors with no per-seat key of their own, so there
+  // is nothing for them to "resolve" about a named seat, only a wallet to borrow. A named seat
+  // therefore never reaches either: it runs its OpenRouter primary and declared failover only,
+  // and answers null (honest silence) rather than drift onto a floor that cannot attribute the
+  // spend to it.
+  if (opts.seat) glmChain = glmChain.filter(function (n) { return n === 'openrouter'; });
   if (!glmChain.length) glmChain = ['openrouter'];
   // \u2b21B:core.model_ladder:FIX:tight_timeout_skips_runpod_glm:20260720\u2b21
   // FOUNDER 911 20260720: the RunPod GLM endpoint showed 2708 failed jobs against
@@ -525,10 +537,14 @@ async function deliberate(system, user, options) {
     ornith: function (runOpts) { return tryOrnith(system, user, runOpts || opts); },
     qwen: function (runOpts) { return tryQwen(system, user, runOpts || opts); },
     anthropic: function (runOpts) { return tryAnthropicBackup(system, user, runOpts || opts); }, };
+  // Same fix as glmChain above: a named seat is OpenRouter-only, full stop. 'ornith' and
+  // 'anthropic' are shared floors with no per-seat key, so neither may ever be reached on a
+  // named seat's behalf, whether via an explicit opts.order or the auto-append just below.
+  if (opts.seat) order = order.filter(function (n) { return n === 'glm' || n === 'qwen'; });
   // The Anthropic backup is always the last rung whenever a key is present, so the cycle has a
   // live floor beneath the open-weight ladder. Appended, never inserted, so it runs only after
   // every higher rung has failed, and only added when it is not already in the configured order.
-  if (opts.order == null && process.env.ANTHROPIC_BACKUP_FLOOR === 'on' &&
+  if (!opts.seat && opts.order == null && process.env.ANTHROPIC_BACKUP_FLOOR === 'on' &&
       process.env.ANTHROPIC_LADDER_API_KEY && order.indexOf('anthropic') === -1) {
     order.push('anthropic');
   }
