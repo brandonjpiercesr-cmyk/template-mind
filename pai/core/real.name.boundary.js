@@ -73,12 +73,22 @@
 // facts a hundred times a day and legitimately answers with other people's names ("you told me
 // your accountant is ..."). "who are you" and "what are you" are ANCHORED: they only count
 // when the question ends there, so "what are you doing with <someone>" stays an ordinary turn.
-var OPEN_TAIL = '(?=\\s*(?:[?.!,;]|$|and\\b|then\\b|really\\b|exactly\\b|anyway\\b))';
+// The question has to actually END there. The first version merely PERMITTED a trailing
+// qualifier, so "what are you really doing with <person>?" still read as a challenge to who
+// she is and a perfectly good answer was refused. A qualifier is allowed, and then the
+// question must stop.
+var OPEN_TAIL = '(?=\\s*(?:[?.!,;]|$)'
+  + '|\\s+(?:really|exactly|then|anyway|though|now)\\s*(?:[?.!,;]|$)'
+  + '|\\s+and\\b)';
 var IDENTITY_CHALLENGE = new RegExp(
-  '\\bwho\\s+(?:are|r)\\s+(?:you|u)\\b' + OPEN_TAIL
+  '\\bwho\\s*(?:\\s|[\\x27\\u2019]re|[\\x27\\u2019]s)\\s*(?:are|r)?\\s*(?:you|u)\\b' + OPEN_TAIL
   + '|\\bwhat\\s+are\\s+you\\b' + OPEN_TAIL
   + '|\\bwho\\s+am\\s+i\\b' + OPEN_TAIL
-  + '|\\bwho\\s+is\\s+this\\b' + OPEN_TAIL
+  // Contracted forms. "who's this?" is how a person actually types it, and the first version
+  // recognized only the uncontracted spelling, so the plainest challenge there is went
+  // unchecked and a name released in reply to it was never looked at.
+  + '|\\bwho\\s*(?:[\\x27\\u2019]s|s|\\s+is)\\s+this\\b' + OPEN_TAIL
+  + '|\\bwho\\s*(?:[\\x27\\u2019]s|\\s+is)\\s+(?:calling|talking|speaking|there)\\b'
   + '|\\bprove\\s+(?:it|who|yourself|that)\\b'
   + '|\\bwho\\s+(?:made|created|built|owns?|runs?|designed|programmed)\\s+you\\b'
   + '|\\bare\\s+you\\s+real\\b'
@@ -156,7 +166,17 @@ var SAFE_ANSWER_WORDS = new RegExp('^(?:the|a|an|and|or|of|in|at|on|to|for|with|
   + 'system|systems|service|services|estate|house|home|place|here|there|you|yourself|me|'
   + 'myself|us|them|it|itself|who|whom|whose|work|works|hand|hands|design|purpose|code|'
   + 'software|one|ones|many|few|several|whole|same|own|behind|serve|serves|serving|run|runs|'
-  + 'running|behalf|account|side)$', 'i');
+  + 'running|behalf|account|side|'
+  // ⬡B:core.real_name_boundary:FIX:not_everything_that_is_not_a_company_is_a_human:20260729⬡
+  // CODEX REVIEW. "I work for customer success" and "I was created by <a company with no
+  // company word in its name>" were both refused as naming a real person, because anything
+  // that was neither word for word allowlisted nor ending in a recognized company suffix
+  // defaulted to HUMAN. Departments and functions are the ordinary answer to "who do you work
+  // for" and none of them is a person, so they belong here beside the role nouns.
+  + 'customer|customers|success|support|engineering|product|products|operations|ops|marketing|'
+  + 'sales|finance|legal|security|research|data|growth|community|infrastructure|design|'
+  + 'delivery|quality|training|content|editorial|studio|desk|office|division|practice|'
+  + 'function|unit|line|floor|shop|lab|program|initiative|effort|side|department)$', 'i');
 
 // PERSON MARKERS. Outside a creator claim, a proper noun alone is not evidence of a human:
 // "Wonder Games", "New York" and "Digital Butler" are all two title cased words. A marker is.
@@ -184,13 +204,23 @@ function canon(value) {
     .toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function splitSentences(text) {
-  var masked = String(text || '').replace(SENTENCE_SAFE_DOT, function (whole) {
+function maskSafeDots(text) {
+  return String(text || '').replace(SENTENCE_SAFE_DOT, function (whole) {
     return whole.slice(0, -1) + DOT_MASK;
   });
-  return masked.split(/(?<=[.!?])\s+/).map(function (part) {
-    return part.split(DOT_MASK).join('.');
-  });
+}
+function unmask(text) { return String(text || '').split(DOT_MASK).join('.'); }
+
+// Sentences with honorific and initial periods still masked. The creator analysis works on
+// THESE, because a phrase is cut at the next full stop and "created by Dr. <name>" would
+// otherwise be cut at the honorific and reduce to the honorific alone. Everything is unmasked
+// again before any judgment about the words.
+function splitSentencesMasked(text) {
+  return maskSafeDots(text).split(/(?<=[.!?])\s+/);
+}
+
+function splitSentences(text) {
+  return splitSentencesMasked(text).map(unmask);
 }
 
 function organizationPhrase(candidate) {
@@ -244,13 +274,26 @@ function isOwnName(candidate, ownForms) {
 // and case and accent insensitive, plus the creator rule, which needs no marker at all.
 function markedPersonNames(text, ownForms) {
   var found = [];
-  [TITLED_NAME, INITIALLED_NAME, SUFFIXED_NAME].forEach(function (pattern, index) {
-    var match = pattern.exec(String(text || ''));
-    if (!match) return;
-    var candidate = String(match[0]).replace(new RegExp('^' + HONORIFIC + '\\.?\\s+', 'i'), '');
-    if (organizationPhrase(candidate)) return;
-    if (isOwnName(candidate, ownForms)) return;
-    found.push(['titled', 'initialled', 'suffixed'][index]);
+  var scan = String(text || '');
+  // ⬡B:core.real_name_boundary:FIX:it_only_ever_looked_at_the_first_one:20260729⬡
+  // CODEX REVIEW, and this one was a real release. Each marker pattern ran exec() ONCE, so
+  // "Dr. <the reader>, this is your space. Dr. <someone else> configured it." matched the
+  // reader's own name, correctly cleared it, and never looked again: the second name shipped.
+  // A detector that stops at the first candidate is a detector that clears an answer because
+  // its FIRST name was innocent. Every match is collected now.
+  [['titled', TITLED_NAME], ['initialled', INITIALLED_NAME],
+    ['suffixed', SUFFIXED_NAME]].forEach(function (entry) {
+    var pattern = new RegExp(entry[1].source, entry[1].flags.indexOf('g') === -1
+      ? entry[1].flags + 'g' : entry[1].flags);
+    var match;
+    while ((match = pattern.exec(scan))) {
+      if (match.index === pattern.lastIndex) pattern.lastIndex++;
+      var candidate = String(match[0])
+        .replace(new RegExp('^' + HONORIFIC + '\\.?\\s+', 'i'), '');
+      if (organizationPhrase(candidate)) continue;
+      if (isOwnName(candidate, ownForms)) continue;
+      found.push(entry[0]);
+    }
   });
   return found;
 }
@@ -268,6 +311,15 @@ function personShapedIdentity(raw) {
   if (!value) return false;
   var tokens = value.split(/\s+/);
   if (tokens.length < 2) return false;
+  // ⬡B:core.real_name_boundary:FIX:capitalization_was_never_the_test_for_person:20260729⬡
+  // CODEX REVIEW. The first version used capitalization alone as the discriminator, so a world
+  // that degraded its identity env to 'The Founder' or 'Account Owner', which is exactly the
+  // degrade no-founder-pii asks for, had that ROLE recorded as a real person, and then every
+  // ordinary answer containing that phrase was refused as an owner name leak. Case was never
+  // the test. What the words MEAN is: a phrase built only of articles and role nouns names
+  // nobody, in any capitalization, and this is the same SAFE_ANSWER_WORDS list the creator
+  // rule already judges "who made you" against, not a second hand maintained copy.
+  if (namesNobody(value)) return false;
   return tokens.every(function (token) {
     return new RegExp('^\\p{Lu}(?:\\.|[\\p{L}\\p{M}\'’-]{0,24}\\.?,?)$', 'u').test(token);
   });
@@ -291,30 +343,70 @@ function configuredIdentityNames(env) {
 // only question that matters: is that a company, a role, her own name, or a human.
 var PHRASE_BREAK = /[,;:.!?]|\band\b|\bbut\b|\bwho\b|\bwhich\b|\bthat\b|\bbecause\b|\bso\b/i;
 
-// Is this trailing clause HER. Read as a whole clause, never as a pronoun sighting somewhere
-// in the sentence, which is the difference between "I was created by <person>" and
-// "I told <person> she works for <person>".
-function subjectIsHer(clause, assistantPattern) {
-  var value = String(clause || '').trim();
-  if (!value) return false;
-  if (ASSISTANT_SUBJECT.test(value)) return true;
+// ⬡B:core.real_name_boundary:FIX:stop_patching_sentence_shapes_and_read_the_subject:20260729⬡
+// CODEX REVIEW, third round, and the reviewer's own note was the right one: the failures kept
+// arriving because the subject test matched a fixed SENTENCE SHAPE. "I was created and built
+// by <person>" broke it (splitting on "and" left an empty clause). "I was recently created by
+// <person>" broke it (an adverb the linking allowlist did not know). Each of those is a
+// different sentence and the same claim, and a rule written per sentence shape will keep
+// meeting new sentences forever.
+//
+// SO IT STOPPED READING SHAPE. The window before the frame has its FILLER removed, connectives
+// and adverbs and the making verbs themselves, and whatever is left has to BE her. That is one
+// rule instead of a growing list, and the words it removes cannot change who a claim is about:
+// "recently", "and", "originally", "was", "also" never turn a sentence about her into a
+// sentence about somebody else.
+var FILLER_WORD = new RegExp('^(?:' + LINKING.slice(3, -1)
+  + '|and|or|nor|but|then|thus|so|therefore|however|of|course'
+  + '|created|built|make|makes|made|design|designs|designed|develop|develops|developed'
+  + '|program|programs|programmed|found|founds|founded|invent|invents|invented|train|trains'
+  + '|trained|code|codes|coded|write|writes|wrote|written|author|authors|authored|operate'
+  + '|operates|operated|own|owns|owned|run|runs)$'
+  + '|^\\p{Ll}+ly$', 'iu');
+
+function stripFiller(window) {
+  return String(window || '')
+    .split(/[\s,;:]+/)
+    .map(function (t) { return t.replace(/^[^\p{L}\p{N}\x27\u2019]+|[^\p{L}\p{N}\x27\u2019]+$/gu, ''); })
+    .filter(function (t) { return t.length > 0 && !FILLER_WORD.test(t); })
+    .join(' ')
+    .trim();
+}
+
+// Is the thing this claim is about HER. Read from the window before the frame, with filler
+// removed, so every way of writing the same claim lands on the same answer.
+function subjectIsHer(window, assistantPattern) {
+  var core = stripFiller(unmask(window));
+  if (!core) return false;
+  if (ASSISTANT_SUBJECT.test(core)) return true;
   if (!assistantPattern) return false;
-  var stripped = value.replace(assistantPattern, ' ').trim();
-  return stripped === '' || new RegExp('^(?:' + LINKING + '\\b\\s*)+$', 'i').test(stripped);
+  return stripFiller(core.replace(assistantPattern, ' ')) === '';
 }
 
 function phraseIsAPerson(phrase, assistantPattern) {
-  var value = String(phrase || '').trim();
+  var value = unmask(String(phrase || '')).trim();
   if (!value) return false;
   if (assistantPattern && assistantPattern.test(value)) return false;
   if (SELF_REFERENCE.test(value)) return false;
   if (organizationPhrase(value)) return false;
   if (namesNobody(value)) return false;
-  return true;
+  // A real person marker settles it outright, whatever else the phrase contains.
+  if (TITLED_NAME.test(value) || INITIALLED_NAME.test(value) || SUFFIXED_NAME.test(value)) {
+    return true;
+  }
+  // Otherwise a human needs at least a given name and a family name. ONE unrecognized word is
+  // a company, a product, a department or a nickname far more often than it is an identifiable
+  // human, and this rule is the difference between refusing "created by <a one word company>"
+  // and refusing nothing real. The limit it leaves, a single word name, is honest and stated:
+  // a first name alone identifies almost nobody, which is the whole reason people have two.
+  var meaningful = String(value).split(/[\s,;:]+/)
+    .map(function (t) { return t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''); })
+    .filter(function (t) { return t.length > 1 && !SAFE_ANSWER_WORDS.test(t); });
+  return meaningful.length >= 2;
 }
 
 function creatorClaimNamesAPerson(text, assistantPattern) {
-  var sentences = splitSentences(text);
+  var sentences = splitSentencesMasked(text);
   for (var s = 0; s < sentences.length; s++) {
     var sentence = sentences[s];
 
@@ -329,9 +421,7 @@ function creatorClaimNamesAPerson(text, assistantPattern) {
       var after = rest.slice(frame.index + frame[0].length);
       offset += frame.index + frame[0].length;
       rest = after;
-      var beforeParts = before.split(PHRASE_BREAK);
-      var subjectClause = beforeParts[beforeParts.length - 1];
-      if (!subjectIsHer(subjectClause, assistantPattern)) continue;
+      if (!subjectIsHer(before.split(/[.!?]/).pop(), assistantPattern)) continue;
       if (phraseIsAPerson(String(after).split(PHRASE_BREAK)[0], assistantPattern)) return true;
     }
 

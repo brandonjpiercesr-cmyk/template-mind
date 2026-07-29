@@ -151,9 +151,15 @@ test('a world that degraded its identity env to a ROLE is not held forever', fun
   // no-founder-pii explicitly asks a world to degrade to a role rather than a person when it
   // cannot resolve one. A world configured that way must not have every answer containing the
   // words "the founder" refused for the rest of its life.
+  // CAPITALIZATION IS NOT THE TEST. The first version used it as the discriminator, so a
+  // Title Cased role sailed through as a human and every answer containing that phrase was
+  // then refused as an owner name leak. What the words MEAN is the test.
+  ['the founder', 'The Founder', 'Account Owner', 'THE ACCOUNT OWNER', 'World Owner',
+    'the owner of this world'].forEach(function (role) {
+    assert.deepStrictEqual(boundary.configuredIdentityNames({ FOUNDER_DISPLAY_NAME: role }), [],
+      'a role is not a person and must never become one, in any capitalization: ' + role);
+  });
   const roleEnv = { FOUNDER_DISPLAY_NAME: 'the founder' };
-  assert.deepStrictEqual(boundary.configuredIdentityNames(roleEnv), [],
-    'a role is not a person and must never become one');
   assert.strictEqual(boundary.violation('who are you?',
     'I answer to the founder of this world and I keep it running for you.',
     { personName: READER, env: roleEnv }), null,
@@ -253,5 +259,69 @@ test('the answer she should give still ships, on every one of these questions', 
     'who made you?', 'prove it'].forEach(function (question) {
     assert.strictEqual(boundary.violation(question, good,
       { personName: READER, env: ENV, assistantName: "A'NU" }), null, question);
+  });
+});
+
+// ── THIRD ROUND (Codex, 20260729): the regex kept meeting new sentences ────────────────────
+// The reviewer's own note was the right one, so the subject test stopped matching sentence
+// SHAPES and started stripping filler instead. These pin the shapes that broke it, and the
+// ordinary sentences that must never break.
+
+test('ROUND 3: a contracted challenge is still a challenge', function () {
+  ["who's this?", "who're you?", "who's calling?", 'whos this'].forEach(function (question) {
+    assert.strictEqual(boundary.identityChallenge(question), true, question);
+  });
+  assert.ok(boundary.violation("who's this?",
+    'I am A\'NU. Dr. Harriet Vole set this up.', { personName: READER, env: {} }),
+  'a name released in reply to the contracted form must be checked like any other');
+});
+
+test('ROUND 3: every marked name is inspected, not only the first', function () {
+  const answer = 'Dr. Tobias Renfrew, this is your space. Dr. Harriet Vole configured it.';
+  assert.ok(boundary.violation("who's this?", answer, { personName: READER, env: {} }),
+    'clearing the FIRST name because it is the reader is not a reason to stop looking');
+});
+
+test('ROUND 3: the same claim in every shape a sentence can take', function () {
+  ['I was created and built by Harriet Vole.',
+    'I was designed and developed by Harriet Vole.',
+    'I was recently created by Dr. Harriet Vole.',
+    'I was originally and entirely built by Harriet Vole.',
+    'A\'NU was originally designed and developed by Harriet Vole.'].forEach(function (answer) {
+    assert.ok(boundary.violation('what do you do?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }),
+    'a rule written per sentence shape meets a new sentence forever: ' + answer);
+  });
+});
+
+test('ROUND 3: a qualifier is allowed only if the question ends there', function () {
+  assert.strictEqual(
+    boundary.identityChallenge('what are you really doing with Dr. Harriet Vole?'), false,
+    'permitting a trailing qualifier is not the same as requiring the question to stop');
+  assert.strictEqual(boundary.identityChallenge('what are you really?'), true,
+    'and the real challenge still reads as one');
+  assert.strictEqual(boundary.violation('what are you really doing with Dr. Harriet Vole?',
+    'I am pulling the Thursday note together with Dr. Harriet Vole now.',
+    { personName: READER, env: {} }), null,
+  'so the ordinary answer to an ordinary question ships');
+});
+
+test('ROUND 3: not everything that is not a company is a human', function () {
+  ['I work for customer success.',
+    'I was created by OpenAI.',
+    'I belong to the customer success department.',
+    'I was created by a team of engineers.',
+    'I was built by the founder of this world.',
+    'I was created by Envolve Enterprises.'].forEach(function (answer) {
+    assert.strictEqual(boundary.violation('who made you?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }), null,
+    'defaulting every unrecognized noun to HUMAN refuses ordinary answers: ' + answer);
+  });
+  ['I was created by Harriet Vole.', 'I was created by harriet vole.',
+    'I was created by HARRIET VOLE.', 'I was created by Mary O\'Connor.',
+    'I was created by José García.', 'I was created by Dr. Vole.'].forEach(function (answer) {
+    assert.ok(boundary.violation('who made you?', answer,
+      { personName: READER, env: {}, assistantName: "A'NU" }),
+    'and a human is still a human, however spelled: ' + answer);
   });
 });
