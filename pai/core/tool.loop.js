@@ -49,6 +49,11 @@ var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
 var outputGuard = require('./model.output.guard.js');
+// ⬡B:core.tool.loop:WIRE:the_env_only_identity_law_reaches_model_output_too:20260729⬡
+// The founder law "identity is env only, never a literal" was enforced over source code and
+// nowhere else, so a name could be perfectly env resolved and still be spoken to a stranger.
+// Measured live 20260729 on an identity challenge. This module holds the outgoing half.
+var realNameBoundary = require('./real.name.boundary.js');
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
@@ -814,6 +819,36 @@ function paiToolTurnBlocksLadder(providerBody, result) {
   var carriedTools = !!(providerBody && Array.isArray(providerBody.tools) && providerBody.tools.length);
   if (!carriedTools) return false;
   return !paiSeatUsable(result);
+}
+
+// ⬡B:core.tool_loop:FIX:a_one_millisecond_call_is_cold_code_choosing_silence:20260728⬡
+// FOUND 20260728 by a PR sweep lane, confirmed here by reading the wire path rather than the
+// claim. The voice deadline is real and correct in intent: the Pipecat bridge owns a 12 second
+// whole-turn budget, so every main-model attempt shares one deadline at t0+6500 and provider
+// fallback cannot stack three long waits in front of SHADOW, STAMP and readback.
+//
+// The defect is the clamp under it: `AbortSignal.timeout(Math.max(1, deadline - Date.now()))`.
+// Once the deadline is past, that is not a short call, it is a call that CANNOT succeed. A
+// tool-using voice turn spends its budget on the first model call and the tool round trip, so
+// the second call gets a one-millisecond signal and aborts before a byte leaves. Then it gets
+// worse in a way the sweep did not name: the abort is caught as an ordinary seat failure, so
+// paiSeatFailover() spends the seat's DECLARED FALLBACK on a second guaranteed-fail call with
+// the same expired deadline, and the turn ends reporting `pai_seat_request_failed` -- a budget
+// problem wearing a provider problem's name, which is what the next debugger will chase.
+//
+// So it refuses by name instead, exactly as the tools-capability guard above does. Cold code
+// may decline to spend a call it knows cannot land; what it may never do is issue one and let
+// the failure look like the provider's. The floor is a real window rather than a tick: under
+// it, a fresh provider round trip does not complete, so calling is only a slower way to fail.
+//
+// A turn with NO voice deadline (every non-voice channel: portal, chat, sms, coding, reach) is
+// untouched. The predicate returns false, nothing refuses, and the behaviour is byte for byte
+// what it was. That is the whole safety property of this change.
+var PAI_VOICE_MIN_MODEL_WINDOW_MS = 1200;
+function paiVoiceDeadlineExhausted(deadline, now, minWindowMs) {
+  if (!deadline || !Number.isFinite(deadline)) return false;
+  var floor = Number.isFinite(minWindowMs) ? minWindowMs : PAI_VOICE_MIN_MODEL_WINDOW_MS;
+  return (deadline - now) < floor;
 }
 
 // ⬡B:core.tool_loop:FIX:the_arrival_exemption_where_a_test_can_actually_reach_it:20260728⬡
@@ -3516,6 +3551,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   }
   async function _callPaiProvider(requestBody, seatName) {
+    // Refused here rather than at the seat, so ONE check covers the primary and its declared
+    // fallback. Refusing inside _attemptPaiSeat would let paiSeatFailover() spend the rescue on
+    // the same expired deadline, which is the second half of the defect this exists for.
+    if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
+      return {error:{code:'pai_voice_deadline_exhausted',seat:seatName||_paiSeatName(),
+        detail:'voice turn budget spent before this call'}};
+    }
     var candidate = _paiSeatCandidate(seatName);
     if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
     try {
@@ -3721,7 +3763,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     };
     systemPrompt += '\nCURRENT IDENTITY PROOF (server-owned for this exact turn): ' +
       JSON.stringify(_runtimeIdentityEvidence) +
-      '\nAnswer the identity questions directly from this binding. Explain that the person is known through their resolved private account/world and stored identity record, and that you are A\'NU because this request is executing inside A\'NU\'s canonical PAI pathway. Do not expose internal identifiers or claim biometric, legal, or real-world proof beyond this binding.';
+      realNameBoundary.systemInstruction();
   }
   // ⬡B:core.tool_loop:GROUND:current_turn_proof_before_draft:20260715⬡
   // Drafting necessarily precedes council commit and STAMP readback. Ground only
@@ -4689,6 +4731,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // exactly as the 20260718 law says, and this changes nothing for it.
     if (paiToolTurnBlocksLadder(_providerBody, r)) {
       if (!_cycleFailure) _noteCycleFailure('pai_seat_tool_turn_unserved');
+    } else if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
+      // The rung shares _modelRequestSignal(), so on an expired voice deadline it would take
+      // the same one-millisecond signal and abort before a byte left, then report `ladder:`
+      // and send the next reader to the ladder. Named for what it is instead.
+      if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
     } else if (!r||r.error||!r.choices){
       try{
         var _lad=require('./model.ladder.js');
@@ -5766,6 +5813,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
         reason:'false_current_turn_failure_claim_after_preparation'};
     }
+    // ⬡B:core.tool_loop:GUARD:no_real_persons_name_reaches_a_reader:20260729⬡
+    // A prompt is not a gate. The instruction above tells her not to name a person; this is
+    // the cold check that it held, at the same pre council seam every other answer boundary
+    // uses, so a failure here is NAMED and handed back to the mind to rewrite once. Cold code
+    // never edits her sentence, it only refuses to let this one out unexamined.
+    try {
+      var _nameLeak = realNameBoundary.violation(_proofQuestion, finalAns,
+        { personName:hamObj && hamObj.name, env:process.env });
+      if (_nameLeak) {
+        return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,reason:_nameLeak};
+      }
+    } catch (eNameBoundary) { /* a broken guard must never silence a real answer */ }
     if (!isHumanFacingAnswer(finalAns)) {
       return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
         reason:'hollow_protocol_after_preparation'};
@@ -5805,7 +5864,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         : _terminalPreparationReason === 'shadow_scrubbed_to_empty'
           ? 'shadow_scrubbed_to_empty'
           : _terminalPreparationReason.indexOf('false_current_turn_failure_claim') === 0
-            ? 'false_current_turn_failure_claim' : 'hollow_protocol_answer';
+            ? 'false_current_turn_failure_claim'
+            // Same law as the two lines above, applied to the name boundary: silence over a
+            // leaked human, but a silence that says which boundary held it, so this never
+            // becomes another anonymous 'hollow_protocol_answer' in the receipts.
+            : _terminalPreparationReason.indexOf('named_') === 0
+              ? _terminalPreparationReason : 'hollow_protocol_answer';
       return {ok:false,reason:_terminalReason,ham:hamObj,cycleId:_cycleId,
         requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
         _dbg:_cycleFailure||null};
@@ -6512,4 +6576,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,isArrivalDestinationBlock,repairRawJsonAnswer}};
+  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer}};
