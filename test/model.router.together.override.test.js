@@ -43,3 +43,45 @@ test('a real, non-banned TOGETHER_MODEL override still wins on the legacy fallba
     freshRouter();
   }
 });
+
+// ⬡B:tests.model_router_together_override:TEST:the_final_tier_override_cannot_bypass_the_ban_either:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: resolve()'s per-tier
+// ANEW_MODEL_<TIER> override superseded the provider map's own already-sanitized
+// model with no ban check of its own; a deployment with ANEW_MODEL_C2=z-ai/glm-5.2,
+// PAI_ROUTING_POLICY=on, TOGETHER_API_KEY set, and no routable c2_organ seat key
+// reached the legacy Together fallback and won regardless of the provider's own fix.
+const ENV_KEYS = ['ANEW_MODEL_C2', 'PAI_ROUTING_POLICY', 'TOGETHER_API_KEY', 'GROQ_API_KEY',
+  'HAM_UID', 'OR_KEY_C2_ORGAN', 'OPENROUTER_API_KEY', 'SEAT_C2_MODEL'];
+function withClearedRouterEnv(overrides, fn) {
+  const saved = {};
+  ENV_KEYS.forEach(function (k) { saved[k] = process.env[k]; delete process.env[k]; });
+  Object.assign(process.env, overrides);
+  try { return fn(); } finally {
+    ENV_KEYS.forEach(function (k) {
+      if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    });
+    freshRouter();
+  }
+}
+
+test('a founder-banned ANEW_MODEL_<TIER> override never reaches the legacy fallback resolve()', function () {
+  withClearedRouterEnv({
+    ANEW_MODEL_C2: 'z-ai/glm-5.2', PAI_ROUTING_POLICY: 'on', TOGETHER_API_KEY: 'fixture-together-key'
+  }, function () {
+    const router = freshRouter();
+    const resolved = router.resolve('c2', { allowFallback: true });
+    assert.ok(resolved, 'the legacy fallback resolves when no seat key is routable');
+    assert.doesNotMatch(resolved.model, /glm-5\.2/i,
+      'a founder-banned per-tier override must not win over the sanitized provider default');
+  });
+});
+
+test('a real, non-banned ANEW_MODEL_<TIER> override still wins on resolve()', function () {
+  withClearedRouterEnv({
+    ANEW_MODEL_C2: 'meta-llama/Llama-3.3-70B-Instruct', PAI_ROUTING_POLICY: 'on', TOGETHER_API_KEY: 'fixture-together-key'
+  }, function () {
+    const router = freshRouter();
+    const resolved = router.resolve('c2', { allowFallback: true });
+    assert.equal(resolved.model, 'meta-llama/Llama-3.3-70B-Instruct', 'a real override is not the ban, it must still win');
+  });
+});

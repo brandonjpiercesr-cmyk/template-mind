@@ -195,7 +195,13 @@ function resolve(tier, opts) {
   var slotMap = { c0:null, c1:'c1_gate', c2:'c2_organ', c2_deep:'c2_deep', c3:'c3_mind', c4:'c4_watch' };
   var slot = slotMap[tier] || 'c1_gate';
   if (!slot) return null;
-  var model = process.env['ANEW_MODEL_' + tier.toUpperCase()] || provider.models[slot];
+  // ⬡B:core.model.router:FIX:the_final_tier_override_bypassed_the_sanitized_default:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P1: this per-tier override
+  // read raw, superseding the provider map's own already-sanitized model with no ban
+  // check of its own; ANEW_MODEL_C2=z-ai/glm-5.2 with allowFallback:true reached this
+  // line and won regardless of which provider was chosen. Routed through the shared
+  // validator, same as the provider map's own Together default just above.
+  var model = seatMap.safeModelOverride(process.env['ANEW_MODEL_' + tier.toUpperCase()], provider.models[slot]);
   if (provider.keyEnvByTier && provider.keyEnvByTier[tier] && process.env[provider.keyEnvByTier[tier]]) {
     key = process.env[provider.keyEnvByTier[tier]];
   }
