@@ -37,6 +37,10 @@ jobs:
           test/doctrine.blocked.fallback.continuity.test.js
           test/doctrine.openrouter.seat.spend.test.js
           test/doctrine.spend.guard.fail.closed.test.js
+          test/provider.boundary.coda.budget.test.js
+          test/provider.spend.receipt.durable.test.js
+          test/migrate.test.js
+          test/founder.state.doors.test.js
           test/day.memory.union.test.js
           test/fusion.span.today.test.js
           test/mind.entry.cycle-auth.test.js

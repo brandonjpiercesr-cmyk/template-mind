@@ -12,9 +12,12 @@ var openrouterSeatSpend = require('./openrouter.seat.spend.js');
 
 var TABLE = 'provider_spend_receipts';
 var SCHEMA = 'anew.provider-spend-receipt.v1';
+var CLAIM_RPC = 'claim_anew_provider_spend_intent';
+var TERMINAL_RPC = 'write_anew_provider_spend_terminal';
+var RECONCILE_RPC = 'reconcile_anew_provider_spend_unknown';
 var MAX_STORE_BYTES = 4 * 1024 * 1024;
 var MAX_RESPONSE_BYTES = 1024 * 1024;
-var SUMMARY_LIMIT = 10001;
+var SUMMARY_LIMIT = 20001;
 var SUMMARY_CACHE = null;
 
 function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -54,7 +57,10 @@ function headerValue(init, name) {
   }
   return clean(value);
 }
-function bearer(init) { return headerValue(init, 'authorization').replace(/^(?:Bearer|Token)\s+/i, '').trim(); }
+// fal authenticates its canonical queue and sync endpoints as `Authorization: Key ...`.
+// Treat Key as the same opaque transport credential form for alias matching; no value is
+// ever persisted, and providers that use Bearer/Token keep their existing behavior.
+function bearer(init) { return headerValue(init, 'authorization').replace(/^(?:Bearer|Token|Key)\s+/i, '').trim(); }
 function sameSecret(left, right) {
   var a = Buffer.from(clean(left)), b = Buffer.from(clean(right));
   return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
@@ -121,7 +127,14 @@ function requestCredential(provider, init, parsed) {
   if (provider === 'anthropic') return headerValue(init, 'x-api-key');
   if (provider === 'elevenlabs') return headerValue(init, 'xi-api-key') || bearer(init);
   if (provider === 'simli' || provider === 'liveavatar') {
-    return headerValue(init, 'x-api-key') || headerValue(init, 'api-key') || bearer(init);
+    var direct = headerValue(init, 'x-api-key') || headerValue(init, 'api-key') || bearer(init);
+    if (direct || provider !== 'simli') return direct;
+    // Simli's canonical session-mint contract carries apiKey inside its JSON body instead of
+    // an authentication header. Read it only for constant-time env alias matching; the value
+    // is never copied into a receipt, log, error, or response. The request body retains the
+    // same opaque whole-body digest semantics used for every other provider request.
+    var facts = bodyFacts(init);
+    return clean(facts.parsed && facts.parsed.apiKey);
   }
   var token = bearer(init);
   if (!token && parsed) token = parsed.searchParams.get('api_key') || parsed.searchParams.get('token') || '';
@@ -195,14 +208,14 @@ function bankConfig(env) {
   var schema = clean(runtime.BRAIN_SCHEMA || (runtime.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'));
   return {url:url,key:key,schema:schema,ok:!!(url && key && identifier(schema, 80))};
 }
-function headers(config, write) {
+function readHeaders(config) {
   var out = {apikey:config.key,Authorization:'Bearer ' + config.key};
-  if (write) {
-    out['Content-Profile'] = config.schema;
-    out['Content-Type'] = 'application/json';
-    out.Prefer = 'resolution=ignore-duplicates,return=representation';
-  } else out['Accept-Profile'] = config.schema;
+  out['Accept-Profile'] = config.schema;
   return out;
+}
+function rpcHeaders(config) {
+  return {apikey:config.key,Authorization:'Bearer ' + config.key,
+    'Content-Type':'application/json'};
 }
 function fetchImpl(options) {
   return options && typeof options.fetchImpl === 'function' ? options.fetchImpl
@@ -232,10 +245,12 @@ async function boundedJson(response, maximum) {
   var raw = Buffer.concat(chunks, total).toString('utf8');
   return raw ? JSON.parse(raw) : [];
 }
-function storeReason(response, phase) {
-  var status = response && response.status || 0;
-  if (status === 404 || status === 400) return 'provider_spend_schema_unavailable';
-  return 'provider_spend_' + phase.toLowerCase() + '_write_failed';
+function reconcileGraceSeconds(env) {
+  var raw = clean((env || process.env).PROVIDER_SPEND_UNRESOLVED_GRACE_SECONDS);
+  if (!raw) return 120;
+  if (!/^[1-9][0-9]*$/.test(raw)) return null;
+  var seconds = Number(raw);
+  return Number.isSafeInteger(seconds) && seconds <= 3600 ? seconds : null;
 }
 function phaseRow(receipt, phase, outcome) {
   var result = outcome || {};
@@ -254,23 +269,6 @@ function phaseRow(receipt, phase, outcome) {
       (phase === 'INTENT' ? 'INTENT_COMMITTED' : null)
   };
 }
-async function insertRow(row, options) {
-  var config = bankConfig(options && options.env), doFetch = fetchImpl(options);
-  if (!config.ok || !doFetch) return {ok:false,reason:'provider_spend_store_unavailable'};
-  var query = new URLSearchParams({on_conflict:'attempt_id,phase'});
-  var response;
-  try {
-    response = await doFetch(config.url + '/rest/v1/' + TABLE + '?' + query.toString(), {
-      method:'POST',headers:headers(config,true),body:JSON.stringify(row),
-      signal:brain.boundedSignal(options && options.signal, options && options.env)
-    });
-  } catch (error) { return {ok:false,reason:'provider_spend_store_unavailable'}; }
-  if (!response || response.ok !== true) return {ok:false,reason:storeReason(response,row.phase)};
-  try {
-    var represented = await boundedJson(response, MAX_STORE_BYTES);
-    return {ok:true,inserted:Array.isArray(represented) && represented.length === 1};
-  } catch (error) { return {ok:false,reason:'provider_spend_store_readback_invalid'}; }
-}
 async function readPhase(attemptId, phase, options) {
   var config = bankConfig(options && options.env), doFetch = fetchImpl(options);
   if (!config.ok || !doFetch) return {ok:false,reason:'provider_spend_store_unavailable'};
@@ -278,7 +276,7 @@ async function readPhase(attemptId, phase, options) {
   var response;
   try {
     response = await doFetch(config.url + '/rest/v1/' + TABLE + '?' + query.toString(), {
-      headers:headers(config,false),signal:brain.boundedSignal(options && options.signal, options && options.env)
+      headers:readHeaders(config),signal:brain.boundedSignal(options && options.signal, options && options.env)
     });
   } catch (error) { return {ok:false,reason:'provider_spend_store_unavailable'}; }
   if (!response || response.ok !== true) return {ok:false,reason:response &&
@@ -290,6 +288,22 @@ async function readPhase(attemptId, phase, options) {
       reason:rows && rows.length > 1 ? 'provider_spend_readback_ambiguous' : 'provider_spend_readback_missing'};
     return {ok:true,row:rows[0]};
   } catch (error) { return {ok:false,reason:'provider_spend_store_readback_invalid'}; }
+}
+async function rpcCall(name, body, options, failureReason) {
+  var config = bankConfig(options && options.env), doFetch = fetchImpl(options);
+  if (!config.ok || !doFetch) return {ok:false,reason:'provider_spend_store_unavailable'};
+  var response;
+  try {
+    response = await doFetch(config.url + '/rest/v1/rpc/' + name, {
+      method:'POST',headers:rpcHeaders(config),body:JSON.stringify(body),
+      signal:brain.boundedSignal(options && options.signal, options && options.env)
+    });
+  } catch (error) { return {ok:false,reason:'provider_spend_store_unavailable'}; }
+  if (!response || response.ok !== true) return {ok:false,reason:response &&
+    (response.status === 404 || response.status === 400) ? 'provider_spend_schema_unavailable'
+      : failureReason};
+  try { return {ok:true,payload:await boundedJson(response,MAX_STORE_BYTES)}; }
+  catch (error) { return {ok:false,reason:'provider_spend_store_readback_invalid'}; }
 }
 function sameIdentity(row, expected) {
   return ['attempt_id','phase','ham_uid','cycle_id','request_id','component','owner_node_id',
@@ -311,25 +325,86 @@ function sameTerminal(row, expected) {
 
 async function claimIntent(receipt, options) {
   var row = phaseRow(receipt, 'INTENT');
-  var inserted = await insertRow(row, options);
-  if (!inserted.ok) return inserted;
+  var limit = Number(options && options.ceiling);
+  var grace = reconcileGraceSeconds(options && options.env);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 10000) {
+    return {ok:false,reason:'provider_spend_ceiling_invalid'};
+  }
+  if (!Number.isInteger(grace)) return {ok:false,reason:'provider_spend_reconcile_grace_invalid'};
+  var claimed = await rpcCall(CLAIM_RPC,{p_receipt:row,p_ceiling:limit},
+    options,'provider_spend_intent_write_failed');
+  if (!claimed.ok) {
+    // A response can be lost after Postgres committed. Read back only to identify that
+    // crash window; it remains a refusal because resending provider traffic is forbidden.
+    var afterLostAck = await readPhase(receipt.attempt_id,'INTENT',options);
+    if (afterLostAck.ok && sameIdentity(afterLostAck.row,row)) {
+      return {ok:false,reason:'provider_spend_intent_ack_lost'};
+    }
+    return claimed;
+  }
+  var payload = claimed.payload;
+  if (!payload || payload.ok !== true || clean(payload.attempt_id) !== receipt.attempt_id ||
+      !Number.isInteger(Number(payload.admissions)) || Number(payload.ceiling) !== limit) {
+    return {ok:false,reason:'provider_spend_intent_readback_mismatch'};
+  }
+  if (payload.admitted !== true) {
+    if (payload.reason === 'daily_spend_ceiling_reached') return {ok:false,
+      reason:'daily_spend_ceiling_reached',admissions:Number(payload.admissions),ceiling:limit};
+    if (payload.duplicate === true) return {ok:false,
+      reason:'provider_spend_attempt_already_admitted'};
+    return {ok:false,reason:'provider_spend_attempt_state_uncertain'};
+  }
   var readback = await readPhase(receipt.attempt_id, 'INTENT', options);
   if (!readback.ok) return readback;
   if (!sameIdentity(readback.row, row)) return {ok:false,reason:'provider_spend_intent_readback_mismatch'};
-  if (!inserted.inserted) return {ok:false,reason:'provider_spend_attempt_state_uncertain'};
-  return {ok:true,row:readback.row};
+  return {ok:true,row:readback.row,admissions:Number(payload.admissions),ceiling:limit};
 }
 
 async function writeTerminal(receipt, outcome, options) {
   var row = phaseRow(receipt, 'TERMINAL', outcome);
-  var inserted = await insertRow(row, options);
-  if (!inserted.ok) return inserted;
+  var written = await rpcCall(TERMINAL_RPC,{p_terminal:row},options,
+    'provider_spend_terminal_write_failed');
+  if (!written.ok) {
+    // A terminal acknowledgment may be lost after commit. Exact independent readback can
+    // recover the mechanical outcome without repeating the provider request.
+    var recovered = await readPhase(receipt.attempt_id,'TERMINAL',options);
+    if (recovered.ok && sameTerminal(recovered.row,row)) {
+      return {ok:true,row:recovered.row,replayed:true,recovered_ack:true};
+    }
+    return written;
+  }
+  var payload = written.payload;
+  if (!payload || payload.ok !== true || payload.stored !== true ||
+      clean(payload.attempt_id) !== receipt.attempt_id) {
+    return {ok:false,reason:'provider_spend_terminal_readback_mismatch'};
+  }
   var readback = await readPhase(receipt.attempt_id, 'TERMINAL', options);
   if (!readback.ok) return readback;
   if (!sameTerminal(readback.row, row)) {
     return {ok:false,reason:'provider_spend_terminal_readback_mismatch'};
   }
-  return {ok:true,row:readback.row,replayed:!inserted.inserted};
+  return {ok:true,row:readback.row,replayed:payload.inserted !== true};
+}
+
+async function reconcileUnresolved(receipt, options) {
+  var grace = reconcileGraceSeconds(options && options.env);
+  if (!Number.isInteger(grace)) return {ok:false,reason:'provider_spend_reconcile_grace_invalid'};
+  var result = await rpcCall(RECONCILE_RPC,{p_ham_uid:receipt.ham_uid,
+    p_cycle_id:receipt.cycle_id,p_request_id:receipt.request_id,p_grace_seconds:grace},
+  options,'provider_spend_reconcile_failed');
+  if (!result.ok) return result;
+  var payload = result.payload;
+  if (!payload || payload.ok !== true || clean(payload.ham_uid) !== receipt.ham_uid ||
+      clean(payload.cycle_id) !== receipt.cycle_id || clean(payload.request_id) !== receipt.request_id ||
+      !Number.isInteger(Number(payload.unresolved)) ||
+      !Number.isInteger(Number(payload.resolved_unknown)) ||
+      !Number.isInteger(Number(payload.outcome_unknown)) ||
+      typeof payload.stale_remaining !== 'boolean') {
+    return {ok:false,reason:'provider_spend_reconcile_readback_mismatch'};
+  }
+  return {ok:true,unresolved:Number(payload.unresolved),
+    resolved_unknown:Number(payload.resolved_unknown),outcome_unknown:Number(payload.outcome_unknown),
+    stale_remaining:payload.stale_remaining};
 }
 
 async function responseBytes(response, maximum) {
@@ -379,7 +454,9 @@ async function terminalFromResponse(response, options) {
     provider_tokens:usage.tokens,actual_cost_usd:usage.cost,cost_source:usage.costSource};
 }
 function terminalFromError(error) {
-  return {status_code:null,disposition:'NETWORK_ERROR',response_digest:null,
+  // A rejected fetch does not prove whether the provider accepted bytes before the socket
+  // failed. The transport fact is terminal, but the provider outcome is not knowable.
+  return {status_code:null,disposition:'OUTCOME_UNKNOWN',response_digest:null,
     provider_request_id:null,provider_tokens:null,actual_cost_usd:null,cost_source:null,
     error_class:identifier(error && error.name || 'Error', 80)};
 }
@@ -404,12 +481,13 @@ async function readSummary(options) {
     return SUMMARY_CACHE;
   }
   var since = new Date(Number(options && options.now || Date.now()) - 86400000).toISOString();
-  var query = new URLSearchParams({phase:'eq.INTENT',created_at:'gte.' + since,
-    select:'provider,kind,key_alias,component,created_at',order:'created_at.asc',limit:String(SUMMARY_LIMIT)});
+  var query = new URLSearchParams({created_at:'gte.' + since,
+    select:'attempt_id,phase,provider,kind,key_alias,component,disposition,status_code,created_at',
+    order:'created_at.asc',limit:String(SUMMARY_LIMIT)});
   var response;
   try {
     response = await doFetch(config.url + '/rest/v1/' + TABLE + '?' + query.toString(), {
-      headers:headers(config,false),signal:brain.boundedSignal(options && options.signal, options && options.env)
+      headers:readHeaders(config),signal:brain.boundedSignal(options && options.signal, options && options.env)
     });
   } catch (error) {
     SUMMARY_CACHE = {readable:false,total:null,reason:'provider_spend_store_unavailable',at:Date.now()};
@@ -424,9 +502,23 @@ async function readSummary(options) {
   try {
     var rows = await boundedJson(response, MAX_STORE_BYTES);
     if (!Array.isArray(rows) || rows.length >= SUMMARY_LIMIT) throw new Error('provider_spend_summary_limit_exceeded');
-    SUMMARY_CACHE = {readable:true,total:rows.length,window_hours:24,reason:null,at:Date.now(),
-      by_provider:buckets(rows,'provider'),by_kind:buckets(rows,'kind'),
-      by_component:buckets(rows,'component',publicComponent),by_key_alias:buckets(rows,'key_alias')};
+    var intents = rows.filter(function(row){return row && row.phase === 'INTENT';});
+    var terminals = rows.filter(function(row){return row && row.phase === 'TERMINAL';});
+    var terminalByAttempt = new Map();
+    terminals.forEach(function(row){terminalByAttempt.set(clean(row.attempt_id),row);});
+    var succeeded = terminals.filter(function(row){return row.disposition === 'SUCCEEDED';}).length;
+    var outcomeUnknown = terminals.filter(function(row){return row.disposition === 'OUTCOME_UNKNOWN';}).length;
+    var failed = terminals.filter(function(row){return row.disposition !== 'SUCCEEDED' &&
+      row.disposition !== 'OUTCOME_UNKNOWN';}).length;
+    var provenEgress = terminals.filter(function(row){return row.disposition === 'SUCCEEDED' ||
+      row.disposition === 'HTTP_ERROR';}).length;
+    var unresolved = intents.filter(function(row){return !terminalByAttempt.has(clean(row.attempt_id));}).length;
+    SUMMARY_CACHE = {readable:true,total:intents.length,admissions:intents.length,
+      terminal:terminals.length,succeeded:succeeded,failed:failed,unresolved:unresolved,
+      outcome_unknown:outcomeUnknown,proven_egress:provenEgress,
+      window_hours:24,reason:null,at:Date.now(),
+      by_provider:buckets(intents,'provider'),by_kind:buckets(intents,'kind'),
+      by_component:buckets(intents,'component',publicComponent),by_key_alias:buckets(intents,'key_alias')};
     return SUMMARY_CACHE;
   } catch (error) {
     SUMMARY_CACHE = {readable:false,total:null,reason:String(error && error.message || error),at:Date.now()};
@@ -440,8 +532,10 @@ function cachedSummary() {
 
 module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimIntent,
   writeTerminal:writeTerminal,terminalFromResponse:terminalFromResponse,
-  terminalFromError:terminalFromError,readSummary:readSummary,cachedSummary:cachedSummary,
+  terminalFromError:terminalFromError,reconcileUnresolved:reconcileUnresolved,
+  readSummary:readSummary,cachedSummary:cachedSummary,
   _test:{providerFor:providerFor,bodyFacts:bodyFacts,providerModel:providerModel,keyAlias:keyAlias,
-    bankConfig:bankConfig,phaseRow:phaseRow,readPhase:readPhase,insertRow:insertRow,
+    bankConfig:bankConfig,phaseRow:phaseRow,readPhase:readPhase,
     boundedJson:boundedJson,usageFacts:usageFacts,responseBytes:responseBytes,
+    reconcileGraceSeconds:reconcileGraceSeconds,rpcCall:rpcCall,
     reset:function () { SUMMARY_CACHE=null; }}};

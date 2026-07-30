@@ -15,7 +15,7 @@ var AsyncLocalStorage = require('node:async_hooks').AsyncLocalStorage;
 // not a bug. The caps (cycle=200, mind=400, anew=400) are set in Render env, not code.
 
 
-var CALL_LOG = [];               // rolling in-memory record of model spend events
+var CALL_LOG = [];               // rolling process-local provider-attempt telemetry only
 var DAY_MS = 24 * 60 * 60 * 1000;
 var DEFAULT_TEXT_CEIL = 1500;
 var DEFAULT_IMAGE_CEIL = 300;
@@ -78,7 +78,7 @@ function ceilDetail(kind) {
   return { value: asked, source: 'env', requested: asked, maximum: maximum };
 }
 
-// One derivation, one place. This is the number the brake actually enforces.
+// One derivation, one place. The provider-spend Memory Bank RPC enforces this number.
 function configuredCeil(kind) { return ceilDetail(kind).value; }
 
 function pruneOld() {
@@ -88,11 +88,9 @@ function pruneOld() {
 }
 
 // ⬡COLD:decide:tag:PROVIDER_SPEND_ATTRIBUTION:20260723⬡
-// CATHY.SHADOW cold-audit COLD-ANEW-LADDER-0006. The daily model-call ceiling brake. Cold,
-// deterministic accounting (a rolling per-day count vs an env ceiling); it makes no semantic
-// judgment, so it is correctly cold code. Ceilings are env truth, not literals.
-// Called right before any paid model call. Returns false when the daily ceiling
-// is hit, so the caller skips the spend and stays silent rather than burning.
+// CATHY.SHADOW cold-audit COLD-ANEW-LADDER-0006. The configuration half of the daily
+// model-call brake. Cold validation derives the ceiling; the atomic Memory Bank INTENT RPC
+// owns rolling-day accounting and admission across replicas.
 // ⬡B:core.spend_guard:911:the_ceiling_stopped_her_and_told_nobody:20260725⬡
 // LIVE 20260725: her gate answered no_answer in under two seconds, five times out of five,
 // while GET /anew/model/health read every provider UP and all ten seat keys live. Nothing
@@ -154,7 +152,7 @@ function withAttribution(value, fn) {
   // receipt escape through the next fallback. The state object is deliberately private
   // and non-enumerable, so it can never enter a receipt or a public attribution surface.
   Object.defineProperty(next, '_provider_state', {enumerable:false,
-    value:active && active._provider_state || {attempt_order:0, hold:null}});
+    value:active && active._provider_state || {attempt_order:0, hold:null,reconcile:null}});
   return ATTRIBUTION.run(next, fn);
 }
 
@@ -177,6 +175,30 @@ function holdPaidEgress(reason) {
   return true;
 }
 
+function ensurePaidReconciliation(key, fn) {
+  var active = ATTRIBUTION.getStore();
+  if (typeof fn !== 'function') {
+    return Promise.resolve({ok:false,reason:'provider_spend_reconcile_scope_invalid'});
+  }
+  // Receipt preparation rejects missing production attribution before this point. Keeping
+  // the helper callable without ALS supports explicit injected boundary harnesses while the
+  // real attributed path below gets cross-fallback single-flight behavior.
+  if (!active || !active._provider_state) return Promise.resolve().then(fn);
+  var state = active._provider_state, exact = String(key || '');
+  if (!exact) return Promise.resolve({ok:false,reason:'provider_spend_reconcile_scope_invalid'});
+  if (state.reconcile) {
+    if (state.reconcile.key !== exact) {
+      return Promise.resolve({ok:false,reason:'provider_spend_reconcile_scope_mismatch'});
+    }
+    return state.reconcile.promise;
+  }
+  // Install the promise before invoking I/O. Concurrent fallbacks in this same live turn
+  // share one pre-admission snapshot and cannot misclassify a sibling INTENT as a crash.
+  var promise = Promise.resolve().then(fn);
+  state.reconcile = {key:exact,promise:promise};
+  return promise;
+}
+
 function lastDenial(withinMs, attribution) {
   if (withinMs && typeof withinMs === 'object') {
     attribution = withinMs;
@@ -191,15 +213,11 @@ function lastDenial(withinMs, attribution) {
 }
 
 function preflight(kind, options) {
-  // Text callers consult this before they know which provider rung, if any, will
-  // actually leave the process. That consultation is admission only. The one
-  // provider boundary records the daily slot at real HTTP egress with
-  // {egress:true}. This is global, not CODA-only: otherwise every ordinary text
-  // request is counted once here and a second time at fetch(). Text, audio,
-  // embeddings, image, and video are all recorded only by the provider boundary
-  // at the actual paid submission.
+  // This is configuration validation only. Daily admission is an atomic Memory Bank
+  // election owned by provider.spend.receipt; a process-local array can never arbitrate
+  // two replicas. Legacy callers may still consult this before they know which rung will
+  // be selected, but they cannot consume or deny a durable slot here.
   var attribution = currentAttribution(options && options.attribution || options);
-  pruneOld();
   var ceil = configuredCeil(kind);
   if (ceil === null) {
     rememberDenial({ at: Date.now(), kind: String(kind || 'text'), count: CALL_LOG.length,
@@ -207,35 +225,39 @@ function preflight(kind, options) {
       attribution:attribution });
     return false;
   }
-  var count = CALL_LOG.length;
-  if (count >= ceil) {
-    // Remember WHY, so her voice can say the ceiling stopped her instead of no_answer.
-    rememberDenial({ at: Date.now(), kind: String(kind || 'text'), count: count, ceiling: ceil,
-      reason: 'daily_call_ceiling_reached', attribution:attribution });
-    return false;
-  }
   return true;
 }
 
-function recordEgress(kind, options) {
-  // Recheck synchronously at the last instruction before realFetch. A preflight can be
-  // separated from this point by the durable intent write; another concurrent request may
-  // have filled the local seat in that interval. No receipt failure or budget refusal can
-  // consume this process-local supplemental counter anymore.
-  if (!preflight(kind, options)) return false;
+function recordAttemptTelemetry(kind, options) {
+  // Observability only. The durable claim has already admitted this exact attempt before
+  // the boundary calls here. This array neither grants nor refuses provider traffic and is
+  // intentionally allowed to reset at process restart.
   var attribution = currentAttribution(options && options.attribution || options);
   // ⬡B:core.spend_guard:FIX:paid_egress_keeps_its_owner:20260730⬡
   // The old log kept only a timestamp, discarding the attribution already present in this
-  // scope. Keep one bounded record per actual provider egress. No prompt, response, key, URL,
+  // scope. Keep one bounded record per locally attempted provider call. No prompt, response, key, URL,
   // or provider body is stored here.
   CALL_LOG.push({ at:Date.now(), kind:String(kind || 'text').slice(0, 24),
     attribution:attribution });
   return true;
 }
 
+// Compatibility for callers and tests that still use the old name. It is telemetry, not
+// proof of egress and never ceiling authority.
+function recordEgress(kind, options) { return recordAttemptTelemetry(kind, options); }
+
+function rememberDurableDenial(kind, count, ceiling, reason, options) {
+  var attribution = currentAttribution(options && options.attribution || options);
+  rememberDenial({at:Date.now(),kind:String(kind || 'text'),
+    count:Number.isInteger(Number(count)) ? Number(count) : null,
+    ceiling:Number.isInteger(Number(ceiling)) ? Number(ceiling) : null,
+    reason:String(reason || 'daily_call_ceiling_reached').slice(0, 120),
+    attribution:attribution});
+}
+
 function allow(kind, options) {
   if (!preflight(kind, options)) return false;
-  return options && options.egress === true ? recordEgress(kind, options) : true;
+  return options && options.egress === true ? recordAttemptTelemetry(kind,options) : true;
 }
 
 function usageToday() { pruneOld(); return CALL_LOG.length; }
@@ -415,6 +437,8 @@ async function checkBalances(options) {
 // for. Caught by the Codex reviewer on the sister PR.
 module.exports = { lastDenial: lastDenial, allow: allow, preflight:preflight,
   recordEgress:recordEgress, usageToday: usageToday,
+  recordAttemptTelemetry:recordAttemptTelemetry,
+  rememberDurableDenial:rememberDurableDenial,
   usageAttribution:usageAttribution,
   ceilDetail: ceilDetail,
   withAttribution:withAttribution,
@@ -422,6 +446,7 @@ module.exports = { lastDenial: lastDenial, allow: allow, preflight:preflight,
   nextProviderAttemptOrder:nextProviderAttemptOrder,
   paidEgressHold:paidEgressHold,
   holdPaidEgress:holdPaidEgress,
+  ensurePaidReconciliation:ensurePaidReconciliation,
   checkBalances: checkBalances,
   accountBalance: accountBalance,
   lowProviders: lowProviders,

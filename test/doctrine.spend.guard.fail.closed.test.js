@@ -25,7 +25,7 @@ test('invalid text ceilings fail closed without recording a provider attempt',fu
   });
 });
 
-test('invalid image ceilings fail closed and bounded valid ceilings still work',function(){
+test('invalid image policy fails closed while valid local telemetry stays non-authoritative',function(){
   process.env.DAILY_IMAGE_CALL_CEIL='not a number';
   let guard=require(path);
   assert.equal(guard.allow('image',{egress:true}),false);
@@ -33,8 +33,10 @@ test('invalid image ceilings fail closed and bounded valid ceilings still work',
   process.env.DAILY_IMAGE_CALL_CEIL='2';delete require.cache[path];guard=require(path);
   assert.equal(guard.allow('image',{egress:true}),true);
   assert.equal(guard.allow('image',{egress:true}),true);
-  assert.equal(guard.allow('image',{egress:true}),false);
-  assert.equal(guard.usageToday(),2);
+  assert.equal(guard.allow('image',{egress:true}),true,
+    'only the atomic bank claim may refuse a shared daily slot');
+  assert.equal(guard.usageToday(),3);
+  assert.equal(guard.ceilDetail('image').value,2);
 });
 
 test('unset ceilings use safe defaults while values above hard maxima close',function(){

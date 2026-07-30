@@ -54,6 +54,9 @@ function receiptStoreFixture() {
       assert.equal(spec.attribution.component,'press.scan');
       return {ok:true,receipt:{attempt_id:'press-scan-fixture'}};
     },
+    reconcileUnresolved:async function () {
+      return {ok:true,unresolved:0,resolved_unknown:0,outcome_unknown:0};
+    },
     claimIntent:async function () { return {ok:true}; },
     terminalFromResponse:async function (response) {
       return {status_code:response.status,disposition:'PROVIDER_RESPONSE'};

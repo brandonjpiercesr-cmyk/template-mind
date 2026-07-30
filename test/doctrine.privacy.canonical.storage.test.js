@@ -23,7 +23,7 @@ function restoreEnv(t, keys) {
   });
 }
 
-test('null-like tiers are never founder T0 and migration 0004 carries both bank columns', function () {
+test('null-like tiers are never founder T0 and migration 0004 targets only the canonical bank', function () {
   const tiers = require(TIERS_PATH);
   [null, undefined, false, true, '', '   '].forEach(function (value) {
     assert.equal(tiers.parseTier(value), null, JSON.stringify(value) + ' became a tier');
@@ -32,10 +32,11 @@ test('null-like tiers are never founder T0 and migration 0004 carries both bank 
   assert.equal(tiers.buildEnvelope('sanctioned', null, '', 'test').tier, 1);
 
   const sql = fs.readFileSync(MIGRATION, 'utf8');
-  assert.match(sql, /abacia_core\.aibe_brain add column if not exists acl_tier smallint/);
   assert.match(sql, /memory_bank\.beads add column if not exists acl_tier smallint/);
-  assert.match(sql, /where acl_tier is null/);
-  assert.match(sql, /value in \('0','1','2','3','4'\)/);
+  assert.doesNotMatch(sql, /alter table abacia_core\.aibe_brain/i);
+  assert.doesNotMatch(sql, /update memory_bank\.beads/i,
+    'the synchronous schema runner must not rescan historical bead content');
+  assert.match(sql, /drop function if exists public\.acl_tier_from_content\(text\)/);
 });
 
 test('the canonical brain writer maps only a real privacy tier into acl_tier', async function (t) {
