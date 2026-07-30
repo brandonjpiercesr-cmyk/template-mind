@@ -1371,8 +1371,8 @@ var TOOLS = [
     +'If it comes back browser_eyes_disabled the organ is not armed on this service; say that plainly rather than guessing what the page looks like.',
     parameters:{type:'object',required:['url'],properties:{
       url:{type:'string',description:'The full public http or https URL to look at.'},
-      width:{type:'number',description:'Viewport width in pixels, 320 to 2560. Defaults to 1280. Use 390 to see it as a phone.'},
-      height:{type:'number',description:'Viewport height in pixels, 320 to 2560. Defaults to 800. Use 844 with width 390 for a phone.'},
+      width:{type:'number',description:'Viewport width in pixels, 320 to 1920. Defaults to 1280. Use 390 to see it as a phone.'},
+      height:{type:'number',description:'Viewport height in pixels, 320 to 1200. Defaults to 800. Use 844 with width 390 for a phone.'},
       full_page:{type:'boolean',description:'True to capture the whole scrollable page instead of just the visible viewport.'},
       reason:{type:'string',description:'Why this page is being looked at, in your own words. It is kept on the receipt.'}
     }}}},
