@@ -1596,7 +1596,29 @@ function effectCancellation(runtime) {
   };
 }
 
-async function executeTool(name, args, hamUid, origMessage, runtime) {
+// ⬡B:core.tool_loop:GUARD:provider_calls_require_exact_offered_membership:20260730⬡
+// The provider can choose only from the exact definitions carried on its own
+// request. Native structured tool calls used to bypass that fact check and
+// could name a mutation hidden from the outbound finalizer. Keep the set null
+// prototyped so special property names cannot manufacture membership.
+function offeredToolNameSet(toolDefinitions) {
+  var names = Object.create(null);
+  (Array.isArray(toolDefinitions) ? toolDefinitions : []).forEach(function (tool) {
+    var toolName = tool && tool.function && tool.function.name;
+    if (typeof toolName === 'string' && toolName) names[toolName] = true;
+  });
+  return Object.freeze(names);
+}
+
+function providerToolNameWasOffered(name, runtime) {
+  return !!(runtime && runtime.phase === 'deliberation' &&
+    runtime.offeredToolNames && runtime.offeredToolNames[name] === true);
+}
+
+async function executeTool(name, args, hamUid, origMessage, runtime, providerReturned) {
+  if (providerReturned === true && !providerToolNameWasOffered(name, runtime)) {
+    return JSON.stringify({ok:false,reason:'tool_call_not_offered',tool:name});
+  }
   if (runtime && runtime.phase === 'commit' &&
       await runtimeCancellationRequested(runtime)) {
     return cancelledToolResult(name);
@@ -4897,6 +4919,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       if(_policyFormat)_providerBody.response_format=_policyFormat;
       _providerBody.provider={require_parameters:true};
     }
+    _effectRuntime.offeredToolNames = offeredToolNameSet(_providerBody.tools);
     r=await _callPaiProvider(_providerBody,_providerSeat);
     r=_structuredProviderResult(r);
     if(r&&r.choices&&r.choices.length){
@@ -5225,6 +5248,22 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           blocked_by:'REACH_INCIDENT_INTAKE',ham:hamObj,cycleId:_cycleId,
           requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
       }
+      // Validate the complete provider batch before executing any member. A
+      // mixed batch cannot queue an offered mutation before a later unoffered
+      // call reveals the contract breach.
+      var _unofferedToolCall = msg.tool_calls.find(function (call) {
+        var callName = call && call.function && call.function.name;
+        return !providerToolNameWasOffered(callName, _effectRuntime);
+      });
+      if (_unofferedToolCall) {
+        var _unofferedToolName = _unofferedToolCall && _unofferedToolCall.function &&
+          _unofferedToolCall.function.name;
+        _stampStep('tool_call_not_offered', String(_unofferedToolName || 'malformed'));
+        return {ok:false,reason:'tool_call_not_offered',
+          blocked_by:String(_unofferedToolName || 'malformed_tool_call'),
+          ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+          tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      }
       msgs.push({role:'assistant',content:msg.content||null,tool_calls:msg.tool_calls});
       var _budgetGroundNeeded = false, _budgetSummaryRaw = null;
       // Reset per iteration. Set the moment ONE call in this iteration asks something new,
@@ -5243,7 +5282,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         targs = bindExactHamToolArgs(tc.function.name, targs, hamUid, _effectRuntime);
         tc.function.arguments = JSON.stringify(targs);
         _stampStep('tool_call', tc.function.name);
-        var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime);
+        var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime,true);
         tools.push(tc.function.name);
         // THE PROGRESS STOP, measuring half. Pure arithmetic over what was asked and what
         // actually came back. Nothing here reads meaning; it only counts repeats.
