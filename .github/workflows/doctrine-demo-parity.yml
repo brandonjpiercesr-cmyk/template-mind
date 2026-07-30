@@ -39,4 +39,5 @@ jobs:
           test/doctrine.spend.guard.fail.closed.test.js
           test/day.memory.union.test.js
           test/fusion.span.today.test.js
+          test/inbox.zero.authorization.test.js
           test/mind.entry.cycle-auth.test.js
