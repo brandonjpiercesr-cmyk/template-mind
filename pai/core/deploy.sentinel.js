@@ -34,7 +34,11 @@
 // (env, GitHub HEAD, Render deploy list), then a durable, deduplicated evidence bead.
 'use strict';
 
-var sensorStore = require('./coda/sensor.store.js');
+// The template world does not own CODA's canonical sensor store. Keep this module
+// loadable for registry introspection, but refuse any attempted submission by name
+// instead of inventing a second store or silently dropping evidence.
+var sensorStore = null;
+try { sensorStore = require('./coda/sensor.store.js'); } catch (eSensorStore) { sensorStore = null; }
 
 function env(name) { return String(process.env[name] || '').trim(); }
 function ownCommit() { return env('RENDER_GIT_COMMIT'); }
@@ -105,6 +109,10 @@ async function senseOnce() {
 // sync note on the CLAIR Command Center desk so A'NU, CLAIR, and the whole team read
 // the same wall. This module never fixes and never reaches; that is the law it keeps.
 async function submitToCoda(facts) {
+  if (!sensorStore || typeof sensorStore.persistEvent !== 'function') {
+    return { ok: false, reason: 'coda_sensor_store_unavailable_in_template_world',
+      stuck: !!(facts && facts.stuck) };
+  }
   var ham = hamUid();
   if (!ham) return { ok: false, reason: 'no_ham_configured' };
   var eventId = 'deploy.freshness.' + String(facts.live_commit || 'unknown').slice(0, 10)

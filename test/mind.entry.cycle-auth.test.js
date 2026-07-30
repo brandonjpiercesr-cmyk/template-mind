@@ -43,8 +43,9 @@ test.before(function () {
         world:'TEST', trust_level:7, via:'test_atmosphere' };
     },
     peopleTier:{
-      resolveViewerTier:function () { return { tier:null, source:'unresolved' }; },
-      bornPeopleTier:async function () { return 3; },
+      resolveReadTier:async function (_identity, hamUid) {
+        return {tier:3,source:'birth',ham_uid:hamUid};
+      },
       effectiveTier:function (tier) {
         return Number.isInteger(tier) && tier >= 0 && tier <= 4 ? tier : 4;
       }

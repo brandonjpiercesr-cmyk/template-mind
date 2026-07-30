@@ -135,9 +135,28 @@ function identityQueryPath(query) {
   if (q.ham_uid) parts.push('ham_uid=eq.' + encodeURIComponent(q.ham_uid));
   if (q.agent_global) parts.push('agent_global=eq.' + encodeURIComponent(q.agent_global));
   if (q.importance_gte != null) parts.push('importance=gte.' + q.importance_gte);
+  if (q.viewer_tier != null) {
+    var tierFilter = require('./privacy/people.tier.js').structuralFilter(q.viewer_tier);
+    if (tierFilter) parts.push(tierFilter);
+  }
   parts.push('order=' + (q.order === 'asc' ? 'source.asc' : 'created_at.desc'));
   parts.push('limit=' + (q.limit || 10));
   return parts.join('&');
+}
+
+function scopedQuery(query, viewerTier) {
+  var copy = Object.assign({}, query || {});
+  // Named memory helpers are security boundaries, including when an older/direct caller
+  // has not yet resolved a tier. An omitted value therefore means T4, never "leave the
+  // predicate out". Founder callers must prove T0 before entering the helper.
+  copy.viewer_tier = require('./privacy/people.tier.js').effectiveTier(viewerTier);
+  return copy;
+}
+
+function scopedQueries(queries, viewerTier) {
+  return (Array.isArray(queries) ? queries : [queries]).map(function (query) {
+    return scopedQuery(query, viewerTier);
+  });
 }
 
 // FIND entry point — run multiple queries in parallel, merge, dedupe by id
@@ -187,10 +206,11 @@ async function find(queries) {
     // therefore INVISIBLE to every non-T0 reader by construction: fail closed at the
     // storage layer. Verified live against the bank.
     //
-    // viewer_tier is opt-in per query. A caller that does not scope its read is unchanged,
-    // exactly as before; the world-facing callers pass it. T0 passes no filter at all
-    // because the founder holds everything, including every bead written before the mark
-    // existed. See core/privacy/people.tier.js for the ladder itself.
+    // Generic find() keeps viewer_tier explicit because some internal catalogs are not
+    // person-facing reads. Every world-facing owner resolves and passes it; all named memory
+    // helpers above fail closed to T4 when an older direct caller omits it. T0 passes no filter
+    // because the founder holds everything, including every bead written before the mark existed.
+    // See core/privacy/people.tier.js for the ladder itself.
     if (q.viewer_tier != null) {
       var _tierFilter = require('./privacy/people.tier.js').structuralFilter(q.viewer_tier);
       if (_tierFilter) parts.push(_tierFilter);
@@ -252,15 +272,15 @@ async function find(queries) {
 
 // Named FIND patterns used by the Memory Bank builder
 // Identity: who is this HAM, their context and trust
-async function findIdentity(hamUid) {
-  return find([
+async function findIdentity(hamUid, viewerTier) {
+  return find(scopedQueries([
     { stamp_type: 'DIRECTIVE', ham_uid: hamUid, limit: 3 },
     { stamp_type: 'HAM_IDENTIFIER', ham_uid: hamUid, limit: 5 }
-  ]);
+  ], viewerTier));
 }
 
 // Agent JDs: all agent definitions available to this HAM.
-async function findAgentJDs(hamUid) {
+async function findAgentJDs(hamUid, viewerTier) {
   // ⬡B:core.find:FIX:new_world_agent_jds_from_ham_scw:20260715⬡
   // Live New World Bank proof: AGENT_JD and agent.jd are empty there, while the
   // same HAM's real adviser births live as SCW rows (scw.<world>.<hamUid>).
@@ -274,7 +294,7 @@ async function findAgentJDs(hamUid) {
     { source_prefix: 'agent.jd', limit: 20 }
   ];
   if (hamUid) queries.push({ stamp_type: 'SCW', ham_uid: hamUid, limit: 100 });
-  var result = await find(queries);
+  var result = await find(scopedQueries(queries, viewerTier));
   var seenWorld = {};
   result.beads = (result.beads || []).filter(function (bead) {
     if (bead && (bead.stamp_type === 'AGENT_JD' || String(bead.source || '').indexOf('agent.jd') === 0)) return true;
@@ -291,7 +311,7 @@ async function findAgentJDs(hamUid) {
 }
 
 // Exact records for bounded agent names explicitly present in the current ask.
-async function findNamedAgentRecords(hamUid, agentGlobals) {
+async function findNamedAgentRecords(hamUid, agentGlobals, viewerTier) {
   // ⬡B:core.find:WIRE:question_named_agents_exact_ham_read:20260715⬡
   // The model cannot reliably invent the right tool arguments for a name it has
   // never seen. The builder supplies only literal uppercase tokens from this turn;
@@ -306,9 +326,9 @@ async function findNamedAgentRecords(hamUid, agentGlobals) {
     return true;
   }).slice(0, 8);
   if (!hamUid || !names.length) return { beads: [], ms: 0, count: 0 };
-  return find(names.map(function (name) {
+  return find(scopedQueries(names.map(function (name) {
     return { agent_global: name, ham_uid: hamUid, limit: 1 };
-  }));
+  }), viewerTier));
 }
 
 // ⬡B:core.find:WONDER:bounded_identity_provenance_read:20260715⬡
@@ -316,7 +336,7 @@ async function findNamedAgentRecords(hamUid, agentGlobals) {
 // agent. Read bounded exact-HAM definition classes plus recent role-bearing
 // memory, then classify only exact question subjects. Mixed-case names travel
 // through the same path. No roster, alias map, fuzzy scan, or answer lives here.
-async function findIdentityEvidence(hamUid, question) {
+async function findIdentityEvidence(hamUid, question, viewerTier) {
   var started = Date.now();
   var exactHam = String(hamUid || '').toUpperCase();
   var subjects = identityProvenance.extractIdentitySubjects(question);
@@ -330,14 +350,14 @@ async function findIdentityEvidence(hamUid, question) {
   }).map(function (subject) {
     return { agent_global:subject.toUpperCase(), ham_uid:exactHam, limit:3 };
   });
-  queries = queries.concat([
+  queries = scopedQueries(queries.concat([
     { stamp_type:'HAM_IDENTIFIER', ham_uid:exactHam, limit:5 },
     { source_prefix:'scw.person_profile.' + exactHam, ham_uid:exactHam, limit:2 },
     { stamp_type:'AGENT_JD', ham_uid:exactHam, limit:24 },
     { stamp_type:'SCW', ham_uid:exactHam, limit:48 },
     { stamp_type:'DOCTRINE', ham_uid:exactHam, limit:48 },
     { stamp_type:'LOGFUL', ham_uid:exactHam, limit:48 }
-  ]);
+  ]), viewerTier);
   try {
     var reads = await Promise.all(queries.map(function (query) {
       return identityBq(identityQueryPath(query));
@@ -376,7 +396,7 @@ async function findIdentityEvidence(hamUid, question) {
 }
 
 // Recent context: the conversation lane for a HAM
-async function findContext(hamUid, limit) {
+async function findContext(hamUid, limit, viewerTier) {
   // ⬡B:core.find:FIX:conversation_context_not_machinery:20260702⬡
   // Was: all MINUTES for the ham, which is dominated by Overseer's every-3-minute
   // "air flowed through the ventilation system" machinery stamps. Her MEMORY_BANK context was
@@ -397,11 +417,11 @@ async function findContext(hamUid, limit) {
   // The floor stays at 7 and the writer was raised to clear it; lowering it would drag the
   // importance-2 housekeeping markers onto her wall as if a person had said them.
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
-  return find([
+  return find(scopedQueries([
     { source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid, limit: limit || 5 },
     { stamp_type: contract.TURN_STAMP_TYPE, ham_uid: hamUid,
       importance_gte: contract.READER_IMPORTANCE_FLOOR, limit: limit || 5 }
-  ]);
+  ], viewerTier));
 }
 
 // Semantic search: topic-specific brain reads
@@ -423,12 +443,12 @@ async function findBySource(sourcePrefix, limit) {
 // wall entirely, and the founder would have traded "she forgets what I said" for "she forgot
 // what her advisers did". Excluding the conversation prefix here keeps both lanes alive: this
 // one is what her stations produced, findContext is what the two of them said.
-async function findRecentResults(hamUid, limit) {
+async function findRecentResults(hamUid, limit, viewerTier) {
   if (!hamUid) return { beads: [] };
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
-  return find([{ stamp_type: 'RESULT', ham_uid: hamUid,
+  return find(scopedQueries([{ stamp_type: 'RESULT', ham_uid: hamUid,
     importance_gte: contract.READER_IMPORTANCE_FLOOR,
-    source_not_prefix: contract.TURN_SOURCE_PREFIX, limit: limit || 10 }]);
+    source_not_prefix: contract.TURN_SOURCE_PREFIX, limit: limit || 10 }], viewerTier));
 }
 
 // ⬡B:core.find:WIRE:findDoctrine_20260701⬡
@@ -437,19 +457,20 @@ async function findRecentResults(hamUid, limit) {
 // "I don't have any information on our roadmap" — the Memory Bank loaded identity, agent
 // JDs, and recent minutes but never doctrine or roadmap. ANYHAM test: hamUid drives
 // the read, any HAM gets their own doctrine.
-async function findDoctrine(hamUid, limit) {
-  return find([
+async function findDoctrine(hamUid, limit, viewerTier) {
+  return find(scopedQueries([
     { stamp_type: 'ROADMAP', ham_uid: hamUid, limit: limit || 2 },
     { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: limit || 4 }
-  ]);
+  ], viewerTier));
 }
 
 // ⬡B:core.find:WIRE:findPersonProfile:20260702⬡
 // Rich identity: who this person actually IS, from their scw.person_profile bead.
 // Founder said, verbatim: "she should know me bro". Name + tier is not knowing
 // someone. UNIVERSALITY: keyed by ham_uid — any HAM gets their own profile.
-async function findPersonProfile(hamUid) {
-  return find([{ source_prefix: 'scw.person_profile.' + hamUid, limit: 1 }]);
+async function findPersonProfile(hamUid, viewerTier) {
+  return find(scopedQueries([{ source_prefix: 'scw.person_profile.' + hamUid,
+    ham_uid: hamUid, limit: 1 }], viewerTier));
 }
 
 // ⬡B:core.find:WIRE:findPreferences_20260711⬡
@@ -459,8 +480,10 @@ async function findPersonProfile(hamUid) {
 // PREFERENCE filter (tool-argument variance). Cold fix: MEMORY_BANK pre-loads these into
 // the wall so the answer is already in context and the model never has to guess a
 // filter. UNIVERSALITY: keyed by ham_uid, any HAM gets their own preferences.
-async function findPreferences(hamUid, limit) {
-  return find([{ stamp_type: 'PREFERENCE', ham_uid: hamUid, limit: limit || 5 }]);
+async function findPreferences(hamUid, limit, viewerTier) {
+  return find(scopedQueries([
+    { stamp_type: 'PREFERENCE', ham_uid: hamUid, limit: limit || 5 }
+  ], viewerTier));
 }
 
 // ⬡B:core.find:WIRE:findWonderGames_20260714⬡
@@ -471,12 +494,12 @@ async function findPreferences(hamUid, limit) {
 // Cold fix, same pattern as preferences: MEMORY_BANK pre-loads these into the wall so the
 // answer is already present and the model never has to guess a filter.
 // UNIVERSALITY: keyed by ham_uid, works for any HAM, no hardcoded content.
-async function findWonderGames(hamUid, limit) {
-  return find([
+async function findWonderGames(hamUid, limit, viewerTier) {
+  return find(scopedQueries([
     { stamp_type: 'WONDER_GAMES', ham_uid: hamUid, limit: limit || 3 },
     { source_prefix: 'wonder_games.', ham_uid: hamUid, limit: limit || 3 },
     { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: limit || 3 }
-  ]);
+  ], viewerTier));
 }
 
 // ⬡B:core.find:WIRE:findStatedCommitments_20260725⬡
@@ -513,15 +536,15 @@ async function findWonderGames(hamUid, limit) {
 // another person's wall. The importance floor keeps the low-importance MEMORY housekeeping
 // stamps (surface-rotation and dedup markers, importance 2) out of the wall.
 // UNIVERSALITY: keyed by ham_uid, any HAM gets their own. No person, no content hardcoded.
-async function findStatedCommitments(hamUid, limit) {
+async function findStatedCommitments(hamUid, limit, viewerTier) {
   if (!hamUid) return { beads: [] };
   var n = limit || 6;
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
-  return find([
+  return find(scopedQueries([
     { source_prefix: contract.GIFT_SOURCE_PREFIX, ham_uid: hamUid, limit: n },
     { stamp_type: contract.GIFT_STAMP_TYPE, ham_uid: hamUid,
       importance_gte: contract.READER_IMPORTANCE_FLOOR, limit: n }
-  ]);
+  ], viewerTier));
 }
 
 // ⬡B:core.find:WIRE:the_one_door_a_non_founder_world_reads_through:20260726⬡

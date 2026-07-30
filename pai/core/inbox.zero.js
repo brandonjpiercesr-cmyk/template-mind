@@ -35,7 +35,10 @@ var publicTurn   = require('./pai.public.finalizer'); // the one real exit: coun
 // Per-world deep intelligence (SCW facts + CORE_DIRECTIVE), firewalled. Defensive require so a
 // mirror that carries only core/ (no agents/) degrades gracefully to no-SCW instead of breaking.
 var advisorSCW; try { advisorSCW = require('../agents/advisor_scw'); }
-catch (e) { advisorSCW = { readWorldSCWText: async function () { return { hasScw: false, coreDirective: null, facts: [] }; } }; }
+catch (e) { advisorSCW = { readWorldSCWText: async function () {
+  return { hasScw: false, coreDirective: null, facts: [],
+    reason: 'advisor_scw_unavailable_in_template_world' };
+} }; }
 var brainClient  = require('./brain.client');
 var lineage      = require('./lineage.attach');
 var formatMatrix = require('./format.matrix');
@@ -985,7 +988,7 @@ async function runInboxZero(opts) {
 
   // 10) Exit to LOGFUL.
   try {
-    var logful = require('./logful');
+    var logful = require('../logful/index.js');
     await logful.logfulStore(HAM, { type: 'inbox_zero', world: world, importance: personal.length ? 8 : 5,
       content: 'Inbox Zero ' + world + ': reviewed ' + packet.messages.length + ', drafted ' + personal.length + ', skipped ' + skippedMsgs.length + ', escalations ' + escalations + '.' });
   } catch (e) {}

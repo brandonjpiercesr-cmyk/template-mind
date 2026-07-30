@@ -24,8 +24,19 @@ jobs:
           test/doctrine.find.in.brain.availability.test.js
           test/doctrine.fcw.memory.availability.test.js
           test/doctrine.people.tier.test.js
+          test/doctrine.privacy.canonical.storage.test.js
+          test/doctrine.privacy.mark.wires.read.test.js
+          test/doctrine.privacy.routes.viewer.tier.test.js
+          test/doctrine.privacy.world.release.test.js
+          test/doctrine.lens.she.learns.test.js
+          test/doctrine.logful.bank.test.js
+          test/doctrine.logful.field.wired.test.js
+          test/doctrine.tool.loop.write_to_brain.verified.test.js
           test/doctrine.memory.keeper.readback.test.js
           test/doctrine.memory.effect.release.gate.test.js
           test/doctrine.blocked.fallback.continuity.test.js
           test/doctrine.openrouter.seat.spend.test.js
           test/doctrine.spend.guard.fail.closed.test.js
+          test/day.memory.union.test.js
+          test/fusion.span.today.test.js
+          test/mind.entry.cycle-auth.test.js

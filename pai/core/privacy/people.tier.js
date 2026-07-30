@@ -26,6 +26,7 @@
 // any reader whose tier cannot be established: an unknown reader is treated as the least
 // privileged person in the system, never as the founder.
 var T0 = 0, STRICTEST = 4;
+var READ_AUTHORITY = Symbol('anew.people.read_authority');
 
 var MARKS = Object.freeze({
   PRIVATE: 'private',            // the founder marked it. Never surfaces, and its existence is never announced.
@@ -46,6 +47,16 @@ function isTier(value) {
   return Number.isInteger(value) && value >= T0 && value <= STRICTEST;
 }
 
+// Number(null) and Number('') are both zero. On this inverted ladder zero is the founder's
+// tier, so generic numeric coercion is an authorization bug, not a convenience. Parse once
+// through a null-aware gate and reuse it anywhere persisted or transported data becomes a tier.
+function parseTier(value) {
+  if (value === null || value === undefined || typeof value === 'boolean') return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  var parsed = Number(value);
+  return isTier(parsed) ? parsed : null;
+}
+
 function normalizeMark(value) {
   var m = String(value == null ? '' : value).trim().toLowerCase();
   return (m === MARKS.PRIVATE || m === MARKS.SANCTIONED || m === MARKS.UNCLASSIFIED) ? m : null;
@@ -58,18 +69,14 @@ function founderHamUid() {
 // Who is reading. Returns the tier plus WHERE it came from, because a tier with no
 // provenance is a guess and a guess is how a private fact reaches a room.
 //   founder_env  the reading HAM is the founder's own world -> T0, sees everything
-//   identity     the world carries a stamped people_tier (BIRTH stamps this)
 //   unresolved   nothing established it. tier is null; every consumer must treat that
 //                as STRICTEST, and PAM does.
-function resolveViewerTier(identity, hamUid) {
-  var uid = String((identity && (identity.ham_uid || identity.hamUid)) || hamUid || '').trim().toUpperCase();
+function resolveViewerTier(_identity, hamUid) {
+  var uid = String(hamUid || '').trim().toUpperCase();
   var founder = founderHamUid();
   if (founder && uid && uid === founder) return { tier: T0, source: 'founder_env' };
-  var declared = identity && (identity.people_tier != null ? identity.people_tier : identity.peopleTier);
-  if (declared != null) {
-    var n = Number(declared);
-    if (isTier(n)) return { tier: n, source: 'identity' };
-  }
+  // Identity is request transport, not read authority. Keeping the argument preserves the
+  // legacy API while ensuring a caller-supplied people_tier can never grant memory access.
   return { tier: null, source: 'unresolved' };
 }
 
@@ -77,6 +84,18 @@ function resolveViewerTier(identity, hamUid) {
 // reader is the least privileged reader, never the most.
 function effectiveTier(tier) {
   return isTier(tier) ? tier : STRICTEST;
+}
+
+function readAuthority(tier, source, hamUid) {
+  var authority = { tier:effectiveTier(tier), source:String(source || 'unresolved'),
+    ham_uid:String(hamUid || '').trim().toUpperCase() };
+  Object.defineProperty(authority, READ_AUTHORITY, {value:true,enumerable:false});
+  return authority;
+}
+
+function isReadAuthority(value, hamUid) {
+  return !!(value && value[READ_AUTHORITY] === true && isTier(value.tier) &&
+    value.ham_uid === String(hamUid || '').trim().toUpperCase());
 }
 
 // THE STRUCTURAL READ FILTER. This is the whole point of storing the tier as a real column
@@ -114,26 +133,27 @@ function structuralFilter(tier) {
 // what the database filtered on, so it is what actually governed the read.
 function envelopeOf(row) {
   var column = row && row.acl_tier;
+  var columnTier = parseTier(column);
   var content = row && row.content;
   if (typeof content === 'string') {
     try { content = JSON.parse(content); } catch (e) { content = null; }
   }
   if (!content || typeof content !== 'object') {
-    return isTier(Number(column))
-      ? { mark: MARKS.UNCLASSIFIED, tier: Number(column), reason: '', by: 'acl_tier_column', at: '' }
+    return columnTier != null
+      ? { mark: MARKS.UNCLASSIFIED, tier: columnTier, reason: '', by: 'acl_tier_column', at: '' }
       : null;
   }
   var p = content.privacy;
   if (!p || typeof p !== 'object') {
-    return isTier(Number(column))
-      ? { mark: MARKS.UNCLASSIFIED, tier: Number(column), reason: '', by: 'acl_tier_column', at: '' }
+    return columnTier != null
+      ? { mark: MARKS.UNCLASSIFIED, tier: columnTier, reason: '', by: 'acl_tier_column', at: '' }
       : null;
   }
   var mark = normalizeMark(p.mark);
-  var tier = Number(p.tier);
+  var tier = parseTier(p.tier);
   return {
     mark: mark || MARKS.UNCLASSIFIED,
-    tier: isTier(tier) ? tier : (mark ? MARK_DEFAULT_TIER[mark] : T0),
+    tier: tier != null ? tier : (mark ? MARK_DEFAULT_TIER[mark] : T0),
     reason: typeof p.reason === 'string' ? p.reason : '',
     by: typeof p.by === 'string' ? p.by : '',
     at: typeof p.at === 'string' ? p.at : ''
@@ -144,7 +164,8 @@ function envelopeOf(row) {
 // the founder, or the classification wonder. Never a bare boolean.
 function buildEnvelope(mark, tier, reason, by) {
   var m = normalizeMark(mark) || MARKS.UNCLASSIFIED;
-  var t = isTier(Number(tier)) ? Number(tier) : MARK_DEFAULT_TIER[m];
+  var parsedTier = parseTier(tier);
+  var t = parsedTier != null ? parsedTier : MARK_DEFAULT_TIER[m];
   return {
     mark: m,
     tier: t,
@@ -165,15 +186,14 @@ function visibleTo(envelope, viewerTier) {
 }
 
 // ⬡B:core.privacy.people_tier:FIX:a_born_world_can_prove_its_own_tier_not_just_the_founders:20260727⬡
-// resolveViewerTier only ever resolves via founder_env or a people_tier the CALLER already
-// carried on `identity`. A session's atmosphere envelope (core/ham.session.authorization.js's
+// resolveViewerTier only ever resolves via founder_env. A session's atmosphere envelope
+// (core/ham.session.authorization.js's
 // authorizeExactHamRequest, resolved via resolveAtmosphere({hamUid}) alone) never carries one,
 // so every non-founder world landed on 'unresolved' and STRICTEST forever, not because it was
 // unclassified, but because nothing ever read the tier core/birth/birth.engine.js already
 // stamped at birth. Safe (fails closed exactly as before), not correct: a world born at T2 could
 // never see its own T2 content through this path. Reading the BIRTH bead is not a judgment,
-// it is retrieving a fact the founder already ruled at birth, the same class of read
-// resolveViewerTier itself performs.
+// it is retrieving a fact the founder already ruled at birth.
 //
 // Required at CALL TIME, not at module top: this file is required once and cached at
 // process start by every caller, so a fresh require() here is what lets a test swap
@@ -195,14 +215,34 @@ async function bornPeopleTier(hamUid) {
     try { content = JSON.parse(content); } catch (e) { return null; }
   }
   var tier = content && (content.people_tier != null ? content.people_tier : content.peopleTier);
-  var n = Number(tier);
-  return isTier(n) ? n : null;
+  return parseTier(tier);
+}
+
+// One read authority for every world-facing memory path. Founder ownership is proven by the
+// server environment. For every non-founder world, BIRTH is the durable authority; generic
+// identity fields are transport data and cannot grant a tier. The returned tier is always
+// effective, so no caller
+// can accidentally interpret "unresolved" as an instruction to omit the structural predicate.
+async function resolveReadTier(identity, hamUid) {
+  var uid = String(hamUid || '').trim().toUpperCase();
+  var identityUid = String(identity && (identity.ham_uid || identity.hamUid || identity.uid) || '')
+    .trim().toUpperCase();
+  if (identityUid && identityUid !== uid) return readAuthority(STRICTEST, 'identity_mismatch', uid);
+  // Only the environment can establish T0. A generic identity object is transport data and its
+  // people_tier field is not a credential. Non-founder authority comes from the BIRTH record.
+  var resolved = resolveViewerTier(null, uid);
+  if (resolved.source === 'founder_env') return readAuthority(resolved.tier, resolved.source, uid);
+  var born = await bornPeopleTier(uid);
+  if (born != null) return readAuthority(born, 'birth', uid);
+  return readAuthority(STRICTEST, 'unresolved', uid);
 }
 
 module.exports = {
   T0: T0, STRICTEST: STRICTEST, MARKS: MARKS, MARK_DEFAULT_TIER: MARK_DEFAULT_TIER,
-  isTier: isTier, normalizeMark: normalizeMark, founderHamUid: founderHamUid,
+  isTier: isTier, parseTier: parseTier, normalizeMark: normalizeMark, founderHamUid: founderHamUid,
   resolveViewerTier: resolveViewerTier, effectiveTier: effectiveTier,
+  isReadAuthority: isReadAuthority,
   structuralFilter: structuralFilter, envelopeOf: envelopeOf,
-  buildEnvelope: buildEnvelope, visibleTo: visibleTo, bornPeopleTier: bornPeopleTier
+  buildEnvelope: buildEnvelope, visibleTo: visibleTo, bornPeopleTier: bornPeopleTier,
+  resolveReadTier: resolveReadTier
 };

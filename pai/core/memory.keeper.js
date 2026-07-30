@@ -167,6 +167,7 @@ function sameStoredBead(row, expected) {
   if (canonicalField(row.content) !== canonicalField(expected.content)) return false;
   if (expected.spawned_by !== undefined && String(row.spawned_by || '') !== String(expected.spawned_by)) return false;
   if (expected.edges !== undefined && canonicalField(row.edges) !== canonicalField(expected.edges)) return false;
+  if (expected.acl_tier !== undefined && Number(row.acl_tier) !== Number(expected.acl_tier)) return false;
   return true;
 }
 
@@ -185,6 +186,20 @@ async function storeBead(bead, signal) {
   // the same class of review that caught it in routes/omi.routes.js.
   if (_tbl() !== 'aibe_brain' && bead.spawned_by === undefined) {
     bead.spawned_by = (bead.source && String(bead.source).split('.')[0]) || 'memory.keeper';
+  }
+  // Privacy authority is embedded in content by the deciding Wonder. This cold boundary only
+  // mirrors a valid T0..T4 value into the structural column. Raw acl_tier input without a valid
+  // envelope is discarded so null, blank, or boolean values cannot become founder T0 through
+  // JavaScript numeric coercion.
+  try {
+    var privacyContent = bead.content;
+    if (typeof privacyContent === 'string') privacyContent = JSON.parse(privacyContent);
+    var privacyTier = require('./privacy/people.tier.js')
+      .parseTier(privacyContent && privacyContent.privacy && privacyContent.privacy.tier);
+    if (privacyTier != null) bead.acl_tier = privacyTier;
+    else if (bead.acl_tier !== undefined) delete bead.acl_tier;
+  } catch (privacyError) {
+    if (bead.acl_tier !== undefined) delete bead.acl_tier;
   }
   var requestStage = 'write';
   async function post(body) {
@@ -340,10 +355,16 @@ async function keepTurn(entrance) {
   var deliberate = input.deliberate || require('./model.ladder.js').deliberate;
   var store = input.store || storeBead;
   var signal = input.abortSignal || null;
+  var privacyTiers = require('./privacy/people.tier.js');
+  var parsedViewerTier = privacyTiers.parseTier(input.viewerTier);
+  var memoryTier = parsedViewerTier != null ? parsedViewerTier : privacyTiers.STRICTEST;
+  var memoryPrivacy = privacyTiers.buildEnvelope(privacyTiers.MARKS.UNCLASSIFIED,
+    memoryTier, 'exact-HAM conversation memory follows the reader\'s proven people tier',
+    'memory_keeper');
 
   var receipt = {
     schema: 'anew.memory.keeper.receipt.v1',
-    ham_uid: hamUid, channel: channel,
+    ham_uid: hamUid, channel: channel, viewer_tier: memoryTier,
     cycle_id: input.cycleId || null, request_id: input.requestId || null,
     entrance: { question_bytes: Buffer.byteLength(question, 'utf8'),
       answer_bytes: Buffer.byteLength(answer, 'utf8'),
@@ -387,12 +408,31 @@ async function keepTurn(entrance) {
       note: 'The conversation record for this turn, written by the memory keeper at the one '
         + 'common PAI exit so every channel lands in the same lane. If she ever fails to '
         + 'remember this exchange, start here and check whether this row reached the wall.',
-      kept_at: new Date(at).toISOString()
+      kept_at: new Date(at).toISOString(),
+      privacy: memoryPrivacy
     }),
     edges: edges,
     importance: MEMORY_CONTRACT.TURN_IMPORTANCE
   };
   receipt.turn_record = await store(turnBead, signal);
+
+  // The turn record is the required durable leg. If its independent readback did not prove the
+  // exact row, this cycle will be held by tool.loop and there is no authorized reason to buy a
+  // second model decision about an optional gift. Stop here before decideGift, with the failed
+  // storage receipt intact and an explicit no-spend disposition.
+  if (!receipt.turn_record || receipt.turn_record.ok !== true ||
+      receipt.turn_record.readback_verified !== true) {
+    receipt.ok = false;
+    receipt.reason = String(receipt.turn_record && receipt.turn_record.reason
+      || 'memory_turn_record_unverified');
+    receipt.mind = { ok:false, skipped:true, reason:'turn_record_unverified',
+      model:null, via:null, ms:0, why:null };
+    receipt.gift = { kept:false, skipped:true, reason:'turn_record_unverified' };
+    receipt.notes = 'the required turn record was NOT durably read back, so the optional '
+      + 'keeper judgment did not run and no model spend was incurred';
+    receipt.ms = Date.now() - started;
+    return receipt;
+  }
 
   // 2. THE GIFT. The mind rules; cold code leashes and files.
   var verdict = await decideGift(question, answer, deliberate, signal);
@@ -442,7 +482,8 @@ async function keepTurn(entrance) {
         + (verdict.why || 'no reason given') + '. The words above are '
         + (leashed.leash === 'verbatim' ? 'their exact verbatim span'
           : 'their entire message, because the proposed quote could not be proved against it')
-        + '.'
+        + '.',
+      privacy: memoryPrivacy
     }),
     edges: edges,
     importance: MEMORY_CONTRACT.GIFT_IMPORTANCE
