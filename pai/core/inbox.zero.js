@@ -1056,17 +1056,52 @@ async function stampParkedRoadmap(HAM) {
 // ── MOUNT ─────────────────────────────────────────────────────────────────────────────
 // registerInboxZero(app): the on-request door. The daily scheduled fire calls runInboxZero
 // directly per world.
-function registerInboxZero(app) {
+function registerInboxZero(app, routeOptions) {
+  var ro = routeOptions || {};
+  var sessionAuthorization = ro.sessionAuthorization ||
+    require('./ham.session.authorization.js');
+  function runtimeHam() {
+    return String(ro.hamUid || process.env.HAM_UID || '').trim().toUpperCase();
+  }
+  async function requireInboxSession(req, res) {
+    var expected = runtimeHam();
+    if (!expected) {
+      res.status(503).json({ ok:false, reason:'inbox_zero_world_unconfigured' });
+      return null;
+    }
+    var authorize = ro.requireExactHamSession ||
+      sessionAuthorization.requireExactHamSession;
+    return await authorize(req, res, expected);
+  }
+  function conflictingHam(value, expected) {
+    var claimed = String(value || '').trim().toUpperCase();
+    return claimed && claimed !== expected;
+  }
   // Claim the lane and stamp the parked-roadmap notice once at mount (fire-and-forget).
-  try { registerLane(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
-  try { stampParkedRoadmap(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
+  if (ro.skipMountStamps !== true) {
+    try { registerLane(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
+    try { stampParkedRoadmap(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
+  }
 
   // POST /inbox-zero/:world/run { hamUid, intent, limit, previewSend }, run a real turn.
   // previewSend:true additionally emails the drafts to the founder-test address only.
   app.post('/inbox-zero/:world/run', async function (req, res) {
     try {
       var body = req.body || {};
-      var out = await runInboxZero({ world: req.params.world, hamUid: body.hamUid || body.ham_uid, intent: body.intent, limit: body.limit, previewSend: body.previewSend === true, saveToDrafts: body.saveToDrafts !== false, clearWatermark: body.clearWatermark === true });
+      // The route is mounted directly in every inherited world, so it cannot rely on the
+      // host application's middleware order. Exact-HAM session authority is proved here,
+      // before a mailbox read, model call, draft write, preview, or watermark mutation.
+      var session = await requireInboxSession(req, res);
+      if (!session) return;
+      var expected = runtimeHam();
+      if (conflictingHam(body.hamUid || body.ham_uid, expected)) {
+        return res.status(409).json({ ok:false, reason:'inbox_zero_ham_mismatch' });
+      }
+      var execute = ro.runInboxZero || runInboxZero;
+      var out = await execute({ world: req.params.world, hamUid: expected,
+        intent: body.intent, limit: body.limit, previewSend: body.previewSend === true,
+        saveToDrafts: body.saveToDrafts !== false,
+        clearWatermark: body.clearWatermark === true });
       res.json(out);
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
@@ -1074,14 +1109,28 @@ function registerInboxZero(app) {
   // GET /inbox-zero/:world/pending?hamUid=, what is resting on the desk for this world.
   app.get('/inbox-zero/:world/pending', async function (req, res) {
     try {
-      var HAM = String(req.query.hamUid || process.env.FOUNDER_HAM_UID || '').toUpperCase();
+      var session = await requireInboxSession(req, res);
+      if (!session) return;
+      var HAM = runtimeHam();
+      if (conflictingHam(req.query && (req.query.hamUid || req.query.ham_uid), HAM)) {
+        return res.status(409).json({ ok:false, reason:'inbox_zero_ham_mismatch' });
+      }
       var world = normalizeWorld(req.params.world);
-      if (!HAM) return res.status(400).json({ ok: false, reason: 'hamUid required' });
+      if (!_bu() || !_bk()) {
+        return res.status(503).json({ ok:false, reason:'inbox_zero_brain_unconfigured' });
+      }
       var url = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + HAM
         + '&agent_global=eq.' + encodeURIComponent(advisorGlobalFor(world))
         + '&stamp_type=eq.DRAFT_PENDING&order=created_at.desc&limit=5&select=summary,content,created_at';
-      var r = await fetch(url, { headers: rh() });
-      var rows = r.ok ? await r.json() : [];
+      var doFetch = ro.fetch || fetch;
+      var r = await doFetch(url, { headers: rh() });
+      if (!r || !r.ok) {
+        return res.status(502).json({ ok:false, reason:'inbox_zero_pending_read_failed' });
+      }
+      var rows = await r.json();
+      if (!Array.isArray(rows)) {
+        return res.status(502).json({ ok:false, reason:'inbox_zero_pending_read_invalid' });
+      }
       res.json({ ok: true, world: world, pending: rows });
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
