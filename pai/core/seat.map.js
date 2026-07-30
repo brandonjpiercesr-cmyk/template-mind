@@ -33,8 +33,8 @@
 // gemini slug via env once the exact OpenRouter slug is confirmed live (do not bake
 // an unverified slug: a wrong model id fails the seat silently).
 
-function env(key, dflt) {
-  var v = process.env[key];
+function env(key, dflt, runtime) {
+  var v = (runtime || process.env)[key];
   return (v && String(v).trim()) ? String(v).trim() : dflt;
 }
 
@@ -82,8 +82,8 @@ function capability(kind, resolvedModel, bakedModel, declared) {
   return resolvedModel === bakedModel ? !!declared : false;
 }
 
-function envUsd(key, dflt) {
-  var raw = process.env[key];
+function envUsd(key, dflt, runtime) {
+  var raw = (runtime || process.env)[key];
   if (raw === undefined || raw === '') return dflt;
   var text = String(raw).trim();
   if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,4})?$/.test(text)) return null;
@@ -200,6 +200,20 @@ var SEATS = {
   c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
                  fallbackModel: 'qwen/qwen3-235b-a22b-2507', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK', fallbackTools:true },
   c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  // AUDRA is contained by CODA, but contained does not mean anonymous. These two
+  // seats used to live only in coding-department/audra/seats.js, outside this one
+  // ownership map. The global OpenRouter dollar brake therefore refused both exact
+  // credentials as openrouter_key_has_no_named_seat before provider egress. They are
+  // env-required because a world that has not commissioned AUDRA must not inherit a
+  // model or a coder-chosen cap merely by loading the template.
+  audra_watch: { role:'AUDRA C4 factual triage',envModel:'AUDRA_WATCH_MODEL',model:null,
+    envProvider:'AUDRA_WATCH_PROVIDER',provider:'openrouter',keyEnv:'OR_KEY_AUDRA_WATCH',
+    via:'openrouter',capEnv:'AUDRA_WATCH_DAILY_CAP_USD',dailyCapUsd:null,
+    requiredEnv:true,vision:false,tools:false },
+  audra_organ: { role:'AUDRA C2 shadow judgment',envModel:'AUDRA_ORGAN_MODEL',model:null,
+    envProvider:'AUDRA_ORGAN_PROVIDER',provider:'openrouter',keyEnv:'OR_KEY_AUDRA_ORGAN',
+    via:'openrouter',capEnv:'AUDRA_ORGAN_DAILY_CAP_USD',dailyCapUsd:null,
+    requiredEnv:true,vision:false,tools:false },
   // ⬡B:core.seat_map:FIX:codas_coder_invented_cap_was_stopping_her_on_demo_eve:20260728⬡
   // Raised 8 to 40 on the founder's own direct instruction. He said he had raised the kimi
   // cap, could not find SEAT_CODA_DAILY_CAP_USD to set it, and told this lane to do it. The
@@ -309,12 +323,18 @@ function isContestantSeat(name) { return /^(cookoff_|wonder_games_)/.test(String
 
 // Resolve a seat, reading its model fresh from env each call (env truth wins;
 // the baked default is only the floor). Unknown seat returns null, never a guess.
-function seat(name) {
+function seat(name, runtime) {
   var d = SEATS[name];
   if (!d) return null;
   var isContestant = isContestantSeat(name);
-  var resolvedModel = env(d.envModel, d.model);
+  var resolvedModel = env(d.envModel, d.model, runtime);
+  var resolvedProvider = d.envProvider ? env(d.envProvider, '', runtime) : d.provider;
+  var resolvedCap = envUsd(d.capEnv, d.dailyCapUsd, runtime);
+  if (d.requiredEnv && (!resolvedModel || resolvedProvider !== d.provider || resolvedCap === null)) {
+    return null;
+  }
   if (!isContestant && isBannedProductionModel(resolvedModel)) resolvedModel = d.model;
+  if (d.requiredEnv && !resolvedModel) return null;
   // ⬡B:core.seat_map:FIX:hasFallback_compared_the_raw_override_not_the_normalized_one:20260729⬡
   // CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P2: this compared the RAW
   // SEAT_*_MODEL_FALLBACK env read against resolvedModel, but fallback() below compares
@@ -323,16 +343,16 @@ function seat(name) {
   // at the baked default) reported hasFallback:true here while fallback() itself
   // normalized to the baked default and returned null (no real failover), so the two
   // exported facts contradicted each other. Normalized the same way here so they agree.
-  var resolvedFallback = d.fallbackModel ? env(d.envModel + '_FALLBACK', d.fallbackModel) : null;
+  var resolvedFallback = d.fallbackModel ? env(d.envModel + '_FALLBACK', d.fallbackModel, runtime) : null;
   if (resolvedFallback && !isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
   return {
     seat: name,
     role: d.role,
     model: resolvedModel,
-    provider: d.provider,
+    provider: resolvedProvider,
     keyEnv: d.keyEnv,
     via: d.via,
-    dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd),
+    dailyCapUsd: resolvedCap,
     capEnv: d.capEnv,
     // Honest to the same rule as fallback() below: a fallback that resolves to the
     // primary's own model is not a fallback, so this seat reports that it has none.
@@ -368,13 +388,13 @@ function seat(name) {
 // Same fix as seat() above, on the same finding: SEAT_*_MODEL_FALLBACK could set a
 // banned model on a non-contestant seat's failover and it would have been honored here
 // unchecked. Treated the same way: a banned override is as if it were never set.
-function fallback(name) {
+function fallback(name, runtime) {
   var d = SEATS[name];
   if (!d || !d.fallbackModel) return null;
   var isContestant = isContestantSeat(name);
-  var resolvedPrimary = env(d.envModel, d.model);
+  var resolvedPrimary = env(d.envModel, d.model, runtime);
   if (!isContestant && isBannedProductionModel(resolvedPrimary)) resolvedPrimary = d.model;
-  var resolvedFallback = env(d.envModel + '_FALLBACK', d.fallbackModel);
+  var resolvedFallback = env(d.envModel + '_FALLBACK', d.fallbackModel, runtime);
   if (!isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
   if (resolvedFallback === resolvedPrimary) return null;
   return {
@@ -384,7 +404,7 @@ function fallback(name) {
     provider: d.fallbackProvider,
     keyEnv: d.fallbackKeyEnv,
     via: d.fallbackProvider,
-    dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd),
+    dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd, runtime),
     capEnv: d.capEnv,
     hasFallback: false,
     // Same rule as the primary: answered about the failover model that will really be
@@ -421,12 +441,16 @@ function sanitizeKey(raw) {
   return v;
 }
 
-function resolveKey(s) {
+function resolveKey(s, runtime) {
   if (!s) return '';
-  return sanitizeKey(process.env[s.keyEnv]);
+  return sanitizeKey((runtime || process.env)[s.keyEnv]);
 }
 
-function seatNames() { return Object.keys(SEATS); }
+function seatNames(runtime) {
+  return Object.keys(SEATS).filter(function(name) {
+    return !SEATS[name].requiredEnv || seat(name,runtime) !== null;
+  });
+}
 
 // ⬡B:core.seat_map:LAW:no_fable_no_opus_no_kimi_no_glm_no_ornith_on_a_production_non_contestant_seat:20260729⬡
 // Founder direct 20260729: "no fable, no opus, no kimi, no glm 5.2 no ornith, unless some

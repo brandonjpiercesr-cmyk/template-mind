@@ -40,8 +40,8 @@ function bearer(init) {
 function keyOwner(key, env) {
   var runtime = env || process.env;
   var matches = [];
-  seatMap.seatNames().forEach(function (name) {
-    var seat = seatMap.seat(name);
+  seatMap.seatNames(runtime).forEach(function (name) {
+    var seat = seatMap.seat(name, runtime);
     var own = seat && seatMap.sanitizeKey(runtime[seat.keyEnv]);
     if (own && sameSecret(key, own)) matches.push(seat);
   });
