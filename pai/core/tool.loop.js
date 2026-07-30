@@ -1801,10 +1801,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         }
         return refusal;
       };
-      // Real, read-only. Scoped to the canonical mind, experience face, and builder.
-      var repos = String(process.env.ANEW_OWN_CODE_REPOS
-        || 'brandonjpiercesr-cmyk/anew,brandonjpiercesr-cmyk/eanew,brandonjpiercesr-cmyk/canew')
+      // Repository scope is deployment configuration, never a founder-shaped template
+      // default inherited by another world. An unconfigured scope is unavailable, not an
+      // invitation to read somebody else's estate.
+      var repos = String(process.env.ANEW_OWN_CODE_REPOS || '')
         .split(',').map(function (repo) { return repo.trim(); }).filter(Boolean);
+      if (!repos.length) return JSON.stringify({ok:false,
+        reason:'code_repository_scope_unconfigured',
+        note:'The code reader has no repository scope configured for this world.'});
       var found = [];
       // \u2b21B:core.tool.loop:FIX:real_naming_collision_confused_synthesis:20260710\u2b21
       // Real, live incident, founder-caught, doctrine violation (STAY GROUNDED): asked
@@ -1840,8 +1844,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
         // similarly named but unrelated file.
         anchorResolved = true;
       }
-      if (qLower.indexOf('CLAIR command center') !== -1 || qLower.indexOf('clear-command-center') !== -1) {
-        found.push({repo:'brandonjpiercesr-cmyk/anew',path:'routes/three-ray.routes.js'});
+      var clairAnchorRepo = String(process.env.ANEW_CLAIR_COMMAND_CENTER_REPO || '').trim();
+      var clairAnchorPath = String(process.env.ANEW_CLAIR_COMMAND_CENTER_PATH || '').trim();
+      if ((qLower.indexOf('CLAIR command center') !== -1 ||
+          qLower.indexOf('clear-command-center') !== -1) && clairAnchorRepo && clairAnchorPath) {
+        found.push({repo:clairAnchorRepo,path:clairAnchorPath});
         anchorResolved = true;
       }
       // \u2b21B:core.tool.loop:FIX:unrelated_cross_repo_number_bled_into_answer:20260710\u2b21
@@ -2161,8 +2168,10 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       return JSON.stringify({ ok:false, available:false, reason:'ham_uid_mismatch',
         bound_ham_uid:boundIdentityHam });
     }
+    var _identityViewerTier = require('./privacy/people.tier.js')
+      .effectiveTier(runtime && runtime.viewerTier);
     return JSON.stringify(await findIdentityEvidence(boundIdentityHam,
-      args.question || origMessage));
+      args.question || origMessage, _identityViewerTier));
   }
   if (name === 'find_in_brain') {
     var q={limit:args.limit||10};
@@ -2189,9 +2198,12 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // The founder's own world resolves to T0 and is filtered by nothing, so every existing
     // founder turn is byte-for-byte unchanged. A born world carries the people_tier BIRTH
     // stamped on it. A reader whose tier cannot be resolved is not silently promoted to T0:
-    // resolveViewerTier returns unresolved, no structural filter is claimed for it, and
-    // board/pam/pam.js pamRelease treats it as the least privileged reader and fails closed.
-    if (runtime && runtime.viewerTier != null) q.viewer_tier = runtime.viewerTier;
+    // The runtime always carries an effective tier, but executeTool is also used directly by
+    // focused callers and tests. Re-applying effectiveTier here means an omitted runtime lands
+    // at T4 and can never silently turn into an unfiltered query.
+    var _toolViewerTier = require('./privacy/people.tier.js')
+      .effectiveTier(runtime && runtime.viewerTier);
+    q.viewer_tier = _toolViewerTier;
     var _findStarted = Date.now();
     var res=await find([q]);
     function _boundedFindFailures(result, stage) {
@@ -2260,7 +2272,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // reported crash fingerprints and a repo incident as the founder's "finances". Skip the ALERT
     // grab-bag on outbound turns; they ground on what they were handed, never the operational wall.
     if (_honestFindEmpty() && q.stamp_type!=='ALERT' && !(runtime && runtime.outboundFinalize === true)) {
-      var fallback=await find([{stamp_type:'ALERT',ham_uid:q.ham_uid,limit:q.limit,order:q.order}]);
+      var fallback=await find([{stamp_type:'ALERT',ham_uid:q.ham_uid,limit:q.limit,
+        order:q.order,viewer_tier:_toolViewerTier}]);
       _adoptFindFallback(fallback, 'alert_fallback');
     }
     // ⬡B:core.tool_loop:FIX:wondergames_mechanical_fallback_20260714⬡
@@ -2278,8 +2291,10 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _wgAsk = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(String(origMessage||''));
       if (_wgAsk && q.stamp_type!=='WONDER_GAMES') {
         var wgFallback=await find([
-          {stamp_type:'WONDER_GAMES',ham_uid:q.ham_uid,limit:q.limit||5},
-          {stamp_type:'DOCTRINE',ham_uid:q.ham_uid,importance_gte:8,limit:3}
+          {stamp_type:'WONDER_GAMES',ham_uid:q.ham_uid,limit:q.limit||5,
+            viewer_tier:_toolViewerTier},
+          {stamp_type:'DOCTRINE',ham_uid:q.ham_uid,importance_gte:8,limit:3,
+            viewer_tier:_toolViewerTier}
         ]);
         _adoptFindFallback(wgFallback, 'wonder_games_fallback');
       }
@@ -2308,8 +2323,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       _kw = _kw.slice(0,4);
       for (var _ki=0; _ki<_kw.length && _honestFindEmpty(); _ki++) {
         try {
+          var _kwTierFilter = require('./privacy/people.tier.js')
+            .structuralFilter(_toolViewerTier);
           var _kwUrl = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + encodeURIComponent(q.ham_uid)
             + '&summary=ilike.*' + encodeURIComponent(_kw[_ki]) + '*'
+            + (_kwTierFilter ? '&' + _kwTierFilter : '')
             + '&select=id,stamp_type,source,summary,content,created_at&order=created_at.desc&limit=12';
           var _kwDeadline = AbortSignal.timeout(2500);
           var _kwSignal = runtime && runtime.abortSignal && typeof AbortSignal.any === 'function'
@@ -2347,7 +2365,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     }
 
     var _fusionLine = '';
-    try { _fusionLine = await require('./context.fusion.js').getLatestSummary(hamUid); } catch (eFu) {}
+    try { _fusionLine = await require('./context.fusion.js')
+      .getLatestSummary(hamUid, runtime && runtime.readAuthority); } catch (eFu) {}
     // ⬡B:core.tool_loop:FIX:fusion_leads_the_result_screenless_20260710⬡ Screenless
     // grounding measured at 2/3: the fusion was PRESENT in the result but buried after
     // the bead array, so the model sometimes led with an old bead instead. Mechanism,
@@ -2444,24 +2463,60 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
   // containment applied now: the dead direct AIBE_BRAIN_URL/KEY reads are removed (they were never
   // used; the write already goes through the canonical _bu/_bk/_tbl/_schema helpers below).
   if (name === 'write_to_brain') {
-    if (!_bu() || !_bk()) return JSON.stringify({ok:false});
-    var bead={ham_uid:args.ham_uid||hamUid,agent_global:'PAI',stamp_type:args.stamp_type||'RESULT',
-      source:'pai.tool.write.'+(args.ham_uid||hamUid)+'.'+Date.now(),
-      acl_stamp:'\u2b21B:pai.tool:RESULT:tool_write:20260630\u2b21',
-      summary:args.summary,content:args.content,importance:args.importance||7};
+    if (!_bu() || !_bk()) return JSON.stringify({ok:false,reason:'memory_bank_unconfigured'});
+    var _writeHam = String(hamUid || '').trim().toUpperCase();
+    var _requestedWriteHam = String(args && args.ham_uid || _writeHam).trim().toUpperCase();
+    if (!_writeHam) return JSON.stringify({ok:false,reason:'ham_uid_required'});
+    if (_requestedWriteHam !== _writeHam) return JSON.stringify({ok:false,
+      reason:'ham_uid_mismatch',bound_ham_uid:_writeHam});
+    var _writeType = String(args && args.stamp_type || 'RESULT').trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9_]{0,39}$/.test(_writeType)) {
+      return JSON.stringify({ok:false,reason:'stamp_type_invalid'});
+    }
+    var _writeSummary = String(args && args.summary || '').trim();
+    if (!_writeSummary) return JSON.stringify({ok:false,reason:'summary_required'});
+    var _writeContent = args && args.content;
+    if (typeof _writeContent === 'string') {
+      try { _writeContent = JSON.parse(_writeContent); }
+      catch (eWriteJson) { _writeContent = { data:_writeContent }; }
+    }
+    if (!_writeContent || typeof _writeContent !== 'object' || Array.isArray(_writeContent)) {
+      _writeContent = { data:_writeContent == null ? '' : _writeContent };
+    } else {
+      _writeContent = Object.assign({}, _writeContent);
+    }
+    var _writeTiers = require('./privacy/people.tier.js');
+    var _writeViewerTier = _writeTiers.effectiveTier(runtime && runtime.viewerTier);
+    _writeContent.privacy = _writeTiers.buildEnvelope(_writeTiers.MARKS.UNCLASSIFIED,
+      _writeViewerTier, 'exact-HAM tool memory follows the reader people tier',
+      'pai_write_to_brain');
+    var _writeIdentity = require('node:crypto').createHash('sha256').update(JSON.stringify({
+      ham_uid:_writeHam,cycle_id:runtime && (runtime.parentCycleId || runtime.cycleId) || null,
+      request_id:runtime && (runtime.parentRequestId || runtime.requestId) || null,
+      stamp_type:_writeType,summary:_writeSummary,content:_writeContent
+    }), 'utf8').digest('hex').slice(0, 32);
+    var _writeSource = 'pai.tool.write.' + _writeHam.toLowerCase() + '.' + _writeIdentity;
+    var _writeEdges = [{type:'PRODUCED_BY',target:'core.tool.loop.write_to_brain'}];
+    var _writeCycle = runtime && (runtime.parentCycleId || runtime.cycleId);
+    var _writeRequest = runtime && (runtime.parentRequestId || runtime.requestId);
+    if (_writeCycle) _writeEdges.push({type:'RELATES_TO',target:'pai.cycle.' + _writeCycle});
+    if (_writeRequest) _writeEdges.push({type:'RELATES_TO',target:'pai.request.' + _writeRequest});
+    var bead={ham_uid:_writeHam,agent_global:'PAI',stamp_type:_writeType,
+      source:_writeSource,
+      acl_stamp:require('./brain.client.js').buildStamp(_writeSource,_writeType,'tool_write'),
+      summary:_writeSummary.slice(0,600),content:JSON.stringify(_writeContent),
+      edges:_writeEdges,importance:Math.max(0,Math.min(10,Number(args && args.importance)||7))};
     try {
       var brainWriteCancelled = await cancelBeforeEffect(name, runtime);
       if (brainWriteCancelled) return brainWriteCancelled;
-      var beadWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
-        headers:{apikey: _bk(),Authorization:'Bearer ' + _bk(),'Accept-Profile':_schema(),
-          'Content-Profile':_schema(),'Content-Type':'application/json',Prefer:'return=representation'},
-        body:JSON.stringify(bead), signal:runtime && runtime.abortSignal});
-      var beadRows = beadWrite.ok ? await beadWrite.json().catch(function(){return null;}) : null;
-      if (!beadWrite.ok || !Array.isArray(beadRows) || !beadRows[0] ||
-          beadRows[0].source !== bead.source) {
-        return JSON.stringify({ok:false,reason:'brain_write_unverified'});
+      var storedBead = await require('./memory.keeper.js').storeBead(
+        bead, runtime && runtime.abortSignal);
+      if (!storedBead || storedBead.ok !== true || storedBead.readback_verified !== true) {
+        return JSON.stringify({ok:false,reason:'brain_write_unverified',
+          detail:storedBead && storedBead.reason || 'verified_store_unavailable'});
       }
-      return JSON.stringify({ok:true,id:beadRows[0].id,source:bead.source});
+      return JSON.stringify({ok:true,id:storedBead.id,source:storedBead.source,
+        readback_verified:true,acl_tier:_writeViewerTier});
     }catch(e){return JSON.stringify({ok:false,error:e.message});}
   }
   // ⬡B:core.tool.loop:FIX:budget_read_must_use_the_authoritative_uppercase_ham:20260722⬡
@@ -2894,9 +2949,13 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _rNk = process.env.MEMORY_BANK_KEY || '';
       var _rRows = null;
       if (_rNb && _rNk) {
+        var _reminderTiers = require('./privacy/people.tier.js');
+        var _reminderViewerTier = _reminderTiers.effectiveTier(runtime && runtime.viewerTier);
+        var _reminderTierFilter = _reminderTiers.structuralFilter(_reminderViewerTier);
         var _rq = _rNb + '/rest/v1/' + (process.env.BEAD_TABLE || 'beads')
           + '?select=summary,created_at&ham_uid=eq.' + encodeURIComponent(_rUid)
-          + '&stamp_type=eq.REMINDER&order=created_at.desc&limit=8';
+          + '&stamp_type=eq.REMINDER' + (_reminderTierFilter ? '&' + _reminderTierFilter : '')
+          + '&order=created_at.desc&limit=8';
         var _rc = new AbortController(); var _rt = setTimeout(function(){ _rc.abort(); }, 6000);
         _rRows = await fetch(_rq, { signal:_rc.signal, headers:{ apikey:_rNk, Authorization:'Bearer '+_rNk, 'Accept-Profile':(process.env.BRAIN_SCHEMA||'memory_bank') } })
           .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
@@ -2918,7 +2977,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       var _fieldDue = [];
       try {
         var _field = require('../logful/field.js');
-        var _fFetched = await _field.fieldCheck(_rUid, Date.now(), 4000);
+        var _fFetched = await _field.fieldCheck(_rUid, Date.now(), 4000,
+          runtime && runtime.readAuthority);
         if (_fFetched && _fFetched.ok) {
           _fieldDue = (_fFetched.due || []).slice(0, 8).map(function (d) {
             return { note: String(d.note || '').slice(0, 180),
@@ -3780,6 +3840,25 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     'INTERNAL CLOSED-WORLD REACH POLICY. Decide only from the server-owned policy question and the exact deliberation evidence packet in this turn. Ambient Memory Bank rows, latest activity, contributors, prior conversation, screen state, and fused world summaries are intentionally excluded and must not be inferred. Return only the required strict JSON object.';
   var _reachIncidentSystemPrompt =
     'INTERNAL CLOSED-WORLD REACH INCIDENT INTAKE. Describe only the exact server-owned incident fact packet in this turn as one concise human-facing sentence. Do not choose timing, channel, recipient, or delivery. Do not call tools, write, deploy, book, send, notify, move a screen, or infer ambient Memory Bank facts. Canonical REACH will separately decide whether, when, and how this candidate surfaces.';
+  var _signedVoiceClosedTurn = !!(
+    verifiedVoiceCallPurposeAnswer(channel, hamUid, message, identity) ||
+    verifiedVoiceHearingAnswer(channel, hamUid, message, identity) ||
+    verifiedVoiceFarewellAnswer(channel, hamUid, message, identity));
+  var _signedVoiceSystemPrompt =
+    'INTERNAL SIGNED VOICE ACKNOWLEDGEMENT. Use only the exact provider-bound call fact already verified for this turn. Do not load ambient memory, tools, fused context, or a drafting model.';
+  // ⬡B:core.tool.loop:GUARD:the_reader_is_known_before_the_wall_is_opened:20260730⬡
+  // Resolve the effective people tier before FCW or any ambient read. Closed-world REACH lanes
+  // intentionally perform no ambient read, so they keep the strict default without touching
+  // BIRTH. Ordinary turns resolve founder env or the durable BIRTH tier exactly once; generic
+  // identity fields never grant read authority. The same result governs the builder and every
+  // later tool read.
+  var _peopleTiers = require('./privacy/people.tier.js');
+  var _readAuthority = {tier:_peopleTiers.STRICTEST,source:'closed_world'};
+  if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn) {
+    try { _readAuthority = await _peopleTiers.resolveReadTier(identity, hamUid); }
+    catch (eReadTier) { _readAuthority = {tier:_peopleTiers.STRICTEST,source:'unresolved'}; }
+  }
+  var _effectiveViewerTier = _peopleTiers.effectiveTier(_readAuthority && _readAuthority.tier);
   var _fcwT0=Date.now();
   // The policy finalizer already receives one normalized, digest-bound evidence
   // wall from cycle.decision. Running the generic Memory Bank builder here would
@@ -3789,9 +3868,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _isolatedHamTier = Number(identity &&
     (identity.trust_level != null ? identity.trust_level : identity.tier));
   if (!Number.isFinite(_isolatedHamTier)) _isolatedHamTier = 0;
-  var fcw = (_structuredReachPolicy || _reachIncidentIntake) ? {
-    ok:true, system_prompt:_reachIncidentIntake
-      ? _reachIncidentSystemPrompt : _structuredReachSystemPrompt,
+  var fcw = (_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn) ? {
+    ok:true, system_prompt:_reachIncidentIntake ? _reachIncidentSystemPrompt
+      : (_signedVoiceClosedTurn ? _signedVoiceSystemPrompt : _structuredReachSystemPrompt),
     ham:{ uid:hamUid, name:String(identity&&identity.name||'Unknown').slice(0,160),
       tier:_isolatedHamTier, world:String(identity&&identity.world||'unknown').slice(0) },
     context:[], named_agent_records:[], identity_record:null,
@@ -3799,7 +3878,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       available:true, ham_uid:String(hamUid||'').toUpperCase(), subjects:[],
       records:[], count:0, ms:0 },
     contributors:null, contributorsResolved:0, contributorsTotal:0, ms:0
-  } : await buildMemoryBank(hamUid,channel,message,identity)
+  } : await buildMemoryBank(hamUid,channel,message,identity,_readAuthority)
     .catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
   if (await _turnCancelled()) return _turnCancelledResult('after_memory');
@@ -3995,7 +4074,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // explicit server-owned voice request may opt into the ambient fuse.
   if (!_structuredReachPolicy &&
       shouldIncludeWorldContext(channel, identity, hamUid, _exactUserMessage)) {
-    try { systemPrompt += await require('./context.fusion.js').getLatestSummary(hamUid); } catch (eFus) {}
+    try { systemPrompt += await require('./context.fusion.js')
+      .getLatestSummary(hamUid, _readAuthority); } catch (eFus) {}
   }
   var msgs=[{role:'system',content:systemPrompt}];
   if (!_structuredReachPolicy && Array.isArray(priorTurns) && priorTurns.length) {
@@ -4341,12 +4421,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // on it -> the database enforces its ceiling. Unresolved -> left null on purpose: no
   // structural claim is made for a reader we cannot place, and PAM's release gate treats
   // that same reader as the least privileged one alive. See core/privacy/people.tier.js.
-  try {
-    var _viewerTier = require('./privacy/people.tier.js')
-      .resolveViewerTier(identity, hamUid);
-    _effectRuntime.viewerTier = _viewerTier.tier;
-    _effectRuntime.viewerTierSource = _viewerTier.source;
-  } catch (eViewerTier) { _effectRuntime.viewerTier = null; }
+  _effectRuntime.viewerTier = _effectiveViewerTier;
+  _effectRuntime.viewerTierSource = String(_readAuthority && _readAuthority.source || 'unresolved');
+  _effectRuntime.readAuthority = _readAuthority;
   _effectRuntime.exactHamReads = _effectRuntime.channel === 'voice' &&
     !!verifiedVoiceCallContext(identity, hamUid);
   _effectRuntime.abortSignal = _turnAbortSignal || null;
@@ -6278,6 +6355,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           && _councilReceipt.persistence.final_source || null,
         toolsUsed: tools.map(function (tu) { return tu && (tu.name || tu.tool) || 'unknown'; }),
         turnMs: Date.now() - t0,
+        viewerTier: _effectiveViewerTier,
         abortSignal: _turnAbortSignal || null
       }).catch(function (eKeep) {
         return { ok:false, reason:'memory_keeper_threw',
@@ -6484,6 +6562,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           var _effectRaw = await executeTool(_effect.name, _effectArgs, hamUid, message,
             Object.assign({ phase:'commit', councilResult:_effectCouncilResult, parentCycleId:_cycleId,
               parentRequestId:_requestId, userMessage:message,
+              viewerTier:_effectiveViewerTier, readAuthority:_readAuthority,
               abortSignal:_turnAbortSignal || null, isCancelled:_turnCancelled },
             { caraContext:identity && identity.council_context || {},
               codaVerified:_effectRuntime.codaVerified === true,

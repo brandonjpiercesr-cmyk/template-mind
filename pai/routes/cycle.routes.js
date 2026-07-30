@@ -104,10 +104,8 @@ module.exports = function registerCycleRoute(app, options) {
       var message = body.message || body.text || '';
       if (!message) return res.status(400).json({ ok:false, reason:'message required' });
 
-      var tierResult = privacy.resolveViewerTier(authorized.envelope, HAM);
-      var tier = tierResult && tierResult.tier;
-      if (tier == null) tier = await privacy.bornPeopleTier(HAM);
-      tier = privacy.effectiveTier(tier);
+      var readAuthority = await privacy.resolveReadTier(authorized.envelope, HAM);
+      var tier = privacy.effectiveTier(readAuthority && readAuthority.tier);
       var identity = serverIdentity(authorized, HAM, message, tier);
 
       var internalProof = auth.verifyInternalCycleContext(req, HAM);

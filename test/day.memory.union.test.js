@@ -1,6 +1,4 @@
-// ⬡B:test.day.memory.union:PROOF:her_day_is_the_union_of_the_calendar_and_what_they_told_her:20260725⬡
-// TWIN of the anew suite tests/day.memory.union.test.js. Same proof, run against this repo's own
-// pai/core copies, so the mind-template every world inherits carries the fix and not the bug.
+// ⬡B:tests.day.memory.union:PROOF:her_day_is_the_union_of_the_calendar_and_what_they_told_her:20260725⬡
 // ACL: Entered through the ABAHAM door, serving channel MESSAGES. Proves the fix for the
 // founder-caught failure of 20260725: he told A'NU his Saturday plan through her live gate, she
 // received it and confirmed the specifics back with a committed cycle receipt, and hours later,
@@ -8,11 +6,11 @@
 // she agreed, then she contradicted him.
 //
 // Verified root cause, in two legs, both covered here:
-//   LEG 1  pai/core/synthesize.js already CAPTURED what he said (a MEMORY bead, importance 9, his
+//   LEG 1  core/synthesize.js already CAPTURED what he said (a MEMORY bead, importance 9, his
 //          exact words) and NOTHING ever read it back. No wall contributor queried stamp_type
 //          MEMORY, and 'memory.gifted.' had exactly one reference in the whole repo: the write.
 //          So what he told her was never on the wall of the later cycle at all.
-//   LEG 2  pai/core/context.fusion.js turned one silent source, an empty calendar, into the settled
+//   LEG 2  core/context.fusion.js turned one silent source, an empty calendar, into the settled
 //          claim "your next 24 hours are wide open with nothing scheduled", and told her to
 //          answer from it "above any memory search".
 //
@@ -46,6 +44,11 @@ function restoreAfter(t, modules, envKeys) {
 // A HAM UID and a plan that belong to nobody: this suite must never carry a real person.
 const TEST_HAM = 'HAM.TEST.DAY';
 const STATED_PLAN = 'Saturday is the ballpark with the team, leaving around ten.';
+
+async function founderReadAuthority() {
+  process.env.FOUNDER_HAM_UID = TEST_HAM;
+  return require('../pai/core/privacy/people.tier.js').resolveReadTier(null, TEST_HAM);
+}
 
 function cacheFind(findPath, statedResult) {
   const empty = { beads: [], ms: 1 };
@@ -97,7 +100,7 @@ function cacheStubs(t, builderPath) {
 test('a plan the person stated survives into a LATER cycle wall, in their own words', async function (t) {
   const builderPath = modulePath('pai', 'core', 'fcw.builder.js');
   const findPath = cacheStubs(t, builderPath);
-  // The bead pai/core/synthesize.js's memory keeper really writes when a person hands something
+  // The bead core/synthesize.js's memory keeper really writes when a person hands something
   // over: stamp_type MEMORY, importance 9, their exact words in content.their_words. Stamped
   // three hours ago, so this is a LATER cycle, not the same turn.
   const threeHoursAgo = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
@@ -207,7 +210,8 @@ test('an empty calendar is carried as evidence about the CALENDAR, never as a co
   serveFusion({ available: true, events: [], grants_read: 1, grants_total: 1, partial: false });
 
   delete require.cache[fusionPath];
-  const line = await require(fusionPath).getLatestSummary(TEST_HAM);
+  const line = await require(fusionPath).getLatestSummary(TEST_HAM,
+    await founderReadAuthority());
 
   assert.ok(line, 'a successful empty read is still real evidence and must reach her');
   // The exact sentence the founder caught is gone for good.
@@ -231,7 +235,8 @@ test('a calendar read that FAILED is spoken as unavailable, never omitted and ne
   serveFusion({ available: false, events: [], reason: 'calendar_read_failed' });
 
   delete require.cache[fusionPath];
-  const line = await require(fusionPath).getLatestSummary(TEST_HAM);
+  const line = await require(fusionPath).getLatestSummary(TEST_HAM,
+    await founderReadAuthority());
 
   assert.match(line, /CALENDAR READ FAILED/);
   assert.match(line, /unavailable read, NOT an empty calendar and NOT an open day/);
@@ -248,7 +253,8 @@ test('an unconfigured calendar stays silent: configuration is not a fault to rep
   serveFusion({ available: false, events: [], reason: 'calendar_not_this_world' });
 
   delete require.cache[fusionPath];
-  const line = await require(fusionPath).getLatestSummary(TEST_HAM);
+  const line = await require(fusionPath).getLatestSummary(TEST_HAM,
+    await founderReadAuthority());
 
   // The channel lane still reports; the calendar contributes nothing and claims nothing.
   assert.equal(line.indexOf('CALENDAR READ FAILED'), -1);
@@ -263,7 +269,8 @@ test('a partial calendar read admits it is incomplete', async function (t) {
   serveFusion({ available: true, events: [], grants_read: 1, grants_total: 3, partial: true });
 
   delete require.cache[fusionPath];
-  const line = await require(fusionPath).getLatestSummary(TEST_HAM);
+  const line = await require(fusionPath).getLatestSummary(TEST_HAM,
+    await founderReadAuthority());
 
   assert.match(line, /only 1 of 3 calendars answered/);
   assert.match(line, /may be incomplete/);

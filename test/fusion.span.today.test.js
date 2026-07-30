@@ -35,6 +35,24 @@ function modulePath() {
 const TEST_HAM = 'HAM.TEST.SPAN';
 const TZ = 'America/New_York';
 
+async function founderReadAuthority() {
+  process.env.FOUNDER_HAM_UID = TEST_HAM;
+  return require('../pai/core/privacy/people.tier.js').resolveReadTier(null, TEST_HAM);
+}
+
+async function bornReadAuthority(tier) {
+  delete process.env.FOUNDER_HAM_UID;
+  const priorFetch = global.fetch;
+  global.fetch = async function () {
+    return { ok:true, status:200, json:async function () {
+      return [{ content:{ people_tier:tier } }];
+    } };
+  };
+  try {
+    return await require('../pai/core/privacy/people.tier.js').resolveReadTier(null, TEST_HAM);
+  } finally { global.fetch = priorFetch; }
+}
+
 function restoreAfter(t, modules, envKeys) {
   const oldFetch = global.fetch;
   const oldEnv = {};
@@ -228,6 +246,115 @@ function serveFusion(calendar, channels) {
   };
 }
 
+test('MEMORY_BANK-only worlds use memory_bank.beads and persist readable tiered fusion',
+  async function (t) {
+    const fusionPath = fusionEnv(t);
+    process.env.MEMORY_BANK_URL = 'https://memory.test.invalid';
+    process.env.MEMORY_BANK_KEY = 'memory-test-key';
+    const calls = [];
+    global.fetch = async function (url, init) {
+      calls.push({url:String(url),init:init || {}});
+      if (init && init.method === 'POST') {
+        return {ok:true,status:201,text:async function () { return ''; }};
+      }
+      return {ok:true,status:200,json:async function () { return []; }};
+    };
+    delete require.cache[fusionPath];
+    const fusion = require(fusionPath);
+    const authority = await bornReadAuthority(2);
+    const out = await fusion.runFuse(TEST_HAM, authority);
+    assert.equal(out.ok, true, JSON.stringify(out));
+    const post = calls.find(function (call) { return call.init.method === 'POST'; });
+    assert.ok(post, 'the fused context was not written');
+    assert.match(post.url, /\/rest\/v1\/beads$/);
+    assert.equal(post.init.headers['Content-Profile'], 'memory_bank');
+    const row = JSON.parse(post.init.body);
+    assert.equal(row.acl_tier, 2,
+      'a T2 fusion row must survive the next T2 summary predicate');
+    assert.equal(row.content.privacy.tier, 2);
+
+    calls.length = 0;
+    await fusion.getLatestSummary(TEST_HAM, authority);
+    const summary = calls.find(function (call) {
+      return call.url.indexOf('context.fusion.') !== -1;
+    });
+    assert.ok(summary);
+    assert.match(summary.url, /\/rest\/v1\/beads\?/);
+    assert.match(summary.url, /[?&]acl_tier=gte\.2(?:&|$)/);
+    assert.equal(summary.init.headers['Accept-Profile'], 'memory_bank');
+  });
+
+test('a T2 fused-context read is structurally filtered and cannot select a T0 row', async function (t) {
+  const fusionPath = fusionEnv(t);
+  process.env.AIBE_BRAIN_URL = 'https://brain.test';
+  process.env.AIBE_BRAIN_KEY = 'brain-key';
+  const urls = [];
+  global.fetch = async function (url) {
+    const value = String(url);
+    urls.push(value);
+    if (value.indexOf('stamp_type=eq.BIRTH') !== -1) {
+      return {ok:true,status:200,json:async function () {
+        return [{content:JSON.stringify({people_tier:2})}];
+      }};
+    }
+    const filtered = /[?&]acl_tier=gte\.2(?:&|$)/.test(value);
+    return {ok:true,status:200,json:async function () {
+      return filtered ? [] : [{acl_tier:0,created_at:new Date().toISOString(),
+        content:JSON.stringify({as_of:new Date().toISOString(),calendar:{available:true,events:[]},
+          channels:{},screen:{live:false}})}];
+    }};
+  };
+  delete require.cache[fusionPath];
+  const authority = await require('../pai/core/privacy/people.tier.js')
+    .resolveReadTier(null, TEST_HAM);
+  const line = await require(fusionPath).getLatestSummary(TEST_HAM, authority);
+  assert.equal(line, '', 'a synthetic T0 fusion row must never reach a T2 world');
+  const summaryUrl = urls.find(function (url) { return url.indexOf('context.fusion.') !== -1; });
+  assert.match(summaryUrl, /[?&]acl_tier=gte\.2(?:&|$)/);
+});
+
+test('fused context performs zero memory fetches without a HAM-bound read authority',
+  async function (t) {
+    const fusionPath = fusionEnv(t);
+    process.env.AIBE_BRAIN_URL = 'https://brain.test';
+    process.env.AIBE_BRAIN_KEY = 'brain-key';
+    let calls = 0;
+    global.fetch = async function () { calls += 1; throw new Error('must not fetch'); };
+    delete require.cache[fusionPath];
+    const fusion = require(fusionPath);
+    assert.equal(await fusion.getLatestSummary(TEST_HAM), '');
+    assert.equal(Object.keys(await fusion._test.readChannelActivity(TEST_HAM)).length, 0);
+    assert.deepEqual(await fusion.runFuse(TEST_HAM),
+      { ok:false, reason:'viewer_read_authority_required' });
+    assert.equal(calls, 0);
+  });
+
+test('context-fusion activity is scoped, while founder T0 summary reads remain unchanged', async function (t) {
+  const fusionPath = fusionEnv(t);
+  process.env.AIBE_BRAIN_URL = 'https://brain.test';
+  process.env.AIBE_BRAIN_KEY = 'brain-key';
+  const urls = [];
+  global.fetch = async function (url) {
+    urls.push(String(url));
+    return {ok:true,status:200,json:async function () { return []; }};
+  };
+  delete require.cache[fusionPath];
+  const fusion = require(fusionPath);
+  const unresolvedAuthority = await require('../pai/core/privacy/people.tier.js')
+    .resolveReadTier(null, TEST_HAM);
+  urls.length = 0;
+  await fusion._test.readChannelActivity(TEST_HAM, unresolvedAuthority);
+  assert.match(urls[0], /[?&]acl_tier=gte\.4(?:&|$)/);
+
+  urls.length = 0;
+  process.env.FOUNDER_HAM_UID = TEST_HAM;
+  await fusion.getLatestSummary(TEST_HAM, await founderReadAuthority());
+  const summaryUrl = urls.find(function (url) { return url.indexOf('context.fusion.') !== -1; });
+  assert.ok(summaryUrl);
+  assert.doesNotMatch(summaryUrl, /[?&]acl_tier=/,
+    'T0 keeps the complete legacy context view with no structural predicate');
+});
+
 test('the summary puts a span in progress under TODAY and never under upcoming', async function (t) {
   const fusionPath = fusionEnv(t);
   process.env.AIBE_BRAIN_URL = 'https://brain.test';
@@ -237,7 +364,8 @@ test('the summary puts a span in progress under TODAY and never under upcoming',
       time: 'all day', allDay: true, is_today: true, is_now: true, is_past: false }] });
 
   delete require.cache[fusionPath];
-  const line = await require(fusionPath).getLatestSummary(TEST_HAM);
+  const line = await require(fusionPath).getLatestSummary(TEST_HAM,
+    await founderReadAuthority());
 
   assert.match(line, /calendar TODAY/);
   assert.match(line, /Multi-day trip/);
@@ -258,7 +386,8 @@ test('the summary never lists an already-ended event as something still ahead of
       time: 'all day', allDay: true, is_today: false, is_now: false, is_past: true }] });
 
   delete require.cache[fusionPath];
-  const line = await require(fusionPath).getLatestSummary(TEST_HAM);
+  const line = await require(fusionPath).getLatestSummary(TEST_HAM,
+    await founderReadAuthority());
 
   assert.equal(line.indexOf('upcoming days hold'), -1);
   assert.equal(line.indexOf('Finished trip'), -1, 'a finished trip is not upcoming');
@@ -276,7 +405,8 @@ test('a genuinely future event is still reported as upcoming and never as today'
       is_today: false, is_now: false, is_past: false }] });
 
   delete require.cache[fusionPath];
-  const line = await require(fusionPath).getLatestSummary(TEST_HAM);
+  const line = await require(fusionPath).getLatestSummary(TEST_HAM,
+    await founderReadAuthority());
 
   assert.match(line, /upcoming days hold: Later conference on Wednesday, July 29/);
   assert.match(line, /never present any of these as today/);

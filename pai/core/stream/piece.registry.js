@@ -68,7 +68,8 @@ var PIECES = {
     aliases: ['today', 'my day', 'what do you know', 'catch me up', 'brief me', 'whats going on'],
     fetch: async function (hamUid, base, headers) {
       try {
-        var line = await require('../context.fusion.js').getLatestSummary(hamUid);
+        var authority = await require('../privacy/people.tier.js').resolveReadTier(null, hamUid);
+        var line = await require('../context.fusion.js').getLatestSummary(hamUid, authority);
         if (!line || !line.trim()) return null;
         var clean = String(line).replace(/WORLD CONTEXT[^:]*:/i, '').trim();
         if (clean.length < 12) return null;

@@ -91,6 +91,12 @@ require('./pai/routes/iman.routes.js')(app);
 // own VOICE edge. ElevenLabs agent -> THIS world's /vara/llm (runPAI local, his bank).
 require('./pai/routes/vara.llm.routes.js')(app);
 require('./pai/routes/vara.call.routes.js')(app);
+// Exact-founder privacy marking plus exact-HAM structurally tiered world reads. The route
+// owns no identity; both authorities are resolved by the shared session gate server-side.
+require('./pai/routes/privacy.routes.js')(app);
+// The same authenticated, read-only named-seat health wall the cycle's internal
+// seat evidence reads. No timer, paid call, or autonomous mutation is mounted.
+require('./pai/routes/seats.health.routes.js')(app);
 // ⬡B:mind.entry:WIRE:inbox_zero_universal_mount:20260720⬡ the universal per-advisor
 // inbox-zero wonder agent, one shared source in pai/core (mirrored from anew/core),
 // world resolved as a parameter. POST /inbox-zero/:world/run.

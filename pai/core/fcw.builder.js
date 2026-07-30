@@ -116,12 +116,26 @@ function memoryReadLine(label, availability, result) {
 
 // Build complete Memory Bank for a HAM turn
 // Returns: { system_prompt, ham, agents, context, tools_summary, ms }
-async function buildMemoryBank(hamUid, channel, question, identity) {
+async function buildMemoryBank(hamUid, channel, question, identity, resolvedReadTier) {
   // ⬡B:core.fcw.builder:WIRE:gate_identity_authority:20260701⬡
   // When the ATMOSPHERE gate has already resolved this person, its envelope is the
   // authority for name/tier/world — findIdentity remains as enrichment/fallback.
   var t0 = Date.now();
   if (!hamUid) return { ok: false, reason: 'no_ham_uid' };
+  // ⬡B:core.fcw.builder:GUARD:resolve_the_reader_before_any_memory_read:20260730⬡
+  // The wall used to issue every canonical read before tool.loop resolved the people tier.
+  // Resolve once at the top, using founder env or the BIRTH bead, and pass the resulting
+  // effective tier into every helper. Generic identity fields never grant read authority.
+  // Direct builder callers get
+  // the same gate; tool.loop may hand in the resolution it already performed to avoid a second
+  // BIRTH lookup. Unresolved is T4, never an omitted predicate.
+  var _tiers = require('./privacy/people.tier.js');
+  var _readAuthority = resolvedReadTier;
+  if (!_tiers.isReadAuthority(_readAuthority, hamUid)) {
+    _readAuthority = await _tiers.resolveReadTier(identity, hamUid);
+  }
+  var _viewerTier = _tiers.effectiveTier(_readAuthority && _readAuthority.tier);
+  var _viewerTierSource = String(_readAuthority && _readAuthority.source || 'unresolved');
 
   // Parallel FIND: identity + agent JDs + context -- all in one round trip
   // ⬡B:core.fcw.builder:FIX:allsettled_not_all_20260703⬡
@@ -207,37 +221,38 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // Cold code CAPTURES and SURFACES this evidence and labels what it is. It never decides what
   // his day means and it never speaks: A'NU reads it and A'NU answers (granddaddy-911).
   var _batch = [
-    findIdentity(hamUid),
-    findAgentJDs(hamUid),
+    findIdentity(hamUid, _viewerTier),
+    findAgentJDs(hamUid, _viewerTier),
     // ⬡B:core.fcw.builder:FIX:read_enough_rows_to_fill_the_widened_window:20260726⬡
     // Widening the render cap below is useless if the reads only ever return five rows. The
     // conversation lane gets the larger share because it is the one the founder said was
     // missing; the adviser lane keeps its own six and can no longer be crowded out of it
     // (core/find.js findRecentResults now excludes the conversation prefix).
-    findContext(hamUid, 10),
-    findRecentResults(hamUid, 6),
-    findDoctrine(hamUid, 3),
-    findPersonProfile(hamUid),
+    findContext(hamUid, 10, _viewerTier),
+    findRecentResults(hamUid, 6, _viewerTier),
+    findDoctrine(hamUid, 3, _viewerTier),
+    findPersonProfile(hamUid, _viewerTier),
     // Guarded call: find.js was once replaced wholesale by a 50-line stub (the 8B lobotomy,
     // core/find.js:8), which turned every finder into undefined and broke every turn on every
     // channel. A missing finder must degrade this one contributor to unavailable, never throw
     // the whole wall away.
-    (typeof findStatedCommitments === 'function' ? findStatedCommitments(hamUid, 10) : Promise.resolve(null))
+    (typeof findStatedCommitments === 'function'
+      ? findStatedCommitments(hamUid, 10, _viewerTier) : Promise.resolve(null))
   ];
   var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'statedPlans'];
   var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1;
   if (_namedAgentGlobals.length) {
     _namedAgentsIdx = _batch.length;
-    _batch.push(findNamedAgentRecords(hamUid, _namedAgentGlobals));
+    _batch.push(findNamedAgentRecords(hamUid, _namedAgentGlobals, _viewerTier));
     _labels.push('namedAgentRecords');
   }
   if (_identitySubjects.length) {
     _identityEvidenceIdx = _batch.length;
-    _batch.push(findIdentityEvidence(hamUid, _questionFocus));
+    _batch.push(findIdentityEvidence(hamUid, _questionFocus, _viewerTier));
     _labels.push('identityEvidence');
   }
-  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5)); _labels.push('preferences'); }
-  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5)); _labels.push('wonderGames'); }
+  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5, _viewerTier)); _labels.push('preferences'); }
+  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5, _viewerTier)); _labels.push('wonderGames'); }
   var _results = await Promise.allSettled(_batch);
   _results.forEach(function (r, i) {
     if (r.status === 'rejected') console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + (r.reason && r.reason.message || r.reason));
@@ -590,7 +605,10 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // OFF AT BIRTH. Unarmed (no ANU_LENSES_ARMED), this resolves to '' and the wall is byte
   // identical to the wall before this line existed. The founder is the reversal gate.
   var _lensBlock = '';
-  try { _lensBlock = await require('./lens.js').lensOffer(hamUid, channel); } catch (eLens) { _lensBlock = ''; }
+  try {
+    _lensBlock = await require('./lens.js').lensOffer(
+      hamUid, channel, undefined, _readAuthority);
+  } catch (eLens) { _lensBlock = ''; }
   var _agentSection = renderMemorySection(['agentJDs'], agentList,
     'the available-agent read completed and returned no agent definitions.');
   var _doctrineSection = renderMemorySection(['doctrine'], doctrineStr,
@@ -871,6 +889,8 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     ok: true,
     available: true,
     partial: _unavailableReads.length > 0 || _partialReads.length > 0,
+    viewer_tier: _viewerTier,
+    viewer_tier_source: _viewerTierSource,
     system_prompt: systemPrompt,
     ham: { uid: hamUid, name: hamName, tier: hamTier, world: hamWorld },
     agents: agentJDs ? agentJDs.beads : [],

@@ -18,11 +18,9 @@
 // ⬡B:core.context.fusion:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
-function _tbl(){return process.env.BEAD_TABLE||'aibe_brain';}
-function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
-
-
-const BU = process.env.AIBE_BRAIN_URL, BK = process.env.AIBE_BRAIN_KEY;
+function _memorySelected(){return !!(process.env.MEMORY_BANK_URL||process.env.MEMORY_BANK_KEY);}
+function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_brain');}
+function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 
 async function readCalendarNext24h(hamUid) {
   // B:context_fusion:FIX:ebc_firewall_multigrant_founder_only_20260712 CRITICAL EBC
@@ -147,14 +145,24 @@ async function readCalendarNext24h(hamUid) {
     error: String(e && e.message || e || 'unknown').slice(0, 160) }; }
 }
 
-async function readChannelActivity(hamUid) {
+async function readTierFor(hamUid, readAuthority) {
+  var tiers = require('./privacy/people.tier.js');
+  if (!tiers.isReadAuthority(readAuthority, hamUid)) return null;
+  return tiers.effectiveTier(readAuthority.tier);
+}
+
+async function readChannelActivity(hamUid, viewerTier) {
   var _noChannels = Object.create(null);
   if (!_bu() || !_bk()) return _noChannels;
   try {
+    var tier = await readTierFor(hamUid, viewerTier);
+    if (tier == null) return _noChannels;
+    var tierFilter = require('./privacy/people.tier.js').structuralFilter(tier);
     const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
     const rows = await fetch(_bu() + '/rest/v1/' + _tbl() + '?select=source,content&ham_uid=eq.' + encodeURIComponent(hamUid)
       + '&created_at=gte.' + encodeURIComponent(since)
-      + '&or=(source.like.logful.channel_turn.*,source.like.logful.portal_turn.*)&limit=200',
+      + '&or=(source.like.logful.channel_turn.*,source.like.logful.portal_turn.*)'
+      + (tierFilter ? '&' + tierFilter : '') + '&limit=200',
       { headers: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() } })
       .then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
     const counts = {};
@@ -167,16 +175,25 @@ async function readChannelActivity(hamUid) {
   } catch (e) { return _noChannels; }
 }
 
-async function runFuse(hamUid) {
+async function runFuse(hamUid, viewerTier) {
   if (!hamUid) return { ok: false, reason: 'hamUid required' };
+  var effectiveViewerTier = await readTierFor(hamUid, viewerTier);
+  if (effectiveViewerTier == null) {
+    return { ok:false, reason:'viewer_read_authority_required' };
+  }
   const cal = await readCalendarNext24h(hamUid);
-  const channels = await readChannelActivity(hamUid);
+  const channels = await readChannelActivity(hamUid, effectiveViewerTier);
   let screen = { live: false };
   try {
     const sa = require('./stream/screen.awareness.js');
     screen = { live: sa.hasLiveScreen(hamUid) };
   } catch (e) {}
-  const fusion = { as_of: new Date().toISOString(), calendar: cal, channels: channels, screen: screen };
+  var privacyTiers = require('./privacy/people.tier.js');
+  const fusion = { as_of: new Date().toISOString(), calendar: cal, channels: channels,
+    screen: screen,
+    privacy: privacyTiers.buildEnvelope(privacyTiers.MARKS.UNCLASSIFIED,
+      effectiveViewerTier, 'exact-HAM fused context follows the reader\'s proven people tier',
+      'context_fusion') };
   try {
     const brain = require('./brain.client');
     await brain.writeBead({ hamUid: hamUid, agentGlobal: 'FUSION', type: 'CONTEXT_FUSION',
@@ -191,11 +208,15 @@ async function runFuse(hamUid) {
 }
 
 // The mind's read: freshest fusion, formatted with honest decay language.
-async function getLatestSummary(hamUid) {
+async function getLatestSummary(hamUid, viewerTier) {
   if (!_bu() || !_bk() || !hamUid) return '';
   try {
+    var effectiveViewerTier = await readTierFor(hamUid, viewerTier);
+    if (effectiveViewerTier == null) return '';
+    var tierFilter = require('./privacy/people.tier.js').structuralFilter(effectiveViewerTier);
     const rows = await fetch(_bu() + '/rest/v1/' + _tbl() + '?select=content,created_at&ham_uid=eq.' + encodeURIComponent(hamUid)
-      + '&source=like.context.fusion.*&order=created_at.desc&limit=1',
+      + '&source=like.context.fusion.*' + (tierFilter ? '&' + tierFilter : '')
+      + '&order=created_at.desc&limit=1',
       { headers: { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() } })
       .then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
     if (!rows.length) return '';
@@ -292,4 +313,5 @@ async function getLatestSummary(hamUid) {
 // _test exposes the calendar read for proof only, the same convention core/find.js and
 // core/fcw.builder.js already use. It stays out of the public surface: nothing but runFuse
 // may drive a calendar read, so the EBC founder-world-only firewall above keeps its one door.
-module.exports = { runFuse, getLatestSummary, _test: { readCalendarNext24h } };
+module.exports = { runFuse, getLatestSummary,
+  _test: { readCalendarNext24h, readChannelActivity, readTierFor } };
