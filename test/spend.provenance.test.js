@@ -24,12 +24,20 @@ function freshGuard() {
 }
 
 function receiptStoreFixture() {
+  let admissions=0;
   return {
     prepare:function (spec) {
       assert.equal(spec.attribution.ham_uid,'HAM.SPEND.TEST');
       return {ok:true,receipt:{attempt_id:'spend-provenance-fixture'}};
     },
-    claimIntent:async function () { return {ok:true}; },
+    reconcileUnresolved:async function () {
+      return {ok:true,unresolved:0,resolved_unknown:0,outcome_unknown:0};
+    },
+    claimIntent:async function () {
+      admissions+=1;
+      return admissions===1 ? {ok:true} : {ok:false,reason:'daily_spend_ceiling_reached',
+        admissions:1,ceiling:1};
+    },
     terminalFromResponse:async function (response) {
       return {status_code:response.status,disposition:'PROVIDER_RESPONSE'};
     },
@@ -49,14 +57,15 @@ test.afterEach(function () {
   restore('OR_KEY_ACCOUNT_MONITOR',ORIGINALS.monitor);
 });
 
-test('admission is free and only real egress consumes the bounded daily slot', function () {
+test('admission is free and local egress telemetry is never shared ceiling authority', function () {
   process.env.DAILY_MODEL_CALL_CEIL='2';
   const guard=freshGuard();
   assert.equal(guard.allow('text'),true);
   assert.equal(guard.usageToday(),0);
   assert.equal(guard.allow('text',{egress:true}),true);
   assert.equal(guard.allow('text',{egress:true}),true);
-  assert.equal(guard.allow('text'),false);
+  assert.equal(guard.allow('text'),true,
+    'only the atomic Memory Bank claim may refuse a shared daily slot');
   assert.equal(guard.usageToday(),2);
 });
 
@@ -82,17 +91,16 @@ test('an oversized ceiling clamps to the maximum and she keeps speaking', functi
   assert.equal(guard.allow('text'),true,'she can speak; refusing here was the bug');
 });
 
-test('concurrent denials stay bound to exact HAM cycle request seat and component', async function () {
+test('concurrent durable denials stay bound to exact HAM cycle request seat and component', async function () {
   process.env.DAILY_MODEL_CALL_CEIL='1';
   const guard=freshGuard();
-  assert.equal(guard.allow('text',{egress:true}),true);
   const scopes=['one','two'].map(function (name) { return {
     ham_uid:'HAM.'+name.toUpperCase(),cycle_id:'cycle.'+name,request_id:'request.'+name,
     seat:'c2_organ',component:'template.cycle'}; });
   await Promise.all(scopes.map(function (scope) {
     return guard.withAttribution(scope,async function () {
       await Promise.resolve();
-      assert.equal(guard.allow('text'),false);
+      guard.rememberDurableDenial('text',1,1,'daily_call_ceiling_reached');
     });
   }));
   scopes.forEach(function (scope) {
