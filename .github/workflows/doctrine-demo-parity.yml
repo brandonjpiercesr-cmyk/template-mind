@@ -1,0 +1,31 @@
+name: doctrine-demo-parity
+
+# These are adapted behavioral contracts from the canonical A'NEW suites. They load the
+# Template runtime through pai/core and prove the mirrored dependency closure behaves as one
+# engine: unavailable memory is not empty, memory writes require independent readback, a
+# working-limit fallback keeps the full request, and paid egress belongs to its exact seat.
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  doctrine-demo-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Prove the mirrored doctrine-to-demo runtime contracts
+        run: >-
+          node --test
+          test/doctrine.find.in.brain.availability.test.js
+          test/doctrine.fcw.memory.availability.test.js
+          test/doctrine.people.tier.test.js
+          test/doctrine.memory.keeper.readback.test.js
+          test/doctrine.memory.effect.release.gate.test.js
+          test/doctrine.blocked.fallback.continuity.test.js
+          test/doctrine.openrouter.seat.spend.test.js
+          test/doctrine.spend.guard.fail.closed.test.js

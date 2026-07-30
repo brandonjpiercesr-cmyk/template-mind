@@ -62,6 +62,9 @@ const TIER_WORLD_ID = 'world_id';
 const TIER_SEPARATOR = '~';
 const WORLD_ID_MARK = 'w1';
 const WORLD_ID_TTL_SECONDS = 12 * 60 * 60;
+const INTERNAL_CYCLE_VERSION = 'anew.ham.internal-cycle-context.v1';
+const INTERNAL_CYCLE_MAX_LIFETIME_MS = 2 * 60 * 1000;
+const INTERNAL_CYCLE_PATH = '/cycle';
 // ⬡B:core.ham_session_authorization:FIX:uppercasing_before_checking_let_case_folding_invent_a_world:20260726⬡
 // The SAME shape of the world ID pattern, but written to be tested against the input BEFORE
 // it is uppercased, which is the whole point of its existing.
@@ -341,6 +344,100 @@ function internalSessionHeaders(hamUid) {
   const token = signHamSession(hamUid);
   if (!token) return null;
   return { Authorization: 'Bearer ' + token };
+}
+
+// A signed HAM session proves which world is calling. It deliberately does not make
+// arbitrary JSON fields server-owned: a browser holding its own session could otherwise
+// submit `outbound_finalize`, `internal_deliberation`, or a privileged channel and skip the
+// ordinary turn gates. Internal callers that genuinely need those machine-only fields bind
+// the exact request bytes to the same server-side signer with this second, purpose-specific
+// proof. The proof is short-lived and names the exact HAM; it never broadens the session.
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  return '{' + Object.keys(value).sort().map(function (name) {
+    return JSON.stringify(name) + ':' + stableStringify(value[name]);
+  }).join(',') + '}';
+}
+
+function internalCyclePayload(hamUid, body, expiresAt, nonce, now) {
+  const normalized = normalizeHamUid(hamUid);
+  const expiry = Number(expiresAt);
+  const current = Number.isFinite(now) ? now : Date.now();
+  const nonceValue = String(nonce || '');
+  if (!normalized || !body || typeof body !== 'object' || Array.isArray(body) ||
+      !Number.isSafeInteger(expiry) || expiry <= current ||
+      expiry - current > INTERNAL_CYCLE_MAX_LIFETIME_MS ||
+      !/^[A-Za-z0-9._:-]{16,220}$/.test(nonceValue)) return null;
+  return {
+    version: INTERNAL_CYCLE_VERSION,
+    purpose: 'internal_cycle_context',
+    method: 'POST',
+    path: INTERNAL_CYCLE_PATH,
+    ham_uid: normalized,
+    expires_at: expiry,
+    nonce: nonceValue,
+    body_digest: crypto.createHash('sha256')
+      .update(Buffer.from(stableStringify(body), 'utf8')).digest('hex')
+  };
+}
+
+function signInternalCycleContext(input) {
+  const secret = signingSecret();
+  const value = input && internalCyclePayload(input.hamUid, input.body,
+    input.expiresAt, input.nonce, input.now);
+  if (!secret || !value) return null;
+  return crypto.createHmac('sha256', secret)
+    .update(Buffer.from(stableStringify(value), 'utf8')).digest('hex');
+}
+
+function internalCycleHeaders(hamUid, body, opts) {
+  opts = opts || {};
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const ttl = Number.isFinite(opts.ttlMs)
+    ? Math.max(1000, Math.min(Math.floor(opts.ttlMs), INTERNAL_CYCLE_MAX_LIFETIME_MS))
+    : 60 * 1000;
+  const expiresAt = now + ttl;
+  const nonce = typeof opts.nonce === 'string' ? opts.nonce : crypto.randomUUID();
+  const signature = signInternalCycleContext({ hamUid:hamUid, body:body,
+    expiresAt:expiresAt, nonce:nonce, now:now });
+  const session = internalSessionHeaders(hamUid);
+  if (!signature || !session) return null;
+  return Object.assign({}, session, {
+    'X-ANEW-Cycle-Expires': String(expiresAt),
+    'X-ANEW-Cycle-Nonce': nonce,
+    'X-ANEW-Cycle-Authorization': signature
+  });
+}
+
+function verifyInternalCycleContext(req, expectedHamUid, opts) {
+  opts = opts || {};
+  const headers = req && req.headers || {};
+  const supplied = String(headers['x-anew-cycle-authorization'] || '');
+  const expiresAt = Number(headers['x-anew-cycle-expires']);
+  const nonce = String(headers['x-anew-cycle-nonce'] || '');
+  const presented = Boolean(supplied || headers['x-anew-cycle-expires'] || nonce);
+  if (!presented) return { ok:false, presented:false, reason:'internal_cycle_proof_absent' };
+  if (!signingSecret()) {
+    return { ok:false, presented:true, status:503,
+      reason:'internal_cycle_authorization_unconfigured' };
+  }
+  const value = internalCyclePayload(expectedHamUid, req && req.body,
+    expiresAt, nonce, opts.now);
+  const expected = value && signInternalCycleContext({ hamUid:expectedHamUid,
+    body:req && req.body, expiresAt:expiresAt, nonce:nonce, now:opts.now });
+  if (!expected || !/^[a-f0-9]{64}$/.test(supplied.toLowerCase())) {
+    return { ok:false, presented:true, status:401,
+      reason:'internal_cycle_authorization_invalid_or_expired' };
+  }
+  const actualBytes = Buffer.from(supplied.toLowerCase(), 'hex');
+  const expectedBytes = Buffer.from(expected, 'hex');
+  if (actualBytes.length !== expectedBytes.length ||
+      !crypto.timingSafeEqual(actualBytes, expectedBytes)) {
+    return { ok:false, presented:true, status:401,
+      reason:'internal_cycle_authorization_invalid_or_expired' };
+  }
+  return { ok:true, presented:true, hamUid:value.ham_uid, payload:value };
 }
 
 function requireHamSession(req, res, expectedHamUid) {
@@ -897,6 +994,12 @@ module.exports = {
   authorizeHamRequest,
   authorizeExactHamRequest,
   internalSessionHeaders,
+  INTERNAL_CYCLE_VERSION,
+  INTERNAL_CYCLE_MAX_LIFETIME_MS,
+  internalCyclePayload,
+  signInternalCycleContext,
+  internalCycleHeaders,
+  verifyInternalCycleContext,
   requireHamSession,
   requireExactHamSession,
   requireAnyHamSession,

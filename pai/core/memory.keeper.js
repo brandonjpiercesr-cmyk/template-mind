@@ -113,16 +113,87 @@ function writeHeaders(representation) {
     Prefer: representation ? 'return=representation' : 'return=minimal' };
 }
 
-// Cold store. One POST, one verified readback of the exact source we asked for. A write that
-// cannot prove itself is reported ok:false, never assumed. If the bank has no edges column
+function memoryIoTimeoutMs() {
+  var raw = Number(process.env.MEMORY_KEEPER_IO_TIMEOUT_MS || 5000);
+  if (!Number.isFinite(raw)) return 5000;
+  return Math.max(100, Math.min(15000, Math.floor(raw)));
+}
+
+// Every network operation gets its OWN deadline. Reusing the POST timeout signal for the
+// independent GET readback can hand GET a signal whose clock already expired while the write
+// body was being parsed. A fresh composite preserves a caller cancellation while starting a
+// new bounded I/O window for this exact request.
+function freshRequestSignal(parentSignal) {
+  var localDeadline = AbortSignal.timeout(memoryIoTimeoutMs());
+  if (!parentSignal) return localDeadline;
+  if (typeof AbortSignal.any === 'function') {
+    return AbortSignal.any([parentSignal, localDeadline]);
+  }
+  var controller = new AbortController();
+  function carry(source) {
+    if (!controller.signal.aborted) controller.abort(source.reason);
+  }
+  if (parentSignal.aborted) carry(parentSignal);
+  else parentSignal.addEventListener('abort', function () { carry(parentSignal); }, { once:true });
+  if (localDeadline.aborted) carry(localDeadline);
+  else localDeadline.addEventListener('abort', function () { carry(localDeadline); }, { once:true });
+  return controller.signal;
+}
+
+function canonicalField(value) {
+  var parsed = value;
+  if (typeof value === 'string') {
+    try { parsed = JSON.parse(value); } catch (e) { return value; }
+  }
+  function sort(input) {
+    if (Array.isArray(input)) return input.map(sort);
+    if (!input || typeof input !== 'object') return input;
+    var out = {};
+    Object.keys(input).sort().forEach(function (key) { out[key] = sort(input[key]); });
+    return out;
+  }
+  try { return JSON.stringify(sort(parsed)); } catch (e) { return String(value); }
+}
+
+function sameStoredBead(row, expected) {
+  if (!row || !expected) return false;
+  if (String(row.ham_uid || '').toUpperCase() !== String(expected.ham_uid || '').toUpperCase()) return false;
+  if (String(row.source || '') !== String(expected.source || '')) return false;
+  if (String(row.stamp_type || '') !== String(expected.stamp_type || '')) return false;
+  if (String(row.acl_stamp || '') !== String(expected.acl_stamp || '')) return false;
+  if (String(row.agent_global || '') !== String(expected.agent_global || '')) return false;
+  if (String(row.summary || '') !== String(expected.summary || '')) return false;
+  if (Number(row.importance) !== Number(expected.importance)) return false;
+  if (canonicalField(row.content) !== canonicalField(expected.content)) return false;
+  if (expected.spawned_by !== undefined && String(row.spawned_by || '') !== String(expected.spawned_by)) return false;
+  if (expected.edges !== undefined && canonicalField(row.edges) !== canonicalField(expected.edges)) return false;
+  return true;
+}
+
+// Cold store. One POST, then one independent exact GET of the source we asked for. A write that
+// cannot prove itself from storage is reported ok:false, never assumed. If the bank has no edges column
 // the row is retried once without edges rather than losing the memory over a schema detail.
 async function storeBead(bead, signal) {
   if (!_bu() || !_bk()) return { ok: false, reason: 'memory_bank_unconfigured' };
+  // ⬡B:core.memory.keeper:FIX:spawned_by_required_on_the_new_bank_20260727⬡
+  // core/brain.client.js:171 sets this on every write that is not the legacy aibe_brain
+  // table, because the new bank's beads table requires it. This is the one write path every
+  // committed turn and gift goes through (keepTurn -> store -> storeBead), so on any world
+  // where _tbl() resolves to 'beads' (including the founder's own, since both legacy and new
+  // env vars are configured there) every turn and gift write was failing this column and
+  // storeBead was correctly returning memory_write_unverified on every single call. Found by
+  // the same class of review that caught it in routes/omi.routes.js.
+  if (_tbl() !== 'aibe_brain' && bead.spawned_by === undefined) {
+    bead.spawned_by = (bead.source && String(bead.source).split('.')[0]) || 'memory.keeper';
+  }
+  var requestStage = 'write';
   async function post(body) {
+    requestStage = 'write';
     var response = await fetch(_bu() + '/rest/v1/' + _tbl(), { method: 'POST',
-      headers: writeHeaders(true), body: JSON.stringify(body), signal: signal || undefined });
+      headers: writeHeaders(true), body: JSON.stringify(body),
+      signal:freshRequestSignal(signal || null) });
     var rows = response.ok ? await response.json().catch(function () { return null; }) : null;
-    return { response: response, rows: rows };
+    return { response: response, rows: rows, body: body };
   }
   try {
     var attempt = await post(bead);
@@ -132,16 +203,34 @@ async function storeBead(bead, signal) {
       attempt = await post(withoutEdges);
       if (attempt.response.ok) attempt.edges_dropped = true;
     }
-    if (!attempt.response.ok || !Array.isArray(attempt.rows) || !attempt.rows[0]
-        || attempt.rows[0].source !== bead.source) {
+    if (!attempt.response.ok || !Array.isArray(attempt.rows) || attempt.rows.length !== 1
+        || !sameStoredBead(attempt.rows[0], attempt.body)) {
       return { ok: false, reason: 'memory_write_unverified',
         status: attempt.response && attempt.response.status || null };
     }
+    // ⬡B:core.memory.keeper:GUARD:representation_is_not_a_durable_readback:20260730⬡
+    // PostgREST's returned representation proves only what the write response said. Read the row
+    // again by exact HAM and source, require uniqueness, and compare the fields future FIND reads.
+    requestStage = 'readback';
+    var readResponse = await fetch(_bu() + '/rest/v1/' + _tbl()
+      + '?ham_uid=eq.' + encodeURIComponent(attempt.body.ham_uid)
+      + '&source=eq.' + encodeURIComponent(attempt.body.source) + '&limit=2',
+    { headers:writeHeaders(false), signal:freshRequestSignal(signal || null) });
+    var readRows = readResponse.ok
+      ? await readResponse.json().catch(function () { return null; }) : null;
+    if (!readResponse.ok || !Array.isArray(readRows) || readRows.length !== 1
+        || !sameStoredBead(readRows[0], attempt.body)) {
+      return { ok:false, reason:'memory_readback_unverified',
+        status:readResponse && readResponse.status || null };
+    }
     return { ok: true, id: attempt.rows[0].id, source: bead.source,
       stamp_type: bead.stamp_type, importance: bead.importance,
-      edges_dropped: !!attempt.edges_dropped };
+      edges_dropped: !!attempt.edges_dropped, readback_verified:true };
   } catch (error) {
-    return { ok: false, reason: 'memory_write_threw',
+    var timeout = error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+    return { ok: false, reason: timeout
+        ? (requestStage === 'readback' ? 'memory_readback_timeout' : 'memory_write_timeout')
+        : (requestStage === 'readback' ? 'memory_readback_threw' : 'memory_write_threw'),
       error: String(error && error.message || error || 'unknown').slice(0, 160) };
   }
 }
@@ -374,6 +463,17 @@ async function keepTurn(entrance) {
 module.exports = {
   MEMORY_CONTRACT: MEMORY_CONTRACT,
   keepTurn: keepTurn,
-  _test: { storeBead: storeBead, decideGift: decideGift, leashToTheirWords: leashToTheirWords,
+  // ⬡B:core.memory.keeper:BUILD:the_one_cold_store_is_not_a_test_only_name:20260728⬡
+  // storeBead is the ONE verified cold write in this estate (one POST, one readback of the
+  // exact source asked for, plus the 20260727 spawned_by fix the new bank requires). It was
+  // reachable only through the _test bag, so core/world.birth.js would have had to either
+  // reach into a test-only name or hand-maintain a SECOND writer, and a twinned writer would
+  // have rediscovered that spawned_by defect live in front of a room. Promoted to a real
+  // export, purely additive: the _test entry stays exactly as it was so every existing caller
+  // keeps working. Supersede, never delete; one source, never two hand-maintained copies.
+  storeBead: storeBead,
+  _test: { storeBead: storeBead, sameStoredBead:sameStoredBead,
+    freshRequestSignal:freshRequestSignal, memoryIoTimeoutMs:memoryIoTimeoutMs,
+    decideGift: decideGift, leashToTheirWords: leashToTheirWords,
     turnSummary: turnSummary, turnEdges: turnEdges, aclStamp: aclStamp, KEEPER_SYSTEM: KEEPER_SYSTEM }
 };

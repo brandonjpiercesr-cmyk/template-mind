@@ -83,7 +83,8 @@ function configuredCeil(kind) { return ceilDetail(kind).value; }
 
 function pruneOld() {
   var cut = Date.now() - DAY_MS;
-  while (CALL_LOG.length && CALL_LOG[0] < cut) CALL_LOG.shift();
+  function at(entry) { return typeof entry === 'number' ? entry : Number(entry && entry.at || 0); }
+  while (CALL_LOG.length && at(CALL_LOG[0]) < cut) CALL_LOG.shift();
 }
 
 // ⬡COLD:decide:tag:PROVIDER_SPEND_ATTRIBUTION:20260723⬡
@@ -186,11 +187,72 @@ function allow(kind, options) {
     return false;
   }
   if (!egress) return true;
-  CALL_LOG.push(Date.now());
+  // ⬡B:core.spend_guard:FIX:paid_egress_keeps_its_owner:20260730⬡
+  // The old log kept only a timestamp, discarding the attribution already present in this
+  // scope. Keep one bounded record per actual provider egress. No prompt, response, key, URL,
+  // or provider body is stored here.
+  CALL_LOG.push({ at:Date.now(), kind:String(kind || 'text').slice(0, 24),
+    attribution:attribution });
   return true;
 }
 
 function usageToday() { pruneOld(); return CALL_LOG.length; }
+
+function publicComponent(value) {
+  var root = String(value || '').split('.')[0].toLowerCase();
+  return ['pai', 'coda', 'wonder', 'canon', 'directive', 'seer'].indexOf(root) >= 0
+    ? root : 'unattributed';
+}
+
+function publicSeat(value) {
+  // A declared failover is a second transport attempt owned by the same governed seat,
+  // not a new wallet. Keep the exact `.fallback` attempt internally while reconciling the
+  // public total to the canonical seat that owns its key and cap.
+  var name = String(value || '').replace(/\.fallback$/, '');
+  try {
+    var seats = require('./seat.map.js').SEATS || {};
+    if (Object.prototype.hasOwnProperty.call(seats, name)) return name;
+  } catch (e) {}
+  return 'unattributed';
+}
+
+function publicKind(value) {
+  var name = String(value || '').toLowerCase();
+  return ['text', 'image', 'audio', 'embedding', 'video'].indexOf(name) >= 0
+    ? name : 'other';
+}
+
+function addBucket(map, name) { map[name] = (map[name] || 0) + 1; }
+
+function boundedBuckets(map, maximum) {
+  var rows = Object.keys(map).map(function (owner) {
+    return { owner:owner, count:map[owner] };
+  }).sort(function (left, right) {
+    return right.count - left.count || left.owner.localeCompare(right.owner);
+  });
+  if (rows.length <= maximum) return rows;
+  var kept = rows.slice(0, maximum - 1);
+  var rolled = rows.slice(maximum - 1).reduce(function (sum, row) { return sum + row.count; }, 0);
+  kept.push({ owner:'other', count:rolled });
+  return kept;
+}
+
+// Public-safe ownership totals. Exact HAM, cycle, request, and arbitrary caller labels remain
+// internal; the wall exposes only stable component families, canonical seat names, and kinds.
+function usageAttribution() {
+  pruneOld();
+  var components = {}, seats = {}, kinds = {};
+  CALL_LOG.forEach(function (entry) {
+    var attribution = entry && typeof entry === 'object' ? entry.attribution : null;
+    addBucket(components, publicComponent(attribution && attribution.component));
+    addBucket(seats, publicSeat(attribution && attribution.seat));
+    addBucket(kinds, publicKind(entry && typeof entry === 'object' ? entry.kind : 'text'));
+  });
+  return { total:CALL_LOG.length, window_hours:24,
+    by_component:boundedBuckets(components, 12),
+    by_seat:boundedBuckets(seats, 12),
+    by_kind:boundedBuckets(kinds, 12) };
+}
 
 // ⬡B:core.spend_guard:WIRE:the_credit_watchdog_reads_with_a_real_seat_key:20260725⬡
 // Founder order 20260725: the shared OPENROUTER_API_KEY is being removed, so a watchdog
@@ -310,6 +372,7 @@ async function checkBalances(options) {
 // a first-class export now, so any world can report what is in force beside what was asked
 // for. Caught by the Codex reviewer on the sister PR.
 module.exports = { lastDenial: lastDenial, allow: allow, usageToday: usageToday,
+  usageAttribution:usageAttribution,
   ceilDetail: ceilDetail,
   withAttribution:withAttribution,
   checkBalances: checkBalances,

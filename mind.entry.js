@@ -50,37 +50,18 @@ function bankHeaders(write) {
 app.get('/health', async function (req, res) {
   let bankAlive = false, beadCount = null;
   try {
-    const r = await fetch(BANK + '/rest/v1/beads?select=id&limit=1', { headers: bankHeaders(false) });
+    const r = await fetch(BANK + '/rest/v1/beads?select=id&ham_uid=eq.'
+      + encodeURIComponent(HAM) + '&limit=1', { headers: bankHeaders(false) });
     bankAlive = r.ok;
     if (r.ok) { const rows = await r.json(); beadCount = Array.isArray(rows) ? rows.length : null; }
   } catch (e) { /* bank unreachable stays false, honestly */ }
   res.json({ ok: Boolean(HAM && bankAlive), world: HAM || 'unborn', bank: bankAlive ? 'alive' : 'unreachable', sampled: beadCount });
 });
 
-// /bead -- stamp a bead into THIS world's own memory. Supersede-only lives in the
-// schema (superseded_by); this door only ever adds.
-app.post('/bead', async function (req, res) {
-  try {
-    const b = req.body || {};
-    if (!b.summary) return res.status(400).json({ ok: false, reason: 'summary required' });
-    const ymd = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const row = {
-      ham_uid: HAM,
-      agent_global: String(b.agent || 'MIND').toUpperCase().slice(0, 24),
-      stamp_type: String(b.type || 'NOTE').toUpperCase().slice(0, 24),
-      acl_stamp: '⬡B:' + String(b.ns || 'mind').toLowerCase() + ':' + String(b.type || 'NOTE').toUpperCase() + ':' + String(b.desc || 'stamped').toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40) + ':' + ymd + '⬡',
-      source: String(b.ns || 'mind') + '.' + Date.now(),
-      summary: String(b.summary).slice(0, 300),
-      content: JSON.stringify(b.content || {}),
-      importance: Math.min(10, Math.max(1, parseInt(b.importance, 10) || 5)),
-      spawned_by: String(b.spawnedBy || 'mind.entry').slice(0, 60)
-    };
-    const r = await fetch(BANK + '/rest/v1/beads', { method: 'POST', headers: bankHeaders(true), body: JSON.stringify(row) });
-    if (!r.ok) return res.json({ ok: false, reason: 'bank write failed ' + r.status });
-    const saved = await r.json();
-    res.json({ ok: true, id: Array.isArray(saved) && saved[0] ? saved[0].id : null, acl: row.acl_stamp });
-  } catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
-});
+// The former unauthenticated /bead helper was an ungoverned second memory writer. It had
+// no exact-HAM session gate, privacy tier, graph edges, or durable readback, and nothing in
+// this repository called it. Memory enters through the authenticated /cycle and its canonical
+// write_to_brain effect, so there is one governed writer instead of a template back door.
 
 // ⬡B:template-mind.mind.entry:WIRE:coding_downtime_wash_doors:20260710⬡
 // The world's own organs, each env-scoped, each submitting through law.
@@ -115,39 +96,12 @@ require('./pai/routes/vara.call.routes.js')(app);
 // world resolved as a parameter. POST /inbox-zero/:world/run.
 try { require('./pai/core/inbox.zero.js').registerInboxZero(app); } catch (e) { console.error('[mind] inbox.zero mount failed:', e.message); }
 
-app.post('/cycle', async function (req, res) {
-  try {
-    if (!HAM || !BANK || !KEY) return res.status(200).json({ ok: false, reason: 'unborn: missing world env' });
-    const body = req.body || {};
-    const message = body.message || body.text || '';
-    if (!message) return res.status(400).json({ ok: false, reason: 'message required' });
-    // the closure reads MEMORY_BANK_* / BEAD_TABLE / BRAIN_SCHEMA from env -- this world's own bank
-    const { runPAI } = require('./pai/core/tool.loop.js');
-    // ⬡B:mind.entry:WIRE:cycle_door_stopped_dropping_identity:20260717⬡
-    // Founder-caught 20260717. runPAI's signature is
-    // (hamUid, message, channel, identity, priorTurns, uiPortal). This door passed
-    // three. identity was ALWAYS undefined here, so through /cycle -- the primary
-    // door of this world since the 20260713 cutover -- _codaLeadNeeded could never
-    // be true, identity.council_context never reached _councilContext, and WRIT
-    // therefore never saw a coding mode and gagged her on her own vocabulary.
-    // reach/iman.js:278 and core/wren/reply.js:174 both pass identity. Only this
-    // door dropped it. Pass the caller's own values through, defaulting to the exact
-    // prior behaviour when absent, so nothing that works today changes.
-    const out = await runPAI(HAM, message, body.channel || 'new_world',
-      body.identity || null, body.priorTurns || [], body.uiPortal || null);
-    // hand the compiled turn to face for persona expression (unchanged organ)
-    if (out && out.ok && (out.answer || out.text)) {
-      const spoken = await require('./face.js').expressTurn(
-        { HAM_UID: HAM, PERSONA: process.env.PERSONA },
-        { text: out.answer || out.text, contributions: out.tools_used });
-      out._servedBy = "new_world_mind_dc499d0c"; return res.json({ ok: true, compiled: out, expressed: spoken });
-    }
-    return res.json({ ok: false, reason: (out && out.reason) || 'no_answer', compiled: out });
-  } catch (e) {
-    console.log('[MIND /cycle] error: ' + e.message);
-    return res.status(500).json({ ok: false, error: e.message });
-  }
-});
+// ⬡B:mind.entry:WIRE:cycle_exact_ham_server_owned_identity:20260730⬡
+// The canonical route authenticates the signed session, resolves the exact HAM through
+// ATMOSPHERE, and constructs identity server-side. Caller JSON cannot grant itself privacy,
+// machine mode, or memory/effect-gate authority.
+require('./pai/routes/cycle.routes.js')(app,
+  { hamUid:HAM, bankUrl:BANK, bankKey:KEY });
 
 app.post('/express', async function (req, res) {
   try { res.json(await require('./face.js').expressTurn({ HAM_UID: HAM, PERSONA: process.env.PERSONA }, (req.body || {}).compiled || req.body)); }
