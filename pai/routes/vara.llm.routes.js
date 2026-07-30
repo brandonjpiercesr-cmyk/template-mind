@@ -12,6 +12,7 @@ function _schema(){return process.env.BRAIN_SCHEMA||'abacia_core';}
 const { runPAI } = require('../core/tool.loop.js');
 const { synthesize } = require('../core/synthesize.js');
 const crypto = require('node:crypto');
+const webhookGuard = require('../core/webhook.guard.js');
 
 module.exports = function(app) {
   // ⬡B:routes.vara.llm:FIX:live_agent_pointed_at_legacy:20260702⬡
@@ -297,6 +298,45 @@ module.exports = function(app) {
   // Resolves caller phone → ham_uid via ATMOSPHERE, returns dynamic_variables
   app.post('/vara/personalize', async function(req, res) {
     var body = req.body || {};
+    // ⬡B:routes.vara.llm:GUARD:provider_proves_and_claims_one_voice_initiation:20260730⬡
+    // caller_id is routing evidence supplied by the provider, never identity authority on its
+    // own. ElevenLabs' conversation-initiation webhook supports a configured secret request
+    // header; verify it through the existing shared-token boundary before caller_id can reach
+    // ATMOSPHERE or this route can mint a signed voice session. The provider's call_sid is then
+    // claimed through the same durable webhook arbiter used by WREN and IMAN, so one provider
+    // initiation can mint exactly one credential even across processes and restarts.
+    var providerAuth = webhookGuard.verifySharedToken({ headers:req.headers || {}, query:{} },
+      process.env.ELEVENLABS_INIT_WEBHOOK_TOKEN, 'x-elevenlabs-init-token');
+    if (!providerAuth.ok) {
+      return res.status(providerAuth.reason === 'shared_token_unconfigured' ? 503 : 401)
+        .json({ ok:false, reason:providerAuth.reason === 'shared_token_unconfigured'
+          ? 'elevenlabs_init_authorization_unconfigured'
+          : 'elevenlabs_init_authorization_invalid' });
+    }
+    var callSid = String(body.call_sid || '').trim();
+    var providerAgentId = String(body.agent_id || '').trim();
+    if (!/^[A-Za-z0-9._:-]{8,160}$/.test(callSid)) {
+      return res.status(400).json({ ok:false, reason:'elevenlabs_call_sid_required' });
+    }
+    if (!/^[A-Za-z0-9._:-]{3,160}$/.test(providerAgentId)) {
+      return res.status(400).json({ ok:false, reason:'elevenlabs_agent_id_required' });
+    }
+    var configuredAgentId = String(process.env.ELEVENLABS_AGENT_ID || '').trim();
+    if (configuredAgentId && !webhookGuard.sameText(providerAgentId, configuredAgentId)) {
+      return res.status(403).json({ ok:false, reason:'elevenlabs_agent_mismatch' });
+    }
+    var expectedWorldHam = String(process.env.HAM_UID || '').trim().toUpperCase();
+    if (!/^[A-Z0-9._:-]{2,160}$/.test(expectedWorldHam)) {
+      return res.status(503).json({ ok:false, reason:'elevenlabs_voice_world_unconfigured' });
+    }
+    var initiationClaim = await webhookGuard.claimWebhook('elevenlabs_init', callSid);
+    if (!initiationClaim.ok) {
+      return res.status(503).json({ ok:false,
+        reason:initiationClaim.reason || 'elevenlabs_init_claim_unavailable' });
+    }
+    if (initiationClaim.duplicate) {
+      return res.status(409).json({ ok:false, reason:'elevenlabs_init_replayed' });
+    }
     var callerId = body.caller_id || body.from_number || body.caller || '';
     var ATM_URL = process.env.ATMOSPHERE_URL || 'https://atmosphere-x2oi.onrender.com';
     var initData = body.conversation_initiation_client_data || {};
@@ -364,6 +404,9 @@ module.exports = function(app) {
           world = env.world || 'guest';
         }
       } catch(e) {}
+    }
+    if (String(hamUid || '').trim().toUpperCase() !== expectedWorldHam) {
+      return res.status(403).json({ ok:false, reason:'elevenlabs_voice_world_mismatch' });
     }
 
     // ⬡B:routes.vara.llm:FIX:full_init_context_shape:20260702⬡
