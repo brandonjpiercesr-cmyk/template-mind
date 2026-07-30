@@ -47,6 +47,24 @@ function captureFetch(payload) {
   return { sent: sent, restore: function () { global.fetch = savedFetch; } };
 }
 
+function receiptStoreFixture() {
+  return {
+    prepare:function (spec) {
+      assert.equal(spec.attribution.ham_uid,'HAM.PRESS.TEST');
+      assert.equal(spec.attribution.component,'press.scan');
+      return {ok:true,receipt:{attempt_id:'press-scan-fixture'}};
+    },
+    claimIntent:async function () { return {ok:true}; },
+    terminalFromResponse:async function (response) {
+      return {status_code:response.status,disposition:'PROVIDER_RESPONSE'};
+    },
+    terminalFromError:function () {
+      return {status_code:null,disposition:'NETWORK_ERROR'};
+    },
+    writeTerminal:async function () { return {ok:true}; }
+  };
+}
+
 const CHAT_OK = { choices: [{ message: { content: 'headline one\nheadline two\nheadline three' } }] };
 
 const CLEAR = {
@@ -113,13 +131,25 @@ test('with no key at all the advisor search refuses instead of dialing naked', a
 
 test('the PRESS scan spends the seat named by PRESS_SCAN_SEAT', async function () {
   const f = captureFetch(CHAT_OK);
+  const priorInstalled=global.__providerBoundaryInstalled;
   try {
+    delete global.__providerBoundaryInstalled;
+    delete require.cache[require.resolve('../pai/core/provider.boundary.js')];
+    delete require.cache[require.resolve('../pai/core/spend.guard.js')];
     const out = await withEnvAsync(env({ PRESS_SCAN_SEAT: 'c4_watch', OR_KEY_C4_WATCH: 'sk-watch-named', OPENROUTER_API_KEY: 'sk-shared' }), function () {
-      return press.scanExternal(['news']);
+      return press.scanExternal(['news'],{hamUid:'HAM.PRESS.TEST',
+        cycleId:'press.scan.cycle.0001',requestId:'press.scan.request.0001',
+        receiptStore:receiptStoreFixture(),env:{RENDER_SERVICE_ID:'srv-template-test'}});
     });
     assert.ok(Array.isArray(out) && out.length > 0, 'the scan still returns candidates');
     assert.equal(f.sent[0].key, 'sk-watch-named', 'a background tick bleeds onto the seat it was pointed at');
-  } finally { f.restore(); }
+  } finally {
+    f.restore();
+    if(priorInstalled===undefined)delete global.__providerBoundaryInstalled;
+    else global.__providerBoundaryInstalled=priorInstalled;
+    delete require.cache[require.resolve('../pai/core/provider.boundary.js')];
+    delete require.cache[require.resolve('../pai/core/spend.guard.js')];
+  }
 });
 
 test('an unnamed PRESS seat refuses the shared wallet and makes no HTTP call', async function () {

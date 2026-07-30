@@ -65,6 +65,13 @@ function requestUrl(value) {
   return String(value || '');
 }
 
+function publicTarget(value) {
+  try {
+    var parsed = new URL(requestUrl(value));
+    return parsed.hostname.toLowerCase() + parsed.pathname;
+  } catch (error) { return 'invalid_provider_target'; }
+}
+
 function headerValue(init,name) {
   var headers=init&&init.headers,wanted=String(name||'').toLowerCase(),value='';
   if(headers&&typeof headers.get==='function')value=headers.get(name)||'';
@@ -149,12 +156,17 @@ function codaAttemptReason(reason) {
 
 function codaAttemptRefusal(reason, url) {
   var mapped = codaAttemptReason(reason);
-  return jsonResponse({ error: { message:mapped, reason:mapped, host:requestUrl(url) } }, 429);
+  return jsonResponse({ error: { message:mapped, reason:mapped, host:publicTarget(url) } }, 429);
 }
 
 function spendGuardRefusal(url) {
   return jsonResponse({ error: { message:'spend_guard_unavailable_at_boundary',
-    reason:'spend_guard_unavailable_at_boundary',host:requestUrl(url) } }, 503);
+    reason:'spend_guard_unavailable_at_boundary',host:publicTarget(url) } }, 503);
+}
+
+function spendReceiptRefusal(reason, url, status) {
+  var named = String(reason || 'provider_spend_receipt_unavailable').slice(0, 160);
+  return jsonResponse({error:{message:named,reason:named,host:publicTarget(url)}},status || 503);
 }
 
 // A cheap preflight keeps a normal N+1 refusal from consuming a daily slot.
@@ -182,7 +194,7 @@ function seatSpendRefusal(result, url) {
     seat:result.seat || null,usage_daily_usd:Number.isFinite(result.usageDailyUsd)
       ? result.usageDailyUsd : null,daily_cap_usd:Number.isFinite(result.capUsd)
       ? result.capUsd : null,retry_at:result.retryAt || null,
-    host:requestUrl(url)}},status);
+    host:publicTarget(url)}},status);
 }
 
 function validProviderBudgetAuthority(value) {
@@ -191,8 +203,35 @@ function validProviderBudgetAuthority(value) {
     typeof value.settleProviderAttempt === 'function');
 }
 
+function providerAttribution(spendGuard, env) {
+  var runtime = env || process.env;
+  var value = spendGuard.currentAttribution();
+  // runPAI already supplies exact HAM/cycle/request/component. The registry names the owner
+  // of that component unambiguously, so the paid door completes those two canonical registry
+  // addresses here rather than asking every raw provider caller to duplicate them.
+  if (/^pai(?:\.|$)/.test(String(value.component || ''))) {
+    if (!value.owner_node_id) value.owner_node_id = 'station.pai';
+    if (!value.target_wonder_id) value.target_wonder_id = 'wonder.anu';
+  }
+  if (!value.service_id) value.service_id = String(runtime.RENDER_SERVICE_ID ||
+    runtime.ANEW_SERVICE_ID || '').trim();
+  return value;
+}
+
 async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
-  providerBudgetAuthority) {
+  providerBudgetAuthority, receiptStore, requestInit, env) {
+  var spendGuard;
+  try { spendGuard = require('./spend.guard.js'); }
+  catch (eSpendModule) { return spendGuardRefusal(url); }
+  var store = receiptStore || require('./provider.spend.receipt.js');
+  if (!store || typeof store.prepare !== 'function' ||
+      typeof store.claimIntent !== 'function' || typeof store.writeTerminal !== 'function' ||
+      typeof store.terminalFromResponse !== 'function' || typeof store.terminalFromError !== 'function') {
+    return spendReceiptRefusal('provider_spend_receipt_store_invalid',url);
+  }
+  var activeHold = typeof spendGuard.paidEgressHold === 'function'
+    ? spendGuard.paidEgressHold() : null;
+  if (activeHold) return spendReceiptRefusal(activeHold,url);
   var providerScope;
   if (providerBudgetAuthority != null &&
       !validProviderBudgetAuthority(providerBudgetAuthority)) {
@@ -208,22 +247,38 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   if (providerScope) {
     var earlyRefusal = obviousScopeRefusal(providerScope);
     if (earlyRefusal) return codaAttemptRefusal(earlyRefusal, url);
-
-    var scopedAllowed;
-    try {
-      scopedAllowed = require('./spend.guard.js').allow(paidKind, {egress:true});
-    } catch (eScopedGuard) {
-      return spendGuardRefusal(url);
-    }
-    if (!scopedAllowed) {
+  }
+  // Admission is read-only. The old path appended CALL_LOG here, before Coda reservation and
+  // before any durable receipt existed, so a refused request was reported as real spend.
+  try {
+    var allowed = spendGuard.preflight(paidKind);
+    if (!allowed) {
       return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary',
-        host: requestUrl(url) } }, 429);
+        host: publicTarget(url) } }, 429);
     }
+  } catch (eGuard) {
+    return spendGuardRefusal(url);
+  }
 
-    var reservation;
+  var predictedAttempt = providerScope
+    ? Number(providerScope.ticket.used_paid_provider_attempts || 0) + 1
+    : (typeof spendGuard.nextProviderAttemptOrder === 'function'
+      ? spendGuard.nextProviderAttemptOrder() : null);
+  var prepared;
+  try {
+    prepared = store.prepare({url:url,init:requestInit,kind:paidKind,
+      attribution:providerAttribution(spendGuard,env),attempt_order:predictedAttempt,
+      env:env || process.env});
+  } catch (ePrepare) { prepared = {ok:false,reason:'provider_spend_attribution_invalid'}; }
+  if (!prepared || prepared.ok !== true || !prepared.receipt) {
+    return spendReceiptRefusal(prepared && prepared.reason,url);
+  }
+
+  var reservation = null;
+  if (providerScope) {
     try {
       reservation = providerBudgetAuthority.reserveProviderAttempt({
-        url:requestUrl(url), purpose:'provider.boundary.egress'
+        url:requestUrl(url),purpose:'provider.boundary.egress'
       });
     } catch (eReserve) {
       return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
@@ -231,40 +286,104 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
     if (!reservation || reservation.ok !== true || reservation.scoped !== true) {
       return codaAttemptRefusal(reservation && reservation.reason, url);
     }
-
-    try {
-      var scopedResponse = await realFetch.apply(fetchThis, fetchArgs);
-      try {
-        providerBudgetAuthority.settleProviderAttempt(reservation, {
-          status_code:scopedResponse && scopedResponse.status,
-          ok:!!(scopedResponse && scopedResponse.ok)
-        });
-      } catch (eSettle) {
-        return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
-      }
-      return scopedResponse;
-    } catch (eScopedFetch) {
-      try {
-        providerBudgetAuthority.settleProviderAttempt(reservation, {
-          ok:false,error:String(eScopedFetch && eScopedFetch.message || eScopedFetch)
-        });
-      } catch (eSettleFailure) {
-        return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
-      }
-      throw eScopedFetch;
+    if (Number(reservation.attempt) !== predictedAttempt) {
+      return codaAttemptRefusal('paid_provider_attempt_budget_invalid',url);
     }
   }
 
+  var receiptOptions = {fetchImpl:realFetch,env:env || process.env,
+    signal:requestInit && requestInit.signal};
+  var intent;
+  try { intent = await store.claimIntent(prepared.receipt,receiptOptions); }
+  catch (eIntent) { intent = {ok:false,reason:'provider_spend_intent_write_failed'}; }
+  if (!intent || intent.ok !== true) {
+    if (reservation) {
+      try { providerBudgetAuthority.settleProviderAttempt(reservation,
+        {ok:false,error:String(intent && intent.reason || 'provider_spend_intent_unverified')}); }
+      catch (eIntentSettle) {}
+    }
+    return spendReceiptRefusal(intent && intent.reason,url);
+  }
+
+  var counted = false;
+  try { counted = spendGuard.recordEgress(paidKind); }
+  catch (eRecord) { counted = false; }
+  if (!counted) {
+    var localRefusal = {status_code:429,disposition:'REFUSED_LOCAL_CEILING_RACE',
+      response_digest:null,provider_request_id:null,provider_tokens:null,
+      actual_cost_usd:null,cost_source:null};
+    var localTerminal;
+    try { localTerminal = await store.writeTerminal(prepared.receipt,localRefusal,receiptOptions); }
+    catch (eLocalTerminal) { localTerminal = {ok:false}; }
+    if (!localTerminal || localTerminal.ok !== true) {
+      if (typeof spendGuard.holdPaidEgress === 'function')
+        spendGuard.holdPaidEgress('provider_spend_terminal_unverified');
+      return spendReceiptRefusal('provider_spend_terminal_unverified',url);
+    }
+    if (reservation) {
+      try { providerBudgetAuthority.settleProviderAttempt(reservation,
+        {status_code:429,ok:false,error:'daily_call_ceiling_reached'}); }
+      catch (eLocalSettle) {}
+    }
+    return jsonResponse({error:{message:'daily_spend_ceiling_reached_at_boundary',
+      host:publicTarget(url)}},429);
+  }
+
+  var response;
+  try { response = await realFetch.apply(fetchThis, fetchArgs); }
+  catch (egressError) {
+    var errorOutcome = store.terminalFromError(egressError);
+    var errorTerminal;
+    try { errorTerminal = await store.writeTerminal(prepared.receipt,errorOutcome,receiptOptions); }
+    catch (eErrorTerminal) { errorTerminal = {ok:false}; }
+    if (!errorTerminal || errorTerminal.ok !== true) {
+      if (typeof spendGuard.holdPaidEgress === 'function')
+        spendGuard.holdPaidEgress('provider_spend_terminal_unverified');
+      if (reservation) {
+        try { providerBudgetAuthority.settleProviderAttempt(reservation,
+          {ok:false,error:'provider_spend_terminal_unverified'}); }
+        catch (eNetworkSettle) {}
+      }
+      return spendReceiptRefusal('provider_spend_terminal_unverified',url);
+    }
+    if (reservation) {
+      try { providerBudgetAuthority.settleProviderAttempt(reservation,
+        {ok:false,error:String(egressError && egressError.message || egressError)}); }
+      catch (eSettleFailure) {
+        if (typeof spendGuard.holdPaidEgress === 'function')
+          spendGuard.holdPaidEgress('provider_budget_terminal_unverified');
+        return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
+      }
+    }
+    throw egressError;
+  }
+  var outcome, terminal;
   try {
-    var allowed = require('./spend.guard.js').allow(paidKind, {egress:true});
-    if (!allowed) {
-      return jsonResponse({ error: { message: 'daily_spend_ceiling_reached_at_boundary',
-        host: requestUrl(url) } }, 429);
+    outcome = await store.terminalFromResponse(response,receiptOptions);
+    terminal = await store.writeTerminal(prepared.receipt,outcome,receiptOptions);
+  } catch (eTerminalWrite) { terminal = {ok:false}; }
+  if (!terminal || terminal.ok !== true) {
+    if (typeof spendGuard.holdPaidEgress === 'function')
+      spendGuard.holdPaidEgress('provider_spend_terminal_unverified');
+    if (reservation) {
+      try { providerBudgetAuthority.settleProviderAttempt(reservation,
+        {status_code:response && response.status,ok:false,error:'provider_spend_terminal_unverified'}); }
+      catch (eTerminalSettle) {}
     }
-  } catch (eGuard) {
-    return spendGuardRefusal(url);
+    return spendReceiptRefusal('provider_spend_terminal_unverified',url);
   }
-  return realFetch.apply(fetchThis, fetchArgs);
+  if (reservation) {
+    try {
+      providerBudgetAuthority.settleProviderAttempt(reservation, {
+        status_code:response && response.status,ok:!!(response && response.ok)
+      });
+    } catch (eSettle) {
+      if (typeof spendGuard.holdPaidEgress === 'function')
+        spendGuard.holdPaidEgress('provider_budget_terminal_unverified');
+      return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
+    }
+  }
+  return response;
 }
 
 // Build an OpenAI-shaped chat completion envelope around ladder text, so a caller
@@ -287,6 +406,8 @@ function chatEnvelope(text) {
 function install(options) {
   var installOptions=options||{};
   var providerBudgetAuthority=installOptions.providerBudgetAuthority || null;
+  var receiptStore=installOptions.receiptStore || require('./provider.spend.receipt.js');
+  var receiptEnv=installOptions.env || process.env;
   if(installOptions.denyPaidEgress===true){
     globalThis.__providerBoundaryDenyPaidEgress=true;
   }
@@ -320,7 +441,7 @@ function install(options) {
           var guarded = await openrouterSeatSpend.run(url, init, realFetch,
             function () {
               return performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
-                providerBudgetAuthority);
+                providerBudgetAuthority,receiptStore,init,receiptEnv);
             });
           if (guarded.blocked) return seatSpendRefusal(guarded, url);
           return guarded.response;
@@ -367,6 +488,8 @@ function install(options) {
 module.exports = { install: install, isBannedChatCall: isBannedChatCall,
   isMeteredPaidCall: isMeteredPaidCall, paidCallKind: paidCallKind,
   sharedProviderCredential:sharedProviderCredential,
+  publicTarget:publicTarget,
+  providerAttribution:providerAttribution,
   validProviderBudgetAuthority:validProviderBudgetAuthority,
   performPaidEgress:performPaidEgress,
   BANNED_HOSTS: BANNED_HOSTS, METERED_PAID_HOSTS: METERED_PAID_HOSTS };
