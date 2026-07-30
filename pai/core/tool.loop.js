@@ -3514,6 +3514,26 @@ function memoryTurnRequired(channel, identity, state) {
   return true;
 }
 
+// CODA's operational writer is an internal deliberation, even though it enters through the
+// shared public finalizer so its answer still crosses the full council and durable readback.
+// Keep the exact two-field identity in one predicate. A coding-mode human door does not carry
+// internal_deliberation and must retain the ordinary human-facing composition path.
+function codaInternalDeliberation(identity) {
+  return !!(identity && identity.council_context &&
+    identity.council_context.mode === 'coding' &&
+    identity.council_context.internal_deliberation === true);
+}
+
+// The reader and voice briefs exist to prepare words for a human. Buying them for CODA's own
+// internal judgment spends the scoped model ticket before the named CODA writer can run. This
+// is a mechanical eligibility boundary only: ordinary human composition, including a human
+// coding-mode turn, remains briefed exactly as before.
+function preWriteCouncilEligible(answerSelected, structuredReachPolicy, reachIncidentIntake,
+  identity) {
+  return !answerSelected && !structuredReachPolicy && !reachIncidentIntake &&
+    !codaInternalDeliberation(identity);
+}
+
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
@@ -4390,6 +4410,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (_signedVoiceFarewellAnswer) {
     _stampStep('signed_voice_farewell_acknowledgement_selected', 'exact_turn_transcript');
   }
+  var _isCodaInternalCycle = codaInternalDeliberation(identity);
   // ⬡B:core.tool_loop:WIRE:the_pre_write_side_of_the_council_runs_before_the_writer:20260726⬡
   // FOUNDER LAW: the output agents "run BEFORE the writing occurs, and they run AFTER."
   // Only the AFTER side existed. The two pre-write organs (board/meta/reader.brief.js,
@@ -4403,10 +4424,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   //    not prose for a human, so there is no reader and no voice to brief.
   //  - a signed-voice turn already HAS its exact bytes selected above (ans is set), so no
   //    drafting happens on this turn at all and a briefing would buy nothing.
+  //  - CODA's internal operational judgment has no human reader. The same exact context marker
+  //    already keeps human consumer nudges out below; it also keeps these two paid human-facing
+  //    briefs from consuming CODA's scoped writer budget before her named seat can run.
   // Never throws and never blocks: an unreachable mind returns ok:false and composition
   // proceeds byte for byte as it did before this wire. Silence over a hollow brief.
   var _preWriteBriefing = null;
-  if (!ans && !_structuredReachPolicy && !_reachIncidentIntake) {
+  if (preWriteCouncilEligible(ans, _structuredReachPolicy, _reachIncidentIntake, identity)) {
     try {
       _preWriteBriefing = await runPreWriteCouncil({
         hamUid: hamUid,
@@ -4638,9 +4662,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // coding-mode chat bridge), neither of which sets internal_deliberation, so both fields
       // are required together. She already carries her real evidence inline in her own armory;
       // none of these consumer lookups are for her.
-      var _isCodaInternalCycle = !!(identity && identity.council_context &&
-        identity.council_context.mode === 'coding' &&
-        identity.council_context.internal_deliberation === true);
       if (!_isCodaInternalCycle) {
       // \u2b21B:core.tool_loop:FIX:forced_lookup_derailing_screen_commands_20260709\u2b21
       // Founder-caught live, third layer of the same night's incident: even with the
@@ -6891,4 +6912,5 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
   paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
-  memoryTurnRecordVerified,memoryTurnRequired}};
+  memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,
+  preWriteCouncilEligible}};
