@@ -190,7 +190,7 @@ async function classify(input, options) {
 // acl_tier column and content.privacy envelope, so a fact marked private stayed exactly as
 // visible as before and a fact marked sanctioned stayed invisible (Codex, anew #1174). This
 // applies the envelope to the target bead itself, the same two fields the write path already
-// mirrors (core/brain.client.js writeBead) and migration 0004 backfills, so the existing
+// mirrors (core/brain.client.js writeBead). Historical NULL remains fail-closed, while the existing
 // structural filter and pamRelease honor the mark with no read-path change needed. This is a
 // classification update to metadata, not a content edit: the fact's text is untouched and the
 // PRIVACY_MARK receipt still carries the supersede history. Fails closed and legibly: if the
