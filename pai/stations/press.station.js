@@ -18,6 +18,7 @@
 var ladder = require('../core/model.ladder.js');
 var nowStation = require('./now.station.js');
 var persona = require('../core/persona.js');
+var crypto = require('node:crypto');
 
 function _bu(){ return process.env.MEMORY_BANK_URL || process.env.AIBE_BRAIN_URL; }
 function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY; }
@@ -51,12 +52,34 @@ function pressScanConfig() {
   if (!key) return null;
   return { seat:s.seat, key:key, model:String(process.env.PRESS_SCAN_MODEL || s.model || '').trim() };
 }
-async function scanExternal(interests) {
+function pressScanIdentity(hamUid,interests,moment) {
+  var ham=String(hamUid||'').trim().toUpperCase();
+  if (!ham) return null;
+  var instant=String(moment&&moment.now_iso||new Date().toISOString());
+  var digest=crypto.createHash('sha256').update(JSON.stringify([
+    ham,instant,Array.isArray(interests)?interests:[]
+  ])).digest('hex');
+  return 'press.scan.'+digest;
+}
+function pressScanAttribution(options,config) {
+  var input=options||{};
+  var ham=String(input.hamUid||input.ham_uid||'').trim().toUpperCase();
+  var cycle=String(input.cycleId||input.cycle_id||'').trim();
+  var request=String(input.requestId||input.request_id||'').trim();
+  if (!ham||!cycle||!request||!config||!config.seat) return null;
+  return {ham_uid:ham,cycle_id:cycle,request_id:request,component:'press.scan',
+    seat:config.seat,owner_node_id:'station.press',target_wonder_id:'wonder.anu',
+    service_id:String((input.env||process.env).RENDER_SERVICE_ID||
+      (input.env||process.env).ANEW_SERVICE_ID||'').trim()};
+}
+async function scanExternal(interests,options) {
   try {
     var clean=(Array.isArray(interests)?interests:[]).map(function(v){return String(v||'').trim();}).filter(Boolean).slice(0,5);
     if (!clean.length) return [];
     var config=pressScanConfig();
     if (!config || !config.model) return [];
+    var attribution=pressScanAttribution(options,config);
+    if (!attribution) return [];
     var q = 'latest news ' + clean.join(', ');
     var body = {
       model: config.model,
@@ -74,12 +97,16 @@ async function scanExternal(interests) {
     var endpoint = 'https://openrouter.ai/api/v1/chat/completions';
     try { var pb = require('../core/provider.boundary.js');
       if (pb && pb.isBannedChatCall && pb.isBannedChatCall(endpoint)) return []; } catch (e) {}
-    try { require('../core/provider.boundary.js').install(); } catch (eInstall) { return []; }
-    var r = await fetch(endpoint, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + config.key, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
-    }).then(function (x) { return x.json(); });
+    try { require('../core/provider.boundary.js').install({
+      receiptStore:options&&options.receiptStore,env:options&&options.env
+    }); } catch (eInstall) { return []; }
+    var r = await require('../core/spend.guard.js').withAttribution(attribution,function () {
+      return fetch(endpoint, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + config.key, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(30000)
+      }).then(function (x) { return x.json(); });
+    });
     var txt = (((r.choices || [])[0] || {}).message || {}).content || '';
     return txt.split('\n').map(function (l) { return l.trim(); })
       .filter(function (l) { return l.length > 8; }).slice(0, 6);
@@ -114,7 +141,9 @@ async function surfaceNews(hamUid, interests, options) {
   if (!chosen.length) return { moment:null, items:[], reason:'interests_unconfigured' };
   var moment = options.moment || await nowStation.assembleNow(hamUid);      // consume NOW, no twin
   var seen = await recentlySurfaced(hamUid);
-  var candidates = await scanExternal(chosen);
+  var scanIdentity=pressScanIdentity(hamUid,chosen,moment);
+  var candidates = await scanExternal(chosen,{hamUid:hamUid,cycleId:scanIdentity,
+    requestId:scanIdentity});
   var items = await judgeRelevance(hamUid, moment, candidates, seen);
   for (var i = 0; i < items.length; i++) { stampItem(hamUid, items[i], moment).catch(function () {}); }
   return { moment: moment, items: items };  // items may be [] -- silence over noise
@@ -159,4 +188,5 @@ async function stampItem(hamUid, item, moment) {
 }
 
 module.exports = { surfaceNews: surfaceNews, scanExternal: scanExternal, judgeRelevance: judgeRelevance,
-  pressScanConfig:pressScanConfig, defaultInterests:defaultInterests };
+  pressScanConfig:pressScanConfig,pressScanIdentity:pressScanIdentity,
+  pressScanAttribution:pressScanAttribution,defaultInterests:defaultInterests };

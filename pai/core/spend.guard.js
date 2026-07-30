@@ -114,7 +114,8 @@ var DENIALS_BY_SCOPE = new Map();
 function cleanAttribution(value) {
   var input = value && typeof value === 'object' ? value : {};
   var out = {};
-  ['ham_uid', 'cycle_id', 'request_id', 'seat', 'component'].forEach(function (key) {
+  ['ham_uid', 'cycle_id', 'request_id', 'seat', 'component', 'owner_node_id',
+    'target_wonder_id', 'service_id'].forEach(function (key) {
     var item = String(input[key] == null ? '' : input[key]).trim();
     if (!item || item.length > 220 || !/^[A-Za-z0-9._:-]+$/.test(item)) return;
     out[key] = key === 'ham_uid' ? item.toUpperCase() : item;
@@ -145,7 +146,35 @@ function rememberDenial(value) {
 
 function withAttribution(value, fn) {
   if (typeof fn !== 'function') throw new TypeError('spend_attribution_callback_required');
-  return ATTRIBUTION.run(currentAttribution(value), fn);
+  var active = ATTRIBUTION.getStore();
+  var next = currentAttribution(value);
+  // Nested transport scopes (the OpenRouter seat resolver is one) must share the same
+  // attempt counter and post-egress hold as the turn that owns them. Copying the numbers
+  // would let every nested scope restart at attempt 1 and would let a failed terminal
+  // receipt escape through the next fallback. The state object is deliberately private
+  // and non-enumerable, so it can never enter a receipt or a public attribution surface.
+  Object.defineProperty(next, '_provider_state', {enumerable:false,
+    value:active && active._provider_state || {attempt_order:0, hold:null}});
+  return ATTRIBUTION.run(next, fn);
+}
+
+function nextProviderAttemptOrder() {
+  var active = ATTRIBUTION.getStore();
+  if (!active || !active._provider_state) return null;
+  active._provider_state.attempt_order = Number(active._provider_state.attempt_order || 0) + 1;
+  return active._provider_state.attempt_order;
+}
+
+function paidEgressHold() {
+  var active = ATTRIBUTION.getStore();
+  return active && active._provider_state && active._provider_state.hold || null;
+}
+
+function holdPaidEgress(reason) {
+  var active = ATTRIBUTION.getStore();
+  if (!active || !active._provider_state) return false;
+  active._provider_state.hold = String(reason || 'provider_spend_terminal_unverified').slice(0, 120);
+  return true;
 }
 
 function lastDenial(withinMs, attribution) {
@@ -161,7 +190,7 @@ function lastDenial(withinMs, attribution) {
   return (Date.now() - denial.at) <= window ? denial : null;
 }
 
-function allow(kind, options) {
+function preflight(kind, options) {
   // Text callers consult this before they know which provider rung, if any, will
   // actually leave the process. That consultation is admission only. The one
   // provider boundary records the daily slot at real HTTP egress with
@@ -169,7 +198,6 @@ function allow(kind, options) {
   // request is counted once here and a second time at fetch(). Text, audio,
   // embeddings, image, and video are all recorded only by the provider boundary
   // at the actual paid submission.
-  var egress = !!(options && options.egress === true);
   var attribution = currentAttribution(options && options.attribution || options);
   pruneOld();
   var ceil = configuredCeil(kind);
@@ -186,7 +214,16 @@ function allow(kind, options) {
       reason: 'daily_call_ceiling_reached', attribution:attribution });
     return false;
   }
-  if (!egress) return true;
+  return true;
+}
+
+function recordEgress(kind, options) {
+  // Recheck synchronously at the last instruction before realFetch. A preflight can be
+  // separated from this point by the durable intent write; another concurrent request may
+  // have filled the local seat in that interval. No receipt failure or budget refusal can
+  // consume this process-local supplemental counter anymore.
+  if (!preflight(kind, options)) return false;
+  var attribution = currentAttribution(options && options.attribution || options);
   // ⬡B:core.spend_guard:FIX:paid_egress_keeps_its_owner:20260730⬡
   // The old log kept only a timestamp, discarding the attribution already present in this
   // scope. Keep one bounded record per actual provider egress. No prompt, response, key, URL,
@@ -194,6 +231,11 @@ function allow(kind, options) {
   CALL_LOG.push({ at:Date.now(), kind:String(kind || 'text').slice(0, 24),
     attribution:attribution });
   return true;
+}
+
+function allow(kind, options) {
+  if (!preflight(kind, options)) return false;
+  return options && options.egress === true ? recordEgress(kind, options) : true;
 }
 
 function usageToday() { pruneOld(); return CALL_LOG.length; }
@@ -371,10 +413,15 @@ async function checkBalances(options) {
 // whole line of work exists to end: the edit looks accepted and then calls stop early. It is
 // a first-class export now, so any world can report what is in force beside what was asked
 // for. Caught by the Codex reviewer on the sister PR.
-module.exports = { lastDenial: lastDenial, allow: allow, usageToday: usageToday,
+module.exports = { lastDenial: lastDenial, allow: allow, preflight:preflight,
+  recordEgress:recordEgress, usageToday: usageToday,
   usageAttribution:usageAttribution,
   ceilDetail: ceilDetail,
   withAttribution:withAttribution,
+  currentAttribution:currentAttribution,
+  nextProviderAttemptOrder:nextProviderAttemptOrder,
+  paidEgressHold:paidEgressHold,
+  holdPaidEgress:holdPaidEgress,
   checkBalances: checkBalances,
   accountBalance: accountBalance,
   lowProviders: lowProviders,

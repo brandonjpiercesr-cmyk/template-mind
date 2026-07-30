@@ -23,6 +23,23 @@ function freshGuard() {
   return require('../pai/core/spend.guard.js');
 }
 
+function receiptStoreFixture() {
+  return {
+    prepare:function (spec) {
+      assert.equal(spec.attribution.ham_uid,'HAM.SPEND.TEST');
+      return {ok:true,receipt:{attempt_id:'spend-provenance-fixture'}};
+    },
+    claimIntent:async function () { return {ok:true}; },
+    terminalFromResponse:async function (response) {
+      return {status_code:response.status,disposition:'PROVIDER_RESPONSE'};
+    },
+    terminalFromError:function () {
+      return {status_code:null,disposition:'NETWORK_ERROR'};
+    },
+    writeTerminal:async function () { return {ok:true}; }
+  };
+}
+
 test.afterEach(function () {
   restore('DAILY_MODEL_CALL_CEIL',ORIGINALS.model);
   restore('DAILY_IMAGE_CALL_CEIL',ORIGINALS.image);
@@ -99,22 +116,35 @@ test('a seat never borrows the shared OpenRouter key', function () {
 
 test('the provider boundary meters each paid HTTP egress exactly once and fails closed', async function () {
   process.env.DAILY_MODEL_CALL_CEIL='1';
+  process.env.OR_KEY_C2_ORGAN='seat-key-fixture';
   const realFetch=global.fetch;
   const priorInstalled=global.__providerBoundaryInstalled;
   let network=0;
-  global.fetch=async function () { network++; return new Response('{}',{status:200}); };
+  global.fetch=async function (url) {
+    if(String(url).indexOf('/api/v1/key')>=0)return new Response(JSON.stringify({
+      data:{usage_daily:0}}),{status:200,headers:{'Content-Type':'application/json'}});
+    network++;return new Response('{}',{status:200});
+  };
   delete global.__providerBoundaryInstalled;
   delete require.cache[require.resolve('../pai/core/spend.guard.js')];
   delete require.cache[require.resolve('../pai/core/provider.boundary.js')];
   const guard=require('../pai/core/spend.guard.js');
   const boundary=require('../pai/core/provider.boundary.js');
-  boundary.install();
+  boundary.install({receiptStore:receiptStoreFixture(),
+    env:{RENDER_SERVICE_ID:'srv-template-test'}});
   try {
-    const first=await global.fetch('https://openrouter.ai/api/v1/chat/completions',
-      {method:'POST',body:'{}'});
-    const second=await global.fetch('https://openrouter.ai/api/v1/chat/completions',
-      {method:'POST',body:'{}'});
-    assert.equal(first.status,200);
+    const responses=await guard.withAttribution({ham_uid:'HAM.SPEND.TEST',
+      cycle_id:'cycle.spend.test.0001',request_id:'request.spend.test.0001',
+      component:'template.cycle',seat:'c2_organ',owner_node_id:'station.pai',
+      target_wonder_id:'wonder.anu',service_id:'srv-template-test'},async function () {
+      const request={method:'POST',headers:{Authorization:'Bearer seat-key-fixture',
+        'Content-Type':'application/json'},body:JSON.stringify({model:'fixture/model-v1'})};
+      return [await global.fetch('https://openrouter.ai/api/v1/chat/completions',request),
+        await global.fetch('https://openrouter.ai/api/v1/chat/completions',request)];
+    });
+    const first=responses[0],second=responses[1];
+    const firstFailure=first.status===200?null:await first.clone().json();
+    assert.equal(first.status,200,JSON.stringify(firstFailure));
     assert.equal(second.status,429);
     assert.equal(network,1);
     assert.equal(guard.usageToday(),1);
