@@ -34,6 +34,7 @@ app.use(express.json({
 const HAM = (process.env.HAM_UID || '').toUpperCase();
 const BANK = process.env.MEMORY_BANK_URL || '';
 const KEY = process.env.MEMORY_BANK_KEY || '';
+const founderMutation = require('./pai/core/founder.mutation.claim.js');
 
 // ENTRANCE narration: a mind without identity or memory refuses to pretend.
 if (!HAM || !BANK || !KEY) {
@@ -115,12 +116,18 @@ app.post('/express', async function (req, res) {
 });
 app.post('/code/submit', async function (req, res) {
   try {
+    var authority = await founderMutation.requireFounderMutation(req, res, 'code_submit');
+    if (!authority) return;
     var out = await require('./coding.js').submitForReview({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY, NIGHT_CHECK_URL: process.env.NIGHT_CHECK_URL }, (req.body || {}).draft || req.body);
     res.json(out);
   } catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
 app.post('/downtime/run', async function (req, res) {
-  try { res.json(await require('./downtime.js').downtimeCycle({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY })); }
+  try {
+    var authority = await founderMutation.requireFounderMutation(req, res, 'downtime_run');
+    if (!authority) return;
+    res.json(await require('./downtime.js').downtimeCycle({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY }));
+  }
   catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
 // \u2b21B:mind.entry:WIRE:atmosphere_door_mounted:20260710\u2b21
@@ -139,7 +146,11 @@ app.post('/atmosphere/resolve', async (req, res) => {
 });
 
 app.post('/wash/listen', async function (req, res) {
-  try { res.json(await require('./wash.js').washListen({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY }, (req.body || {}).signal || req.body)); }
+  try {
+    var authority = await founderMutation.requireFounderMutation(req, res, 'wash_listen');
+    if (!authority) return;
+    res.json(await require('./wash.js').washListen({ HAM_UID: HAM, MEMORY_BANK_URL: BANK, MEMORY_BANK_KEY: KEY }, (req.body || {}).signal || req.body));
+  }
   catch (e) { res.status(500).json({ ok: false, reason: e.message }); }
 });
 
