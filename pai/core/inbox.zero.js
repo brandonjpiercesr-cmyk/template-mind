@@ -42,6 +42,7 @@ catch (e) { advisorSCW = { readWorldSCWText: async function () {
 var brainClient  = require('./brain.client');
 var lineage      = require('./lineage.attach');
 var formatMatrix = require('./format.matrix');
+var founderMutation = require('./founder.mutation.claim.js');
 // The reach decision organ (the wonder that decides which way A'NU reaches him). Cold code
 // here never decides to email him; it hands the finished report to this mind, which judges
 // the channel, and only an EMAIL ruling sends. Defensive require so a mirror that carries
@@ -1056,7 +1057,8 @@ async function stampParkedRoadmap(HAM) {
 // ── MOUNT ─────────────────────────────────────────────────────────────────────────────
 // registerInboxZero(app): the on-request door. The daily scheduled fire calls runInboxZero
 // directly per world.
-function registerInboxZero(app) {
+function registerInboxZero(app, deps) {
+  var d = deps || {};
   // Claim the lane and stamp the parked-roadmap notice once at mount (fire-and-forget).
   try { registerLane(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
   try { stampParkedRoadmap(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID); } catch (e) {}
@@ -1066,7 +1068,19 @@ function registerInboxZero(app) {
   app.post('/inbox-zero/:world/run', async function (req, res) {
     try {
       var body = req.body || {};
-      var out = await runInboxZero({ world: req.params.world, hamUid: body.hamUid || body.ham_uid, intent: body.intent, limit: body.limit, previewSend: body.previewSend === true, saveToDrafts: body.saveToDrafts !== false, clearWatermark: body.clearWatermark === true });
+      var requireMutation = d.requireFounderMutation || founderMutation.requireFounderMutation;
+      var authority = await requireMutation(req, res, 'inbox_zero_run', d.mutationDeps);
+      if (!authority) return;
+      var worldHam = String(process.env.HAM_UID || '').trim().toUpperCase();
+      var claimedHam = String(body.hamUid || body.ham_uid || '').trim().toUpperCase();
+      if (!worldHam) return res.status(503).json({ ok:false, reason:'mind_ham_uid_unconfigured' });
+      if (claimedHam && claimedHam !== worldHam) {
+        return res.status(403).json({ ok:false, reason:'mind_ham_uid_conflict' });
+      }
+      var runner = d.runInboxZero || runInboxZero;
+      var out = await runner({ world: req.params.world, hamUid: worldHam,
+        intent: body.intent, limit: body.limit, previewSend: body.previewSend === true,
+        saveToDrafts: body.saveToDrafts !== false, clearWatermark: body.clearWatermark === true });
       res.json(out);
     } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
   });
