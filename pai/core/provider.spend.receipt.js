@@ -28,6 +28,21 @@ function strictNumber(value) {
   var parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
+function decimalCost(value) {
+  var parsed=strictNumber(value);
+  // JavaScript rounds the numeric(18,8) maximum string up to 10^10. Reject that
+  // boundary before serializing so the terminal RPC can never overflow its SQL column.
+  if(parsed===null||parsed>=10000000000)return null;
+  return parsed.toFixed(8).replace(/(?:\.0+|(?:(\.[0-9]*?)0+))$/,'$1')||'0';
+}
+function stableJson(value) {
+  if(value===null)return'null';
+  if(Array.isArray(value))return'['+value.map(stableJson).join(',')+']';
+  if(value&&typeof value==='object')return'{'+Object.keys(value).sort().map(function(key){
+    return JSON.stringify(key)+':'+stableJson(value[key]);
+  }).join(',')+'}';
+  return JSON.stringify(value);
+}
 function identifier(value, maximum) {
   var text = clean(value);
   return text && text.length <= maximum && /^[A-Za-z0-9._:/-]+$/.test(text) ? text : null;
@@ -264,7 +279,7 @@ function phaseRow(receipt, phase, outcome) {
     response_digest:result.response_digest || null,provider_request_id:result.provider_request_id || null,
     status_code:Number.isInteger(result.status_code) ? result.status_code : null,
     provider_tokens:result.provider_tokens || null,
-    actual_cost_usd:strictNumber(result.actual_cost_usd),
+    actual_cost_usd:decimalCost(result.actual_cost_usd),
     cost_source:result.cost_source || null,disposition:result.disposition ||
       (phase === 'INTENT' ? 'INTENT_COMMITTED' : null)
   };
@@ -320,7 +335,7 @@ function sameTerminal(row, expected) {
       clean(row.cost_source) !== clean(expected.cost_source)) return false;
   var leftCost = strictNumber(row.actual_cost_usd), rightCost = strictNumber(expected.actual_cost_usd);
   if (leftCost !== rightCost) return false;
-  return JSON.stringify(row.provider_tokens || null) === JSON.stringify(expected.provider_tokens || null);
+  return stableJson(row.provider_tokens || null) === stableJson(expected.provider_tokens || null);
 }
 
 async function claimIntent(receipt, options) {
@@ -376,7 +391,8 @@ async function writeTerminal(receipt, outcome, options) {
   var payload = written.payload;
   if (!payload || payload.ok !== true || payload.stored !== true ||
       clean(payload.attempt_id) !== receipt.attempt_id) {
-    return {ok:false,reason:'provider_spend_terminal_readback_mismatch'};
+    return {ok:false,reason:identifier(payload&&payload.reason,160)||
+      'provider_spend_terminal_readback_mismatch'};
   }
   var readback = await readPhase(receipt.attempt_id, 'TERMINAL', options);
   if (!readback.ok) return readback;
@@ -446,7 +462,8 @@ async function terminalFromResponse(response, options) {
   var body = null;
   if (bytes) { try { body = JSON.parse(bytes.toString('utf8')); } catch (error) { body = null; } }
   var usage = usageFacts(body);
-  var providerRequestId = headerValue({headers:response && response.headers}, 'x-request-id') ||
+  var providerRequestId = headerValue({headers:response && response.headers}, 'x-generation-id') ||
+    headerValue({headers:response && response.headers}, 'x-request-id') ||
     headerValue({headers:response && response.headers}, 'request-id') || null;
   return {status_code:response && Number.isInteger(response.status) ? response.status : null,
     disposition:response && response.ok === true ? 'SUCCEEDED' : 'HTTP_ERROR',
@@ -535,7 +552,8 @@ module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimInt
   terminalFromError:terminalFromError,reconcileUnresolved:reconcileUnresolved,
   readSummary:readSummary,cachedSummary:cachedSummary,
   _test:{providerFor:providerFor,bodyFacts:bodyFacts,providerModel:providerModel,keyAlias:keyAlias,
-    bankConfig:bankConfig,phaseRow:phaseRow,readPhase:readPhase,
+    bankConfig:bankConfig,phaseRow:phaseRow,readPhase:readPhase,decimalCost:decimalCost,
+    stableJson:stableJson,
     boundedJson:boundedJson,usageFacts:usageFacts,responseBytes:responseBytes,
     reconcileGraceSeconds:reconcileGraceSeconds,rpcCall:rpcCall,
     reset:function () { SUMMARY_CACHE=null; }}};

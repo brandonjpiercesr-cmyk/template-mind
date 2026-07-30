@@ -294,6 +294,12 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
 
   var receiptOptions = {fetchImpl:realFetch,env:env || process.env,
     signal:requestInit && requestInit.signal,ceiling:ceilingDetail.value};
+  // ⬡B:core.provider_boundary:FIX:the_provider_deadline_cannot_abort_its_own_terminal_receipt:20260730⬡
+  // The provider signal governs only provider work. Once bytes may have left, terminal
+  // accounting needs its own bounded bank deadline so an expiring model timeout cannot strand
+  // a paid INTENT without a TERMINAL receipt.
+  var terminalReceiptOptions = {fetchImpl:realFetch,env:env || process.env,
+    signal:null,ceiling:ceilingDetail.value};
   var reconciled;
   var reconcileKey = [prepared.receipt.ham_uid,prepared.receipt.cycle_id,
     prepared.receipt.request_id].join('|');
@@ -359,7 +365,8 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   catch (egressError) {
     var errorOutcome = store.terminalFromError(egressError);
     var errorTerminal;
-    try { errorTerminal = await store.writeTerminal(prepared.receipt,errorOutcome,receiptOptions); }
+    try { errorTerminal = await store.writeTerminal(prepared.receipt,errorOutcome,
+      terminalReceiptOptions); }
     catch (eErrorTerminal) { errorTerminal = {ok:false}; }
     if (!errorTerminal || errorTerminal.ok !== true) {
       if (typeof spendGuard.holdPaidEgress === 'function')
@@ -389,8 +396,8 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   }
   var outcome, terminal;
   try {
-    outcome = await store.terminalFromResponse(response,receiptOptions);
-    terminal = await store.writeTerminal(prepared.receipt,outcome,receiptOptions);
+    outcome = await store.terminalFromResponse(response,terminalReceiptOptions);
+    terminal = await store.writeTerminal(prepared.receipt,outcome,terminalReceiptOptions);
   } catch (eTerminalWrite) { terminal = {ok:false}; }
   if (!terminal || terminal.ok !== true) {
     if (typeof spendGuard.holdPaidEgress === 'function')
