@@ -2192,7 +2192,55 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // resolveViewerTier returns unresolved, no structural filter is claimed for it, and
     // board/pam/pam.js pamRelease treats it as the least privileged reader and fails closed.
     if (runtime && runtime.viewerTier != null) q.viewer_tier = runtime.viewerTier;
+    var _findStarted = Date.now();
     var res=await find([q]);
+    function _boundedFindFailures(result, stage) {
+      var rows = Array.isArray(result && result.failures) ? result.failures : [];
+      if (!rows.length && (!result || result.ok !== true || result.available !== true)) {
+        rows = [{reason:result && result.reason || 'brain_read_unavailable',
+          status:result && result.status != null ? result.status : null}];
+      }
+      return rows.slice(0, 8).map(function (failure) {
+        return {stage:stage,query_index:failure && failure.query_index != null
+          ? failure.query_index : null,
+        reason:String(failure && failure.reason || 'brain_read_unavailable').slice(0, 120),
+        status:failure && failure.status != null ? failure.status : null};
+      });
+    }
+    // ⬡B:core.tool_loop:GUARD:a_brain_outage_is_not_an_empty_tool_result:20260730⬡
+    // FIND now carries an explicit availability contract. Stop here when the requested read did
+    // not complete: ALERT, Wonder Games, keyword fallbacks, and ambient fusion are not allowed to
+    // turn that outage into a different-looking empty result.
+    if (!res || res.ok !== true || res.available !== true) {
+      return JSON.stringify({ok:false,available:false,partial:false,
+        reason:String(res && res.reason || 'brain_read_unavailable').slice(0,120),
+        failures:_boundedFindFailures(res,'requested_query'),beads:[],
+        recency_instruction:'The memory read was unavailable. An empty history was not proven.',
+        ms:Date.now()-_findStarted});
+    }
+    var _findFailures = _boundedFindFailures(res, 'requested_query');
+    var _findPartial = res.partial === true || _findFailures.length > 0;
+    var _fallbackReadsAvailable = !_findPartial;
+    function _honestFindEmpty() {
+      return _fallbackReadsAvailable && res && res.ok === true && res.available === true
+        && res.partial !== true && Array.isArray(res.beads) && res.beads.length === 0;
+    }
+    function _adoptFindFallback(candidate, stage) {
+      var candidateFailures = _boundedFindFailures(candidate, stage);
+      if (!candidate || candidate.ok !== true || candidate.available !== true) {
+        _findFailures = _findFailures.concat(candidateFailures).slice(0, 8);
+        _findPartial = true;
+        _fallbackReadsAvailable = false;
+        return false;
+      }
+      if (candidate.partial === true || candidateFailures.length) {
+        _findFailures = _findFailures.concat(candidateFailures).slice(0, 8);
+        _findPartial = true;
+        _fallbackReadsAvailable = false;
+      }
+      if (Array.isArray(candidate.beads) && candidate.beads.length > 0) res = candidate;
+      return true;
+    }
     // ⬡B:core.tool_loop:FIX:model_reliability_not_the_query_mechanics:20260708⬡
     // Real, live incident, confirmed by direct testing: the underlying query
     // is correct -- stamp_type=ALERT with the real ham_uid genuinely returns
@@ -2211,9 +2259,9 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // service crash sensors, provider credit warnings, into the answer, so the finance advisor
     // reported crash fingerprints and a repo incident as the founder's "finances". Skip the ALERT
     // grab-bag on outbound turns; they ground on what they were handed, never the operational wall.
-    if (res.beads.length===0 && q.stamp_type!=='ALERT' && !(runtime && runtime.outboundFinalize === true)) {
+    if (_honestFindEmpty() && q.stamp_type!=='ALERT' && !(runtime && runtime.outboundFinalize === true)) {
       var fallback=await find([{stamp_type:'ALERT',ham_uid:q.ham_uid,limit:q.limit,order:q.order}]);
-      if (fallback.beads.length>0) { res=fallback; }
+      _adoptFindFallback(fallback, 'alert_fallback');
     }
     // ⬡B:core.tool_loop:FIX:wondergames_mechanical_fallback_20260714⬡
     // Same doctrine as the ALERT fallback above (reliability is mechanism, never
@@ -2226,14 +2274,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // (carried on args._question by the caller, or reconstructed from message)
     // smells like Wonder Games/cook-off, force a real WONDER_GAMES query before
     // giving up.
-    if (res.beads.length===0) {
+    if (_honestFindEmpty()) {
       var _wgAsk = /wonder ?games?|cook.?off|cooking code off|coding cook|head.?to.?head|model contest|which model won/i.test(String(origMessage||''));
       if (_wgAsk && q.stamp_type!=='WONDER_GAMES') {
         var wgFallback=await find([
           {stamp_type:'WONDER_GAMES',ham_uid:q.ham_uid,limit:q.limit||5},
           {stamp_type:'DOCTRINE',ham_uid:q.ham_uid,importance_gte:8,limit:3}
         ]);
-        if (wgFallback.beads.length>0) { res=wgFallback; }
+        _adoptFindFallback(wgFallback, 'wonder_games_fallback');
       }
     }
     // ⬡B:core.tool_loop:FIX:general_keyword_fallback_finds_plainly_stored_facts_20260718⬡
@@ -2251,24 +2299,50 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     // sub-100ms design intent holds for the common (exact-hit) path.
     // Same advisor guard as the ALERT fallback: on an outbound/compose turn the advisor grounds on
     // its own curated context, so skip this keyword net that would pull arbitrary founder-wall beads.
-    if (res.beads.length===0 && !(runtime && runtime.outboundFinalize === true)) {
+    if (_honestFindEmpty() && !(runtime && runtime.outboundFinalize === true)) {
       var _kwStop = {the:1,and:1,for:1,you:1,your:1,what:1,whats:1,who:1,whos:1,does:1,did:1,is:1,are:1,was:1,were:1,my:1,me:1,do:1,i:1,a:1,an:1,of:1,to:1,in:1,on:1,about:1,tell:1,show:1,any:1,have:1,has:1,love:1,like:1,favorite:1};
       var _kw = String(origMessage||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
         .filter(function(w){return w.length>=3 && !_kwStop[w];});
       // longest words first: the most distinctive noun is the best single probe
       _kw.sort(function(a,b){return b.length-a.length;});
       _kw = _kw.slice(0,4);
-      for (var _ki=0; _ki<_kw.length && res.beads.length===0; _ki++) {
+      for (var _ki=0; _ki<_kw.length && _honestFindEmpty(); _ki++) {
         try {
           var _kwUrl = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + encodeURIComponent(q.ham_uid)
             + '&summary=ilike.*' + encodeURIComponent(_kw[_ki]) + '*'
             + '&select=id,stamp_type,source,summary,content,created_at&order=created_at.desc&limit=12';
-          var _kwRows = await fetch(_kwUrl, {headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},
-            signal: runtime && runtime.abortSignal}).then(function(x){return x.json();}).catch(function(){return [];});
-          if (Array.isArray(_kwRows) && _kwRows.length) {
-            res = { beads:_kwRows, count:_kwRows.length, ham_uid:q.ham_uid, keyword_fallback:_kw[_ki] };
+          var _kwDeadline = AbortSignal.timeout(2500);
+          var _kwSignal = runtime && runtime.abortSignal && typeof AbortSignal.any === 'function'
+            ? AbortSignal.any([runtime.abortSignal,_kwDeadline])
+            : (runtime && runtime.abortSignal || _kwDeadline);
+          var _kwResponse = await fetch(_kwUrl, {headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},
+            signal:_kwSignal});
+          if (!_kwResponse || _kwResponse.ok !== true) {
+            _findFailures.push({stage:'keyword_fallback',query_index:_ki,
+              reason:'brain_keyword_http_error',status:_kwResponse&&_kwResponse.status||null});
+            _findPartial = true;
+            _fallbackReadsAvailable = false;
+            break;
           }
-        } catch (_kwe) {}
+          var _kwRows = await _kwResponse.json().catch(function(){return null;});
+          if (!Array.isArray(_kwRows)) {
+            _findFailures.push({stage:'keyword_fallback',query_index:_ki,
+              reason:'brain_keyword_payload_invalid',status:_kwResponse.status||null});
+            _findPartial = true;
+            _fallbackReadsAvailable = false;
+            break;
+          }
+          if (Array.isArray(_kwRows) && _kwRows.length) {
+            res = {ok:true,available:true,partial:false,failures:[],beads:_kwRows,
+              count:_kwRows.length,ham_uid:q.ham_uid,keyword_fallback:_kw[_ki]};
+          }
+        } catch (_kwe) {
+          _findFailures.push({stage:'keyword_fallback',query_index:_ki,
+            reason:_kwe&&(_kwe.name==='TimeoutError'||_kwe.name==='AbortError')
+              ? 'brain_keyword_timeout' : 'brain_keyword_transport_error',status:null});
+          _findPartial = true;
+          _fallbackReadsAvailable = false;
+        }
       }
     }
 
@@ -2294,6 +2368,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
     if (_fusionLine && !_composeTurn) {
       _result.answer_this_first_for_day_or_schedule = _fusionLine.trim();
     }
+    _result.ok = true;
+    _result.available = true;
+    _result.partial = _findPartial || res.partial === true;
+    _result.reason = null;
+    _result.failures = _findFailures.slice(0, 8);
     // ⬡B:core.tool_loop:FIX:no_recency_on_find_results_stale_reported_as_live_20260713⬡
     // Founder-caught live, twice in one reply: asked a coding question, got
     // back two confident "this is happening right now" claims (a recap loop
@@ -2350,7 +2429,13 @@ async function executeTool(name, args, hamUid, origMessage, runtime) {
       return {stamp_type:b.stamp_type,summary:b.summary,content:(_bc||'').slice(0),stamped:ageLabel};
     });
     _result.recency_instruction = 'Every result above carries "stamped: X ago", real elapsed time, not a guess. Before stating anything as a CURRENT problem, loop, or status, check its age. Anything more than a few hours old may already be resolved -- state it as history ("as of N ago, X was happening") not as present-tense fact ("X is happening right now"), unless you have separately confirmed it is still true today.';
-    _result.ms = res.ms;
+    if (res.keyword_fallback) _result.keyword_fallback = res.keyword_fallback;
+    // Preserve FIND's own measured read duration in the public result. Besides being the
+    // canonical timing field, it is evidence from the reader itself and can legitimately
+    // change between identical questions. The progress detector intentionally treats changed
+    // result bytes as changed evidence; replacing this with the wrapper's often-zero duration
+    // made separate reads look identical and fired the stronger stop for the wrong reason.
+    _result.ms = Number.isFinite(Number(res.ms)) ? Number(res.ms) : Date.now() - _findStarted;
     return JSON.stringify(_result);
   }
   // ⬡COLD:remember:tag:ONE_BRAIN_WRITE:20260723⬡
@@ -3316,6 +3401,35 @@ function _preWriteRelationshipContext(hamObj, identity) {
     facts.push('this is a composition turn for outbound delivery, not an answer to a question asked in the room');
   }
   return facts.join('\n');
+}
+
+function memoryTurnRecordVerified(receipt) {
+  return !!(receipt && receipt.turn_record && receipt.turn_record.ok === true
+    && receipt.turn_record.readback_verified === true);
+}
+
+// The memory durability gate belongs to the kind of turn, not to one route name. CARA was
+// the first door to require it, which left the same person's OMI, voice, portal, email, SMS
+// and /turn conversations able to release effects and report success while their turn record
+// was missing. Keep the ordinary inbound set in one predicate and keep machine-owned re-entry
+// lanes out explicitly. In particular, delivery.external is NOT an exclusion: OMI and signed
+// voice arrivals carry that marker even though they are still the person's live conversation.
+function memoryTurnRequired(channel, identity, state) {
+  var normalizedChannel = String(channel || '').trim().toLowerCase();
+  var context = identity && identity.council_context || {};
+  var mode = String(context.mode || '').trim().toLowerCase();
+  var flags = state || {};
+  if (!normalizedChannel) return false;
+  if (flags.structuredReachPolicy === true || flags.reachIncidentIntake === true) return false;
+  if (identity && identity.outbound_finalize === true) return false;
+  if (context.outbound_finalize === true || context.internal_deliberation === true) return false;
+  if (/^(?:guide|wake|anew_action|autonomous|system|reach(?:_.*)?|outbound(?:_.*)?|outreach(?:_.*)?)$/.test(normalizedChannel)) {
+    return false;
+  }
+  if (/^(?:reach(?:_|$)|outbound(?:_|$)|outreach(?:_|$)|proposed_action_dispatch$|autonomous$|blocked(?:_|$))/.test(mode)) {
+    return false;
+  }
+  return true;
 }
 
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
@@ -6139,9 +6253,22 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // INSIDE the cycle's own spend attribution, which is exactly what the 20260725 removal
   // required: no detached model call, no detached brain write, nothing escaping the cycle.
   // It is started here so its bounded mind call overlaps the post-council effects, and it is
-  // settled at the exit below. It never changes the answer and it can never fail the turn.
+  // settled at the exit below. On every ordinary user-facing turn, its independently read-back
+  // conversation record is part of success and is verified before any queued effect can run.
   var _memoryKeeperRun = null;
-  if (_reachHandoffEligible && !_structuredReachPolicy && !_reachIncidentIntake && !_blockedFallback) {
+  var _memoryKeeper = null;
+  var _memoryTurnRequired = memoryTurnRequired(channel, identity, {
+    structuredReachPolicy:_structuredReachPolicy,
+    reachIncidentIntake:_reachIncidentIntake,
+    blockedFallback:_blockedFallback
+  });
+  // Preserve the former reporting-only keeper on other reach-eligible cycles, while making the
+  // durability-critical inbound lanes independent of REACH eligibility. OMI and voice can carry
+  // delivery.external and therefore be intentionally ineligible for a REACH handoff; that must
+  // never make their own conversation record disappear.
+  var _memoryKeeperShouldRun = _memoryTurnRequired || (_reachHandoffEligible &&
+    !_structuredReachPolicy && !_reachIncidentIntake && !_blockedFallback);
+  if (_memoryKeeperShouldRun) {
     try {
       _memoryKeeperRun = require('./memory.keeper.js').keepTurn({
         hamUid: hamUid, channel: channel,
@@ -6159,6 +6286,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     } catch (eKeeperStart) {
       _memoryKeeperRun = Promise.resolve({ ok:false, reason:'memory_keeper_unreachable',
         error:String(eKeeperStart && eKeeperStart.message || eKeeperStart).slice(0, 160) });
+    }
+  }
+  if (_memoryTurnRequired) {
+    try { _memoryKeeper = _memoryKeeperRun ? await _memoryKeeperRun : null; }
+    catch (eKeeperBeforeEffects) {
+      _memoryKeeper = { ok:false, reason:'memory_keeper_settle_failed' };
+    }
+    if (!memoryTurnRecordVerified(_memoryKeeper)) {
+      _stampStep('cycle_end_silent', 'memory_turn_record_unverified');
+      return { ok:false, reason:'memory_turn_record_unverified', blocked_by:'MEMORY_KEEPER',
+        ham:hamObj, cycleId:_cycleId, requestId:_requestId,
+        councilProof:compactCouncilProof(_council), memory_keeper:_memoryKeeper,
+        tools_used:tools, iterations:iter, ms:Date.now()-t0 };
     }
   }
   // ⬡B:core.tool.loop:COMMIT:queued_mutations_after_stamp:20260715⬡
@@ -6442,9 +6582,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // forgotten: a memory the cycle never confirmed is exactly the "system reporting success it
   // has not earned" this codebase already named as its own disease (index.js:329). Its receipt
   // rides on the result so a trace-back can see what was kept, what was ruled a gift, and what
-  // failed, on the same turn. A keeper failure is reported, never fatal.
-  var _memoryKeeper = null;
-  if (_memoryKeeperRun) {
+  // failed, on the same turn. Non-user-facing modes retain the reporting-only behavior.
+  if (_memoryKeeperRun && !_memoryKeeper) {
     try { _memoryKeeper = await _memoryKeeperRun; }
     catch (eKeeperSettle) { _memoryKeeper = { ok:false, reason:'memory_keeper_settle_failed' }; }
   }
@@ -6633,4 +6772,5 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer}};
+  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
+  memoryTurnRecordVerified,memoryTurnRequired}};

@@ -51,6 +51,69 @@ function selectHamIdentityBead(beads, hamUid) {
   return rows.length && score(rows[0]) >= 0 ? rows[0] : null;
 }
 
+function settledReadAvailability(result, label) {
+  if (!result || result.status !== 'fulfilled' || !result.value) {
+    var rejectedReason = String(result && result.reason && result.reason.message
+      || result && result.reason || 'brain_read_rejected').slice(0, 160);
+    return { available:false, partial:false, reason:rejectedReason,
+      failures:[{ reason:rejectedReason }], label:label };
+  }
+  var value = result.value;
+  var failures = (Array.isArray(value.failures) ? value.failures : []).map(function (failure) {
+    return {
+      query_index: failure && failure.query_index != null ? failure.query_index : null,
+      reason: String(failure && failure.reason || 'brain_read_unavailable').slice(0, 160),
+      status: failure && failure.status != null ? failure.status : null
+    };
+  });
+  if (result.value.available === false || result.value.ok === false) {
+    var unavailableReason = String(result.value.reason || failures[0] && failures[0].reason
+      || 'brain_read_unavailable').slice(0, 160);
+    if (!failures.length) failures.push({ reason:unavailableReason });
+    return { available:false, partial:false, reason:unavailableReason,
+      failures:failures, label:label };
+  }
+  // Older callers and test doubles predate the availability contract. A fulfilled object is
+  // usable unless it explicitly says otherwise, which preserves their existing behavior.
+  return { available:true, partial:value.partial === true || failures.length > 0,
+    reason:null, failures:failures, label:label };
+}
+
+function memoryReadLine(label, availability, result) {
+  var title = {
+    identity:'identity', agentJDs:'available agents', context:'conversation context',
+    recent:'recent adviser results', doctrine:'roadmap and doctrine',
+    profile:'person profile', statedPlans:'things they told you directly',
+    namedAgentRecords:'question-matched named agent records',
+    identityEvidence:'question-matched identity evidence',
+    preferences:'question-matched preferences',
+    wonderGames:'question-matched Wonder Games records'
+  }[label] || label;
+  var value = result && result.status === 'fulfilled' ? result.value : null;
+  // Most FIND contracts carry beads; identity evidence carries verified records. Prefer the
+  // actual bounded arrays and use a finite declared count only for a contract with neither.
+  var count = value && Array.isArray(value.beads) ? value.beads.length
+    : (value && Array.isArray(value.records) ? value.records.length
+    : (value && Number.isFinite(Number(value.count)) && Number(value.count) >= 0
+      ? Number(value.count) : 0));
+  if (!availability.available) {
+    return '- ' + title + ': UNAVAILABLE (' + availability.reason
+      + '). This is not an empty result and proves nothing is absent.';
+  }
+  if (availability.partial) {
+    var reasons = availability.failures.map(function (failure) {
+      return failure.reason + (failure.status == null ? '' : ' HTTP ' + failure.status);
+    }).filter(function (reason, index, all) { return all.indexOf(reason) === index; });
+    return '- ' + title + ': PARTIAL READ; ' + count + ' record(s) returned, but '
+      + (reasons.length ? reasons.join(', ') : 'one or more queries were unavailable')
+      + '. Use the returned records, but never infer absence from what may be missing.';
+  }
+  if (!count) {
+    return '- ' + title + ': AVAILABLE, SUCCESSFUL EMPTY. The read completed and returned no records.';
+  }
+  return '- ' + title + ': AVAILABLE; ' + count + ' record(s) returned.';
+}
+
 // Build complete Memory Bank for a HAM turn
 // Returns: { system_prompt, ham, agents, context, tools_summary, ms }
 async function buildMemoryBank(hamUid, channel, question, identity) {
@@ -125,14 +188,20 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   // demo-critical. He told her his Saturday plan through her own live gate. She received it and
   // confirmed the specifics back to him, with a committed cycle receipt. Hours later, asked where
   // things stood, she said his day was open with no meetings locked in. He told her, she agreed,
-  // then she contradicted him. Root cause, verified in the code and not guessed: the capture side
-  // already worked (core/synthesize.js's memory keeper stamps a MEMORY bead with his exact words
-  // every turn a person hands something over) but NOTHING read it back. No wall contributor
-  // queried stamp_type MEMORY, and 'memory.gifted.' had exactly one reference in the entire repo,
-  // the write itself. The gift was captured and buried in the same breath, so by the next cycle
-  // the only thing she still held about his day was a cold calendar read that knew nothing about
-  // it. So the calendar did not override what he told her; what he told her was never on the wall
-  // to be overridden. This is the read-back: always on, in the same parallel allSettled batch as
+  // then she contradicted him.
+  // ⬡B:core.fcw.builder:FIX:the_comment_here_used_to_lie_about_the_capture_side:20260726⬡
+  // WHAT THIS COMMENT USED TO SAY, and it was FALSE the day it was written: "the capture side
+  // already worked (core/synthesize.js's memory keeper stamps a MEMORY bead with his exact
+  // words every turn a person hands something over) but NOTHING read it back." Only the second
+  // half was true. The synthesize keeper had been removed on 20260725 as a detached model call
+  // and brain write escaping the council, and NOTHING replaced it, so the only route left was
+  // the model electing to call write_to_brain: a coin flip, and the exact tool-argument-variance
+  // failure this same file names three separate times as the cause of three founder-caught bugs.
+  // A comment claiming a wire exists is how this survived four audits. THE WRITER NOW EXISTS:
+  // core/memory.keeper.js, at the ONE common PAI exit in core/tool.loop.js, awaited inside the
+  // cycle, every channel, mind-ruled and leashed to his own words, addressed by the one shared
+  // MEMORY_CONTRACT that core/find.js reads back from. Verify it, do not trust this prose.
+  // This is the read-back: always on, in the same parallel allSettled batch as
   // its five siblings, so it costs no extra latency, no clock and no LLM (C0, a brain FIND). No
   // env flag, because a capture-and-surface repair on an existing path should simply be correct.
   // Cold code CAPTURES and SURFACES this evidence and labels what it is. It never decides what
@@ -140,15 +209,20 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var _batch = [
     findIdentity(hamUid),
     findAgentJDs(hamUid),
-    findContext(hamUid, 5),
-    findRecentResults(hamUid, 5),
+    // ⬡B:core.fcw.builder:FIX:read_enough_rows_to_fill_the_widened_window:20260726⬡
+    // Widening the render cap below is useless if the reads only ever return five rows. The
+    // conversation lane gets the larger share because it is the one the founder said was
+    // missing; the adviser lane keeps its own six and can no longer be crowded out of it
+    // (core/find.js findRecentResults now excludes the conversation prefix).
+    findContext(hamUid, 10),
+    findRecentResults(hamUid, 6),
     findDoctrine(hamUid, 3),
     findPersonProfile(hamUid),
     // Guarded call: find.js was once replaced wholesale by a 50-line stub (the 8B lobotomy,
     // core/find.js:8), which turned every finder into undefined and broke every turn on every
     // channel. A missing finder must degrade this one contributor to unavailable, never throw
     // the whole wall away.
-    (typeof findStatedCommitments === 'function' ? findStatedCommitments(hamUid, 6) : Promise.resolve(null))
+    (typeof findStatedCommitments === 'function' ? findStatedCommitments(hamUid, 10) : Promise.resolve(null))
   ];
   var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'statedPlans'];
   var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1;
@@ -174,14 +248,102 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var recent = _results[3].status === 'fulfilled' ? _results[3].value : null;
   var doctrine = _results[4].status === 'fulfilled' ? _results[4].value : null;
   var profile = _results[5].status === 'fulfilled' ? _results[5].value : null;
+  // ⬡B:core.fcw.builder:GUARD:an_unavailable_bank_is_not_an_empty_person:20260730⬡
+  // Only the seven always-on context reads decide whether the wall exists. Optional question
+  // evidence cannot rescue a wholly unavailable memory substrate. Every triggered optional read
+  // still belongs in the wall's availability truth: those reads exist specifically to ground the
+  // question deterministically, so silently losing one would recreate the confident no-memory
+  // answer they were built to prevent. A usable wall also needs its critical truth spine:
+  // identity, doctrine, and at least one continuity read.
+  var _canonicalAvailability = {};
+  _labels.slice(0, 7).forEach(function (label, index) {
+    _canonicalAvailability[label] = settledReadAvailability(_results[index], label);
+  });
+  var _triggeredAvailability = {};
+  _labels.slice(7).forEach(function (label, offset) {
+    var index = offset + 7;
+    _triggeredAvailability[label] = settledReadAvailability(_results[index], label);
+  });
+  var _contributorAvailability = Object.assign({}, _canonicalAvailability, _triggeredAvailability);
+  var _unavailableReads = Object.keys(_contributorAvailability).filter(function (label) {
+    return !_contributorAvailability[label].available;
+  });
+  var _partialReads = Object.keys(_contributorAvailability).filter(function (label) {
+    return _contributorAvailability[label].partial;
+  });
+  var _canonicalUnavailableReads = Object.keys(_canonicalAvailability).filter(function (label) {
+    return !_canonicalAvailability[label].available;
+  });
+  var _canonicalAvailableReadCount = 7 - _canonicalUnavailableReads.length;
+  var _contributorsTotal = Object.keys(_contributorAvailability).length;
+  var _availableReadCount = _contributorsTotal - _unavailableReads.length;
+  if (_canonicalAvailableReadCount === 0) {
+    return { ok:false, available:false, reason:'memory_bank_unavailable',
+      contributorsAvailable:_availableReadCount, contributorsTotal:_contributorsTotal,
+      canonicalContributorsAvailable:0, canonicalContributorsTotal:7,
+      contributorAvailability:_contributorAvailability,
+      unavailableContributors:_unavailableReads,
+      ms:Date.now() - t0 };
+  }
+  var _continuityAvailable = ['context', 'recent', 'statedPlans'].some(function (label) {
+    return _canonicalAvailability[label].available;
+  });
+  var _missingCritical = [];
+  if (!_canonicalAvailability.identity.available) _missingCritical.push('identity');
+  if (!_canonicalAvailability.doctrine.available) _missingCritical.push('doctrine');
+  if (!_continuityAvailable) _missingCritical.push('context_or_recent_or_statedPlans');
+  if (_missingCritical.length) {
+    return { ok:false, available:_availableReadCount > 0, reason:'memory_bank_insufficient',
+      contributorsAvailable:_availableReadCount, contributorsTotal:_contributorsTotal,
+      canonicalContributorsAvailable:_canonicalAvailableReadCount,
+      canonicalContributorsTotal:7,
+      contributorAvailability:_contributorAvailability,
+      unavailableContributors:_unavailableReads,
+      partialContributors:_partialReads,
+      missingCriticalContributors:_missingCritical,
+      ms:Date.now() - t0 };
+  }
+  var _memoryAvailabilityBlock = ['MEMORY READ AVAILABILITY (truth gate for this turn):']
+    .concat(_labels.map(function (label, index) {
+      return memoryReadLine(label, _contributorAvailability[label], _results[index]);
+    }))
+    .concat(['UNAVAILABLE and PARTIAL lanes are never proof that the person has no history. '
+      + 'Use records that actually arrived, name uncertainty plainly when it matters, and never '
+      + 'turn a failed read into an empty-life claim. Do not narrate these internal lane names to the person.'])
+    .join('\n');
+  function renderMemorySection(labels, rendered, successfulEmpty) {
+    var states = labels.map(function (label) { return _canonicalAvailability[label]; });
+    var impaired = states.some(function (state) { return !state.available || state.partial; });
+    if (!impaired) {
+      if (rendered) return rendered;
+      var returnedCount = labels.reduce(function (total, label) {
+        var index = _labels.indexOf(label);
+        var value = _results[index] && _results[index].status === 'fulfilled'
+          ? _results[index].value : null;
+        return total + (value && Array.isArray(value.beads) ? value.beads.length : 0);
+      }, 0);
+      return returnedCount === 0
+        ? ('SUCCESSFUL EMPTY: ' + successfulEmpty)
+        : ('AVAILABLE: the read returned ' + returnedCount
+          + ' record(s), but none carried renderable text for this section.');
+    }
+    var statusLines = labels.map(function (label) {
+      var index = _labels.indexOf(label);
+      return memoryReadLine(label, _canonicalAvailability[label], _results[index]);
+    }).join('\n');
+    return 'READ STATUS FOR THIS SECTION:\n' + statusLines + '\n'
+      + (rendered || 'No records arrived from the available portion of these reads. Because the '
+        + 'section is unavailable or partial, that is not proof that no records exist.');
+  }
   // ⬡B:core.fcw.builder:GUARD:a_failed_plans_read_is_not_an_empty_day:20260725⬡ An unavailable
   // read is not evidence that they told her nothing. Keep the two states apart: a fulfilled read
   // may represent a genuinely empty set, a rejected one may only report itself unavailable. Cold
   // code never converts either one into a claim about their day.
   var _statedOk = _results[6] && _results[6].status === 'fulfilled' && _results[6].value;
-  var _stated = _statedOk ? _results[6].value : null;
-  var _statedRows = (_stated && Array.isArray(_stated.beads)) ? _stated.beads.slice(0, 6) : [];
-  var _statedAvailable = !!_statedOk;
+  var _stated = _canonicalAvailability.statedPlans.available && _statedOk
+    ? _results[6].value : null;
+  var _statedRows = (_stated && Array.isArray(_stated.beads)) ? _stated.beads.slice(0, 10) : [];
+  var _statedAvailable = _canonicalAvailability.statedPlans.available;
 
   // Build identity summary
   var hamName = 'Unknown';
@@ -232,7 +394,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var allContext = [];
   // Question-specific exact reads ride ahead of ordinary recent context so they
   // are not truncated out of the wall or SHADOW's bounded evidence window.
-  var _namedAgents = (_namedAgentsIdx >= 0 && _results[_namedAgentsIdx] && _results[_namedAgentsIdx].status === 'fulfilled') ? _results[_namedAgentsIdx].value : null;
+  var _namedAgents = (_namedAgentsIdx >= 0 && _contributorAvailability.namedAgentRecords.available
+    && _results[_namedAgentsIdx] && _results[_namedAgentsIdx].status === 'fulfilled')
+    ? _results[_namedAgentsIdx].value : null;
   // ⬡B:core.fcw.builder:GUARD:identity_unavailable_is_not_empty:20260715⬡
   // A rejected identity read must retain its unavailable state. Only a successful
   // read may represent a genuinely empty set.
@@ -254,8 +418,12 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
       error:String(_identityReadError && _identityReadError.message ||
         _identityReadError || 'unknown').slice(0, 160), ms:0 };
   }
-  var _prefs = (_prefIdx >= 0 && _results[_prefIdx] && _results[_prefIdx].status === 'fulfilled') ? _results[_prefIdx].value : null;
-  var _wg = (_wgIdx >= 0 && _results[_wgIdx] && _results[_wgIdx].status === 'fulfilled') ? _results[_wgIdx].value : null;
+  var _prefs = (_prefIdx >= 0 && _contributorAvailability.preferences.available
+    && _results[_prefIdx] && _results[_prefIdx].status === 'fulfilled')
+    ? _results[_prefIdx].value : null;
+  var _wg = (_wgIdx >= 0 && _contributorAvailability.wonderGames.available
+    && _results[_wgIdx] && _results[_wgIdx].status === 'fulfilled')
+    ? _results[_wgIdx].value : null;
   // ⬡B:core.fcw.builder:WIRE:named_agent_exact_rows_internal:20260715⬡
   // Preserve the already-read exact-name rows on a dedicated internal lane. The
   // tool loop can deliver these same records through the model's attended tool
@@ -275,8 +443,28 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   if (_wg && _wg.beads && _wg.beads.length) allContext = allContext.concat(_wg.beads);
   if (context && context.beads) allContext = allContext.concat(context.beads);
   if (recent && recent.beads) allContext = allContext.concat(recent.beads);
-  contextStr = allContext.slice(0, 8).map(function(b) {
-    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '') + '] ' + (b.summary||b.source||'').slice(0,100);
+  // ⬡B:core.fcw.builder:FIX:eight_rows_of_one_hundred_characters_was_a_keyhole:20260726⬡
+  // Her ENTIRE recalled world for a turn was 8 rows cut to 100 characters each: about 800
+  // characters, less than one text message, and those 8 slots were contested, so on a
+  // favorites question or any question containing an uppercase token the actual conversation
+  // was pushed out of the window completely. The file already knew: the comment 150 lines
+  // below says in as many words that the 100-character cut destroys meaning, and the cut was
+  // still sitting two lines from the comment describing it.
+  // THE NUMBER, justified from the real budget rather than picked: this section is now capped
+  // at RECALL_ROWS * RECALL_ROW_CHARS = 24 * 600 = 14,400 characters, about 3,600 tokens. The
+  // fixed instruction block assembled below is roughly 8,000 characters (about 2,000 tokens),
+  // the profile and doctrine sections together run a few thousand more, and the authorized
+  // ladder models (GLM 5.2, Qwen) all carry at least a 32,000-token context. So the whole wall
+  // including this section stays under a third of the SMALLEST authorized context, leaving the
+  // large majority for the live conversation history and her answer, and the per-channel answer
+  // ceiling (tokenCapFor) is untouched. 600 characters is chosen because it is the point where
+  // a turn record's "THEY SAID ... SHE ANSWERED ..." summary survives with its meaning intact
+  // instead of being guillotined mid-sentence; 24 rows because 8 could not hold even a single
+  // exchange alongside the question-specific exact reads that ride ahead of it.
+  var RECALL_ROWS = 24;
+  var RECALL_ROW_CHARS = 600;
+  contextStr = allContext.slice(0, RECALL_ROWS).map(function(b) {
+    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '') + '] ' + (b.summary||b.source||'').slice(0,RECALL_ROW_CHARS);
   }).join('\n');
 
   // ⬡B:core.fcw.builder:WIRE:doctrine_in_fcw_20260701⬡
@@ -309,6 +497,22 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
   var _capLine = '';
   try { _capLine = await require('./capabilities.js').capabilityLine(); } catch (eCap) {}
 
+  // ⬡B:core.fcw.builder:BUILD:she_can_say_when_her_own_credentials_are_refusing_her:20260725⬡
+  // 20260725: one shared API key answered http_401, her mind lost every rung that read it, and
+  // her gate answered the founder with a hollow protocol answer for hours. By that evening the
+  // cure and the instruments were built, but every one of them reported to a CODER: an HTTP
+  // wall, a watcher script, a board. She was still the only participant who could not say what
+  // was wrong with her, which is why a coder had to notice at all.
+  //
+  // The capability line above already taught her to name a gap in what she can DO. This is the
+  // same honesty one layer down, about what she can still RUN ON. Facts only, from the one
+  // source (core/seats.health.js by way of core/seat.evidence.js), never a probe on this hot
+  // path and never a spend. It is EMPTY on a healthy day and empty on a cold cache, so a turn
+  // never waits on it. Cold code carries it; SHE decides whether the person needs to hear it.
+  // No credential value exists anywhere on this path, only seat names and refusal causes.
+  var _keyLine = '';
+  try { _keyLine = require('./seat.evidence.js').groundingLine(); } catch (eKey) { _keyLine = ''; }
+
   // Assemble system prompt -- the ONE A'NU voice, no internal names leaked.
   // \u2b21B:core.fcw.builder:FIX:generate_through_the_one_persona_voice_not_a_thin_inline_copy:20260721\u2b21
   // This system prompt is what she actually GENERATES from, so the voice here is the voice the
@@ -335,7 +539,26 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     _anuVoice = 'You are ghostwriting an email that ' + (hamName || 'the account owner')
       + ' will send FROM HIS OWN email account to another person. Write it in HIS voice, as if he wrote it himself: warm, direct, real, peer to peer. You are NOT an assistant and you are NOT speaking to him; you ARE him, writing to someone else. Do not explain, over-affirm, praise, or coach the recipient, and never write anything condescending or that reads as talking down to them; match the real relationship and the tone of the moment. Full natural sentences, no em dashes, no hollow AI phrases, no assistant framing, no "I already handled it" narration.';
   } else {
-    try { _anuVoice = require('./persona.js').VOICE; } catch (eVoice) { _anuVoice = "You are A\u2019NU, a warm, sharp butler in the spirit of JARVIS, a Black woman, never Siri. You speak in full natural sentences, you already did the work and lead with what you handled, you never sign off with a courtesy line, you never use em dashes or hollow AI phrases."; }
+    // \u2b21B:core.fcw.builder:FIX:one_source_at_her_voice_and_it_is_the_living_one:20260726\u2b21
+    // Two things were wrong on this line. First, the catch carried a hand written
+    // SECOND copy of her voice, thinner than the real one, so any hiccup loading
+    // persona.js silently downgraded her into a coder's imitation of herself. That
+    // is exactly the twin the standing law forbids: one source, never two hand
+    // maintained copies. persona.js is a local require with no I/O, so it can only
+    // fail if the file itself is broken, and in that case she must not speak at all
+    // rather than speak as a knockoff. The fallback is gone.
+    // Second, VOICE is only the FLOOR, the voice a coder wrote for her. livingVoice
+    // is the floor plus the lines she grew about herself through her own cycle,
+    // minus anything the founder reversed from the command center. This is the seam
+    // where she actually generates, so this is where her own persona has to arrive.
+    // Best effort and cached: if the brain is silent she gets the floor and nobody
+    // waits, so growth can never cost a person latency.
+    var _personaMod = require('./persona.js');
+    _anuVoice = _personaMod.VOICE;
+    try {
+      var _living = await _personaMod.livingVoice(hamUid);
+      if (_living && _living.voice) _anuVoice = _living.voice;
+    } catch (eLiving) { /* the floor still speaks; she is never starved of a voice */ }
   }
   // ⬡B:core.fcw.builder:FIX:she_knows_their_local_time_not_utc:20260725⬡ Founder-caught,
   // demo-critical: A'NU said "you're up early, 3:17am" reading the SERVER clock (UTC) when he
@@ -359,8 +582,25 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     _hamLocalNow = new Intl.DateTimeFormat('en-US', { timeZone: _hamTz,
       weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date());
   } catch (eTz) { _hamLocalNow = ''; }
+  // ⬡B:core.fcw.builder:WIRE:lenses_she_learned_ride_the_wall:20260726⬡
+  // THE LENSES SHE LEARNS (founder order 20260726). core/lens.js is a WORK that feeds the
+  // wonder: it hands her the internal postures she has learned from real turns and it never
+  // picks one, never speaks, and never touches her voice. She chooses inside her own
+  // deliberation, right here in the wall she generates from, or she chooses none.
+  // OFF AT BIRTH. Unarmed (no ANU_LENSES_ARMED), this resolves to '' and the wall is byte
+  // identical to the wall before this line existed. The founder is the reversal gate.
+  var _lensBlock = '';
+  try { _lensBlock = await require('./lens.js').lensOffer(hamUid, channel); } catch (eLens) { _lensBlock = ''; }
+  var _agentSection = renderMemorySection(['agentJDs'], agentList,
+    'the available-agent read completed and returned no agent definitions.');
+  var _doctrineSection = renderMemorySection(['doctrine'], doctrineStr,
+    'the roadmap-and-doctrine read completed and returned no doctrine records.');
+  var _contextSection = renderMemorySection(['context', 'recent'], contextStr,
+    'the conversation-context and recent-results reads completed and returned no records.');
   var systemPrompt = [
     _anuVoice,
+    '',
+    _memoryAvailabilityBlock,
     '',
     'HAM CONTEXT:',
     (_hamLocalNow
@@ -398,7 +638,12 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
             + 'unavailable read, NOT an empty one. Say plainly that you cannot see it if it matters, and '
             + 'never treat this silence as proof that their day is empty.';
         }
-        if (!_statedRows.length) return '';
+        var statedPartial = _canonicalAvailability.statedPlans.partial;
+        var statedWarning = statedPartial
+          ? 'WHAT THEY TOLD YOU, READ STATUS: this read was PARTIAL. Use the records that arrived, '
+            + 'but never treat missing records as proof that they told you nothing else.\n'
+          : '';
+        if (!_statedRows.length) return statedWarning;
         var lines = _statedRows.map(function (b) {
           var words = '', when = (b && b.created_at) ? String(b.created_at) : '';
           try {
@@ -422,7 +667,7 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
           return '- ' + (age ? '(they told you this ' + age + ') ' : '(no timestamp on this one) ') + words;
         }).filter(function (line) { return !!line; });
         if (!lines.length) return '';
-        return 'WHAT THEY TOLD YOU DIRECTLY, in their own words, kept at the moment they said it:\n'
+        return statedWarning + 'WHAT THEY TOLD YOU DIRECTLY, in their own words, kept at the moment they said it:\n'
           + lines.join('\n') + '\n'
           + 'These are things this person SAID TO YOU. They are not calendar entries and most of them '
           + 'will never appear on any calendar, and they are every bit as real as what is on one. When '
@@ -440,6 +685,8 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'Trust tier: ' + hamTier,
     'Channel: ' + (channel || 'unknown'),
     (_capLine ? ('YOUR CAPABILITIES RIGHT NOW: ' + _capLine) : ''),
+    (_lensBlock || ''),
+    (_keyLine || ''),
     (identity && identity.call_reason
       ? 'WHY THIS CONVERSATION IS HAPPENING RIGHT NOW: you reached out to them proactively '
         + 'moments ago, real judgment, not scripted, because of this: "' + identity.call_reason
@@ -448,13 +695,13 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
       : ''),
     '',
     'AVAILABLE AGENTS AND TOOLS:',
-    agentList || '(loading...)',
+    _agentSection,
     '',
     'ROADMAP AND DOCTRINE (your world\'s current priorities):',
-    doctrineStr || '(none loaded)',
+    _doctrineSection,
     '',
     'RECENT CONTEXT (brain):',
-    contextStr || '(no recent context)',
+    _contextSection,
     '',
     'SEARCH FIRST, ALWAYS: whenever the person asks about anything specific you do not '
     + 'already see spelled out in RECENT CONTEXT above -- a person, an email, a task, a '
@@ -488,12 +735,9 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     // person's full legal name, his title, and his company. Nothing in this codebase held
     // that name as a literal; it arrived here the way identity is supposed to arrive, and
     // she repeated it because nothing said not to. The env only identity law is about a
-    // human not being leaked, and source discipline alone never achieved that. This repo is
-    // the mind every world inherits, so the law has to be in the wall a NEW world is born
-    // with, not patched into one world after its owner has already been named to a stranger.
-    // One source for the wording, pai/core/real.name.boundary.js, which also holds the cold
-    // check on the way out, so the rule she is told and the rule she is held to are the same
-    // bytes.
+    // human not being leaked, and source discipline alone never achieved that. One source
+    // for the wording, core/real.name.boundary.js, which also holds the cold check on the
+    // way out, so the rule she is told and the rule she is held to are the same bytes.
     require('./real.name.boundary.js').WALL_LINE,
     'ABSOLUTE HONESTY RULE: you have no memories beyond what is in your brain context above.',
     'This includes ATTRIBUTION: if they quote or paste text back at you and ask who said it,',
@@ -506,11 +750,23 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'NEVER invent shared memories, past events, trips, objects, or history. If asked to prove',
     'who you are or recall something not in context, say plainly you do not have that memory',
     'stored yet. A made-up memory is a lie and one lie destroys all trust. Uncertain = say so.',
-    'MEMORY IS BORN WHEN THEY GIVE IT: when the person TELLS you something new — a decision,',
-    'a rename, a moment, a fact to keep — that is not a recall test, it is the memory being',
+    'MEMORY IS BORN WHEN THEY GIVE IT: when the person TELLS you something new, a decision,',
+    'a rename, a moment, a fact to keep, that is not a recall test, it is the memory being',
     'made. Use write_to_brain immediately (stamp_type MEMORY, importance 9, their words in',
     'content) and confirm back in your own words what you will remember. NEVER answer new',
     'information with I-do-not-have-that-memory. Deflecting a gift kills it.',
+    // ⬡B:fcw.prompt:FIX:capture_is_no_longer_contingent_on_a_tool_call:20260726⬡
+    // The line above is still right and still stands, but it used to be the ONLY capture
+    // path, which made keeping what a person said contingent on the model electing to call a
+    // tool. A memory keeper now runs on the write side of every committed turn on every
+    // channel (core/memory.keeper.js). Telling her that is not permission to skip the tool: it
+    // stops her from claiming, when a tool call fails or she chooses not to make one, that the
+    // thing they just told her is therefore lost.
+    'You do not have to earn your own memory with a tool call. Everything said to you on this',
+    'turn is recorded on the write side of the cycle, in their words, whether or not you call',
+    'anything. So never tell someone you might lose or forget what they just said, and never',
+    'make keeping it sound like a favour you performed. Use the tool when it is a real gift so',
+    'it stands out later, and simply be someone who was listening.',
     'A DEEPER MEMORY EXISTS BEYOND THIS TURN: this HAM may have a JOURNAL in the brain --',
     'their biography, prophecies, collected thoughts, or book writing, seeded from their own',
     'files. There is no relevance ranking on this search -- results come back newest first,',
@@ -532,6 +788,12 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     'no audit markers, no source codes. Those are added separately after you answer. Just talk.',
   ].join('\n');
 
+  // ⬡COLD:remember:become:ANU_MEMORY_CONTEXT_WONDER:20260724⬡
+  // CATHY.SHADOW cold-audit COLD-SUPABASE-IO-0168. The per-build MINUTES trace: one lightweight,
+  // fail-silent, importance-2 bead recording the wall's entrance/exit/notes (which contributors
+  // resolved vs came back empty). It is the canonical per-turn context assembly's own remember
+  // step, never a synthetic memory and never breaking the wall it describes. Marked as ANU memory
+  // context's remember path.
   // ⬡B:core.fcw.builder:FIX:nasty_c_to_wonder_entrance_exit_notes:20260708⬡
   // Founder correction 20260708: this builder was a NASTY C -- pure cold code that
   // ran silent and stamped nothing. Being C0 (no LLM) is fine for cost, but it is not
@@ -553,7 +815,26 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     // at that moment or not.
     statedPlans: !!_statedRows.length
   };
+  if (_namedAgentsIdx >= 0) contributors.namedAgentRecords = !!_namedAgentRecords.length;
+  if (_identityEvidenceIdx >= 0) {
+    contributors.identityEvidence = !!(_identityEvidence &&
+      Array.isArray(_identityEvidence.records) && _identityEvidence.records.length);
+  }
+  if (_prefIdx >= 0) contributors.preferences = !!(_prefs && _prefs.beads && _prefs.beads.length);
+  if (_wgIdx >= 0) contributors.wonderGames = !!(_wg && _wg.beads && _wg.beads.length);
   var empties = Object.keys(contributors).filter(function (k) { return !contributors[k]; });
+  var _contributorsResolved = Object.keys(contributors).length - empties.length;
+  var _availabilityNotes = [];
+  if (_unavailableReads.length) {
+    _availabilityNotes.push('UNAVAILABLE reads: ' + _unavailableReads.join(', '));
+  }
+  if (_partialReads.length) {
+    _availabilityNotes.push('PARTIAL reads: ' + _partialReads.join(', '));
+  }
+  if (!_availabilityNotes.length && empties.length) {
+    _availabilityNotes.push('successful EMPTY contributors: ' + empties.join(', '));
+  }
+  if (!_availabilityNotes.length) _availabilityNotes.push('all contributors present');
   try {
     var _BU = _bu(), _BK = _bk();
     if (_BU && _BK) {
@@ -570,11 +851,16 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
           source: 'ham_' + String(hamUid).toLowerCase() + '.fcw.build.' + _wm,
           content: JSON.stringify({
             entrance: { hamUid: String(hamUid).toUpperCase(), channel: channel || null, question: String(question || '').slice(0), gateIdentity: !!identity },
-            exit: { ok: true, contributors: contributors, contributorsResolved: Object.keys(contributors).length - empties.length, ms: (Date.now() - t0) },
-            note: empties.length ? ('Memory Bank wall assembled with EMPTY contributors: ' + empties.join(', ') + ' -- if she answered wrong on this turn, start here')
-                                  : 'Memory Bank wall assembled with all contributors present'
+            exit: { ok: true, contributors: contributors,
+              contributorAvailability: _contributorAvailability,
+              contributorsResolved: _contributorsResolved,
+              contributorsAvailable: _availableReadCount, ms: (Date.now() - t0) },
+            note: 'Memory Bank wall assembled with ' + _availabilityNotes.join('; ')
           }),
-          summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase() + ' (' + (channel || 'na') + '), ' + (Object.keys(contributors).length - empties.length) + '/6 contributors',
+          summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase() + ' ('
+            + (channel || 'na') + '), ' + _contributorsResolved + '/' + Object.keys(contributors).length
+            + ' contributors with records, ' + _availableReadCount + '/' + _contributorsTotal
+            + ' reads available',
           importance: 2
         })
       }).catch(function () {});
@@ -583,6 +869,8 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
 
   return {
     ok: true,
+    available: true,
+    partial: _unavailableReads.length > 0 || _partialReads.length > 0,
     system_prompt: systemPrompt,
     ham: { uid: hamUid, name: hamName, tier: hamTier, world: hamWorld },
     agents: agentJDs ? agentJDs.beads : [],
@@ -595,7 +883,13 @@ async function buildMemoryBank(hamUid, channel, question, identity) {
     identity_evidence: _identityEvidence,
     identity_record: ib || null,
     contributors: contributors,
-    contributorsResolved: Object.keys(contributors).length - empties.length,
+    contributorAvailability: _contributorAvailability,
+    contributorsAvailable: _availableReadCount,
+    canonicalContributorsAvailable: _canonicalAvailableReadCount,
+    canonicalContributorsTotal: 7,
+    unavailableContributors: _unavailableReads,
+    partialContributors: _partialReads,
+    contributorsResolved: _contributorsResolved,
     contributorsTotal: Object.keys(contributors).length,
     ms: ms,
     find_ms: {

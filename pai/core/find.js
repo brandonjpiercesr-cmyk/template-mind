@@ -35,22 +35,50 @@ function bh() {
 
 function bq(path) {
   var b = bh();
-  if (!b.url || !b.hdrs.apikey) return Promise.resolve([]);
-  // Hard timeout — a slow brain can never hang the Memory Bank build.
-  // If the new brain is paused/slow, FIND returns [] fast instead of blocking the turn.
+  // ⬡B:core.find:GUARD:generic_read_availability_is_explicit:20260730⬡
+  // An unavailable bank and a successful empty query are different facts. Every generic FIND
+  // read now carries that distinction while retaining the bounded fail-soft behavior: a single
+  // failed query can still coexist with successful siblings, but it can no longer impersonate
+  // an empty human history.
+  if (!b.url || !b.hdrs.apikey) return Promise.resolve({
+    ok:false, available:false, reason:'brain_unconfigured', rows:[]
+  });
   return new Promise(function(resolve) {
     var settled = false;
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    }
     var timer = setTimeout(function() {
-      if (!settled) { settled = true; resolve([]); }
+      finish({ ok:false, available:false, reason:'brain_timeout', rows:[] });
     }, 2500);
-    fetch(b.url + '/rest/v1/' + _tbl() + '?' + path, { headers: b.hdrs })
-      .then(function(r) { return r.ok ? r.json() : []; })
-      .then(function(rows) {
-        if (!settled) { settled = true; clearTimeout(timer); resolve(rows || []); }
-      })
-      .catch(function() {
-        if (!settled) { settled = true; clearTimeout(timer); resolve([]); }
+    Promise.resolve().then(function() {
+      return fetch(b.url + '/rest/v1/' + _tbl() + '?' + path, { headers: b.hdrs });
+    }).then(function(response) {
+      // A real WHATWG Response exposes `ok`, but the long-lived internal bank adapters and
+      // focused contract doubles predate that property and expose a successful JSON body
+      // directly. Preserve that compatible success shape while still failing closed on an
+      // explicit non-OK response or a numeric error status.
+      var status = Number(response && response.status);
+      if (!response || response.ok === false || (Number.isFinite(status) && status >= 400)) {
+        finish({ ok:false, available:false, reason:'brain_http_error',
+          status:response && response.status || null, rows:[] });
+        return null;
+      }
+      return Promise.resolve(response.json()).then(function(rows) {
+        if (!Array.isArray(rows)) {
+          finish({ ok:false, available:false, reason:'brain_payload_invalid', rows:[] });
+          return;
+        }
+        finish({ ok:true, available:true, rows:rows });
+      }, function() {
+        finish({ ok:false, available:false, reason:'brain_payload_invalid', rows:[] });
       });
+    }).catch(function() {
+      finish({ ok:false, available:false, reason:'brain_transport_error', rows:[] });
+    });
   });
 }
 
@@ -102,7 +130,8 @@ function identityQueryPath(query) {
   var q = query || {};
   var parts = [];
   if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
-  if (q.source_prefix) parts.push('source=like.' + encodeURIComponent(q.source_prefix) + '*');
+  if (q.source) parts.push('source=eq.' + encodeURIComponent(q.source));
+  else if (q.source_prefix) parts.push('source=like.' + encodeURIComponent(q.source_prefix) + '*');
   if (q.ham_uid) parts.push('ham_uid=eq.' + encodeURIComponent(q.ham_uid));
   if (q.agent_global) parts.push('agent_global=eq.' + encodeURIComponent(q.agent_global));
   if (q.importance_gte != null) parts.push('importance=gte.' + q.importance_gte);
@@ -112,7 +141,7 @@ function identityQueryPath(query) {
 }
 
 // FIND entry point — run multiple queries in parallel, merge, dedupe by id
-// queries: array of { stamp_type?, source_prefix?, ham_uid?, importance_gte?, limit? }
+// queries: array of { stamp_type?, source?, source_prefix?, ham_uid?, importance_gte?, limit? }
 async function find(queries) {
   if (!Array.isArray(queries)) queries = [queries];
   var t0 = Date.now();
@@ -120,7 +149,18 @@ async function find(queries) {
   var promises = queries.map(function(q) {
     var parts = [];
     if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
-    if (q.source_prefix) parts.push('source=like.' + encodeURIComponent(q.source_prefix) + '*');
+    // Exact doctrine/provenance readers must not let a prefix-colliding child row impersonate
+    // the source they requested. `source` and `source_prefix` are intentionally exclusive.
+    if (q.source) parts.push('source=eq.' + encodeURIComponent(q.source));
+    else if (q.source_prefix) parts.push('source=like.' + encodeURIComponent(q.source_prefix) + '*');
+    // \u2b21B:core.find:WIRE:source_not_prefix_keeps_two_lanes_from_crowding_each_other:20260726\u2b21
+    // Added with the memory keeper (core/memory.keeper.js). Every committed turn now writes a
+    // RESULT bead in the conversation lane (source prefix pai.minutes.), which is what finally
+    // makes findContext live on text and voice. Without this clause that conversation would
+    // also swamp findRecentResults, whose whole job is the OTHER lane: what her advisers and
+    // agents produced. Same equality-class performance as the rest of this builder, no
+    // wildcard scan beyond the anchored prefix the positive form already uses.
+    if (q.source_not_prefix) parts.push('source=not.like.' + encodeURIComponent(q.source_not_prefix) + '*');
     if (q.ham_uid) parts.push('ham_uid=eq.' + encodeURIComponent(q.ham_uid));
     // \u2b21B:core.find:FIX:agent_global_exact_match_topic_search:20260711\u2b21
     // FOUNDER, most important question of all time: 'whenever I talk to her I never
@@ -133,6 +173,43 @@ async function find(queries) {
     // stamp_type=eq., NOT an ilike scan. The no-wildcards law is honored.
     if (q.agent_global) parts.push('agent_global=eq.' + encodeURIComponent(q.agent_global));
     if (q.importance_gte != null) parts.push('importance=gte.' + q.importance_gte);
+    // ⬡B:core.find:GUARD:a_world_reads_beneath_its_own_tier_and_the_database_enforces_it:20260726⬡
+    // PER-WORLD FILTERING, STRUCTURAL. The founder's inverted people ladder (T0 founder,
+    // T1 highest circle, T2 ENVOLVE only, each tier inheriting everything beneath it) is
+    // enforced HERE, in the predicate PostgREST sends to the database, and not by trimming
+    // a string somewhere downstream. The difference is the whole point: content above the
+    // reader's tier is never SELECTED, so it never travels the wire, never lands in a
+    // variable, never reaches a log line, and cannot be leaked by the next person who
+    // forgets to call the filter.
+    //
+    // A bead with no privacy envelope yields NULL for content->privacy->>tier, and NULL
+    // >= '1' is NULL in SQL, so PostgREST drops the row. Unclassified legacy memory is
+    // therefore INVISIBLE to every non-T0 reader by construction: fail closed at the
+    // storage layer. Verified live against the bank.
+    //
+    // viewer_tier is opt-in per query. A caller that does not scope its read is unchanged,
+    // exactly as before; the world-facing callers pass it. T0 passes no filter at all
+    // because the founder holds everything, including every bead written before the mark
+    // existed. See core/privacy/people.tier.js for the ladder itself.
+    if (q.viewer_tier != null) {
+      var _tierFilter = require('./privacy/people.tier.js').structuralFilter(q.viewer_tier);
+      if (_tierFilter) parts.push(_tierFilter);
+    }
+    // ⬡B:core.find:WIRE:select_columns_so_catalogs_dont_pull_whole_libraries:20260721⬡
+    // The KEEPER's catalog pass needs source+summary for ~100 canon beads whose
+    // content runs to hundreds of KB each; without column selection that catalog
+    // read pulls the whole library over the wire to use one line per book. Callers
+    // that pass q.select get only those columns; every existing caller is untouched.
+    // ⬡B:core.find:FIX:select_must_carry_id_or_dedup_collapses_to_one:20260721⬡
+    // find() dedupes the merged result by row.id (below). A caller-supplied select
+    // that omits id makes every row's id undefined, so seen[undefined] keeps only
+    // the FIRST row and silently discards the rest — the Keeper's live catalog came
+    // back as 1 of 76 this way. Always carry id when a select is present.
+    if (q.select) {
+      var _sel = String(q.select);
+      if (!/(^|,)\s*id\s*(,|$)/.test(_sel)) _sel = 'id,' + _sel;
+      parts.push('select=' + encodeURIComponent(_sel));
+    }
     // ⬡B:core.find:FIX:order_parameter:20260702⬡
     // Live incident: asked for the OPENING line of a multi-part journal document,
     // every retrieval returned a middle-or-later chunk because created_at.desc was
@@ -151,16 +228,26 @@ async function find(queries) {
   // Merge + dedupe by id
   var seen = {};
   var merged = [];
-  results.forEach(function(rows) {
-    (rows || []).forEach(function(row) {
+  results.forEach(function(result) {
+    ((result && result.rows) || []).forEach(function(row) {
       if (!seen[row.id]) {
         seen[row.id] = true;
         merged.push(row);
       }
     });
   });
+  var failures = results.map(function(result, index) {
+    if (result && result.available === true && result.ok === true) return null;
+    return { query_index:index, reason:String(result && result.reason || 'brain_read_unavailable'),
+      status:result && result.status != null ? result.status : null };
+  }).filter(Boolean);
+  var queriesAvailable = results.length - failures.length;
+  var available = results.length === 0 || queriesAvailable > 0;
 
-  return { beads: merged, ms: Date.now() - t0, count: merged.length };
+  return { ok:available, available:available, partial:available && failures.length > 0,
+    reason:available ? null : String(failures[0] && failures[0].reason || 'brain_read_unavailable'),
+    beads:merged, ms:Date.now() - t0, count:merged.length,
+    queriesTotal:results.length, queriesAvailable:queriesAvailable, failures:failures };
 }
 
 // Named FIND patterns used by the Memory Bank builder
@@ -288,17 +375,32 @@ async function findIdentityEvidence(hamUid, question) {
   }
 }
 
-// Recent context: last N minutes + results for a HAM
+// Recent context: the conversation lane for a HAM
 async function findContext(hamUid, limit) {
   // ⬡B:core.find:FIX:conversation_context_not_machinery:20260702⬡
-  // Was: all MINUTES for the ham — which is dominated by Overseer's every-3-minute
+  // Was: all MINUTES for the ham, which is dominated by Overseer's every-3-minute
   // "air flowed through the ventilation system" machinery stamps. Her MEMORY_BANK context was
   // wall-to-wall ventilation, so she parroted it in every reply (screenshot evidence:
   // same phrase repeated across texts and emails). Now: conversation minutes
-  // (pai.minutes.*) and high-importance results — what was actually said and done.
+  // (pai.minutes.*) and high-importance results, what was actually said and done.
+  // ⬡B:core.find:FIX:this_read_finally_has_a_writer_on_every_channel:20260726⬡
+  // FOUNDER, loudest complaint: "I still don't think she really memorizes and has memory."
+  // Verified mechanical cause: for weeks the ONLY writer of the 'pai.minutes.' prefix this
+  // line queries was routes/stream.routes.js, the browser stream. SMS, voice and every
+  // non-stream /cara/chat turn wrote nothing this read could ever return, and leg 2
+  // (stamp_type RESULT at the importance floor) was never written by a turn at all, so on the
+  // channels he actually uses BOTH legs of her conversation memory pointed at things nothing
+  // wrote. The writer is now core/memory.keeper.js, at the ONE common PAI exit, on every
+  // channel, and it emits EXACTLY the contract both legs below query: stamp_type RESULT,
+  // source prefix pai.minutes., importance 7. THE CONTRACT LIVES IN ONE PLACE:
+  // core/memory.keeper.js MEMORY_CONTRACT. Read it before you change either string here.
+  // The floor stays at 7 and the writer was raised to clear it; lowering it would drag the
+  // importance-2 housekeeping markers onto her wall as if a person had said them.
+  var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find([
-    { source_prefix: 'pai.minutes.', ham_uid: hamUid, limit: limit || 5 },
-    { stamp_type: 'RESULT', ham_uid: hamUid, importance_gte: 7, limit: limit || 5 }
+    { source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid, limit: limit || 5 },
+    { stamp_type: contract.TURN_STAMP_TYPE, ham_uid: hamUid,
+      importance_gte: contract.READER_IMPORTANCE_FLOOR, limit: limit || 5 }
   ]);
 }
 
@@ -307,9 +409,26 @@ async function findBySource(sourcePrefix, limit) {
   return find([{ source_prefix: sourcePrefix, limit: limit || 10 }]);
 }
 
-// Recent RESULT BEADs across all activity (for meeting minutes context)
-async function findRecentResults(limit) {
-  return find([{ stamp_type: 'RESULT', importance_gte: 7, limit: limit || 10 }]);
+// ⬡B:core.find:FIX:recent_results_are_ham_scoped_the_feb2026_leak:20260722⬡
+// Recent RESULT beads for THIS ham. This feeds the always-on Memory Bank turn context
+// (core/fcw.builder.js), where every sibling read is ham-scoped — this one was not, so
+// one HAM's RESULT summaries (what was said and done) bled into another HAM's prompt:
+// the exact cross-HAM incident class the founder was burned by in Feb 2026. Now
+// ham-scoped and FAIL-CLOSED — no ham, no read, never cross-HAM. (The old signature was
+// findRecentResults(limit); the sole caller passes hamUid now.)
+// ⬡B:core.find:WIRE:the_adviser_lane_is_not_the_conversation_lane:20260726⬡
+// Since 20260726 every committed turn writes a RESULT bead in the conversation lane (source
+// prefix pai.minutes., core/memory.keeper.js). findContext already returns that lane. If this
+// finder returned it too, a talkative hour would push every adviser and agent RESULT off the
+// wall entirely, and the founder would have traded "she forgets what I said" for "she forgot
+// what her advisers did". Excluding the conversation prefix here keeps both lanes alive: this
+// one is what her stations produced, findContext is what the two of them said.
+async function findRecentResults(hamUid, limit) {
+  if (!hamUid) return { beads: [] };
+  var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
+  return find([{ stamp_type: 'RESULT', ham_uid: hamUid,
+    importance_gte: contract.READER_IMPORTANCE_FLOOR,
+    source_not_prefix: contract.TURN_SOURCE_PREFIX, limit: limit || 10 }]);
 }
 
 // ⬡B:core.find:WIRE:findDoctrine_20260701⬡
@@ -364,30 +483,98 @@ async function findWonderGames(hamUid, limit) {
 // WHAT THIS PERSON TOLD HER DIRECTLY, read back. Founder-caught live, demo-critical:
 // he told her his Saturday plan through her own gate, she received it and confirmed the
 // specifics back with a committed cycle receipt, and hours later, asked where things
-// stood, she said his day was open with no meetings locked in. Traced it here: the
-// capture side already works. core/synthesize.js's memory keeper stamps a MEMORY bead
-// (importance 9) carrying their exact words every time a person hands over something to
-// keep. But NOTHING ever read it back. 'memory.gifted.' had exactly one reference in the
-// whole repo, the write, and no wall contributor queried stamp_type MEMORY, so the gift
-// was captured and buried in the same breath. Her only remaining route to it was the
-// model happening to call find_in_brain with the right filter, which is the exact
-// tool-argument-variance failure findPreferences and findWonderGames were both built to
-// cure. Same cure, third time: the wall pre-loads what they told her so it is already in
-// front of her and she never has to guess a filter to remember her own conversation.
-// ONE SOURCE: this reads the bead the keeper already writes. No second store.
+// stood, she said his day was open with no meetings locked in.
+// ⬡B:core.find:FIX:the_comment_here_used_to_lie_about_its_own_writer:20260726⬡
+// WHAT THIS COMMENT USED TO SAY, and it was FALSE when it was written: "the capture side
+// already works. core/synthesize.js's memory keeper stamps a MEMORY bead (importance 9)
+// carrying their exact words every time a person hands over something to keep." It did not.
+// The synthesize keeper had been removed on 20260725 as a detached model call and a detached
+// brain write escaping the council (⬡COLD:act:remove:PAI_SYNTHESIS_PROJECTION⬡), and nothing
+// replaced it. 'memory.gifted.' had five references in the whole repo: two comments swearing
+// the writer existed, one test fixture, and the two READS on the lines below. NO WRITER. So
+// this read was correct and pointed at nothing, and the comment above it told every coder who
+// looked that capture was solved and to move on. That is the actual mechanism behind "she
+// still doesn't really memorize": not that nobody looked, but that the code lied to everyone
+// who did. THE WRITER NOW EXISTS: core/memory.keeper.js, at the ONE common PAI exit, on every
+// channel, awaited inside the cycle with a verified readback, ruled by a mind and leashed to
+// the person's own words. If you are reading this comment to decide whether capture works,
+// open that file and check that core/tool.loop.js still calls keepTurn. Do not trust prose.
+// ONE SOURCE: this reads the exact bead that keeper writes, addressed by the one shared
+// MEMORY_CONTRACT, so the read string and the write string can never drift apart again.
+//
+// MERGE NOTE 20260727: main independently patched this same function while this branch's
+// memory.keeper.js work was in flight, removing the source_prefix 'memory.gifted.' clause as
+// dead (true on main at the time: nothing wrote that prefix). That is no longer true on this
+// branch. core/memory.keeper.js's keepGift now writes exactly that prefix
+// (MEMORY_CONTRACT.GIFT_SOURCE_PREFIX), so the clause below is live, not dead, and dropping it
+// would silently regress this branch's own fix. Kept both contract-driven clauses.
 // Fails closed without a ham (the Feb-2026 cross-HAM law, same as findRecentResults),
 // and ham_uid scopes every query, so one person's stated plans can never surface in
-// another person's wall. importance_gte 7 keeps the low-importance MEMORY housekeeping
+// another person's wall. The importance floor keeps the low-importance MEMORY housekeeping
 // stamps (surface-rotation and dedup markers, importance 2) out of the wall.
 // UNIVERSALITY: keyed by ham_uid, any HAM gets their own. No person, no content hardcoded.
 async function findStatedCommitments(hamUid, limit) {
   if (!hamUid) return { beads: [] };
   var n = limit || 6;
+  var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find([
-    { source_prefix: 'memory.gifted.', ham_uid: hamUid, limit: n },
-    { stamp_type: 'MEMORY', ham_uid: hamUid, importance_gte: 7, limit: n }
+    { source_prefix: contract.GIFT_SOURCE_PREFIX, ham_uid: hamUid, limit: n },
+    { stamp_type: contract.GIFT_STAMP_TYPE, ham_uid: hamUid,
+      importance_gte: contract.READER_IMPORTANCE_FLOOR, limit: n }
   ]);
 }
 
-module.exports = { find, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
-  _test:{ identityBq:identityBq, identityQueryPath:identityQueryPath } };
+// ⬡B:core.find:WIRE:the_one_door_a_non_founder_world_reads_through:20260726⬡
+// THE WORLD READ. Every read on behalf of a world that is NOT the founder's own goes
+// through here, so the tier ceiling cannot be forgotten by a caller: it is applied to
+// every query in the batch, not to whichever ones the caller remembered. An unresolved
+// tier lands at STRICTEST inside people.tier.effectiveTier, never at T0. This is the
+// query-side half; board/pam/pam.js pamRelease is the judgment-side half, and a world
+// read is meant to pass through both.
+async function findForWorld(viewerTier, queries) {
+  var tiers = require('./privacy/people.tier.js');
+  var t = tiers.effectiveTier(viewerTier);
+  var list = (Array.isArray(queries) ? queries : [queries]).map(function (q) {
+    return Object.assign({}, q || {}, { viewer_tier: t });
+  });
+  // ⬡B:core.find:GUARD:an_unenforceable_ceiling_is_reported_loudly_not_returned_as_empty:20260726⬡
+  // bq() fails SOFT by design: a slow or erroring bank returns [] so a founder turn degrades
+  // instead of hanging. That is right for ordinary context and WRONG here, because on a world
+  // read an empty result and an unenforceable ceiling look identical from the outside. If
+  // migrations/0004 has not been applied, PostgREST answers the acl_tier predicate with a 400
+  // and the soft path would hand back a clean, empty, entirely reassuring [] while the gate
+  // was never actually applied. So the world read probes the ceiling ONCE against the live
+  // bank first and reports the failure. Closed AND legible beats closed and silent: the
+  // founder sees "the tier column is not there", not four mysteriously empty worlds.
+  if (t > tiers.T0) {
+    var probe = await _tierColumnReachable(t);
+    if (!probe.ok) {
+      return { ok: false, available:false, beads: [], count: 0, ms: 0, viewer_tier: t,
+        reason: probe.reason,
+        remedy: 'apply migrations/0004_acl_tier_structural_people_ladder.sql via POST /admin/migrate' };
+    }
+  }
+  var res = await find(list);
+  res.viewer_tier = t;
+  return res;
+}
+
+// One cheap head-style read that exercises the tier predicate and nothing else, so an
+// unenforceable ceiling is discovered before any content is selected.
+async function _tierColumnReachable(tier) {
+  var b = bh();
+  if (!b.url || !b.hdrs.apikey) return { ok: false, reason: 'bank_unconfigured' };
+  var filter = require('./privacy/people.tier.js').structuralFilter(tier);
+  if (!filter) return { ok: true };
+  try {
+    var r = await fetch(b.url + '/rest/v1/' + _tbl() + '?select=id&' + filter + '&limit=1',
+      { headers: b.hdrs, signal: AbortSignal.timeout(4000) });
+    if (r.ok) return { ok: true };
+    return { ok: false, reason: 'tier_ceiling_unenforceable_http_' + r.status };
+  } catch (e) {
+    return { ok: false, reason: 'tier_ceiling_unenforceable_transport' };
+  }
+}
+
+module.exports = { find, findForWorld, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
+  _test:{ bq:bq, identityBq:identityBq, identityQueryPath:identityQueryPath } };

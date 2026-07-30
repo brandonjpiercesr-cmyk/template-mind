@@ -60,6 +60,24 @@ function usageNumber(value) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
+// ⬡B:core.openrouter_seat_spend:GATE:a_dry_account_is_a_fact_not_a_judgment:20260726⬡
+// The dry account skip is DEFAULT OFF behind one exact string gate. The balance READ is
+// free and lives on the health cycle, because reading prevents spend. The SKIP changes
+// live request behavior, and a wrong skip would silence her, which is worse than one
+// refused request. Arming it is the founder's call, not a coder's.
+function dryAccountBlockArmed(env) {
+  return String((env || process.env).OPENROUTER_DRY_ACCOUNT_BLOCK || '') === 'true';
+}
+
+// How stale an already-read account balance may be before this door asks again. Bounded,
+// so a malformed value can neither pin a stale refusal nor add a round trip to every
+// paid request. Zero means always read fresh.
+function balanceMaxAgeMs(env) {
+  var raw = Number((env || process.env).OPENROUTER_ACCOUNT_BALANCE_MAX_AGE_MS);
+  if (!Number.isFinite(raw) || raw < 0) return 60000;
+  return Math.min(Math.floor(raw), 300000);
+}
+
 function usageSignal(callerSignal, env) {
   var raw = Number((env || process.env).OPENROUTER_SEAT_USAGE_TIMEOUT_MS || 1200);
   var timeoutMs = Number.isFinite(raw) ? Math.max(100,Math.min(2500,Math.floor(raw))) : 1200;
@@ -86,6 +104,11 @@ async function currentUsage(key, fetchImpl, callerSignal, env) {
         (response && response.status || 0)};
     }
     var body = await response.json().catch(function () { return null; });
+    // NOTE for the next coder, and it has already cost one PR: this response also
+    // carries `limit_remaining`. That is the spending limit left on THIS ONE KEY, not
+    // the account balance, and it is null on an ordinary uncapped key. It cannot tell
+    // you whether the account can pay. The account balance has exactly one reader,
+    // core/spend.guard.js accountBalance(), which reads GET /api/v1/credits.
     var daily = usageNumber(body && body.data && body.data.usage_daily);
     if (daily === null) return {ok:false,reason:'openrouter_seat_usage_daily_invalid'};
     return {ok:true,usageDaily:daily};
@@ -125,16 +148,43 @@ async function run(url, init, fetchImpl, execute, env) {
     var usage = await currentUsage(key, fetchImpl, init && init.signal, env);
     if (!usage.ok) return {blocked:true,status:503,reason:usage.reason,
       seat:seat.seat,capUsd:cap};
+    // The seat cap answers "has this seat spent enough today". This answers a DIFFERENT
+    // question the cap cannot see: "can the account behind this seat pay at all". A seat
+    // at $0.10 of a $5 cap sails through the cap while the account credit reads zero, so
+    // the request leaves, comes back refused, and the turn falls through to a more
+    // expensive rung. Skipping an account the provider itself reports as empty is a
+    // mechanical fact, not a quality ruling, so cold code may act on it. Unknown is not
+    // empty and never blocks. 429 so the caller treats it as the same soft miss it
+    // already handles for the cap.
+    if (dryAccountBlockArmed(env)) {
+      // The balance is read on the monitor-only credential resolved by the ONE seat
+      // source, never on the completion seat whose request this is.
+      var balance = await require('./spend.guard.js').accountBalance(
+        {fetchImpl:fetchImpl,maxAgeMs:balanceMaxAgeMs(env)});
+      if (balance && balance.known === true && balance.dry === true) {
+        return {blocked:true,status:429,reason:'openrouter_account_out_of_credit',
+          seat:seat.seat,usageDailyUsd:usage.usageDaily,capUsd:cap,
+          accountRemainingUsd:balance.remaining,retryAt:'after_credit_top_up'};
+      }
+    }
     if (usage.usageDaily >= cap) return {blocked:true,status:429,
       reason:'openrouter_seat_daily_dollar_cap_reached',seat:seat.seat,
       usageDailyUsd:usage.usageDaily,capUsd:cap,retryAt:'next_utc_day'};
+    // This boundary has resolved the credential to the one canonical seat that owns it.
+    // Replace any ambient entry-channel guess only for the actual paid transport. The
+    // surrounding HAM/cycle/request/component attribution is retained by withAttribution.
+    // This covers primary, declared fallback, council, keeper, ladder, and direct CODA
+    // OpenRouter calls without trusting each caller to label itself correctly.
+    var response = await require('./spend.guard.js').withAttribution(
+      {seat:seat.seat}, execute);
     return {blocked:false,seat:seat.seat,usageDailyUsd:usage.usageDaily,
-      capUsd:cap,response:await execute()};
+      capUsd:cap,response:response};
   });
 }
 
 function reset() { queues.clear(); }
 
 module.exports = {run:run,keyOwner:keyOwner,bearer:bearer,currentUsage:currentUsage,
+  dryAccountBlockArmed:dryAccountBlockArmed,
   _test:{sameSecret:sameSecret,usageNumber:usageNumber,usageSignal:usageSignal,
-    queueSeat:queueSeat,reset:reset}};
+    balanceMaxAgeMs:balanceMaxAgeMs,queueSeat:queueSeat,reset:reset}};
