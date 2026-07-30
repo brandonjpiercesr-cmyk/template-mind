@@ -394,9 +394,22 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
     }
     throw egressError;
   }
-  var outcome, terminal;
+  var outcome, terminal, callerResponse=response;
   try {
-    outcome = await store.terminalFromResponse(response,terminalReceiptOptions);
+    // ⬡B:core.provider_boundary:FIX:durable_accounting_cannot_destroy_the_paid_answer:20260730⬡
+    // Capture the provider bytes before terminal bank I/O can outlive the provider signal.
+    // The terminal facts and the caller response come from that one capture, while the
+    // detached replay remains readable after the original request deadline expires.
+    if(typeof store.captureTerminalResponse==='function'){
+      var captured=await store.captureTerminalResponse(response,terminalReceiptOptions);
+      outcome=captured&&captured.outcome;
+      callerResponse=captured&&captured.response||response;
+      if(callerResponse!==response&&response&&response.body&&
+          typeof response.body.cancel==='function')response.body.cancel().catch(function(){});
+    }else{
+      try{callerResponse=response.clone();}catch(eClone){callerResponse=response;}
+      outcome = await store.terminalFromResponse(response,terminalReceiptOptions);
+    }
     terminal = await store.writeTerminal(prepared.receipt,outcome,terminalReceiptOptions);
   } catch (eTerminalWrite) { terminal = {ok:false}; }
   if (!terminal || terminal.ok !== true) {
@@ -420,7 +433,7 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
       return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
     }
   }
-  return response;
+  return callerResponse;
 }
 
 // Build an OpenAI-shaped chat completion envelope around ladder text, so a caller
