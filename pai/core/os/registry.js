@@ -43,6 +43,9 @@ const LIVE = [
   { id: 'ccwa',     label: 'Come Code', mark: 'K', color: '#22D3EE',
     keywords: ['ccwa', 'code', 'developer', 'coding', 'terminal', 'dev'],
     aliases: ['CCWA', 'Code', 'Developer'], path: function () { return '/ccwa'; } },
+  { id: 'launch-deck', label: 'Launch Deck', mark: 'E', color: '#D4A843',
+    keywords: ['launch', 'deck', 'demo', 'presentation', 'pitch', 'investor'],
+    aliases: ['Deck', 'Demo Deck', 'Launch'], path: function () { return '/deck'; } },
   { id: 'alive',    label: 'Alive',              mark: 'L', color: '#EC4899',
     keywords: ['alive', 'canvas', 'live', 'surface', 'heartbeat'],
     aliases: ['Alive', 'Alive Canvas'], path: function (H) { return '/alive-view/' + H; } }, // ⬡B:os.registry:REPOINT:her_narrated_alive_20260711⬡
