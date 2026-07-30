@@ -427,8 +427,12 @@ async function responseBytes(response, maximum) {
   var clone;
   try { clone = response.clone(); } catch (error) { return null; }
   var declared = Number(clone.headers && clone.headers.get && clone.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > maximum) return null;
-  if (!clone.body || typeof clone.body.getReader !== 'function') return null;
+  if (Number.isFinite(declared) && declared > maximum) {
+    if(clone.body&&typeof clone.body.cancel==='function')clone.body.cancel().catch(function(){});
+    return null;
+  }
+  if (!clone.body) return Buffer.alloc(0);
+  if (typeof clone.body.getReader !== 'function') return null;
   var reader = clone.body.getReader(), chunks = [], total = 0;
   try {
     while (true) {
@@ -436,11 +440,27 @@ async function responseBytes(response, maximum) {
       if (part.done) break;
       var chunk = Buffer.from(part.value);
       total += chunk.length;
-      if (total > maximum) { await reader.cancel(); return null; }
+      if (total > maximum) {
+        // A cloned Web stream is a tee. Awaiting cancel waits for the untouched caller
+        // branch, but that branch cannot be returned until accounting finishes. Fire the
+        // cancellation without joining it so an oversized receipt body cannot deadlock and
+        // strand its paid INTENT.
+        reader.cancel().catch(function(){});
+        return null;
+      }
       chunks.push(chunk);
     }
-  } catch (error) { try { await reader.cancel(); } catch (cancelError) {} return null; }
+  } catch (error) { try { reader.cancel().catch(function(){}); } catch (cancelError) {} return null; }
   return Buffer.concat(chunks, total);
+}
+function replayResponse(response, bytes) {
+  if (!bytes || typeof Response !== 'function') return null;
+  var status = response && Number.isInteger(response.status) ? response.status : 200;
+  var body = status === 204 || status === 205 || status === 304 ? null : bytes;
+  try {
+    return new Response(body,{status:status,statusText:String(response && response.statusText || ''),
+      headers:response && response.headers});
+  } catch (error) { return null; }
 }
 function usageFacts(body) {
   var usage = body && body.usage;
@@ -457,7 +477,7 @@ function usageFacts(body) {
   }
   return {tokens:tokens,cost:cost,costSource:cost === null ? null : 'provider_reported'};
 }
-async function terminalFromResponse(response, options) {
+async function captureTerminalResponse(response, options) {
   var bytes = await responseBytes(response, Number(options && options.maxResponseBytes) || MAX_RESPONSE_BYTES);
   var body = null;
   if (bytes) { try { body = JSON.parse(bytes.toString('utf8')); } catch (error) { body = null; } }
@@ -465,10 +485,14 @@ async function terminalFromResponse(response, options) {
   var providerRequestId = headerValue({headers:response && response.headers}, 'x-generation-id') ||
     headerValue({headers:response && response.headers}, 'x-request-id') ||
     headerValue({headers:response && response.headers}, 'request-id') || null;
-  return {status_code:response && Number.isInteger(response.status) ? response.status : null,
+  return {outcome:{status_code:response && Number.isInteger(response.status) ? response.status : null,
     disposition:response && response.ok === true ? 'SUCCEEDED' : 'HTTP_ERROR',
     response_digest:bytes ? sha(bytes) : null,provider_request_id:identifier(providerRequestId, 240),
-    provider_tokens:usage.tokens,actual_cost_usd:usage.cost,cost_source:usage.costSource};
+    provider_tokens:usage.tokens,actual_cost_usd:usage.cost,cost_source:usage.costSource},
+    response:replayResponse(response,bytes)};
+}
+async function terminalFromResponse(response, options) {
+  return (await captureTerminalResponse(response,options)).outcome;
 }
 function terminalFromError(error) {
   // A rejected fetch does not prove whether the provider accepted bytes before the socket
@@ -549,11 +573,13 @@ function cachedSummary() {
 
 module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimIntent,
   writeTerminal:writeTerminal,terminalFromResponse:terminalFromResponse,
+  captureTerminalResponse:captureTerminalResponse,
   terminalFromError:terminalFromError,reconcileUnresolved:reconcileUnresolved,
   readSummary:readSummary,cachedSummary:cachedSummary,
   _test:{providerFor:providerFor,bodyFacts:bodyFacts,providerModel:providerModel,keyAlias:keyAlias,
     bankConfig:bankConfig,phaseRow:phaseRow,readPhase:readPhase,decimalCost:decimalCost,
     stableJson:stableJson,
     boundedJson:boundedJson,usageFacts:usageFacts,responseBytes:responseBytes,
+    replayResponse:replayResponse,
     reconcileGraceSeconds:reconcileGraceSeconds,rpcCall:rpcCall,
     reset:function () { SUMMARY_CACHE=null; }}};
