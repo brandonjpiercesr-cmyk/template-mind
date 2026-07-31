@@ -50,6 +50,7 @@ var voiceCallBinding = require('./voice.call.binding.js');
 var voiceRoomSafe = require('./voice.room.safe.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
 var outputGuard = require('./model.output.guard.js');
+var toolRetrieval = require('./tool.retrieval.js');
 // ⬡B:core.tool.loop:WIRE:the_env_only_identity_law_reaches_model_output_too:20260729⬡
 // The founder law "identity is env only, never a literal" was enforced over source code and
 // nowhere else, so a name could be perfectly env resolved and still be spoken to a stranger.
@@ -4822,6 +4823,23 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         });
       }
       _stampStep('tool_intent_route', _routedToolIntent + ':visible=' + body.tools.length);
+      if (!body.tools.length) delete body.tools;
+    }
+    // CLAIR_reach R4E: at catalog scale, bound the routed set to the few tools
+    // whose USE WHEN context matches this exact turn, and expose none on weak
+    // relevance. Inert at or below the scale threshold, so today's small routed
+    // sets pass through unchanged. Cold code ranks and fetches; the model still
+    // chooses among the returned subset.
+    if (iter === 1 && Array.isArray(body.tools) && body.tools.length &&
+        !_structuredReachPolicy && !_reachIncidentIntake && !_routedRequiresLiveTool &&
+        String(channel || '').toLowerCase() !== 'voice' &&
+        !(identity && identity.outbound_finalize === true)) {
+      var _ragBefore = body.tools.length;
+      body.tools = toolRetrieval.retrieveToolSubset(
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message, body.tools);
+      if (body.tools.length !== _ragBefore) {
+        _stampStep('tool_rag_bounded', _ragBefore + '->' + body.tools.length);
+      }
       if (!body.tools.length) delete body.tools;
     }
     if (Array.isArray(body.tools) && body.tools.length) {
