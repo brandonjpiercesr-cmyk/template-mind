@@ -25,3 +25,55 @@ jobs:
         run: node --test tests/no.founder.pii.sees.a.name.test.js
       - name: Scan for hardcoded founder identity (must be zero)
         run: node scripts/checks/no-founder-pii.js .
+      # ⬡B:github.no_founder_pii:WIRE:the_standing_goal_ships_to_every_inherited_world:20260731⬡
+      # Founder order 20260731, given twice: progress assignments and roadmaps until completion,
+      # make it a STANDING GOAL, build check-ins. This repo is the mind-template, so what lands in
+      # its CLAUDE.md is what every future world starts with. This step fails the build if the
+      # standing goal, the consult door, or the five-flag reporting shape is removed from it.
+      #
+      # It rides as a STEP in this existing workflow, never as a new workflow file, for the same
+      # billing reason recorded in the sister repo: on 20260731 CI went dark for more than twenty
+      # hours on Actions billing, and every job is billed rounded UP to a whole minute.
+      #
+      # The marker list is the same one enforced in `anew` by scripts/checks/standing-goal-guard.js,
+      # which is the source of record and carries the reasoning for each marker. It is asserted
+      # inline here rather than by shipping a second copy of that script, because a second
+      # hand-maintained copy is exactly what the one-source law forbids. Verified on 20260731 by
+      # running the anew guard against this repo with --root and --claude-md-only: 17/17 present.
+      - name: The standing goal is still law in the mind-template
+        shell: bash
+        run: |
+          set -uo pipefail
+          missing=0
+          check() {
+            if ! grep -qF -- "$2" CLAUDE.md; then
+              echo "  MISSING: $1"
+              missing=$((missing+1))
+            fi
+          }
+          check "the standing goal has a section of its own"      "THE STANDING GOAL"
+          check "the founder's own words are quoted"              "PROGRESS YOUR ASSIGNMENTS AND ROADMAPS UNTIL COMPLETION"
+          check "an assignment ends when it is DONE"              "assignment ends when it is **DONE**"
+          check "the checkout names the re-arm"                   "re-arm"
+          check "the consult door with its full URL"              "https://aibebase.onrender.com/cara/consult"
+          check "the consult auth header"                         "x-cara-consult-key"
+          check "the coder decides after the consult"             "then you decide and act"
+          check "a consult FEEDS her, never borrows her voice"    "FEEDING her"
+          check "questions reach him only on his four kinds"      "spend he has not authorised"
+          check "GREEN flag"                                      "🟢"
+          check "YELLOW flag"                                     "🟡"
+          check "ORANGE flag"                                     "🟠"
+          check "BLACK flag"                                      "⚫"
+          check "RED flag"                                        "🔴"
+          check "OUTSTANDING BY HIM rides every report"           "OUTSTANDING BY HIM"
+          check "a RED carries the exact value to type"           "exact value to type"
+          check "the doctrine file is pointed at"                 "PROGRESS_UNTIL_COMPLETION_20260731"
+          if [ "$missing" -ne 0 ]; then
+            echo ""
+            echo "THE STANDING GOAL GUARD FAILED: $missing marker(s) gone from CLAUDE.md."
+            echo "Founder order 20260731: progress your assignments and roadmaps until completion."
+            echo "This repo is the mind-template. A law removed here is removed from every world that inherits it."
+            echo "Source of record for the markers and the reasoning: anew scripts/checks/standing-goal-guard.js"
+            exit 1
+          fi
+          echo "standing-goal markers: 17/17 present in the mind-template's CLAUDE.md."
