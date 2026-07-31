@@ -47,6 +47,7 @@ var ANSWER_FLOOR = _boundEnvInt('PAI_ANSWER_FLOOR', 8000, 1, 1000000);
 var _crypto = require('crypto');
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
+var voiceRoomSafe = require('./voice.room.safe.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
 var outputGuard = require('./model.output.guard.js');
 // ⬡B:core.tool.loop:WIRE:the_env_only_identity_law_reaches_model_output_too:20260729⬡
@@ -83,6 +84,7 @@ function tokenCapFor(channel) {
 
 function shouldIncludeWorldContext(channel, identity, hamUid, question) {
   if (String(channel || '').toLowerCase() !== 'voice') return true;
+  if (voiceRoomSafe.isAuthorized(identity)) return false;
   if (identity && identity.council_context &&
       identity.council_context.mode === 'voice' &&
       identity.council_context.include_world_context === true) return true;
@@ -792,9 +794,26 @@ function paiSeatUsable(result) {
   }
   return false;
 }
+function paiDeterministicRequestFailure(result) {
+  var error=result&&result.error||{};
+  var status=Number(error.status||0);
+  return status===400||status===422||
+    /^pai_seat_http_(?:400|422)$/.test(String(error.code||''));
+}
+function paiOutcomeUnknownFailure(result) {
+  var error=result&&result.error||{};
+  var reason=[error.code,error.reason,error.message,error.detail]
+    .filter(Boolean).join(':').toLowerCase();
+  return reason.indexOf('provider_spend_outcome_unknown')!==-1;
+}
 async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   var primary = await attempt(primaryCandidate);
   if (paiSeatUsable(primary)) return primary;
+  // An interrupted paid request may already have reached the provider. The durable
+  // spend boundary correctly records that as OUTCOME_UNKNOWN and holds later egress.
+  // Calling the fallback cannot rescue that turn; it only performs a second refused
+  // preflight and burns conversational time. Preserve the exact first wall and stop.
+  if (paiDeterministicRequestFailure(primary)||paiOutcomeUnknownFailure(primary)) return primary;
   if (!fallbackCandidate) return primary;
   var recovered = await attempt(fallbackCandidate);
   // The rescue only wins if it actually carries an answer. If it does not, the caller gets
@@ -824,6 +843,9 @@ function paiToolTurnBlocksLadder(providerBody, result) {
   var carriedTools = !!(providerBody && Array.isArray(providerBody.tools) && providerBody.tools.length);
   if (!carriedTools) return false;
   return !paiSeatUsable(result);
+}
+function paiRequestBlocksLadder(providerBody, result) {
+  return paiDeterministicRequestFailure(result)||paiToolTurnBlocksLadder(providerBody,result);
 }
 
 // ⬡B:core.tool_loop:FIX:a_one_millisecond_call_is_cold_code_choosing_silence:20260728⬡
@@ -953,6 +975,36 @@ function primaryProviderBody(body, msgs, model) {
     providerBody.chat_template_kwargs = body.chat_template_kwargs;
   }
   return providerBody;
+}
+
+// Provider extensions are model-family contracts, not universal OpenAI fields.
+// Qwen and GLM accept their no-thinking template control. Other families receive
+// the portable reasoning control only, so a named CODA seat cannot buy the same
+// deterministic request-contract 400 on every wake.
+function applyProviderThinkingPolicy(providerBody, model) {
+  var target=providerBody||{};
+  var exactModel=String(model||'').trim().toLowerCase();
+  if(/^(?:qwen\/|z-ai\/glm)/.test(exactModel)){
+    target.reasoning={enabled:false};
+    target.chat_template_kwargs={enable_thinking:false};
+  }else{
+    delete target.reasoning;
+    delete target.chat_template_kwargs;
+  }
+  return target;
+}
+
+function prepareRoadmapActivationBody(body, approved) {
+  if(approved!==true)return {ok:true,body:body};
+  var activationTool=Array.isArray(body&&body.tools)&&body.tools.find(function(tool){
+    return tool&&tool.type==='function'&&tool.function&&
+      tool.function.name==='activate_roadmap_task';
+  });
+  if(!activationTool)return {ok:false,reason:'roadmap_activation_tool_unavailable'};
+  body.tools=[activationTool];
+  body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
+  body._roadmapActivationNudge=true;
+  return {ok:true,body:body};
 }
 
 function dayQuestionIntent(message, isScreenCommand) {
@@ -1437,7 +1489,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   sports:['nash_sports'],
   reminders:['read_reminders','create_reminder','stop_mentioning'],
   budget:['get_budget_summary','get_budget_upcoming'],
-  memory:['find_in_brain','find_identity_evidence'],
+  memory:['find_in_brain','find_identity_evidence','write_to_brain'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','find_in_brain',
     'read_lane_board','read_render_logs','get_recent_builds','read_own_code','consult_coda',
     'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
@@ -1451,6 +1503,11 @@ function routeToolIntent(message) {
   // sports-score or calendar calls. General/zero-tool lets the grounded face
   // answer from current context or say it does not know rather than guessing.
   if (/\b(favou?rite|preferred) (team|sport)\b/.test(text)) return 'general';
+  // "Remind me why/how/what" is an ordinary request to explain, not authorization
+  // to create a future reminder. Keep the natural-language homonym out of the action lane.
+  if (/^(?:please\s+)?remind\s+me\s+(?:why|how|what|who|where|when)\b/.test(text)) {
+    return 'general';
+  }
   // An explicit station command owns the turn even when its task text names a
   // calendar, inbox, or other live-data scenario to grade. The founder caught
   // two R4 acceptance asks being hijacked into calendar_read before Wonder
@@ -1532,8 +1589,36 @@ function requiredReadToolForMessage(message, intent) {
   if (intent === 'reminders' && /\b(what|read|show|list|check|current|active|pending)\b/.test(text) && !/\b(create|add|set|stop|remove|delete)\b/.test(text)) return 'read_reminders';
   if (intent === 'budget' && /\b(payments? (?:are )?(?:due|coming)|due soon|upcoming|bnpl)\b/.test(text)) return 'get_budget_upcoming';
   if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track|income|expenses?|paychecks?|salary|take[- ]?home|bills?|net (income|pay)|cash ?flow|afford|savings?|money|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'get_budget_summary';
+  if (intent === 'memory' && /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text)) return null;
   if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
   if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat)\b/.test(text)) return 'read_lane_board';
+  return null;
+}
+
+// ⬡B:core.tool_loop:FIX:an_explicit_reminder_command_cannot_be_answered_without_the_reminder_hand:20260730⬡
+// LIVE FOUNDER RECEIPTS, 20260730. "Remind me to build business websites" shipped the
+// literal text "[Calling" with tools_used:[], and "Remind me at 6pm ... call my kids"
+// called calendar_read, then told him A'NU could not set reminders. The intent router had
+// correctly put create_reminder on the table, but it treated an explicit imperative as an
+// optional choice. That is not judgment: the person already chose the action in their own
+// words. This function identifies only that exact, unambiguous authorization. It never
+// executes the mutation; the model still supplies the reminder artifact, and the existing
+// POST_COUNCIL transaction still withholds the write until the full council commits.
+function requiredActionToolForMessage(message, intent) {
+  var text = String(message || '').trim().toLowerCase();
+  if (intent === 'memory' &&
+      /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text) &&
+      /\b(?:memory|brain|remember|keep|record|store|save)\b/.test(text)) {
+    return 'write_to_brain';
+  }
+  if (intent !== 'reminders') return null;
+  if (/^(?:please\s+)?remind\s+me\s+(?:why|how|what|who|where|when)\b/.test(text)) {
+    return null;
+  }
+  if (/^(?:please\s+)?remind\s+me\b/.test(text) ||
+      /^(?:please\s+)?(?:set|add|create)\s+(?:me\s+)?(?:a\s+)?reminder\b/.test(text)) {
+    return 'create_reminder';
+  }
   return null;
 }
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
@@ -3130,7 +3215,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       // Sunday. Timed events are real instants and DO belong in the HAM's timezone. So the
       // rule is per-event, not per-calendar: floating dates read in UTC, instants read local.
       var _fmtDateUTC = new Intl.DateTimeFormat('en-US', { timeZone:'UTC', weekday:'long', year:'numeric', month:'long', day:'numeric' });
-      var _todayUTCStr = _fmtDateUTC.format(new Date(new Date().toLocaleString('en-US', { timeZone:_tz })));
+      var _todayUTCStr = _todayStr;
       // ⬡B:core.tool.loop:FIX:a_span_he_is_on_is_today_not_upcoming:20260725⬡ THE THIRD AND LAST
       // READER OF THE SAME CALENDAR, and the one that was still wrong on the glass. Live on
       // cd5f3aea5, asked what was on his calendar today, she answered "your calendar for today
@@ -3529,9 +3614,17 @@ function codaInternalDeliberation(identity) {
 // is a mechanical eligibility boundary only: ordinary human composition, including a human
 // coding-mode turn, remains briefed exactly as before.
 function preWriteCouncilEligible(answerSelected, structuredReachPolicy, reachIncidentIntake,
-  identity) {
+  identity, channel, hamUid) {
+  // A live signed phone turn cannot buy two sequential drafting briefs before the
+  // real-time writer. Production evidence showed those briefs consuming ~22.5s of
+  // the 25s voice model budget, leaving voice_fast only ~2s; its abort then became
+  // OUTCOME_UNKNOWN and the caller heard silence. Ordinary written surfaces retain
+  // both pre-write organs. Authenticated live voice still crosses the complete
+  // post-write council before any bytes are authorized for TTS.
+  var liveVoice = String(channel || '').toLowerCase() === 'voice' &&
+    !!verifiedVoiceCallContext(identity, hamUid);
   return !answerSelected && !structuredReachPolicy && !reachIncidentIntake &&
-    !codaInternalDeliberation(identity);
+    !codaInternalDeliberation(identity) && !liveVoice;
 }
 
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
@@ -3543,6 +3636,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // a tool or contributor inside this cycle, but it must never replace this choke point.
   var t0=Date.now();
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
+  // The verified voice route authorizes this object through a process-owned
+  // WeakSet. A JSON field named room_safe is never sufficient to close a world.
+  var _roomSafeVoice=String(channel||'').toLowerCase()==='voice' &&
+    voiceRoomSafe.isAuthorized(identity);
   // Server-owned machine intake is candidate-eligible, but it is not a general
   // face turn. The route constructs this non-JSON identity marker after HMAC and
   // exact-HAM validation; no caller field is copied into the marker.
@@ -3592,11 +3689,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     return false;
   }
-  // The Pipecat bridge owns a 12-second whole-turn budget. Keep all main-model
-  // attempts inside one shared voice deadline so provider fallback cannot add
-  // three independent long waits before SHADOW, STAMP, and readback run.
+  // Voice still has one shared bounded model budget, but the old 6.5-second
+  // deadline made the normal nine-row PAI/council path lose a race it could not
+  // consistently win. Pipecat now owns a longer bounded turn window; keep the
+  // model inside it without turning a slow verified cycle into a dead call.
   var _voiceModelDeadline = String(channel || '').toLowerCase() === 'voice'
-    ? t0 + 6500 : null;
+    ? t0 + _boundEnvInt('PAI_VOICE_MODEL_BUDGET_MS', 25000, 5000, 60000) : null;
   function _modelRequestSignal() {
     var deadlineSignal = _voiceModelDeadline
       ? AbortSignal.timeout(Math.max(1, _voiceModelDeadline - Date.now())) : null;
@@ -3612,6 +3710,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }, { once:true });
     });
     return controller.signal;
+  }
+  function _providerAttemptSignal(candidate) {
+    var wholeTurnSignal = _modelRequestSignal();
+    if (String(channel || '').toLowerCase() !== 'voice') return wholeTurnSignal;
+    // Live receipt 20260730: two Qwen passes settled in 2.9s and 1.8s, then a
+    // third pass was cut off by the old 6.5s per-attempt timer. Because bytes had
+    // already left, that abort correctly became OUTCOME_UNKNOWN and the spend
+    // guard correctly prohibited the declared fallback. A timer that makes its
+    // own fallback unlawful is not redundancy. Known terminal provider failures
+    // still reach paiSeatFailover immediately and the fallback owns the remaining
+    // whole-turn window. A pending paid request gets the one bounded turn window
+    // so it can settle with an answer or one honest terminal receipt.
+    return wholeTurnSignal;
   }
   // ⬡B:core.tool_loop:FIX:named_pai_seat_is_the_one_completion_door:20260725⬡
   // One provider-capable door for the complete PAI turn. Voice uses its own
@@ -3750,17 +3861,26 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     var providerBody = primaryProviderBody(requestBody,
       requestBody && requestBody.messages || [], candidate.seat.model);
+    // The fallback is a different model contract. Re-apply reasoning policy at
+    // the exact provider boundary so a Qwen primary cannot hand Qwen-only
+    // template fields to a non-Qwen rescue (or vice versa).
+    applyProviderThinkingPolicy(providerBody, candidate.seat.model);
     try {
       var response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method:'POST',
         headers:{Authorization:'Bearer ' + candidate.key,'Content-Type':'application/json',
           'HTTP-Referer':process.env.SELF_BASE_URL||process.env.AIBEBASE_URL||'https://aibebase.onrender.com',
           'X-Title':'ANEW Envolve'},
-        body:JSON.stringify(providerBody),signal:_modelRequestSignal()
+        body:JSON.stringify(providerBody),signal:_providerAttemptSignal(candidate)
       });
       var payload = await response.json();
-      if (response && response.ok === false && !(payload && payload.error)) {
-        return {error:{code:'pai_seat_http_' + response.status,seat:candidate.seat.seat}};
+      if (response && response.ok === false) {
+        if(!(payload&&payload.error))payload={error:{code:'pai_seat_http_'+response.status}};
+        if(typeof payload.error!=='object'||payload.error===null){
+          payload.error={code:'pai_seat_http_'+response.status};
+        }
+        payload.error.status=response.status;
+        payload.error.seat=candidate.seat.seat;
       }
       if (payload && typeof payload === 'object') {
         payload._provider='openrouter:' + candidate.seat.seat;
@@ -3837,6 +3957,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (_voiceSessionId) {
       if (step === 'cycle_start') detail = 'voice_turn_received';
       else if (step === 'cycle_end') detail = 'voice_turn_committed';
+      else if (step === 'preparation_answer_healing' &&
+          /^(?:named_[a-z0-9_]+|name_boundary_check_failed_fail_closed)$/.test(String(detail||''))) {
+        detail = String(detail).slice(0, 120);
+      }
+      else if (step === 'preparation_answer_heal_outcome' &&
+          /^(?:empty|passed|rejected:(?:named_[a-z0-9_]+|name_boundary_check_failed_fail_closed))$/.test(
+            String(detail||''))) {
+        detail = String(detail).slice(0, 132);
+      }
       else if (/^(?:outbound_council_blocked|cycle_end_silent|post_council_effect_failed)$/.test(step)) {
         var _voiceCodes = String(detail || '').toLowerCase().match(/[a-z0-9][a-z0-9_.:-]{0,79}/g) || [];
         detail = _voiceCodes.slice(0, 4).join(',') || step;
@@ -3882,6 +4011,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     'INTERNAL CLOSED-WORLD REACH POLICY. Decide only from the server-owned policy question and the exact deliberation evidence packet in this turn. Ambient Memory Bank rows, latest activity, contributors, prior conversation, screen state, and fused world summaries are intentionally excluded and must not be inferred. Return only the required strict JSON object.';
   var _reachIncidentSystemPrompt =
     'INTERNAL CLOSED-WORLD REACH INCIDENT INTAKE. Describe only the exact server-owned incident fact packet in this turn as one concise human-facing sentence. Do not choose timing, channel, recipient, or delivery. Do not call tools, write, deploy, book, send, notify, move a screen, or infer ambient Memory Bank facts. Canonical REACH will separately decide whether, when, and how this candidate surfaces.';
+  var _roomSafeSystemPrompt = voiceRoomSafe.systemPrompt();
   var _signedVoiceClosedTurn = !!(
     verifiedVoiceCallPurposeAnswer(channel, hamUid, message, identity) ||
     verifiedVoiceHearingAnswer(channel, hamUid, message, identity) ||
@@ -3896,7 +4026,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // later tool read.
   var _peopleTiers = require('./privacy/people.tier.js');
   var _readAuthority = {tier:_peopleTiers.STRICTEST,source:'closed_world'};
-  if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn) {
+  if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn &&
+      !_roomSafeVoice) {
     try { _readAuthority = await _peopleTiers.resolveReadTier(identity, hamUid); }
     catch (eReadTier) { _readAuthority = {tier:_peopleTiers.STRICTEST,source:'unresolved'}; }
   }
@@ -3910,9 +4041,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _isolatedHamTier = Number(identity &&
     (identity.trust_level != null ? identity.trust_level : identity.tier));
   if (!Number.isFinite(_isolatedHamTier)) _isolatedHamTier = 0;
-  var fcw = (_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn) ? {
+  var fcw = (_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
+      _roomSafeVoice) ? {
     ok:true, system_prompt:_reachIncidentIntake ? _reachIncidentSystemPrompt
-      : (_signedVoiceClosedTurn ? _signedVoiceSystemPrompt : _structuredReachSystemPrompt),
+      : (_signedVoiceClosedTurn ? _signedVoiceSystemPrompt
+        : (_roomSafeVoice ? _roomSafeSystemPrompt : _structuredReachSystemPrompt)),
     ham:{ uid:hamUid, name:String(identity&&identity.name||'Unknown').slice(0,160),
       tier:_isolatedHamTier, world:String(identity&&identity.world||'unknown').slice(0) },
     context:[], named_agent_records:[], identity_record:null,
@@ -3964,7 +4097,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // state, and fused summaries may not steer whether this candidate reaches
   // anyone. The exact deliberation packet below is the sole factual input.
   var systemPrompt = _structuredReachPolicy ? _structuredReachSystemPrompt
-    : _reachIncidentIntake ? _reachIncidentSystemPrompt : fcw.system_prompt;
+    : _reachIncidentIntake ? _reachIncidentSystemPrompt
+      : _roomSafeVoice ? _roomSafeSystemPrompt : fcw.system_prompt;
   var hamObj = fcw.ham;
   // ⬡B:core.tool_loop:GUARD:one_exact_question_for_provenance_and_council:20260715⬡
   // Identity metadata is canonical when present. Otherwise the first trusted
@@ -4375,7 +4509,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     'get_budget_upcoming','get_budget_summary','consult_advisor','calendar_read','inbox_read','read_reminders',
     'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda',
     'look_at_page'];
-  var _turnToolDefinitions = _reachIncidentIntake ? [] :
+  var _turnToolDefinitions = (_reachIncidentIntake || _roomSafeVoice) ? [] :
     identity && identity.outbound_finalize === true
     ? TOOLS.filter(function (tool) {
       return tool && tool.function && _readOnlyToolNames.indexOf(tool.function.name) >= 0;
@@ -4430,7 +4564,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // Never throws and never blocks: an unreachable mind returns ok:false and composition
   // proceeds byte for byte as it did before this wire. Silence over a hollow brief.
   var _preWriteBriefing = null;
-  if (preWriteCouncilEligible(ans, _structuredReachPolicy, _reachIncidentIntake, identity)) {
+  if (preWriteCouncilEligible(ans, _structuredReachPolicy, _reachIncidentIntake,
+      identity, channel, hamUid)) {
     try {
       _preWriteBriefing = await runPreWriteCouncil({
         hamUid: hamUid,
@@ -4512,6 +4647,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _closingReason = null;               // set once, by cold code, to end the turn
   var _closingPassRan = false;
   var _toolTextRejectedOnce = false;       // one corrective pass per turn, never two
+  var _exactRoutedWords = (_exactUserMessage && _exactUserMessage.trim())
+    ? _exactUserMessage : message;
+  var _explicitRequiredActionTool = requiredActionToolForMessage(
+    _exactRoutedWords, routeToolIntent(_exactRoutedWords));
   while (!ans) {
     // COLD CODE MAY END THE TURN. IT MAY NOT ANSWER IT. When either backstop fires she
     // gets one more pass, tools removed, with an explicit instruction to answer the whole
@@ -4558,23 +4697,44 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (!_closingPassRan && (_toolWindow <= 0 || iter <= _toolWindow)) {
       body.tools=_turnToolDefinitions;
     }
+    // Once the exact explicit action has produced its durable pending effect, the next
+    // model pass is for A'NU to speak from that committed plan. Leaving all forty-one tools
+    // on the table here is how the 6 p.m. reminder wandered into calendar_read after the
+    // reminder intent was already known. No cold code composes the answer and no effect is
+    // released here; this only closes the armory after the one authorized hand is queued.
+    var _explicitActionQueued = _explicitRequiredActionTool &&
+      _effectRuntime.pendingEffects.some(function (effect) {
+        return effect && effect.name === _explicitRequiredActionTool;
+      });
+    if (_explicitActionQueued) {
+      delete body.tools;
+      body.messages = body.messages.concat([{ role:'system', content:
+        'The explicitly requested action is now queued behind the outbound council. '
+        + 'Do not call another tool. Answer the person naturally and directly from the '
+        + 'queued action shown in the completed tool result. Do not expose tool protocol.' }]);
+    }
     var _routedToolIntent = null;
     var _routedRequiresLiveTool = false;
     var _routedRequiredReadTool = null;
-    if (iter === 1 && Array.isArray(body.tools) && body.tools.length &&
+    var _routedRequiredActionTool = null;
+    var _routeEveryVoicePass = String(channel || '').toLowerCase() === 'voice';
+    if ((iter === 1 || _routeEveryVoicePass) && Array.isArray(body.tools) && body.tools.length &&
         !_structuredReachPolicy && !_reachIncidentIntake &&
-        String(channel || '').toLowerCase() !== 'voice' &&
         !(identity && identity.outbound_finalize === true)) {
       _routedToolIntent = routeToolIntent(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
       _routedRequiredReadTool = requiredReadToolForMessage(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
         _routedToolIntent);
+      _routedRequiredActionTool = requiredActionToolForMessage(
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
+        _routedToolIntent);
       _routedRequiresLiveTool = !!_routedRequiredReadTool;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
-      if (_routedRequiredReadTool) {
+      if (_routedRequiredReadTool || _routedRequiredActionTool) {
+        var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
         body.tools = body.tools.filter(function (tool) {
-          return tool && tool.function && tool.function.name === _routedRequiredReadTool;
+          return tool && tool.function && tool.function.name === _routedExactTool;
         });
       }
       // ⬡B:core.tool_loop:WONDER:surface_tools_always_on_the_table:20260721⬡ Her surface tools
@@ -4583,7 +4743,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // routing regex having to catch it first. This is availability, not a decision: she still
       // reasons about whether to use them in the canonical model pass, and it is
       // her call, never a force. Skipped only when a single read tool is required for the turn.
-      if (!_routedRequiredReadTool && Array.isArray(_turnToolDefinitions)) {
+      if (!_routedRequiredReadTool && !_routedRequiredActionTool &&
+          (!_routeEveryVoicePass || _routedToolIntent !== 'general') &&
+          Array.isArray(_turnToolDefinitions)) {
         var _haveSurfaceTool = {};
         (Array.isArray(body.tools) ? body.tools : []).forEach(function (t) {
           if (t && t.function) _haveSurfaceTool[t.function.name] = true; });
@@ -4893,14 +5055,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         content:'This exact request asks for owned or current data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
       _stampStep('tool_intent_live_read_required', _routedToolIntent);
     }
+    if (_routedRequiredActionTool && Array.isArray(body.tools) && body.tools.length) {
+      body.tool_choice = 'required';
+      body._requiredActionTool = _routedRequiredActionTool;
+      body.messages = body.messages.concat([{ role:'system', content:
+        'The person explicitly authorized this exact action in their own words. Emit a real '
+        + _routedRequiredActionTool + ' tool call now. Do not narrate, imitate, or print a tool '
+        + 'call. The mutation will remain queued until the outbound council commits.' }]);
+      _stampStep('tool_intent_explicit_action_required', _routedRequiredActionTool);
+    }
     var r=null;
     // A typed roadmap mutation is not fabricated into a provider response. CODA
     // must be verified in this turn and must APPROVE. The model still emits the
     // real canonical tool call, which then queues behind the committed council.
     if (iter===1 && _roadmapActivationNeeded && _roadmapActivationEnvelope &&
         _roadmapActivationEnvelope.spec && _effectRuntime.codaActivationApproved===true) {
-      body.tool_choice={type:'function',function:{name:'activate_roadmap_task'}};
-      body._roadmapActivationNudge=true;
+      var _roadmapActivationPrepared=prepareRoadmapActivationBody(body,true);
+      if(!_roadmapActivationPrepared.ok){
+        _noteCycleFailure(_roadmapActivationPrepared.reason);
+        return {ok:false,reason:_roadmapActivationPrepared.reason,cycleId:_cycleId};
+      }
+      body=_roadmapActivationPrepared.body;
     }
     // Premium C3 synthesis remains an explicit opt-in and can only run on a
     // pure human-answer pass. The ordinary load-bearing path is C2, and neither
@@ -4933,8 +5108,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _providerCandidate=_paiSeatCandidate(_providerSeat);
     var _providerBody=primaryProviderBody(body,msgs,
       _providerCandidate&&_providerCandidate.seat.model||'');
-    _providerBody.chat_template_kwargs={enable_thinking:false};
-    _providerBody.reasoning={enabled:false};
+    applyProviderThinkingPolicy(_providerBody,
+      _providerCandidate&&_providerCandidate.seat.model||'');
     if(_structuredReachPolicy){
       var _policyFormat=_structuredReachResponseFormat();
       if(_policyFormat)_providerBody.response_format=_policyFormat;
@@ -4969,7 +5144,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     //
     // A turn carrying no tools is untouched: the ladder is still the last rung before silence,
     // exactly as the 20260718 law says, and this changes nothing for it.
-    if (paiToolTurnBlocksLadder(_providerBody, r)) {
+    if (paiRequestBlocksLadder(_providerBody, r)) {
       if (!_cycleFailure) _noteCycleFailure('pai_seat_tool_turn_unserved');
     } else if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
       // The rung shares _modelRequestSignal(), so on an expired voice deadline it would take
@@ -5182,9 +5357,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // real as the founder's own identity. This is the same silence-over-
     // hollow rule already enforced a few lines below for malformed tool-call
     // text; this is the same failure class arriving a different way.
-    if (iter===1 && (body.tool_choice==='auto'||body.tool_choice) && !(msg.tool_calls&&msg.tool_calls.length) && (body._dataReaderNudge || body._codingReadNudge || body._roadmapActivationNudge || (body.tool_choice && body.tool_choice.function))) {
+    if (iter===1 && (body.tool_choice==='auto'||body.tool_choice) && !(msg.tool_calls&&msg.tool_calls.length) && (body._requiredActionTool || body._dataReaderNudge || body._codingReadNudge || body._roadmapActivationNudge || (body.tool_choice && body.tool_choice.function))) {
       var _requiredToolName = (body.tool_choice && body.tool_choice.function
-        && body.tool_choice.function.name) || body._dataReaderNudge || (body._codingReadNudge ? 'consult_mace' : null) || (body._roadmapActivationNudge ? 'activate_roadmap_task' : null) || 'the required tool';
+        && body.tool_choice.function.name) || body._requiredActionTool ||
+        body._dataReaderNudge || (body._codingReadNudge ? 'consult_mace' : null) ||
+        (body._roadmapActivationNudge ? 'activate_roadmap_task' : null) || 'the required tool';
       var retryMsgs=msgs.concat([{role:'assistant',content:msg.content||''},
         {role:'user',content:'You were required to call ' + _requiredToolName
           + ' and did not. Call that exact tool now before saying anything else.'}]);
@@ -5621,14 +5798,24 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (_preCouncilHumanRepairUsed) return {answer:'',repaired:false};
     _preCouncilHumanRepairUsed = true;
     var _oneRepairCap = tokenCapFor(channel);
-    var _repairedHuman = await regenerateHollowAnswer(candidate, msgs, [async function (repairMessages) {
+    var _nameBoundaryRepair = /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
+      String(failureCode || ''));
+    // A privacy-held attribution is evidence of what must NOT be repeated. Feeding
+    // it back as the assistant's last sentence anchored the healer on the exact
+    // name/creator claim it was asked to remove. Name-boundary repairs therefore
+    // start from the original bound context and completed tool results only.
+    var _repairCandidate = _nameBoundaryRepair ? '' : candidate;
+    var _nameRepairInstruction = _nameBoundaryRepair
+      ? ' Remove every creator, owner, founder, builder, employer, or author attribution and every real-person name from the answer, including the name of the person on this call. Answer who you are, why you are here, or who authorized the call only in terms of what you do, the signed call purpose, and non-human system or Wonder roles already established in the bound context. Do not repeat or paraphrase the rejected attribution.'
+      : '';
+    var _repairedHuman = await regenerateHollowAnswer(_repairCandidate, msgs, [async function (repairMessages) {
       return (await _completeBoundHistoryOnLadder(repairMessages, _oneRepairCap, 0.1, false)) || '';
     }], { force:true, maxAttempts:1, instruction:
       'The proposed answer failed the pre-council boundary (' + String(failureCode || 'invalid_answer') + '). '
       + 'Repair it once as a direct human-facing answer to the original request, using only facts in '
       + 'the bound system context and completed tool results already present. Fix only that named '
       + 'failure. Do not add facts, claim an unexecuted action, emit tool syntax or JSON, mention the '
-      + 'repair, or describe yourself as an AI/model.' });
+      + 'repair, or describe yourself as an AI/model.' + _nameRepairInstruction });
     return _repairedHuman;
   }
   // ⬡B:core.tool_loop:WIRE:loop_exit_receipt:20260718⬡ bisection instrument:
@@ -6112,12 +6299,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _stampStep('preparation_answer_healing', _preparedHuman.reason);
       var _lateRepair = await _repairHumanOnce(finalAns, _preparedHuman.reason);
       if (await _turnCancelled(true)) return _turnCancelledResult('after_preparation_repair');
+      var _repairOutcome = 'empty';
       if (_lateRepair && _lateRepair.answer) {
         _preparedHuman = _prepareHumanAnswerOnce(_lateRepair.answer);
+        _repairOutcome = _preparedHuman.ok ? 'passed'
+          : 'rejected:' + String(_preparedHuman.reason || 'unknown').slice(0, 120);
         if (_preparedHuman.ok) {
           _stampStep('preparation_answer_healed', 'single_full_resubmission');
         }
       }
+      // A provider HTTP 200 does not prove that the cleaned answer was usable. Keep
+      // the outcome observable without storing any response or rejected answer bytes.
+      _stampStep('preparation_answer_heal_outcome', _repairOutcome);
     }
     if (!_preparedHuman.ok) {
       var _terminalPreparationReason = _preparedHuman.reason || 'hollow_protocol_after_preparation';
@@ -6872,7 +7065,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var result;
   try {
     result = await require('./spend.guard.js').withAttribution({ham_uid:exactHam,
-      cycle_id:cycleId,request_id:requestId,seat:seat,component:component},function () {
+      cycle_id:cycleId,request_id:requestId,seat:seat,component:component,
+      owner_node_id:'station.pai',target_wonder_id:'wonder.anu'},function () {
         return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
           {cycle_id:cycleId,request_id:requestId});
       });
@@ -6896,9 +7090,11 @@ function _ghHoldResetForTests() { _ghHold = { until: 0, reason: null, status: 0 
 function _ghHoldStateForTests() { return { until:_ghHold.until, reason:_ghHold.reason, status:_ghHold.status }; }
 
 module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
-  primaryProviderBody,dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
+  primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
+  dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
+  requiredActionToolForMessage,
   prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
@@ -6911,6 +7107,7 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
   _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
-  paiSeatFailover,paiSeatUsable,paiToolTurnBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
+  paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
+  paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,
   preWriteCouncilEligible}};

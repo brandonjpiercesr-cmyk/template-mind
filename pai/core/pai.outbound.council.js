@@ -174,6 +174,16 @@ function isHumanFacingAnswer(value) {
     probe = quoted[2].trim();
   }
   if (!probe) return false;
+  // ⬡B:core.pai_outbound_council:FIX:bracketed_calling_fragment_is_tool_protocol_not_a_reply:20260730⬡
+  // LIVE FOUNDER TEXT: "I'll save this reminder to the brain right now.\n\n[Calling"
+  // crossed the whole council and reached iMessage. The old predicate rejected only a
+  // payload made entirely of XML/function protocol, so one prose sentence in front of an
+  // unfinished bracketed invocation disguised the plumbing as a human answer. A bracketed
+  // invocation marker beginning its own line is protocol wherever it occurs in the draft.
+  // Ordinary prose about calling someone remains legal.
+  if (/(?:^|\n)\s*\[(?:calling|invoking|running|executing)(?:\s+[a-z_][a-z0-9_]*)?(?:\s|\]|$)/i.test(probe)) {
+    return false;
+  }
   if (/^\[?\s*(?:tool[_\s-]?call|function[_\s-]?call)\s*\]?\s*$/i.test(probe)) return false;
   if (/^<\s*\/?\s*(?:tool_call|function_call)(?=[\s/>])[^>]*\/?>\s*$/i.test(probe) ||
       /^<\s*\/?\s*function\s*>\s*$/i.test(probe)) return false;
