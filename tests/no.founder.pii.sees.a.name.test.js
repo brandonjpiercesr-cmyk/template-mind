@@ -99,10 +99,23 @@ test('the guard states what it did NOT check, so silence is never read as covera
     'the guard must not claim a clean bill of health for dimensions it never examined');
 });
 
-test('markdown is still unread, and that gap is stated rather than hidden', () => {
-  // Not fixed here on purpose: this repo carries a large pre-existing markdown surface and
-  // pulling it in belongs in its own change with its own baseline. What is not allowed is
-  // leaving the gap silent, so the guard prints it on every run and this holds that promise.
-  const src = fs.readFileSync(GUARD, 'utf8');
-  assert.match(src, /md, txt, yml/, 'the markdown blind spot must be named in the run output');
-});
+// ⬡B:tests.no_founder_pii_name:FIX:markdown_and_dot_shipped_dirs_are_read_now:20260727⬡
+// Superseding, not deleting: this test used to pin markdown as an accepted, named gap. That
+// reasoning stopped holding the moment a real leak was found living inside it -- this repo's
+// own HANDOFF_TO_THE_NEXT_CHAT_20260721.md carried the founder's full legal name, and a follow
+// up Codex review on that same fix found .claude/skills/*/SKILL.md (shipped instruction
+// content, same standing as .github) was still pruned before the extension check ever ran and
+// itself carried the name a second time. This is a TRUE ZERO template; "small enough to fix"
+// beat "big enough to defer." Markdown is read now, and any other still-unscanned type (txt,
+// yml, yaml, sql, sh, env) remains named rather than silently assumed clean.
+test('markdown and shipped dot directories are read now, and what remains unread is still named',
+  () => {
+    const src = fs.readFileSync(GUARD, 'utf8');
+    assert.match(src, /SCANNED_EXT_RE\s*=\s*\/\\\.\([^)]*\bmd\b[^)]*\)\$\//,
+      'markdown must be in the scanned-extension list, not just promised in a comment');
+    assert.match(src, /ent\.name\s*!==\s*'\.claude'/,
+      '.claude must be let through the dot-directory prune the same way .github already is');
+    assert.match(src, /txt, yml/, 'a real remaining gap must still be named in the run output');
+    assert.doesNotMatch(src, /UNSCANNED_NOTE\s*=\s*'md,/,
+      'markdown must not still be listed among the unread extensions once it is actually read');
+  });

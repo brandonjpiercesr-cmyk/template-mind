@@ -4,7 +4,7 @@ description: The founder's supreme governing law, above every other rule includi
 ---
 
 # THE GRANDDADDY 911 — THE ONE WONDER SPEAKS
-### The ultimate governing law. Dictated by Brandon J. Pierce Sr., 20260721. Above wonder-first and everything else. Lineage FOUNDER>CLAUDETTE.
+### The ultimate governing law. Dictated by the founder, 20260721. Above wonder-first and everything else. Lineage FOUNDER>CLAUDETTE.
 
 ⬡B:clair.law:GRANDDADDY_911:the_one_wonder_speaks_everything_else_feeds:20260721⬡
 

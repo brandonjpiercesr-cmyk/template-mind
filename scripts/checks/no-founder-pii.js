@@ -73,9 +73,13 @@ const PERSON_NAME_RE = new RegExp(
 const IDENTITY_KEY_RE = /\b(founder|owner|full_name|fullName|legal_name|legalName|real_name|realName|human_name|account_holder)\s*:\s*['"`]([^'"`\n]{2,80})['"`]/g;
 const PERSONISH_VALUE_RE = /^(?:[A-Z][A-Za-z'’.-]{1,20})(?:\s+(?:[A-Z][A-Za-z'’.-]{0,20}|[A-Z]\.)){1,3}$/;
 // File types this guard reads. Stated out loud because everything outside it is UNCHECKED, and
-// an unstated blind spot reads as coverage. Markdown is the known live gap in this repo.
-const SCANNED_EXT_RE = /\.(js|cjs|mjs|jsx|ts|json|html)$/;
-const UNSCANNED_NOTE = 'md, txt, yml, yaml, sql, sh, env files and every other extension are NOT read by this guard';
+// an unstated blind spot reads as coverage.
+// ⬡B:scripts.checks.no_founder_pii:FIX:markdown_was_never_scanned_and_the_gate_never_looked:20260725⬡
+// This repo's own CLAUDE.md law: TRUE ZERO, never a literal. It was not: a tracked Markdown
+// file carried the founder's full legal name and this guard reported clean, because it never
+// opened a .md file at all. .md now joins the list this repo actually reads.
+const SCANNED_EXT_RE = /\.(js|cjs|mjs|jsx|ts|json|html|md)$/;
+const UNSCANNED_NOTE = 'txt, yml, yaml, sql, sh, env files and every other extension are NOT read by this guard';
 // Mask a name so the guard never prints, stores or baselines the plaintext it exists to protect.
 function maskName(s) {
   return String(s).trim().split(/\s+/).map(function (w) { return w.slice(0, 1) + '***'; }).join(' ');
@@ -104,7 +108,14 @@ function walk(dir, acc) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return acc; }
   for (const ent of entries) {
-    if (ent.name.startsWith('.') && ent.name !== '.github') continue;
+    // ⬡B:scripts.checks.no_founder_pii:FIX:claude_dir_was_pruned_before_the_extension_filter_ran:20260727⬡
+    // Codex review on this exact PR, correct: adding .md to SCANNED_EXT_RE does nothing for a
+    // file the walk never reaches. Every dot-directory except .github was pruned here, so
+    // .claude/skills/*/SKILL.md (five tracked files, real shipped instruction content) never
+    // reached the extension check at all. .claude ships to every world exactly like .github
+    // does, so it gets the same exception. Everything else dot-prefixed stays skipped (.git via
+    // SKIP_DIRS below, editor/tool metadata like .vscode, .idea that ships nothing runtime).
+    if (ent.name.startsWith('.') && ent.name !== '.github' && ent.name !== '.claude') continue;
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) { if (!SKIP_DIRS.has(ent.name)) walk(full, acc); continue; }
     if (!SCANNED_EXT_RE.test(ent.name)) continue;
