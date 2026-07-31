@@ -4,6 +4,13 @@ name: doctrine-demo-parity
 # Template runtime through pai/core and prove the mirrored dependency closure behaves as one
 # engine: unavailable memory is not empty, memory writes require independent readback, a
 # working-limit fallback keeps the full request, and paid egress belongs to its exact seat.
+#
+# ⬡B:ci.doctrine_demo_parity:WIRE:the_ceiling_ownership_law_runs_in_this_existing_job:20260731⬡
+# The 20260731 ceiling ownership mirror was added to THIS job's existing list rather than to a
+# new workflow file. Actions minutes are billed per job rounded up to a whole minute, and CI on
+# the sister repository went dark for more than twenty hours on 20260731 when the account spend
+# limit was reached. One more test file in a job that already runs the spend guard suite costs
+# seconds of a minute already being paid for.
 on:
   pull_request:
     branches: [ main ]
@@ -37,6 +44,7 @@ jobs:
           test/doctrine.blocked.fallback.continuity.test.js
           test/doctrine.openrouter.seat.spend.test.js
           test/doctrine.spend.guard.fail.closed.test.js
+          test/doctrine.no.coder.may.pick.a.ceiling.test.js
           test/provider.boundary.coda.budget.test.js
           test/provider.spend.receipt.durable.test.js
           test/migrate.test.js
