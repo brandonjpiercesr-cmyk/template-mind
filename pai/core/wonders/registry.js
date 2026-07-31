@@ -290,10 +290,63 @@ function snapshot() {
   };
 }
 
+// ⬡B:core.wonders.registry:BUILD:departments_derived_never_twinned:20260731⬡
+// The wonder-department view, DERIVED from the one registry rather than a second
+// hand-maintained org chart. Every owner chain in this registry tops out at one executive
+// root, so grouping by root collapses the whole estate into a single useless block. The
+// real department heads are the STATIONS: a node's department is the nearest node in its
+// owner chain (itself included) whose kind is station; nodes with no station above them
+// form the executive department under their root. Cycles cannot loop (each id visits once).
+// Measured on this template: 24 nodes across 4 stations.
+//
+// This lands here because the paired core/tool.loop.js exposes a read_wonder_departments
+// tool that calls registry.departments(). That file is byte-identical with the canonical
+// side by law, so the template inherited the tool in the same window. Without this
+// function the inherited tool would have answered ok:false forever, which is a hollow
+// tool wearing a working tool's name. The implementation is kept identical to the
+// canonical side so the two never drift into two behaviours under one name.
+function departmentRoot(node) {
+  var STATION = 'independent_thinking_station';
+  // Nearest station STRICTLY above wins; a station with no station above is its own
+  // department head; everything else rolls up to the executive root.
+  var current = node, hops = 0, seen = {}, root = node;
+  while (current && hops < 16) {
+    if (current !== node && current.kind === STATION) return current;
+    root = current;
+    var ownerId = current.owner_wonder_id;
+    if (!ownerId || ownerId === current.id || seen[ownerId]) break;
+    seen[current.id] = true;
+    var owner = BY_ID[ownerId];
+    if (!owner) break;
+    current = owner;
+    hops++;
+  }
+  if (node.kind === STATION) return node;
+  return root;
+}
+
+function departments() {
+  var groups = {};
+  NODES.forEach(function (node) {
+    var root = departmentRoot(node);
+    var key = root.id;
+    if (!groups[key]) {
+      groups[key] = { department_id: root.id, department_name: root.display_name || root.id,
+        members: [] };
+    }
+    groups[key].members.push({ id: node.id, name: node.display_name || node.id,
+      kind: node.kind, lifecycle: node.lifecycle,
+      role: node.product_role || node.technical_role || '' });
+  });
+  return Object.keys(groups).sort().map(function (key) { return groups[key]; });
+}
+
 module.exports = {
   CONTRACT_VERSION:contract.VERSION,
   resolve:resolve,
   list:list,
   validateRegistry:validateRegistry,
-  snapshot:snapshot
+  snapshot:snapshot,
+  departments:departments,
+  _test:{departmentRoot:departmentRoot}
 };

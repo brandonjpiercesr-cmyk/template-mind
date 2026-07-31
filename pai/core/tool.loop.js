@@ -408,7 +408,11 @@ var DATA_READER_TOOLS = {
   // safety net the other readers have: when the model will not emit the call, cold
   // code runs it and feeds the real board back so she answers from the actual lanes,
   // never from nothing and never from the calendar.
-  read_lane_board: function(m){ return {}; }
+  read_lane_board: function(m){ return {}; },
+  // Same shape and same reason as read_lane_board directly above: a pure deterministic
+  // reader over the in-repo wonder registry, force-executed when the model will not call
+  // it, so "talk to your team" is answered from the real org, never from nothing.
+  read_wonder_departments: function(m){ return {}; }
 };
 // ⬡B:core.tool_loop:FOUNDER_LAW:her_thinking_is_not_capped_at_a_literal:20260726⬡
 // FOUNDER DIRECT, 20260726, verbatim: "FIX ALL GAPS! AND STOP CAPPING SHIT LIKE 20 = max!!"
@@ -1192,6 +1196,8 @@ var TOOLS = [
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
   {type:'function',function:{name:'read_lane_board',description:'READ THE LANE BOARD. Returns every active build chat/lane working on your system right now, each with its ACL name and the roadmap it is currently on. Use this whenever the founder asks what chats or lanes are working on your build, who is building what, or whether two lanes might collide. The lanes cannot talk to each other, they coordinate by stamping this board, so this is how you know the whole picture. Takes no arguments.',
     parameters:{type:'object',properties:{}}}},
+  {type:'function',function:{name:'read_wonder_departments',description:'READ YOUR OWN WONDER NETWORK. Returns every department in your system with each wonder in it: its name, what it does for the person, and whether it is live, contained, or not yet born. Use this whenever someone asks about your team, your wonders, your departments, who works for you, or what parts of you exist. This is your real org, derived from the registry, so you answer from what is actually built and never invent a member. Takes no arguments.',
+    parameters:{type:'object',properties:{}}}},
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
     +'Use for ANY question about a game, score, or whether a team won (Lakers, NBA, NFL, MLB, NHL, WNBA). '
     +'Pass league as one of: nba, nfl, mlb, nhl, wnba. Returns the latest scoreboard lines.',
@@ -1455,6 +1461,7 @@ function toolSelectionBoundary(name) {
     nash_sports: 'USE WHEN: the person asks for a live or recent sports score, result, or whether a team won. DO NOT USE WHEN: they ask which team they personally like, for a sports opinion, or for non-sports current information.',
     consult_mace: 'USE WHEN: a coding request requires reading an exact repository file or directory before deciding or building. DO NOT USE WHEN: the person asks general knowledge, calendar, personal-memory, or non-code questions, or when no repository read is needed.',
     read_lane_board: 'USE WHEN: the person asks which coding lanes or chats are active, who owns work, or whether lanes may collide. DO NOT USE WHEN: they ask about their calendar, general project advice, repository contents, or ordinary conversation.',
+    read_wonder_departments: 'USE WHEN: the person asks about your team, your wonders, your departments, who works for you, or what parts of your system exist and whether they are alive. DO NOT USE WHEN: they ask about human coding chats (that is read_lane_board), their own calendar, or ordinary conversation.',
     update_screen: 'USE WHEN: the person explicitly asks to change or show something on the live glass. DO NOT USE WHEN: they ask for a spoken answer, general advice, stored memory, or a real-world action outside the screen.',
     email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
     contact_send: 'USE WHEN: the person explicitly authorizes this exact text to this exact resolved third party. DO NOT USE WHEN: they mention a person, ask for contact details, brainstorm wording, or have not authorized the exact send.',
@@ -1491,7 +1498,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   budget:['get_budget_summary','get_budget_upcoming'],
   memory:['find_in_brain','find_identity_evidence','write_to_brain'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','find_in_brain',
-    'read_lane_board','read_render_logs','get_recent_builds','read_own_code','consult_coda',
+    'read_lane_board','read_wonder_departments','read_render_logs','get_recent_builds','read_own_code','consult_coda',
     'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
   screen:['update_screen','save_layout','edit_layout','set_background'],
   general:[]
@@ -1548,6 +1555,15 @@ function routeToolIntent(message) {
   if (/\b(look at|looking at|open|screenshot|screen shot|render|check|view|see|inspect)\b/.test(text)
       && (/https?:\/\//.test(text) || /\b(page|site|website|url|portal|surface)\b/.test(text)))
     return 'code';
+  // Demo night 20260730 the founder texted "What's next to fix? And who is working on it?"
+  // and neither phrase matched anything, so the turn routed to general with zero tools and
+  // she answered "I don't have that information available right now" while the answer sat
+  // on the board. Build-state phrasings are code questions, and this specific rule sits
+  // above the broad memory pairing so "who's working on my build" is not eaten by my+build.
+  if (/\b(next to fix|left to fix|what needs fixing|fixing next|still broken|who(?:'s| is) working|who(?:'s| is) building|working on (?:it|this|that|the build|the system))\b/.test(text)) return 'code';
+  // Her own organization is a code-intent subject too: demo night he texted "talk to your
+  // entire team and let me know what you said" and the turn had no route to any org at all.
+  if (/\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team)\b/.test(text)) return 'code';
   if (/\b(my|our|stored|brain|memory|bead|previous|recent|most recent|most recently|recently|last)\b/.test(text) &&
       /\b(decision|preference|history|result|failure|flagged|built|build|did we|identity|who is)\b/.test(text)) return 'memory';
   if (/\b(code|repo|repository|deploy|builds?|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
@@ -1591,7 +1607,8 @@ function requiredReadToolForMessage(message, intent) {
   if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track|income|expenses?|paychecks?|salary|take[- ]?home|bills?|net (income|pay)|cash ?flow|afford|savings?|money|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'get_budget_summary';
   if (intent === 'memory' && /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text)) return null;
   if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
-  if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat)\b/.test(text)) return 'read_lane_board';
+  if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat|next to fix|left to fix|who(?:'s| is) working|who(?:'s| is) building|working on (?:it|this|that|the build|the system))\b/.test(text)) return 'read_lane_board';
+  if (intent === 'code' && /\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team|talk to your (?:whole |entire )?team)\b/.test(text)) return 'read_wonder_departments';
   return null;
 }
 
@@ -2227,13 +2244,27 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     try {
       var _boundLaneHam = String(hamUid || '').toUpperCase();
       if (!_boundLaneHam) return JSON.stringify({ ok:false, reason:'ham_uid_required' });
+      var _lbHeaders = { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() };
       var _lbUrl = _bu().replace(/\/+$/, '') + '/rest/v1/' + _tbl()
         + '?ham_uid=eq.' + encodeURIComponent(_boundLaneHam)
         + '&stamp_type=eq.LANE_CLAIM&source=ilike.lane.registry.*'
         + '&select=source,summary,created_at&order=created_at.desc&limit=30';
-      var _lbRes = await fetch(_lbUrl, { headers: {
-        apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema()
-      }, signal: (runtime && runtime.abortSignal) }).then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; });
+      // ⬡B:core.tool_loop:FIX:the_board_she_reads_is_the_board_the_coders_write:20260731⬡
+      // Demo night proof: the only production writer of LANE_CLAIM rows is inbox zero, while
+      // every real coding operator checks in and out through the CCWA door as CCWA_CHECKIN /
+      // CCWA_CHECKOUT rows. So the founder asked who is working on the build, this tool read
+      // an empty registry, and she truthfully had nothing. The CCWA ledger is the live board.
+      var _ccUrl = _bu().replace(/\/+$/, '') + '/rest/v1/' + _tbl()
+        + '?ham_uid=eq.' + encodeURIComponent(_boundLaneHam)
+        + '&stamp_type=in.(CCWA_CHECKIN,CCWA_CHECKOUT)&source=ilike.ccwa.cc.*'
+        + '&select=source,agent_global,summary,stamp_type,created_at&order=created_at.desc&limit=40';
+      var _lbBoth = await Promise.all([
+        fetch(_lbUrl, { headers: _lbHeaders, signal: (runtime && runtime.abortSignal) })
+          .then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; }),
+        fetch(_ccUrl, { headers: _lbHeaders, signal: (runtime && runtime.abortSignal) })
+          .then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; })
+      ]);
+      var _lbRes = _lbBoth[0], _ccRes = _lbBoth[1];
       // ⬡B:core.tool_loop:FIX:lane_board_returns_readable_prose_not_raw_json:20260719⬡
       // Founder caught her dumping the raw JSON blob at him. The tool now returns a
       // clean human-readable summary so even a light grounding pass speaks it as prose,
@@ -2250,9 +2281,42 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
         var _short = (_cut.length > 1 ? _cut[1] : _doing).trim().slice(0);
         _lines.push(_nm + ': ' + _short);
       });
+      // one line per CCWA coder, newest row wins, checked-in vs checked-out named plainly
+      var _seenCoder = {};
+      (Array.isArray(_ccRes) ? _ccRes : []).forEach(function (row) {
+        var _coder = String(row.agent_global || '').trim();
+        if (!_coder || _seenCoder[_coder]) return;
+        _seenCoder[_coder] = true;
+        var _what = String(row.summary || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+        var _state = row.stamp_type === 'CCWA_CHECKIN' ? 'working now' : 'last finished';
+        var _when = String(row.created_at || '').slice(0, 16).replace('T', ' ');
+        _lines.push(_coder + ' (' + _state + (_when ? ', ' + _when : '') + '): ' + _what);
+      });
       if (!_lines.length) return 'The lane board has no registered lanes right now.';
-      return 'There are ' + _lines.length + ' active build lanes on the board right now:\n- ' + _lines.join('\n- ');
+      return 'There are ' + _lines.length + ' build lanes on the board right now:\n- ' + _lines.join('\n- ');
     } catch (e) { return JSON.stringify({ ok:false, reason:'lane_board_error', detail:e.message }); }
+  }
+  if (name === 'read_wonder_departments') {
+    // ⬡B:core.tool_loop:WIRE:her_own_org_is_readable_at_last:20260731⬡ Demo night the
+    // founder texted "talk to your entire team and let me know what you said" and she had
+    // no readable org anywhere. This reads the one wonder registry (core/wonders/
+    // registry.js departments(), derived, never a second hand-maintained chart) and
+    // returns prose, one department per block, each member with its liveness named
+    // honestly, so she describes what actually exists and never invents a teammate.
+    try {
+      var _wdGroups = require('./wonders/registry.js').departments();
+      if (!Array.isArray(_wdGroups) || !_wdGroups.length) return 'The wonder registry has no departments recorded right now.';
+      var _wdLife = { active: 'live now', contained: 'live in a contained lane', planned: 'designed, not yet born' };
+      var _wdBlocks = _wdGroups.map(function (g) {
+        var members = (g.members || []).map(function (m) {
+          var life = _wdLife[m.lifecycle] || m.lifecycle;
+          var role = String(m.role || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+          return '  - ' + m.name + ' (' + life + ')' + (role ? ': ' + role : '');
+        });
+        return g.department_name + ' department, ' + members.length + ' member' + (members.length === 1 ? '' : 's') + ':\n' + members.join('\n');
+      });
+      return 'Your wonder network right now, from the registry:\n' + _wdBlocks.join('\n');
+    } catch (eWd) { return JSON.stringify({ ok:false, reason:'wonder_registry_error', detail:eWd.message }); }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
@@ -4885,7 +4949,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // question is about the BUILD chats/lanes, not the day. HINT in the same shape as
       // _isDayQ (she keeps ALL tools and still chooses), just puts read_lane_board top of
       // mind so she does not fall through to the calendar.
-      var _isLaneBoardQ = /\b(lane|lanes|which chat|what chat|chats|other chat|acl name|working on (your|the) build|who is building|who's building|building your|lane board|coordinat)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd;
+      var _isLaneBoardQ = /\b(lane|lanes|which chat|what chat|chats|other chat|acl name|working on (your|the) build|working on (it|this|that)|who is building|who's building|who is working|who's working|next to fix|left to fix|building your|lane board|coordinat)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd;
       // ⬡B:core.tool_loop:WIRE:coding_build_nudge_she_uses_her_coding_team:20260719⬡
       // Founder caught her NOT using her coding tools: asked to consult MACE/CODA and run
       // the coding process, she fell through to find_in_brain and answered with the
