@@ -516,14 +516,26 @@ function buckets(rows, key, transform) {
     .sort(function (a,b) { return b.count-a.count || a.owner.localeCompare(b.owner); }).slice(0,24);
 }
 async function readSummary(options) {
+  var requestedScope = options && options.scope && typeof options.scope === 'object'
+    ? options.scope : null;
+  var scope = {};
+  ['ham_uid','key_alias','component','service_id'].forEach(function(field) {
+    var value = clean(requestedScope && requestedScope[field]);
+    if (value) scope[field] = value;
+  });
+  var scoped = Object.keys(scope).length > 0;
+  function publish(summary) {
+    if (!scoped) SUMMARY_CACHE = summary;
+    return summary;
+  }
   var config = bankConfig(options && options.env), doFetch = fetchImpl(options);
   if (!config.ok || !doFetch) {
-    SUMMARY_CACHE = {readable:false,total:null,reason:'provider_spend_store_unavailable',at:Date.now()};
-    return SUMMARY_CACHE;
+    return publish({readable:false,total:null,
+      reason:'provider_spend_store_unavailable',at:Date.now()});
   }
   var since = new Date(Number(options && options.now || Date.now()) - 86400000).toISOString();
   var query = new URLSearchParams({created_at:'gte.' + since,
-    select:'attempt_id,phase,provider,kind,key_alias,component,disposition,status_code,created_at',
+    select:'attempt_id,phase,provider,kind,key_alias,component,ham_uid,service_id,disposition,status_code,created_at',
     order:'created_at.asc',limit:String(SUMMARY_LIMIT)});
   var response;
   try {
@@ -531,20 +543,24 @@ async function readSummary(options) {
       headers:readHeaders(config),signal:brain.boundedSignal(options && options.signal, options && options.env)
     });
   } catch (error) {
-    SUMMARY_CACHE = {readable:false,total:null,reason:'provider_spend_store_unavailable',at:Date.now()};
-    return SUMMARY_CACHE;
+    return publish({readable:false,total:null,
+      reason:'provider_spend_store_unavailable',at:Date.now()});
   }
   if (!response || response.ok !== true) {
-    SUMMARY_CACHE = {readable:false,total:null,reason:response &&
+    return publish({readable:false,total:null,reason:response &&
       (response.status === 404 || response.status === 400) ? 'provider_spend_schema_unavailable'
-        : 'provider_spend_summary_read_failed',at:Date.now()};
-    return SUMMARY_CACHE;
+        : 'provider_spend_summary_read_failed',at:Date.now()});
   }
   try {
     var rows = await boundedJson(response, MAX_STORE_BYTES);
     if (!Array.isArray(rows) || rows.length >= SUMMARY_LIMIT) throw new Error('provider_spend_summary_limit_exceeded');
-    var intents = rows.filter(function(row){return row && row.phase === 'INTENT';});
-    var terminals = rows.filter(function(row){return row && row.phase === 'TERMINAL';});
+    var scopedRows = scoped ? rows.filter(function(row) {
+      return Object.keys(scope).every(function(field) {
+        return clean(row && row[field]) === scope[field];
+      });
+    }) : rows;
+    var intents = scopedRows.filter(function(row){return row && row.phase === 'INTENT';});
+    var terminals = scopedRows.filter(function(row){return row && row.phase === 'TERMINAL';});
     var terminalByAttempt = new Map();
     terminals.forEach(function(row){terminalByAttempt.set(clean(row.attempt_id),row);});
     var succeeded = terminals.filter(function(row){return row.disposition === 'SUCCEEDED';}).length;
@@ -554,16 +570,26 @@ async function readSummary(options) {
     var provenEgress = terminals.filter(function(row){return row.disposition === 'SUCCEEDED' ||
       row.disposition === 'HTTP_ERROR';}).length;
     var unresolved = intents.filter(function(row){return !terminalByAttempt.has(clean(row.attempt_id));}).length;
-    SUMMARY_CACHE = {readable:true,total:intents.length,admissions:intents.length,
+    function latestAt(list) {
+      var values = list.map(function(row){return Date.parse(row && row.created_at || '');})
+        .filter(Number.isFinite);
+      return values.length ? new Date(Math.max.apply(Math, values)).toISOString() : null;
+    }
+    var unknownRows = terminals.filter(function(row){return row.disposition === 'OUTCOME_UNKNOWN';});
+    var unresolvedRows = intents.filter(function(row){return !terminalByAttempt.has(clean(row.attempt_id));});
+    return publish({readable:true,total:intents.length,admissions:intents.length,
       terminal:terminals.length,succeeded:succeeded,failed:failed,unresolved:unresolved,
       outcome_unknown:outcomeUnknown,proven_egress:provenEgress,
+      latest_outcome_unknown_at:latestAt(unknownRows),
+      latest_unresolved_at:latestAt(unresolvedRows),
+      scope:Object.keys(scope).length ? scope : null,
       window_hours:24,reason:null,at:Date.now(),
       by_provider:buckets(intents,'provider'),by_kind:buckets(intents,'kind'),
-      by_component:buckets(intents,'component',publicComponent),by_key_alias:buckets(intents,'key_alias')};
-    return SUMMARY_CACHE;
+      by_component:buckets(intents,'component',publicComponent),
+      by_key_alias:buckets(intents,'key_alias')});
   } catch (error) {
-    SUMMARY_CACHE = {readable:false,total:null,reason:String(error && error.message || error),at:Date.now()};
-    return SUMMARY_CACHE;
+    return publish({readable:false,total:null,
+      reason:String(error && error.message || error),at:Date.now()});
   }
 }
 function cachedSummary() {

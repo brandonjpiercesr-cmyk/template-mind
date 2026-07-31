@@ -235,6 +235,18 @@ async function tryRunPodGLM(system, user, opts) {
 var seatMap = null;
 try { seatMap = require('./seat.map.js'); } catch (eSeatMap) { seatMap = null; }
 
+function applyOpenRouterThinkingPolicy(body, model) {
+  var target=body||{},exactModel=String(model||'').trim().toLowerCase();
+  if(/^(?:qwen\/|z-ai\/glm)/.test(exactModel)){
+    target.chat_template_kwargs={enable_thinking:false};
+    target.reasoning={enabled:false};
+  }else{
+    delete target.chat_template_kwargs;
+    delete target.reasoning;
+  }
+  return target;
+}
+
 // ⬡B:core.model_ladder:911:the_rung_spent_the_seats_KEY_and_threw_away_its_MODEL:20260728⬡
 // THE OPEN LEDGER row B7, "re-seat the ladder onto funded seat-map models". It was real, and
 // this is what it was. Both OpenRouter rungs below already resolved the funded seat and paid
@@ -355,8 +367,7 @@ async function tryOpenRouterGLM(system, user, opts) {
     // credits (live 402 receipt today) OpenRouter is the working warm rung, so
     // it must answer clean. Both passthrough shapes are sent because OpenRouter
     // providers differ in which one they honor.
-    body.chat_template_kwargs = { enable_thinking: false };
-    body.reasoning = { enabled: false };
+    applyOpenRouterThinkingPolicy(body,glmModel);
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
@@ -445,8 +456,7 @@ async function tryQwen(system, user, opts) {
     //
     // Both passthrough shapes go out because OpenRouter providers differ in which one they
     // honour, which is the reasoning the GLM rung already carries and the reason it works.
-    body.chat_template_kwargs = { enable_thinking: false };
-    body.reasoning = { enabled: false };
+    applyOpenRouterThinkingPolicy(body,qwenModel);
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
@@ -665,4 +675,5 @@ async function transcribe(audio, opts) {
 }
 
 module.exports = { deliberate: deliberate, transcribe: transcribe,
-  _test: { hasAcceptedContent: hasAcceptedContent, cleanModelContent: cleanModelContent } };
+  _test: { hasAcceptedContent: hasAcceptedContent, cleanModelContent: cleanModelContent,
+    applyOpenRouterThinkingPolicy:applyOpenRouterThinkingPolicy } };

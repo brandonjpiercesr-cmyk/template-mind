@@ -107,7 +107,7 @@ async function readCalendarNext24h(hamUid) {
           const _d = startTs ? new Date(startTs * 1000) : null;
           const _allDay = !!when.start_date;
           const _todayL = _fL.format(new Date());
-          const _todayF = _fU.format(new Date(new Date().toLocaleString('en-US', { timeZone:_tz })));
+          const _todayF = _todayL;
           const _dateStr = _d ? (_allDay ? _fU.format(_d) : _fL.format(_d)) : null;
           var _timeStr = _d ? (_allDay ? 'all day' : _fT.format(_d)) : 'time unknown';
           // The end, stamped by the same rule as the start: an all-day span is a floating UTC
