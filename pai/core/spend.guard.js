@@ -84,6 +84,86 @@ function ceilDetail(kind) {
 // One derivation, one place. The provider-spend Memory Bank RPC enforces this number.
 function configuredCeil(kind) { return ceilDetail(kind).value; }
 
+// ⬡B:core.spend_guard:LAW:the_five_states_of_a_ceiling_may_never_collapse_into_fewer:20260801⬡
+// CATHY (Codex) review chain, 20260801, nine findings across four separate files
+// (core/provider.boundary.js, core/provider.spend.receipt.js, routes/launch.state.routes.js,
+// routes/spend.ceiling.routes.js, core/autonomy.governor.js, core/ceiling.owner.js), one at a
+// time, each fixed at its own site. That is whack-a-mole, and the founder named it: "that is
+// the thing that stops finding number ten arriving from a reviewer instead of from him in
+// production." Every single one of those nine findings, traced back, is the SAME error:
+// collapsing distinct states into fewer states.
+//   1. UNSET               nobody ever configured this setting.
+//   2. CONFIGURED          a real, usable, finite value is in force.
+//   3. CONFIGURED_ABOVE_RANGE   configured, but larger than this process can represent
+//                          exactly (or an overflowed digit run): a clear, deliberate ask for
+//                          MORE, not a mistake, and not the same as UNSET.
+//   4. UNREADABLE          configured, but not parseable as the kind of number this setting
+//                          holds: a real typo, and not the same as CONFIGURED_ABOVE_RANGE.
+//   5. LANE_DEFAULT        nothing configured, a coder's baked-in number is standing in.
+// "unlimited" is not "unset" (states 1 and 3 are both unlimited, and they are not the same
+// state: one is a human's silence, the other is a human's number too large to hold exactly).
+// "too big" is not "malformed" (states 3 and 4 are both refusals of the raw digits, and they
+// are not the same state: one is an unambiguous MORE, the other is genuinely unreadable).
+// "no ceiling in force" is not "no ceiling configured" (states 1 and 3 both leave nothing in
+// force, but only state 1 is silence; state 3 is a human's own number that needs review, and
+// telling him nothing is configured when he configured something is a lie about his own edit).
+//
+// ONE SOURCE for translating a raw `ceilDetail()`/`readCeiling()` result into what may be
+// PRINTED to a person or to the mind, or WRITTEN to a report. Every surface that reports a
+// ceiling (routes/launch.state.routes.js, routes/spend.ceiling.routes.js,
+// core/autonomy.governor.js) calls this instead of re-deriving its own branching, so a state
+// distinction fixed once is fixed everywhere, and cannot silently re-collapse at a fifth site
+// nobody has found yet. `core/ceiling.owner.js`'s own raw `value` field remains the ADMISSION
+// ONLY signal `core/spend.guard.js#preflight()` reads directly (see the note on `ceilDetail`
+// above); it is `value` from THIS function, never that one, that may reach a report.
+var CEILING_STATE = Object.freeze({
+  UNSET: 'unset',
+  CONFIGURED: 'configured',
+  CONFIGURED_ABOVE_RANGE: 'configured_above_range',
+  UNREADABLE: 'unreadable',
+  LANE_DEFAULT: 'lane_default'
+});
+function describeCeiling(detail) {
+  var d = detail || {};
+  var state;
+  if (d.chosen_by === 'unreadable_setting') state = CEILING_STATE.UNREADABLE;
+  else if (d.chosen_by === 'this_lane') state = CEILING_STATE.LANE_DEFAULT;
+  else if (d.chosen_by === 'nobody_yet') state = CEILING_STATE.UNSET;
+  else if (d.chosen_by === 'the founder' && d.unlimited === true) {
+    state = CEILING_STATE.CONFIGURED_ABOVE_RANGE;
+  } else state = CEILING_STATE.CONFIGURED;
+  // The admission-only sentinel (`EXACT_INTEGER_EDGE`/`Number.MAX_SAFE_INTEGER`) never
+  // survives past this line. UNSET and CONFIGURED_ABOVE_RANGE both report value:null, because
+  // in BOTH states nothing is actually in force at a real number, even though they are
+  // different states with different owners and different reasons.
+  var reportableValue = (state === CEILING_STATE.UNSET ||
+    state === CEILING_STATE.CONFIGURED_ABOVE_RANGE) ? null : d.value;
+  // Only these two states put a real, working number in force that can be REACHED and refuse
+  // a call. UNSET and CONFIGURED_ABOVE_RANGE cannot fire, because there is nothing to compare
+  // an admission count against. UNREADABLE cannot fire a "ceiling reached" refusal either: it
+  // refuses EVERY call outright at the configuration boundary, never by counting up to it.
+  var inForce = state === CEILING_STATE.CONFIGURED || state === CEILING_STATE.LANE_DEFAULT;
+  var note;
+  if (state === CEILING_STATE.UNSET) {
+    note = 'nothing is configured, so no call ceiling of this kind is in force.';
+  } else if (state === CEILING_STATE.CONFIGURED_ABOVE_RANGE) {
+    note = 'a value is configured that is larger than this process can count exactly, so no ' +
+      'call ceiling of this kind is in force at the number typed. This needs review: it is ' +
+      'his own number, not the same as nothing being set.';
+  } else if (state === CEILING_STATE.UNREADABLE) {
+    note = 'a value is configured that cannot be read as a number, so every call of this ' +
+      'kind refuses until it is corrected.';
+  } else if (state === CEILING_STATE.LANE_DEFAULT) {
+    note = 'no human has chosen this ceiling, a value baked into code is standing in.';
+  } else {
+    note = null;
+  }
+  return {
+    state: state, value: reportableValue, unlimited: d.unlimited === true, in_force: inForce,
+    needs_review: d.needs_review === true, chosen_by: d.chosen_by || null, note: note
+  };
+}
+
 function pruneOld() {
   var cut = Date.now() - DAY_MS;
   function at(entry) { return typeof entry === 'number' ? entry : Number(entry && entry.at || 0); }
@@ -449,6 +529,8 @@ module.exports = { lastDenial: lastDenial, allow: allow, preflight:preflight,
   rememberDurableDenial:rememberDurableDenial,
   usageAttribution:usageAttribution,
   ceilDetail: ceilDetail,
+  describeCeiling: describeCeiling,
+  CEILING_STATE: CEILING_STATE,
   withAttribution:withAttribution,
   currentAttribution:currentAttribution,
   nextProviderAttemptOrder:nextProviderAttemptOrder,

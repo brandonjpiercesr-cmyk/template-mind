@@ -45,6 +45,7 @@ jobs:
           test/doctrine.openrouter.seat.spend.test.js
           test/doctrine.spend.guard.fail.closed.test.js
           test/doctrine.no.coder.may.pick.a.ceiling.test.js
+          test/doctrine.ceiling.five.states.never.collapse.test.js
           test/provider.boundary.coda.budget.test.js
           test/provider.spend.receipt.durable.test.js
           test/migrate.test.js
