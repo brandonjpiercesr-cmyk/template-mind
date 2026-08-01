@@ -43,6 +43,55 @@ const PHONE_RE = /(?:\+?1[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}(?!\d)/g;
 // is an international phone and never a timestamp (timestamps carry no +), so it is safe
 // to catch. The guard never carries the real number, not even as an example.
 const E164_RE = /\+\d{11,15}(?!\d)/g;
+// ⬡B:checks.no_founder_pii:FIX:the_gate_never_had_an_address_detector:20260801⬡
+// THE LAW NAMED FOUR THINGS AND THIS GUARD COULD ONLY SEE THREE. The founder law of 20260722
+// forbids "no email, no phone, no HAM UID, no child's or family member's name, NO PERSONAL
+// ADDRESS". Email, phone and name each got a detector across four hardening passes. Address
+// never got one at all, in either repo, so a home address in shippable code was invisible to
+// every green run this gate has ever printed. Same defect shape as the markdown blind spot
+// closed earlier the same day: the roster was never audited against the law it enforces.
+//
+// MEASURED 20260801 on anew main with a standalone shape probe: 5 distinct address-shaped
+// values across 6 files, two of them client intake transcripts and ONE of them
+// core/scw/mediators.seed.js, which is shipped code that writes into the brain at mount.
+//
+// Two shapes, both deliberately narrow, because a guard that cries wolf gets switched off:
+//   1. a street line: a house number, one to four words, then a street-type suffix,
+//   2. a city line: City[, City] then a two-letter US state then a 5 or 9 digit ZIP.
+// A bare number and a bare city are never flagged. This is a US-shaped detector and it says
+// so rather than implying worldwide coverage; a non-US postal address still walks past it,
+// which is stated in UNSCANNED_NOTE rather than left for someone to discover.
+// MEASURED FALSE POSITIVE, found on the very first run of this detector and fixed rather than
+// shipped: routes/os.api.routes.js:1027 is ordinary prose in a comment that happens to read
+// "<number> <Title> <Title> Way <more words>". Street-type suffixes are common English words
+// (Way, Place, Court, Circle, Drive), so the suffix alone is not a signal. A real address
+// TERMINATES there: it is followed by a comma, a quote, a closing bracket, or end of line,
+// never by three more words of a sentence. That single lookahead removed the whole
+// false-positive class and kept every true hit, verified by re-running before and after.
+//
+// LIMIT, stated rather than left to be discovered, in the same spirit as PERSON_NAME_RE above:
+// requiring termination means an address written MID-SENTENCE, with prose continuing after the
+// street type, is not detected. That is a deliberate precision-over-recall trade, taken because
+// this estate's own history says a guard that cries wolf gets switched off and a switched-off
+// guard protects nobody. A partial detector that names which half it covers beats a guard that
+// silently covered none of it, which is exactly what this gate did for address until today.
+const STREET_ADDRESS_RE = /\b\d{1,6}\s+(?:[A-Z][A-Za-z.'-]+\s+){1,4}(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|Way|Pl|Place|Ter|Terrace|Cir|Circle|Hwy|Highway|Pkwy|Parkway)\b\.?(?=\s*(?:[,;"'`)\]}]|$))/g;
+const CITY_STATE_ZIP_RE = /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}(?:-\d{4})?\b/g;
+// Mask an address so the guard never prints, stores or baselines the place it protects. Only
+// the SHAPE survives: digits become #, letters become *, punctuation and spacing stay so a
+// reviewer can still tell a street line from a city line without learning where anyone lives.
+function maskAddress(s) {
+  return String(s).trim().replace(/\d/g, '#').replace(/[A-Za-z]/g, '*');
+}
+// ⬡B:checks.no_founder_pii:PARTIAL:digest_bound_hints_land_here_one_detector_at_a_time:20260801⬡
+// The sister repo bound every hint to a truncated SHA-256 of the matched value on 20260729,
+// so a DIFFERENT value of the same shape can never satisfy an already-accepted baseline key.
+// This copy never received that pass. The address detector arrives already bound rather than
+// arriving with a hole that has to be closed later; the four OLDER call sites here still carry
+// bare shape masks and that is named work for the detector-backport lane, not silence.
+function tokenHint(tok, label) {
+  return (label || (String(tok).slice(0, 1).toUpperCase() + '***')) + '#' + h(tok).slice(0, 12);
+}
 // Tokens for the hash check: words, emails, hyphenated names, hex ids.
 const TOKEN_RE = /[A-Za-z0-9._%+@-]{3,}/g;
 // ⬡B:checks.no_founder_pii:FIX:the_gate_could_not_see_a_name:20260726⬡
@@ -95,7 +144,7 @@ const SCANNED_EXT_RE = /\.(js|cjs|mjs|jsx|ts|tsx|json|html|htm|md|markdown|txt|y
 // What is STILL unread, stated rather than implied, because an unstated blind spot reads as
 // coverage: extensionless files (Dockerfile, Makefile, LICENSE), binaries, and dot-FILES at any
 // level (walk() skips names starting with a dot; only .github and .claude are entered).
-const UNSCANNED_NOTE = 'extensionless files (Dockerfile, Makefile, LICENSE), binaries, and dot-FILES are NOT read by this guard';
+const UNSCANNED_NOTE = 'extensionless files (Dockerfile, Makefile, LICENSE), binaries, and dot-FILES are NOT read by this guard, and the address detector is US-shaped so a non-US postal address is NOT detected';
 // Mask a name so the guard never prints, stores or baselines the plaintext it exists to protect.
 function maskName(s) {
   return String(s).trim().split(/\s+/).map(function (w) { return w.slice(0, 1) + '***'; }).join(' ');
@@ -172,6 +221,15 @@ function scanFile(full) {
       if (d.length < 11 || d.length > 15) continue;
       violations.push({ rel, line: i + 1, type: 'hardcoded_phone', hint: '+**...' + d.slice(-4) });
     }
+    // a personal address, by shape. The guard never learns the place, only that one is there.
+    STREET_ADDRESS_RE.lastIndex = 0;
+    while ((m = STREET_ADDRESS_RE.exec(line))) {
+      violations.push({ rel, line: i + 1, type: 'hardcoded_address', hint: tokenHint(m[0], maskAddress(m[0])) });
+    }
+    CITY_STATE_ZIP_RE.lastIndex = 0;
+    while ((m = CITY_STATE_ZIP_RE.exec(line))) {
+      violations.push({ rel, line: i + 1, type: 'hardcoded_address', hint: tokenHint(m[0], maskAddress(m[0])) });
+    }
     // a real person's name, by shape. The guard never learns the name, only that one is there.
     PERSON_NAME_RE.lastIndex = 0;
     while ((m = PERSON_NAME_RE.exec(line))) {
@@ -241,7 +299,7 @@ function main() {
   // for a name, and while a real legal name sat in a bead written at mount. A guard that names
   // what it checked cannot be misread as covering what it did not, so every run states its
   // roster and its blind spot, pass or fail.
-  const ROSTER = 'checks run: email, phone, e164, denylisted-token, person-name-shape, identity-key. '
+  const ROSTER = 'checks run: email, phone, e164, us-address-shape, denylisted-token, person-name-shape, identity-key. '
     + 'NOT read: ' + UNSCANNED_NOTE + '. A plain two-word name with no honorific, middle initial '
     + 'or generational suffix is also not detected.';
   if (!all.length) {

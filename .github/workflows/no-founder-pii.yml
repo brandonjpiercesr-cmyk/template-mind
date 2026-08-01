@@ -35,5 +35,11 @@ jobs:
       # a real temp tree, which is the only way to prove which files a walker actually opens.
       - name: Prove the gate actually opens every shipped text format
         run: node --test tests/the.gate.reads.every.shipped.text.format.test.js
+      # ⬡B:ci.no_founder_pii:WIRE:the_law_named_four_things_and_the_gate_saw_three:20260801⬡
+      # The founder law forbids email, phone, HAM UID, name AND personal address. Three of the
+      # four had detectors; address never had one in either repo. This is the TRUE ZERO template,
+      # so the detector must be here too and must stay at zero findings, never baselined.
+      - name: Prove the gate can see a personal address
+        run: node --test tests/the.gate.can.see.an.address.test.js
       - name: Scan for hardcoded founder identity (must be zero)
         run: node scripts/checks/no-founder-pii.js .
