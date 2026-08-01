@@ -87,7 +87,8 @@ function memoryReadLine(label, availability, result) {
     namedAgentRecords:'question-matched named agent records',
     identityEvidence:'question-matched identity evidence',
     preferences:'question-matched preferences',
-    wonderGames:'question-matched Wonder Games records'
+    wonderGames:'question-matched Wonder Games records',
+    agentFindRecentCycleTruth:'requesting seat recent cycle truth'
   }[label] || label;
   var value = result && result.status === 'fulfilled' ? result.value : null;
   // Most FIND contracts carry beads; identity evidence carries verified records. Prefer the
@@ -116,7 +117,7 @@ function memoryReadLine(label, availability, result) {
 
 // Build complete Memory Bank for a HAM turn
 // Returns: { system_prompt, ham, agents, context, tools_summary, ms }
-async function buildMemoryBank(hamUid, channel, question, identity, resolvedReadTier) {
+async function buildMemoryBank(hamUid, channel, question, identity, resolvedReadTier, options) {
   // ⬡B:core.fcw.builder:WIRE:gate_identity_authority:20260701⬡
   // When the ATMOSPHERE gate has already resolved this person, its envelope is the
   // authority for name/tier/world — findIdentity remains as enrichment/fallback.
@@ -220,6 +221,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // env flag, because a capture-and-surface repair on an existing path should simply be correct.
   // Cold code CAPTURES and SURFACES this evidence and labels what it is. It never decides what
   // his day means and it never speaks: A'NU reads it and A'NU answers (granddaddy-911).
+  var _agentFindWake = options && options.agentFindWake;
   var _batch = [
     findIdentity(hamUid, _viewerTier),
     findAgentJDs(hamUid, _viewerTier),
@@ -240,7 +242,20 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       ? findStatedCommitments(hamUid, 10, _viewerTier) : Promise.resolve(null))
   ];
   var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'statedPlans'];
-  var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1;
+  var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1,
+    _agentFindRecentIdx = -1;
+  // ⬡B:core.fcw.builder:WIRE:agent_find_recent_truth_joins_the_same_parallel_harvest:20260801⬡
+  // The seat's recent cycle truth is a real wall contributor, so it starts in the same
+  // allSettled harvest as the existing seven rather than adding a serial pre-model scan.
+  // The Agent FIND binder below treats an unavailable result as terminal. A successful empty
+  // result stays a successful empty result and is never turned into an unavailable history.
+  if (_agentFindWake) {
+    _agentFindRecentIdx = _batch.length;
+    _batch.push(require('./agent.find.js').readRecentCycleTruth({
+      ham_uid:hamUid,seat_node_id:_agentFindWake.seat_node_id,viewer_tier:_viewerTier
+    }));
+    _labels.push('agentFindRecentCycleTruth');
+  }
   if (_namedAgentGlobals.length) {
     _namedAgentsIdx = _batch.length;
     _batch.push(findNamedAgentRecords(hamUid, _namedAgentGlobals, _viewerTier));
@@ -853,7 +868,10 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     _availabilityNotes.push('successful EMPTY contributors: ' + empties.join(', '));
   }
   if (!_availabilityNotes.length) _availabilityNotes.push('all contributors present');
-  try {
+  // Ordinary direct builder callers keep the legacy MINUTES trace. The canonical PAI path
+  // now has Agent FIND, whose typed edge-bearing beacon supersedes that untyped direct POST;
+  // never write both for the same wall.
+  if (!_agentFindWake) try {
     var _BU = _bu(), _BK = _bk();
     if (_BU && _BK) {
       var _wm = Date.now();
@@ -885,7 +903,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     }
   } catch (_e) { /* wonder-stamp never breaks the wall */ }
 
-  return {
+  var _builtWall = {
     ok: true,
     available: true,
     partial: _unavailableReads.length > 0 || _partialReads.length > 0,
@@ -918,6 +936,18 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       context: context ? context.ms : 0
     }
   };
+  if (!_agentFindWake) return _builtWall;
+  var _agentFindRecent = (_agentFindRecentIdx >= 0 && _results[_agentFindRecentIdx] &&
+    _results[_agentFindRecentIdx].status === 'fulfilled')
+    ? _results[_agentFindRecentIdx].value
+    : {ok:false,available:false,reason:'agent_find_recent_truth_rejected',beads:[]};
+  // ⬡B:core.fcw.builder:GATE:agent_find_readback_precedes_every_paid_deliberation:20260801⬡
+  // This await is the wake boundary. An ordinary PAI caller cannot receive an ok:true FCW until
+  // the requesting seat, the complete wall, the recent cycle truth and the typed beacon agree
+  // on readback. tool.loop refuses every non-ok wall before its first provider call.
+  return require('./agent.find.js').bindWall(Object.assign({}, _agentFindWake, {
+    fcw:_builtWall,recent_cycle_truth:_agentFindRecent
+  }));
 }
 
 // ⬡B:core.fcw_builder:ALIAS:memory_bank_doctrine_name_20260712⬡ BIND doctrine: Memory
