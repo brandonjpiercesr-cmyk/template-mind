@@ -2310,10 +2310,16 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       };
       // The board read-model, run over THIS ham's rows only. harness()'s own bank readers are
       // deliberately global (one board, every world) and must never become the reader inside a
-      // ham-bound tool, so both are injected: the rows already fetched above, and no targeted
-      // per-worker rescue, which is the board door's job and reaches across hams to do it.
-      // Founder broadcasts are written to coders, not to the person asking, so they stay on
-      // the coder wall. A world that carries no command center keeps the plain read below.
+      // ham-bound tool, so all three are injected: the rows already fetched above, no targeted
+      // per-worker rescue (the board door's job, reaches across hams to do it), and no separate
+      // message fetch. core/ccwa.js's own FIX:the_recap_the_doctrine_promises_is_actually_fetched
+      // added readMessages as a fourth harness() dependency with its own global (non-ham-scoped)
+      // default fetch; left uninjected here, on merge with that change, it silently reopened the
+      // exact cross-world read this tool exists to avoid. Caught by
+      // tests/tool.loop.build.state.intent.test.js's "the board read stays inside the bound
+      // world" assertion. Founder broadcasts are written to coders, not to the person asking, so
+      // they stay on the coder wall. A world that carries no command center keeps the plain read
+      // below.
       var _lbCards = null;
       try {
         var _lbBoard = require('./ccwa.js');
@@ -2321,7 +2327,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
           var _lbRead = await _lbBoard.harness({
             read: function () { return Array.isArray(_ccRes) ? _ccRes : []; },
             readLatestFor: function () { return null; },
-            readActiveDirectives: function () { return []; }
+            readActiveDirectives: function () { return []; },
+            readMessages: function () { return []; }
           });
           if (_lbRead && _lbRead.ok && Array.isArray(_lbRead.workers)) _lbCards = _lbRead.workers;
         }
