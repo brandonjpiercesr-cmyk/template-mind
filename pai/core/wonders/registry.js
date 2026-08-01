@@ -24,13 +24,26 @@ const NODES = [
     metadata:{wiring:[wire('anu.index.js'),wire('routes/chat.bridge.routes.js')]}
   },
   {
+    id:'station.agent_find', display_name:'Agent FIND', kind:'wonder_agent', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Bind the complete world wall and recent cycle truth to the requesting seat before deliberation.',
+    product_role:'The decoder navigator that makes sure each seated mind wakes in the right world and job.',
+    cycle:{triggers:['seat.wake','ham.turn'],coordinator:'station.pai'},
+    context_policy:'context.agent_find.per_seat_fcw.v1',
+    authority_policy:'authority.agent_find.read_bind_stamp_only.v1',
+    return_gate:'gate.ham.active_channel',metadata:{wiring:[wire('core/agent.find.js#bindWall'),
+      wire('core/find.js#find'),wire('core/fcw.builder.js#buildMemoryBank'),
+      wire('core/truth.beacon.js'),wire('core/tool.loop.js#runPAI')],truth_beacon_id:'agent.find'}
+  },
+  {
     id:'station.pai', display_name:'PAI', kind:'independent_thinking_station', lifecycle:'active',
     owner_wonder_id:'wonder.anu', reports_to:'wonder.anu', ham_scope:'inherited',
     technical_role:'Run the interactive council, tools, steps, and cycle receipt.',
     product_role:"A'NU's governed reasoning and action cycle.",
     cycle:{triggers:['ham.turn','subordinate.hitch'],coordinator:'station.pai'},
     context_policy:'context.pai.full.v1', authority_policy:'authority.pai.v1',
-    return_gate:'gate.ham.active_channel', metadata:{wiring:[wire('core/tool.loop.js#runPAI')]}
+    return_gate:'gate.ham.active_channel', metadata:{wiring:[wire('core/tool.loop.js#runPAI')],
+      agent_find:{recent_truth:[{stamp_type:'CYCLE_STEP',source_prefix:'pai.cycle.',limit:12}]}}
   },
   {
     id:'station.coda', display_name:'CODA', kind:'independent_thinking_station', lifecycle:'active',
@@ -41,7 +54,8 @@ const NODES = [
     context_policy:'context.coda.bcw.v1', authority_policy:'authority.coda.r0_r3_policy_r4_human.v1',
     return_gate:'gate.coda.result',
     metadata:{wiring:[wire('advisors/coding.js'),wire('core/coda/mind.js'),
-      wire('core/coda/wall.js'),wire('core/tool.loop.js#consult_coda')]}
+      wire('core/coda/wall.js'),wire('core/tool.loop.js#consult_coda')],
+      agent_find:{recent_truth:[{stamp_type:'CODA_WONDER_RESULT',source_prefix:'coda.result.',limit:6}]}}
   },
   {
     id:'agent.span', display_name:'SPAN', kind:'wonder_agent', lifecycle:'contained',
@@ -253,8 +267,23 @@ const NODES = [
 const BY_ID = Object.create(null);
 NODES.forEach(function (node) { BY_ID[node.id] = Object.freeze(node); });
 
+const SHARED_MISSION='Turn real world truth into governed, proactive human service through the complete PAI cycle.';
+const PERSONA_BASE=Object.freeze({lines:Object.freeze([
+  'You are a working seat inside ENVOLVE, powered by Proactive Assisting Intelligence.',
+  'Use the evidence in this world, stay inside your registered authority, and return through your gate.'
+])});
+const AGENT_FIND_LEGS=Object.freeze({
+  'station.agent_find':Object.freeze({persona:{differentia:'You decode and navigate the complete wall before another seat thinks.',temperament:'Fast, literal, silent, and exact about provenance.'},jd:{summary:'Bind the complete FCW, recent truth, and employment record to one requesting seat before deliberation.',duties:['Run canonical FIND reads.','Preserve every FCW contributor.','Stamp and verify one typed truth beacon.'],never:['Never call a model.','Never decide what evidence means.','Never turn an unavailable read into empty truth.']},goals:['Every deliberation starts from a complete, seat-bound wall.'],toolbelt:['tool.brain.find'],may_summon:[],may_recommend:[],wakes:['station.pai','station.coda'],hands_to:['station.pai','station.coda']}),
+  'station.pai':Object.freeze({persona:{differentia:'You coordinate the governed reasoning cycle.',temperament:'Deliberate and evidence led.'},jd:{summary:'Run the interactive PAI cycle end to end.',duties:['Read the world wall.','Use governed tools and councils.','Return through the active channel.'],never:['Never invent unavailable evidence.']},goals:['Complete each admitted cycle with durable truth.'],toolbelt:['tool.brain.find'],may_summon:['station.coda'],may_recommend:['guardian.clair'],wakes:['station.coda'],hands_to:['gate.ham.active_channel']}),
+  'station.coda':Object.freeze({persona:{differentia:'You lead coding judgment and repair disposition.',temperament:'Exact, practical, and verification hungry.'},jd:{summary:'Convert evidence-backed coding work through the governed coding cycle.',duties:['Read exact repair evidence.','Choose a typed disposition.','Return through the CODA result gate.'],never:['Never claim a repair without source and readback.']},goals:['Every admitted repair reaches a durable disposition.'],toolbelt:['tool.brain.find'],may_summon:['agent.span','agent.mace'],may_recommend:['guardian.clair'],wakes:['agent.span','agent.mace'],hands_to:['gate.coda.result']})
+});
+
+function personaBase() { return {lines:PERSONA_BASE.lines.slice()}; }
+function sharedMission() { return SHARED_MISSION; }
+
 function resolve(id) {
-  return BY_ID[String(id || '')] || null;
+  const raw=BY_ID[String(id||'')]||null,legs=raw&&AGENT_FIND_LEGS[raw.id];
+  return raw&&legs?Object.assign({},raw,legs):raw;
 }
 
 function list(options) {
@@ -348,5 +377,7 @@ module.exports = {
   validateRegistry:validateRegistry,
   snapshot:snapshot,
   departments:departments,
+  personaBase:personaBase,
+  sharedMission:sharedMission,
   _test:{departmentRoot:departmentRoot}
 };

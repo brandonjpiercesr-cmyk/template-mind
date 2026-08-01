@@ -3838,6 +3838,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (normalizedChannel === 'coding') return 'coda';
     return 'c2_organ';
   }
+  // ⬡B:core.tool_loop:WIRE:agent_find_binds_the_model_seat_to_its_registry_seat:20260801⬡
+  // Provider seats name the wallet/model boundary; registry seats name the job being done.
+  // CODA's coding channel wakes with CODA's employment record. Voice and ordinary turns are
+  // PAI-cycle work. Agent FIND receives both names and proves that binding before any provider
+  // bytes can leave this loop.
+  function _agentFindSeatNodeId() {
+    return _paiSeatName() === 'coda' ? 'station.coda' : 'station.pai';
+  }
   function _paiSeatCandidate(name) {
     var seat = seatMap.seat(name || _paiSeatName());
     if (!seat || seat.provider !== 'openrouter') return null;
@@ -4141,7 +4149,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       available:true, ham_uid:String(hamUid||'').toUpperCase(), subjects:[],
       records:[], count:0, ms:0 },
     contributors:null, contributorsResolved:0, contributorsTotal:0, ms:0
-  } : await buildMemoryBank(hamUid,channel,message,identity,_readAuthority)
+  } : await buildMemoryBank(hamUid,channel,message,identity,_readAuthority,{
+    agentFindWake:{ham_uid:hamUid,cycle_id:_cycleId,request_id:_requestId,
+      channel:channel,seat_name:_paiSeatName(),seat_node_id:_agentFindSeatNodeId(),
+      observed_at:new Date().toISOString()}
+  })
     .catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
   if (await _turnCancelled()) return _turnCancelledResult('after_memory');
@@ -7084,6 +7096,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     fcw_contributors:(fcw&&fcw.contributors)||null,
     fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
     fcw_contributors_total:(fcw&&fcw.contributorsTotal)||0,
+    // The source and row id are the public trace handle only. The complete employment
+    // record and wall remain inside the Memory Bank bead and the non-enumerable prompt.
+    // This lets an organic cycle prove Agent FIND ran without leaking internal context.
+    agent_find_receipt:(fcw&&fcw.agent_find&&fcw.agent_find.truth_beacon)||null,
     memory_keeper:_memoryKeeper,
     // ⬡B:core.tool_loop:EXIT:the_watched_cycle_hands_back_its_own_trail:20260726⬡
     // Null on every ordinary turn. On a founder override turn it carries the step trail
