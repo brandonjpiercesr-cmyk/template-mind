@@ -18,6 +18,26 @@ var RECONCILE_RPC = 'reconcile_anew_provider_spend_unknown';
 var MAX_STORE_BYTES = 4 * 1024 * 1024;
 var MAX_RESPONSE_BYTES = 1024 * 1024;
 var SUMMARY_LIMIT = 20001;
+// ⬡B:core.provider_spend_receipt:LAW:a_no_maximum_ceiling_cannot_be_smuggled_through_a_coder_bound:20260801⬡
+// CATHY (Codex) review, 20260801, on anew#1494: `core/ceiling.owner.js` and
+// `core/spend.guard.js` now honestly report a daily call ceiling as EITHER a real founder
+// number of ANY size, unclamped, OR `unlimited:true` (nothing configured, reported with the
+// arithmetic edge because a downstream contract used to demand an integer rather than an
+// absence). This claim function still hard rejected anything outside 1..10000, a coder
+// literal from before that ceiling work existed. Net effect if left alone: every paid
+// provider call would fail closed with provider_spend_ceiling_invalid the moment the founder
+// removed his call ceiling (the whole point of that PR) or simply typed a real number above
+// ten thousand. Two changes close it, both matching the migration in
+// migrations/0008_provider_spend_unlimited_ceiling.sql:
+//   1. `ceiling: null` paired with `unlimited: true` is now a legal, explicit "no ceiling"
+//      input, passed to the RPC as SQL NULL rather than smuggled through as a giant integer a
+//      Postgres `integer` column cannot even hold. The RPC skips its admission-count check
+//      entirely when the ceiling is null.
+//   2. A real configured ceiling is now checked against POSTGRES_INTEGER_MAX, the actual
+//      physical ceiling of the `integer` column the RPC stores it in, an arithmetic fact
+//      about the storage type rather than a threshold any coder picked, precisely mirroring
+//      how `core/ceiling.owner.js` already treats `Number.MAX_SAFE_INTEGER` for JavaScript.
+var POSTGRES_INTEGER_MAX = 2147483647;
 var SUMMARY_CACHE = null;
 
 function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -340,9 +360,16 @@ function sameTerminal(row, expected) {
 
 async function claimIntent(receipt, options) {
   var row = phaseRow(receipt, 'INTENT');
-  var limit = Number(options && options.ceiling);
-  var grace = reconcileGraceSeconds(options && options.env);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 10000) {
+  var opts = options || {};
+  // ⬡B:core.provider_spend_receipt:FIX:unlimited_must_be_declared_never_inferred_from_a_blank:20260801⬡
+  // `ceiling` may be null ONLY when the caller also sets `unlimited: true`. A caller that
+  // forgets to pass a ceiling at all (a bug, not a decision) supplies `undefined` with no
+  // `unlimited` flag, and that still refuses below exactly as before. This keeps "no ceiling
+  // configured" and "caller passed nothing" from ever reading as the same thing.
+  var unlimited = opts.ceiling === null && opts.unlimited === true;
+  var limit = unlimited ? null : Number(opts.ceiling);
+  var grace = reconcileGraceSeconds(opts.env);
+  if (!unlimited && (!Number.isInteger(limit) || limit < 1 || limit > POSTGRES_INTEGER_MAX)) {
     return {ok:false,reason:'provider_spend_ceiling_invalid'};
   }
   if (!Number.isInteger(grace)) return {ok:false,reason:'provider_spend_reconcile_grace_invalid'};
@@ -358,8 +385,11 @@ async function claimIntent(receipt, options) {
     return claimed;
   }
   var payload = claimed.payload;
+  var ceilingMatches = unlimited
+    ? (payload && payload.ceiling === null)
+    : Number(payload && payload.ceiling) === limit;
   if (!payload || payload.ok !== true || clean(payload.attempt_id) !== receipt.attempt_id ||
-      !Number.isInteger(Number(payload.admissions)) || Number(payload.ceiling) !== limit) {
+      !Number.isInteger(Number(payload.admissions)) || !ceilingMatches) {
     return {ok:false,reason:'provider_spend_intent_readback_mismatch'};
   }
   if (payload.admitted !== true) {
