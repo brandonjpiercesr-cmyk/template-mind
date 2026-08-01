@@ -78,8 +78,24 @@ const PERSONISH_VALUE_RE = /^(?:[A-Z][A-Za-z'’.-]{1,20})(?:\s+(?:[A-Z][A-Za-z'
 // This repo's own CLAUDE.md law: TRUE ZERO, never a literal. It was not: a tracked Markdown
 // file carried the founder's full legal name and this guard reported clean, because it never
 // opened a .md file at all. .md now joins the list this repo actually reads.
-const SCANNED_EXT_RE = /\.(js|cjs|mjs|jsx|ts|json|html|md)$/;
-const UNSCANNED_NOTE = 'txt, yml, yaml, sql, sh, env files and every other extension are NOT read by this guard';
+// ⬡B:scripts.checks.no_founder_pii:FIX:the_identity_gate_never_read_a_doc:20260801⬡
+// PARITY WITH anew, WHICH CLOSED THE SAME GAP ONE FORMAT WIDER THE SAME NIGHT. This repo fixed
+// markdown on 20260725 and the sister repo never received it: measured 20260801, anew's copy of
+// this guard was still reading seven extensions and no .md at all, and widening it there took
+// that repo from 180 hits across 64 files to 1071 across 147. That drift is the real finding,
+// and the roster is now the same on both sides so it cannot recur one extension at a time.
+//
+// A doc is shippable text. This repo is the mind-template every world inherits, so a person
+// written into a .yml, a .sql seed, a .sh hook or a .txt handoff rides into a stranger's deploy
+// exactly like one written into a .js string. Measured on this tree with the full roster below:
+// ZERO additional findings, so the widening costs this repo nothing and it stays a TRUE ZERO
+// with no baseline file at all. Zero today is the reason to keep watching, never to stop.
+// Case-insensitive on purpose: README.MD is the same file as readme.md to a reader.
+const SCANNED_EXT_RE = /\.(js|cjs|mjs|jsx|ts|tsx|json|html|htm|md|markdown|txt|yml|yaml|sql|sh|bash|csv|tsv|ini|toml|conf|xml|svg|css|py|rb|go|php)$/i;
+// What is STILL unread, stated rather than implied, because an unstated blind spot reads as
+// coverage: extensionless files (Dockerfile, Makefile, LICENSE), binaries, and dot-FILES at any
+// level (walk() skips names starting with a dot; only .github and .claude are entered).
+const UNSCANNED_NOTE = 'extensionless files (Dockerfile, Makefile, LICENSE), binaries, and dot-FILES are NOT read by this guard';
 // Mask a name so the guard never prints, stores or baselines the plaintext it exists to protect.
 function maskName(s) {
   return String(s).trim().split(/\s+/).map(function (w) { return w.slice(0, 1) + '***'; }).join(' ');
