@@ -2523,18 +2523,6 @@ async function healAnswer(answer, reason, stage, input, deps) {
 }
 
 async function defaultWritStage(ctx) {
-  // WRIT is the human-facing voice/format organ. CODA's internal operational
-  // answer is a typed machine contract whose exact evidence references are
-  // validated again by advisors/coding.js after this council returns. Letting
-  // a voice rewrite touch those bytes can turn a canonical coda.incident ref
-  // into a friendlier invented subject after SHADOW has already passed it.
-  // The internal turn remains fully judged by PAM and SHADOW; only the
-  // human-voice transformation is inapplicable, just as META_COMMENTARY already
-  // recognizes for the same tightly bound context.
-  if (internalCodingDeliberation(ctx)) return { ok:true, answer:ctx.answer,
-    reason:'WRIT_INTERNAL_CODING_PASS', evidence:{ verdict:'PASS',
-      hard_fails:[],advisory_flags:[],emojis_removed:0,em_dashes_removed:0,
-      meta_removed:0,internal_deliberation:true } };
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
     reason:'WRIT_STRUCTURED_REACH_POLICY_PASS', evidence:{ verdict:'PASS',
       hard_fails:[],advisory_flags:[],emojis_removed:0,em_dashes_removed:0,
@@ -4102,7 +4090,6 @@ module.exports = {
     verifiedFactEvidenceText:verifiedFactEvidenceText,
     shadowEvidenceMaxBytes:shadowEvidenceMaxBytes,
     defaultShadowStage: defaultShadowStage,
-    defaultWritStage: defaultWritStage,
     healAnswer: healAnswer
   }
 };
