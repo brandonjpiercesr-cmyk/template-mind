@@ -88,7 +88,10 @@ const LIVE = [
   { id: 'inbox-manager', label: 'Inbox Manager',  mark: 'X', color: '#06B6D4', keywords: ['inbox','triage','priority','email manager'], aliases: ['Inbox Manager'], path: function (H) { return '/inbox-manager-view/' + H; } },
   { id: 'references', label: 'References',        mark: 'F', color: '#14B8A6', keywords: ['references','citations','sources','library'], aliases: ['References'], path: function (H) { return '/references-view/' + H; } },
   // ⬡B:os.registry:REPOINT:meeting_interview_to_three_panel_copilot_phase5:20260720⬡
-  { id: 'meeting',  label: 'Meeting Mode',        mark: 'W', color: '#EF4444', keywords: ['meeting','mesa','notes','minutes','transcript','copilot'], aliases: ['Meeting','MESA'], path: function (H) { return '/meeting/' + H; } },
+  // ⬡B:os.registry:FIX:mesa_dock_chip_repointed_red_to_cyan_20260801⬡ the founder's
+  // amber-IRIS-against-cyan-MESA distinction (anew FRONTEND_CENSUS_FE_20260731.md section 4)
+  // reconciled here against anew routes/face/meeting.page.routes.js, which carried the same fix.
+  { id: 'meeting',  label: 'Meeting Mode',        mark: 'W', color: '#22D3EE', keywords: ['meeting','mesa','notes','minutes','transcript','copilot'], aliases: ['Meeting','MESA'], path: function (H) { return '/meeting/' + H; } },
   { id: 'interview',label: 'Interview Mode',      mark: 'I', color: '#F59E0B', keywords: ['interview','iris','prep','job','mock'], aliases: ['Interview','IRIS'], path: function (H) { return '/interview/' + H; } },
   { id: 'gmg-university', label: 'GMG University',   mark: 'V', color: '#EC4899', keywords: ['gmg university','guru','curriculum','learn','course'], aliases: ['GMG University','GURU'], path: function (H) { return '/gmg-university-view/' + H; } },
   { id: 'memos',    label: 'Memos',              mark: 'Z', color: '#8B5CF6', keywords: ['memos','notes','memo'], aliases: ['Memos'], path: function (H) { return '/memos-view/' + H; } },
