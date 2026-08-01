@@ -5517,14 +5517,63 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         var callName = call && call.function && call.function.name;
         return !providerToolNameWasOffered(callName, _effectRuntime);
       });
+      // ⬡B:core.tool_loop:FIX:an_unoffered_tool_call_refuses_the_batch_never_the_turn:20260731⬡
+      // FOUNDER P0, live 20260731: "what's your favorite doctrine and why?" died TWICE in a
+      // row on the chat surface with "That turn could not finish on my side." Traced end to
+      // end: the question matches no intent, routeToolIntent returns 'general', whose tool
+      // table is empty, so pass 1 carried only the two surface tools. The wall doctrine
+      // simultaneously orders SEARCH FIRST, ALWAYS, so she obeyed it and called find_in_brain,
+      // a real, read-only tool that was simply not on that pass's table. The old code here
+      // then killed the WHOLE TURN terminally (runPAI ok:false 'tool_call_not_offered', the
+      // stream mapped it to 'turn_could_not_complete', the surface printed the fallback line),
+      // deterministically on every retry of the same words. RULINGS 20260731 named this exact
+      // seam "NAMED, NOT FIXED, separate ticket"; this lane is that ticket.
+      // THE SECURITY RULING (guard 20260730, 49e2940) HOLDS UNWEAKENED: when ANY member of
+      // the batch is unoffered, NO member executes and NO mutation queues, which is the exact
+      // mixed-batch ordering the batch scan was written for. What changes is only what happens
+      // NEXT. Instead of ending the turn, the refusal is handed back to her as the tool result
+      // for every member of the batch, and the loop continues: from iteration two the full
+      // armory is on the table (the intent filter is a pass 1 hint), so the read she was
+      // reaching for becomes legal and the turn ends in an answer instead of a fallback line.
+      // A model that breaches forever gathers nothing, so the same progress stop that bounds
+      // barren tool work bounds this too, ending in a closing pass, never a dead turn.
       if (_unofferedToolCall) {
         var _unofferedToolName = _unofferedToolCall && _unofferedToolCall.function &&
           _unofferedToolCall.function.name;
         _stampStep('tool_call_not_offered', String(_unofferedToolName || 'malformed'));
-        return {ok:false,reason:'tool_call_not_offered',
-          blocked_by:String(_unofferedToolName || 'malformed_tool_call'),
-          ham:hamObj,cycleId:_cycleId,requestId:_requestId,
-          tools_used:tools,iterations:iter,ms:Date.now()-t0};
+        msgs.push({role:'assistant',content:msg.content||null,tool_calls:msg.tool_calls});
+        var _breachAskedNew = false;
+        msg.tool_calls.forEach(function (call) {
+          var callName = call && call.function && call.function.name;
+          var callArgs = {};
+          try { callArgs = JSON.parse((call && call.function && call.function.arguments) || '{}'); }
+          catch (eBreachArgs) {}
+          var breachKey = _callKey(String(callName || 'malformed_tool_call'), callArgs);
+          if (!_seenCalls[breachKey]) { _seenCalls[breachKey] = true; _breachAskedNew = true; }
+          var _memberOffered = providerToolNameWasOffered(callName, _effectRuntime);
+          msgs.push({role:'tool',tool_call_id:call && call.id,
+            content: JSON.stringify(_memberOffered
+              ? {ok:false,reason:'tool_call_batch_rejected',tool:callName || null,
+                  note:'Nothing in this batch ran, because another call in it named a tool that was not offered on that pass. Use only the tools provided on the current pass, or answer from what you already gathered.'}
+              : {ok:false,reason:'tool_call_not_offered',tool:callName || null,
+                  note:'That tool was not offered on that pass, so nothing in the batch ran. Use only the tools provided on the current pass, or answer from what you already gathered.'})});
+        });
+        _barrenRun++;
+        if (_barrenRun >= _barrenLimit && !_closingReason) {
+          _closingReason = 'no_new_evidence';
+          _stampStep('progress_stop', 'no_new_evidence after ' + _barrenRun +
+            ' consecutive barren iterations, iter=' + iter);
+        }
+        if (_breachAskedNew) { _repeatRun = 0; }
+        else {
+          _repeatRun++;
+          if (_repeatRun >= _repeatLimit && !_closingReason) {
+            _closingReason = 'no_new_question';
+            _stampStep('progress_stop', 'no_new_question after ' + _repeatRun +
+              ' consecutive iterations asking nothing new, iter=' + iter);
+          }
+        }
+        continue;
       }
       msgs.push({role:'assistant',content:msg.content||null,tool_calls:msg.tool_calls});
       var _budgetGroundNeeded = false, _budgetSummaryRaw = null;
