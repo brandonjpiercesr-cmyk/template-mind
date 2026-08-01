@@ -12,6 +12,7 @@ var openrouterSeatSpend = require('./openrouter.seat.spend.js');
 
 var TABLE = 'provider_spend_receipts';
 var RECONCILIATION_TABLE = 'provider_spend_reconciliations';
+var BILLABLE_TABLE = 'provider_spend_receipts_billable';
 var SCHEMA = 'anew.provider-spend-receipt.v1';
 var CLAIM_RPC = 'claim_anew_provider_spend_intent';
 var TERMINAL_RPC = 'write_anew_provider_spend_terminal';
@@ -756,7 +757,10 @@ async function readSummary(options) {
     while (true) {
       var headers = readHeaders(config);
       headers.Range = offset + '-' + (offset + SUMMARY_PAGE_SIZE - 1);
-      var response = await doFetch(config.url + '/rest/v1/' + TABLE + '?' + query.toString(), {
+      // The append-only TERMINAL is transport truth. Provider metadata recovered after the
+      // response lives in the immutable reconciliation table. The canonical billable view is
+      // the one source that coalesces those two facts without mutating either row.
+      var response = await doFetch(config.url + '/rest/v1/' + BILLABLE_TABLE + '?' + query.toString(), {
         headers:headers,signal:brain.boundedSignal(options && options.signal, options && options.env)
       });
       if (!response || response.ok !== true) {

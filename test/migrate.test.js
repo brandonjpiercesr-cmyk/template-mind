@@ -160,21 +160,26 @@ test('the lexical migration tail places provider receipt storage before its atom
   const files=fs.readdirSync(path.join(__dirname,'../migrations'))
     .filter((file)=>/\.sql$/.test(file)).sort();
   assert.deepEqual(files.slice(-3),[
-    '0005_atomic_paid_admission_claims.sql',
-    '0006_provider_spend_receipts.sql',
-    '0007_provider_spend_atomic_admission.sql'
+    '0007_provider_spend_atomic_admission.sql',
+    '0008_provider_spend_unlimited_ceiling.sql',
+    '0009_provider_spend_reconciliation.sql'
   ]);
 });
 
 test('atomic admission and provider receipt migrations all apply in canonical order', async () => {
   const files=['0005_atomic_paid_admission_claims.sql','0006_provider_spend_receipts.sql',
-    '0007_provider_spend_atomic_admission.sql'];
+    '0007_provider_spend_atomic_admission.sql','0008_provider_spend_unlimited_ceiling.sql',
+    '0009_provider_spend_reconciliation.sql'];
   const atomicSql=fs.readFileSync(path.join(__dirname,'../migrations',files[0]),'utf8');
   const providerSql=fs.readFileSync(path.join(__dirname,'../migrations',files[1]),'utf8');
   const atomicStatements=migrate._test.splitStatements(atomicSql);
   const providerStatements=migrate._test.splitStatements(providerSql);
   const providerAtomicSql=fs.readFileSync(path.join(__dirname,'../migrations',files[2]),'utf8');
   const providerAtomicStatements=migrate._test.splitStatements(providerAtomicSql);
+  const unlimitedStatements=migrate._test.splitStatements(fs.readFileSync(
+    path.join(__dirname,'../migrations',files[3]),'utf8'));
+  const reconciliationStatements=migrate._test.splitStatements(fs.readFileSync(
+    path.join(__dirname,'../migrations',files[4]),'utf8'));
   const calls=[];
   const out=await migrate.applyMigrations({files:files,
     read:(file)=>fs.readFileSync(path.join(__dirname,'../migrations',file),'utf8'),
@@ -184,13 +189,15 @@ test('atomic admission and provider receipt migrations all apply in canonical or
   assert.equal(out.applied[0].statements,atomicStatements.length);
   assert.equal(out.applied[1].statements,providerStatements.length);
   assert.equal(out.applied[2].statements,providerAtomicStatements.length);
+  assert.equal(out.applied[3].statements,unlimitedStatements.length);
+  assert.equal(out.applied[4].statements,reconciliationStatements.length);
   assert.match(calls[atomicStatements.length],
     /^create table if not exists memory_bank\.provider_spend_receipts/i);
   assert.equal(calls.findIndex((stmt)=>/memory_bank\.provider_spend_receipts/i.test(stmt))
     >=atomicStatements.length,true,'provider DDL must execute only after all atomic DDL');
   assert.match(providerStatements.at(-1),/^notify pgrst,\s*'reload schema'$/i);
   assert.match(providerAtomicStatements.at(-1),/^notify pgrst,\s*'reload schema'$/i);
-  assert.equal(calls.at(-1),providerAtomicStatements.at(-1));
+  assert.equal(calls.at(-1),reconciliationStatements.at(-1));
 });
 
 test('an atomic admission failure prevents provider receipt DDL and schema reload', async () => {

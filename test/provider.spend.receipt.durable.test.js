@@ -63,6 +63,12 @@ function fakeBank(options) {
         return json(200,{ok:true,stored:true,inserted:inserted,
           attempt_id:row.attempt_id,disposition:rows.get(key).disposition});
       }
+      if (rpc === 'write_anew_provider_spend_reconciliation') {
+        const row=body.p_fact,key=row.attempt_id+':RECONCILIATION';
+        const inserted=!rows.has(key);
+        if(inserted)rows.set(key,Object.assign({created_at:new Date().toISOString()},row));
+        return json(200,{ok:true,stored:true,inserted:inserted,attempt_id:row.attempt_id});
+      }
       if (rpc === 'reconcile_anew_provider_spend_unknown') {
         if(opts.reconcileFailure)return json(503,{error:'fixture'});
         const cutoff=Date.now()-Number(body.p_grace_seconds)*1000;
@@ -91,7 +97,13 @@ function fakeBank(options) {
       }
       throw new Error('unexpected_bank_rpc:' + rpc);
     }
-    if (!parsed.pathname.endsWith('/provider_spend_receipts')) {
+    if (parsed.pathname.endsWith('/provider_spend_reconciliations')) {
+      const attempt=String(parsed.searchParams.get('attempt_id')||'').replace(/^eq\./,'');
+      const row=rows.get(attempt+':RECONCILIATION');
+      return json(200,row?[row]:[]);
+    }
+    const billable = parsed.pathname.endsWith('/provider_spend_receipts_billable');
+    if (!billable && !parsed.pathname.endsWith('/provider_spend_receipts')) {
       throw new Error('unexpected_bank_path:' + parsed.pathname);
     }
     if ((init && init.method) === 'POST') {
@@ -118,15 +130,22 @@ function fakeBank(options) {
     }
     const since = String(parsed.searchParams.get('created_at') || '').replace(/^gte\./,'');
     const selected = Array.from(rows.values()).filter(function (row) {
-      return (!phase || row.phase === phase) && (!since || row.created_at >= since);
+      return new Set(['INTENT','TERMINAL']).has(row.phase) &&
+        (!phase || row.phase === phase) && (!since || row.created_at >= since);
     }).sort(function (left,right) {
       return String(left.created_at).localeCompare(String(right.created_at)) ||
         String(left.attempt_id).localeCompare(String(right.attempt_id)) ||
         String(left.phase).localeCompare(String(right.phase));
     }).map(function (row) {
+      const fact=billable&&row.phase==='TERMINAL'
+        ? rows.get(row.attempt_id+':RECONCILIATION') : null;
       return {attempt_id:row.attempt_id,phase:row.phase,provider:row.provider,kind:row.kind,
         key_alias:row.key_alias,component:row.component,disposition:row.disposition,
-        status_code:row.status_code,created_at:row.created_at};
+        status_code:row.status_code,
+        actual_cost_usd:row.actual_cost_usd == null && fact ? fact.actual_cost_usd
+          : row.actual_cost_usd,
+        cost_source:row.cost_source == null && fact ? fact.cost_source : row.cost_source,
+        created_at:row.created_at};
     });
     const range=String(init&&init.headers&&(init.headers.Range||init.headers.range)||'0-499');
     const match=range.match(/^(\d+)-(\d+)$/);
@@ -198,6 +217,7 @@ async function listenBank() {
 function fixtureEnv() {
   return {MEMORY_BANK_URL:'https://memory.fixture',MEMORY_BANK_KEY:'bank-secret-fixture',
     BRAIN_SCHEMA:'memory_bank',TOGETHER_COMPONENT_KEY:'together-secret-fixture',
+    OR_KEY_MODEL_LADDER:'openrouter-secret-fixture',
     RENDER_SERVICE_ID:'srv-anew-fixture'};
 }
 function attribution() {
@@ -704,6 +724,36 @@ test('global stale reconciliation drains at most one hundred rows per admission 
       assert.equal(final.status,200);
       assert.equal(h.providerCalls(),1);
     }finally{h.restore();}
+  });
+
+test('durable spend wall reads the canonical billable view and counts reconciled provider cost',
+  async function(){
+    const store=require(RECEIPT_PATH),bank=fakeBank();
+    const built=prepared(store,{url:'https://openrouter.ai/api/v1/chat/completions',
+      init:{method:'POST',headers:{Authorization:'Bearer openrouter-secret-fixture'},
+        body:JSON.stringify({model:'qwen/qwen3',messages:[{role:'user',content:'fixture'}]})},
+      attribution:Object.assign({},attribution(),{cycle_id:'cycle.reconciled.1',
+        request_id:'request.reconciled.1',seat:'deliberation'})});
+    assert.equal(built.ok,true,built.reason);
+    const receipt=built.receipt;
+    assert.equal((await store.claimIntent(receipt,{fetchImpl:bank.fetch,env:fixtureEnv(),
+      ceiling:100})).ok,true);
+    assert.equal((await store.writeTerminal(receipt,{status_code:200,disposition:'SUCCEEDED',
+      response_digest:'a'.repeat(64),provider_request_id:'gen-reconciled-wall'},
+    {fetchImpl:bank.fetch,env:fixtureEnv()})).ok,true);
+    assert.equal((await store.writeReconciliation(receipt,{
+      provider_request_id:'gen-reconciled-wall',provider_tokens:{input_tokens:4,
+        output_tokens:2,total_tokens:6},actual_cost_usd:0.0025,
+      cost_source:'provider_reported',provider_fact_digest:'d'.repeat(64),
+      provider_model:'qwen/qwen3',provider_name:'Fixture Provider'},
+    {fetchImpl:bank.fetch,env:fixtureEnv()})).ok,true);
+    const summary=await store.readSummary({fetchImpl:bank.fetch,env:fixtureEnv()});
+    assert.equal(summary.readable,true);
+    assert.equal(summary.provider_reported_cost_usd,0.0025);
+    assert.equal(summary.costed_terminal,1);
+    assert.equal(summary.uncosted_proven_egress,0);
+    assert.ok(bank.calls.some(call=>new URL(call.url).pathname
+      .endsWith('/provider_spend_receipts_billable')));
   });
 
 test('durable summary separates admission, terminal, failure, unresolved, and proven egress',
