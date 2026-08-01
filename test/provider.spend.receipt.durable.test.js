@@ -313,11 +313,45 @@ test('a real founder-chosen ceiling above the old 10000 literal is honored, not 
     assert.equal(out.ceiling,50000);
   });
 
-test('a ceiling above the Postgres integer column max is still refused, that bound is physical',
+// ⬡B:tests.provider_spend_receipt:911:the_trap_came_back_one_layer_down:20260801⬡
+// Mirror of anew#1494's second CATHY (Codex) review: the first fix raised this file's bound
+// to 2147483647 (Postgres integer's own physical max) and called that a hardware fact, but
+// pai/core/ceiling.owner.js publishes any safe JavaScript integer up to Number.MAX_SAFE_INTEGER
+// (~9.007e15) as a real, enforced founder number. A founder who set
+// DAILY_MODEL_CALL_CEIL=4000000000 (4 billion, above the old bound, well under the JS safe
+// integer edge) would still have been rejected. This is Codex's own named reproduction case.
+test('a founder ceiling of four billion, above the old Postgres integer bound, is publishable and admits a real call',
+  async function () {
+    const ceilingOwner = require('../pai/core/ceiling.owner.js');
+    const bank = fakeBank();
+    const store = require(RECEIPT_PATH);
+    const published = ceilingOwner.readCeiling('DAILY_MODEL_CALL_CEIL',
+      {integer:true,unlimited_when_unset:true},{DAILY_MODEL_CALL_CEIL:'4000000000'});
+    assert.equal(published.chosen_by,'the founder',
+      'the guard must publish this as a real founder-chosen number, not clamp or refuse it');
+    assert.equal(published.value,4000000000);
+    const out = await store.claimIntent(prepared(store).receipt,
+      {fetchImpl:bank.fetch,env:fixtureEnv(),ceiling:published.value});
+    assert.equal(out.ok,true,
+      'a ceiling the guard publishes as real and enforced must be admitted here');
+    assert.equal(out.ceiling,4000000000);
+  });
+
+test('this file\'s accepted maximum is never lower than what pai/core/ceiling.owner.js will publish',
+  async function () {
+    const ceilingOwner = require('../pai/core/ceiling.owner.js');
+    const store = require(RECEIPT_PATH);
+    assert.equal(store.JS_SAFE_INTEGER_MAX,ceilingOwner.EXACT_INTEGER_EDGE,
+      'the claim function\'s own accepted maximum must equal the exact edge the ceiling '+
+      'owner module publishes to, not merely be close to it');
+    assert.equal(ceilingOwner.EXACT_INTEGER_EDGE,Number.MAX_SAFE_INTEGER);
+  });
+
+test('a ceiling above the JavaScript safe integer edge is still refused, that bound is physical',
   async function () {
     const store = require(RECEIPT_PATH);
     const out = await store.claimIntent(prepared(store).receipt,
-      {fetchImpl:fakeBank().fetch,env:fixtureEnv(),ceiling:2147483648});
+      {fetchImpl:fakeBank().fetch,env:fixtureEnv(),ceiling:Number.MAX_SAFE_INTEGER * 2});
     assert.equal(out.ok,false);
     assert.equal(out.reason,'provider_spend_ceiling_invalid');
   });
