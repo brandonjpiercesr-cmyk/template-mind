@@ -85,6 +85,28 @@ test('a digit run too long to be an exact number still never mutes her',function
   assert.equal(guard.allow('text'),true,'she speaks');
 });
 
+// ⬡B:tests.spend_guard:911:overflow_to_infinity_is_more_not_unreadable:20260801⬡
+// Mirror of anew#1494's CATHY (Codex) eighth finding: `Number(text)` on a digit run long
+// enough (Codex's own example: 309 digits) does not stay a large finite number, it overflows
+// past a JavaScript double's real range straight to `Infinity`. The prior check ORDER ran the
+// finite-ness check before the safe-integer check, so an overflowed run hit UNREADABLE
+// (`not_a_finite_number`) and never reached the branch built to hold exactly this case. The
+// 999...999 (21 nines) case above stays FINITE (`1e21`) and was never proof this ordering was
+// safe; this drives an input that genuinely overflows to `Infinity` to prove the true bug.
+test('a digit run so long it overflows to Infinity is STILL more, never unreadable, and still never mutes her',function(){
+  process.env.DAILY_MODEL_CALL_CEIL='9'.repeat(309);delete require.cache[path];
+  const guard=require(path);
+  const detail=guard._test.ceilDetail('text');
+  assert.equal(detail.chosen_by,'the founder',
+    'an overflowed digit run is still HIS attempt, not nobody and not unreadable');
+  assert.notEqual(detail.chosen_by,'unreadable_setting',
+    'the original bug: this landed here first, before the safe-integer branch could catch it');
+  assert.equal(detail.unlimited,true);
+  assert.equal(detail.limited_by,'exact_integer_range');
+  assert.equal(detail.value,Number.MAX_SAFE_INTEGER);
+  assert.equal(guard.allow('text'),true,'an overflowed digit run must never mute her');
+});
+
 test('a blank or whitespace ceiling means nobody chose, not a typo and not a default',function(){
   process.env.DAILY_MODEL_CALL_CEIL='   ';delete require.cache[path];
   const guard=require(path);

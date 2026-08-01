@@ -143,6 +143,33 @@ function readCeiling(name, spec, runtime) {
   }
 
   var asked = Number(text);
+
+  // ⬡B:core.ceiling_owner:911:branch_order_is_a_state_and_reordering_it_is_a_behavior_change:20260801⬡
+  // CATHY (Codex) review chain, 20260801, eighth finding, the most serious in the whole sweep
+  // because it lives in the ONE SOURCE every consumer trusts. `pattern.test(text)` already
+  // restricted `text` to a validated digit run (optionally with a bounded decimal part), so
+  // `Number(text)` can never produce NaN here; the ONLY way `!Number.isFinite(asked)` can ever
+  // be true past that point is a digit run long enough to overflow a JavaScript double into
+  // `Infinity` (Codex's own example: 309 nines). That is not a shape problem, a decimal in the
+  // wrong place, or a typo: it is the exact "digit run too long to be an exact number" case the
+  // comment two branches below already names and already promises never fails closed, MORE
+  // taken at its word. The check order below used to run finite-ness BEFORE safe-integer-ness,
+  // so an overflowed run hit the UNREADABLE branch first and never reached the branch built to
+  // hold it, refusing every paid call the instant a founder typed a number large enough to
+  // overflow: the founder's original 20260726 trap in its purest form, reintroduced by this
+  // very PR meant to kill it. The safe-integer check (which is also true for Infinity, since
+  // Infinity is neither safe nor an integer) now runs FIRST for integer specs, so overflow and
+  // "too big but still finite" are one state, not two, and neither can ever be misread as
+  // UNREADABLE. This ONLY applies to integer specs (`s.integer === true`, the call ceiling's
+  // own shape): a non-integer (decimal, money) spec that overflows still falls through to the
+  // finite check below and fails closed, because this codebase has no established "unlimited"
+  // meaning for a dollar figure and money is the stake; inventing one here was not this
+  // finding's ask and would be a second, undiscussed behavior change riding on this fix.
+  if (s.integer === true && !Number.isSafeInteger(asked)) {
+    return _out(setting, { value: EXACT_INTEGER_EDGE, chosen_by: CHOSEN_BY.FOUNDER,
+      configured: true, requested: null, unlimited: true, needs_review: true,
+      limited_by: 'exact_integer_range', reason: 'above_exact_integer_range' });
+  }
   if (!Number.isFinite(asked)) {
     return _out(setting, { chosen_by: CHOSEN_BY.UNREADABLE, configured: true, needs_review: true,
       reason: 'not_a_finite_number' });
@@ -152,18 +179,6 @@ function readCeiling(name, spec, runtime) {
   if (asked <= 0) {
     return _out(setting, { chosen_by: CHOSEN_BY.UNREADABLE, configured: true, needs_review: true,
       requested: asked, reason: 'not_above_zero' });
-  }
-
-  // A digit run too long to be an exact JavaScript number is NOT a typo and never fails closed.
-  // Refusing one muted her live on 20260726 while the founder was RAISING the budget, which is
-  // the guard doing the exact harm it exists to prevent. The meaning is never in doubt: MORE.
-  // What is in force is the largest number this process can count exactly, which is a fact about
-  // arithmetic rather than a limit anybody chose, and `limited_by` names it so nobody reads the
-  // result as a coder trimming his edit.
-  if (s.integer === true && !Number.isSafeInteger(asked)) {
-    return _out(setting, { value: EXACT_INTEGER_EDGE, chosen_by: CHOSEN_BY.FOUNDER,
-      configured: true, requested: null, unlimited: true, needs_review: true,
-      limited_by: 'exact_integer_range', reason: 'above_exact_integer_range' });
   }
 
   // HIS NUMBER, WHATEVER IT IS. No upper bound is applied here, ever.
