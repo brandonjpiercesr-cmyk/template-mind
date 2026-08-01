@@ -17,10 +17,16 @@ var AsyncLocalStorage = require('node:async_hooks').AsyncLocalStorage;
 
 var CALL_LOG = [];               // rolling process-local provider-attempt telemetry only
 var DAY_MS = 24 * 60 * 60 * 1000;
-var DEFAULT_TEXT_CEIL = 1500;
-var DEFAULT_IMAGE_CEIL = 300;
-var MAX_TEXT_CEIL = 10000;
-var MAX_IMAGE_CEIL = 2000;
+// ⬡B:core.spend_guard:LAW:no_coder_may_pick_or_cap_this_ceiling:20260731⬡
+// FOUNDER ORDER 20260731, his words: remove all the bullshit limits, also in the code. Four
+// numbers used to live on this line and every one of them was a coder literal, none of them a
+// decision. Two were built in defaults, so a world that configured nothing ran on a number
+// nobody chose (her image work ran for weeks on one of them). Two were upper bounds presented
+// to the founder as hard maximums, when they were only what a lane typed into a pull request:
+// not GitHub, not a provider, not physics. All four are gone, and the reader below now comes
+// from the one source that cannot express a maximum at all, so no lane can put them back
+// without adding the concept back and tripping `tests/no.coder.may.pick.a.ceiling.test.js`.
+var ceilingOwner = require('./ceiling.owner.js');
 var ATTRIBUTION = new AsyncLocalStorage();
 
 // ⬡B:core.spend_guard:FIX:a_malformed_brake_is_not_permission_to_spend:20260725⬡
@@ -48,34 +54,31 @@ var ATTRIBUTION = new AsyncLocalStorage();
 // to protect a budget that was being RAISED, which is the guard doing the exact harm it was
 // built to prevent.
 //
-// So oversized CLAMPS to the maximum and keeps her alive. The brake still exists, at a number
-// this system chose, and the surface says out loud what was asked for and what is in force so
-// nobody thinks their edit took when it was trimmed. Unreadable still fails closed.
+// ⬡B:core.spend_guard:LAW:the_ceiling_the_founder_typed_is_the_ceiling:20260731⬡
+// SUPERSEDES THE CLAMP ABOVE, and keeps every guarantee it bought. The 20260726 fix was right
+// that an oversized value must never mute her, and it cured that by trimming his number down to
+// an upper bound. The bound itself was the remaining defect: he was told it was a hard maximum,
+// and it was a literal a lane typed. With no maximum in the estate there is nothing left to
+// clamp TO, so the mute is cured a second way and better: whatever he types is what runs.
+//
+// WHAT EACH ANSWER NOW MEANS, and every one of them says who chose it:
+//   'the founder'        a real value is configured. It is enforced exactly, at any size.
+//   'nobody_yet'         nothing is configured, so there is NO call ceiling. `unlimited` is
+//                        true, and the number carried is the arithmetic edge rather than an
+//                        invented default, only because the durable bank claim's contract needs
+//                        an integer to pass. Read the whole note in core/ceiling.owner.js.
+//   'unreadable_setting' something is configured that nobody can read. Still fails closed with
+//                        its own named denial, exactly as before, because '2,000' and 'two
+//                        thousand' leave nothing to honor and money is the stake.
+// The daily USD brake underneath this is untouched and is where an unconfigured world's real
+// protection lives: `core/seat.map.js` per seat caps, enforced at provider egress by
+// `core/openrouter.seat.spend.js`, plus the account balance read further down this file.
 function ceilDetail(kind) {
   var name = kind === 'image' ? 'DAILY_IMAGE_CALL_CEIL' : 'DAILY_MODEL_CALL_CEIL';
-  var fallback = kind === 'image' ? DEFAULT_IMAGE_CEIL : DEFAULT_TEXT_CEIL;
-  var maximum = kind === 'image' ? MAX_IMAGE_CEIL : MAX_TEXT_CEIL;
-  var raw = process.env[name];
-  // Blank, or blank once trimmed, means nobody chose. That is the same thing as unset, and
-  // treating a stray space as a typo would be one more way to go silent over nothing.
-  var text = raw === undefined ? '' : String(raw).trim();
-  if (text === '') {
-    return { value: fallback, source: 'built_in_default', requested: null, maximum: maximum };
-  }
-  if (!/^[1-9][0-9]*$/.test(text)) {
-    return { value: null, source: 'env', requested: null, maximum: maximum };
-  }
-  // Order matters, and the first version had it backwards. A digit run too long to be an
-  // exact JavaScript number is still unambiguously a number ABOVE the maximum, so rejecting
-  // it for imprecision reintroduces the exact mute this change exists to remove. Classify by
-  // SIZE first; the only thing lost by clamping an imprecise value is precision nobody wants,
-  // because the number in force is the maximum either way. Caught by the Codex reviewer.
-  var asked = Number(text);
-  if (!Number.isSafeInteger(asked) || asked > maximum) {
-    return { value: maximum, source: 'env_clamped',
-      requested: Number.isSafeInteger(asked) ? asked : null, maximum: maximum };
-  }
-  return { value: asked, source: 'env', requested: asked, maximum: maximum };
+  var read = ceilingOwner.readCeiling(name, { integer: true, unlimited_when_unset: true });
+  return { value: read.value, chosen_by: read.chosen_by, setting: name,
+    requested: read.requested, reason: read.reason, configured: read.configured,
+    unlimited: read.unlimited, limited_by: read.limited_by, needs_review: read.needs_review };
 }
 
 // One derivation, one place. The provider-spend Memory Bank RPC enforces this number.
@@ -218,10 +221,15 @@ function preflight(kind, options) {
   // two replicas. Legacy callers may still consult this before they know which rung will
   // be selected, but they cannot consume or deny a durable slot here.
   var attribution = currentAttribution(options && options.attribution || options);
-  var ceil = configuredCeil(kind);
-  if (ceil === null) {
+  // A null value now has exactly ONE cause, and it is never "nobody configured this". The one
+  // source refuses to hand back a bare null: an unconfigured ceiling reports 'nobody_yet' with
+  // no ceiling in force, and only a value that IS configured and cannot be read arrives here as
+  // null. The denial carries who chose it so the surface can say which of the two it was.
+  var detail = ceilDetail(kind);
+  if (detail.value === null) {
     rememberDenial({ at: Date.now(), kind: String(kind || 'text'), count: CALL_LOG.length,
       ceiling: null, reason: 'daily_call_ceiling_configuration_invalid',
+      chosen_by: detail.chosen_by, setting: detail.setting, why: detail.reason,
       attribution:attribution });
     return false;
   }

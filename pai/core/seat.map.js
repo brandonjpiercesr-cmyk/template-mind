@@ -82,14 +82,40 @@ function capability(kind, resolvedModel, bakedModel, declared) {
   return resolvedModel === bakedModel ? !!declared : false;
 }
 
-function envUsd(key, dflt, runtime) {
-  var raw = (runtime || process.env)[key];
-  if (raw === undefined || raw === '') return dflt;
-  var text = String(raw).trim();
-  if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,4})?$/.test(text)) return null;
-  var value = Number(text);
-  return Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
+// ⬡B:core.seat_map:911:a_generous_cap_bought_him_LESS_than_setting_nothing_and_nobody_told_him:20260731⬡
+// HIT PERSONALLY BY THE FOUNDER ON 20260731, and it is a TRAP, not merely a limit. This reader
+// ended with a comparison against a hundred, and anything above it returned null. null already
+// meant INVALID everywhere downstream: `seat()` publishes it as `dailyCapUsd:null`, and
+// `core/openrouter.seat.spend.js` refuses the seat outright with
+// openrouter_seat_daily_cap_invalid. So a founder who typed a generous number to be GENEROUS
+// killed the seat, a founder who typed nothing kept a working one, and no surface anywhere said
+// a word about it. He believed his edit had taken. That is the worst defect shape in this
+// estate: a value a human set that is silently not in force, because he has no reason to look
+// again.
+//
+// TWO THINGS CHANGE, and both are the founder's 20260731 order (remove the bullshit limits,
+// also in the code):
+//   1. THERE IS NO UPPER BOUND. The hundred was a coder literal, not a provider rule and not a
+//      billing rule. Whatever he sets is what is enforced, at any size. The reader is now
+//      core/ceiling.owner.js, which cannot express a maximum at all, so the bound cannot be
+//      reintroduced without adding the concept back and tripping the suite that forbids it.
+//   2. NULL CAN NEVER AGAIN BE SILENT. Every read reports `chosen_by`, so a caller can tell
+//      'the founder' from 'this_lane' (a value baked into this file, which is what every
+//      dailyCapUsd below still is) from 'unreadable_setting' (configured and unusable, which
+//      still fails closed) from 'nobody_yet'. `capReason` names the exact shape fault. A cap
+//      that is not in force now announces itself instead of reading as a working seat.
+// The baked dailyCapUsd numbers below are NOT touched here: raising or lowering a real dollar
+// figure is a founder spend decision, not a lane's. They are now correctly LABELLED as this
+// lane's, which is what /coda/sensors/health has been saying in prose since 20260728.
+var ceilingOwner = require('./ceiling.owner.js');
+
+function capDetail(key, dflt, runtime) {
+  return ceilingOwner.readCeiling(key,
+    { decimals: 4, lane_value: Number.isFinite(dflt) && dflt > 0 ? dflt : null },
+    runtime || process.env);
 }
+
+function envUsd(key, dflt, runtime) { return capDetail(key, dflt, runtime).value; }
 
 // role, default model (env-overridable per seat), transport provider, the
 // per-function named key env and telemetry via label. Dollar caps are not
@@ -336,7 +362,8 @@ function seat(name, runtime) {
   var isContestant = isContestantSeat(name);
   var resolvedModel = env(d.envModel, d.model, runtime);
   var resolvedProvider = d.envProvider ? env(d.envProvider, '', runtime) : d.provider;
-  var resolvedCap = envUsd(d.capEnv, d.dailyCapUsd, runtime);
+  var cap = capDetail(d.capEnv, d.dailyCapUsd, runtime);
+  var resolvedCap = cap.value;
   if (d.requiredEnv && (!resolvedModel || resolvedProvider !== d.provider || resolvedCap === null)) {
     return null;
   }
@@ -361,6 +388,16 @@ function seat(name, runtime) {
     via: d.via,
     dailyCapUsd: resolvedCap,
     capEnv: d.capEnv,
+    // WHO CHOSE THIS DOLLAR FIGURE, published beside it rather than inferred by each caller.
+    // 'the founder' means his env value is in force exactly. 'this_lane' means the number baked
+    // into this file is standing in and no human picked it. 'unreadable_setting' means he set
+    // something that cannot be used, `capReason` names the shape fault, and the seat fails
+    // closed at provider egress instead of pretending to have a cap. A caller that used to
+    // re-derive this from its own copy of the env parse now reads the one source.
+    capChosenBy: cap.chosen_by,
+    capRequested: cap.requested,
+    capReason: cap.reason,
+    capNeedsReview: cap.needs_review,
     // Honest to the same rule as fallback() below: a fallback that resolves to the
     // primary's own model is not a fallback, so this seat reports that it has none.
     // Compared against `resolvedModel`, not the raw env read, so a banned override
@@ -404,6 +441,10 @@ function fallback(name, runtime) {
   var resolvedFallback = env(d.envModel + '_FALLBACK', d.fallbackModel, runtime);
   if (!isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
   if (resolvedFallback === resolvedPrimary) return null;
+  // The failover attempt is the SAME governed seat on the same wallet, so it reads the same cap
+  // through the same one source and publishes the same ownership facts. Deriving them a second
+  // way here is how the two halves of one seat start disagreeing about what is in force.
+  var fbCap = capDetail(d.capEnv, d.dailyCapUsd, runtime);
   return {
     seat: name + '.fallback',
     role: d.role + ' (fallback)',
@@ -411,8 +452,12 @@ function fallback(name, runtime) {
     provider: d.fallbackProvider,
     keyEnv: d.fallbackKeyEnv,
     via: d.fallbackProvider,
-    dailyCapUsd: envUsd(d.capEnv, d.dailyCapUsd, runtime),
+    dailyCapUsd: fbCap.value,
     capEnv: d.capEnv,
+    capChosenBy: fbCap.chosen_by,
+    capRequested: fbCap.requested,
+    capReason: fbCap.reason,
+    capNeedsReview: fbCap.needs_review,
     hasFallback: false,
     // Same rule as the primary: answered about the failover model that will really be
     // called, so a SEAT_*_MODEL_FALLBACK re-seat cannot inherit a stale capability claim.
@@ -506,4 +551,8 @@ function safeModelOverride(envValue, safeDefault) {
 
 module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
   isBannedProductionModel: isBannedProductionModel, safeModelOverride: safeModelOverride,
+  // A first class export, not a test hook. Any surface that wants to report who chose a seat's
+  // dollar cap reads THIS rather than keeping its own copy of the env parse, which is exactly
+  // the second hand maintained reader that let the trap above survive unnoticed.
+  capDetail: capDetail,
   _test:{envUsd:envUsd} };

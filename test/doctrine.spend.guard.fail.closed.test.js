@@ -39,34 +39,58 @@ test('invalid image policy fails closed while valid local telemetry stays non-au
   assert.equal(guard.ceilDetail('image').value,2);
 });
 
-test('unset ceilings use safe defaults while values above hard maxima close',function(){
+// ⬡B:tests.spend_guard_fail_closed:LAW:no_default_and_no_maximum_survive_here:20260731⬡
+// These three tests used to assert four literals by name: two built in defaults and two upper
+// bounds. All four were coder literals, none of them a decision, and the founder had been told
+// the upper two were hard maximums. His 20260731 order removed them, so the assertions that
+// pinned them are replaced by assertions that they can never come back.
+test('nothing configured means NO ceiling, and it says nobody chose it',function(){
   delete process.env.DAILY_MODEL_CALL_CEIL;delete process.env.DAILY_IMAGE_CALL_CEIL;
-  let guard=require(path);assert.equal(guard._test.configuredCeil('text'),1500);
-  assert.equal(guard._test.configuredCeil('image'),300);
-  process.env.DAILY_MODEL_CALL_CEIL='10001';process.env.DAILY_IMAGE_CALL_CEIL='2001';
-  assert.equal(guard._test.configuredCeil('text'),10000,'one over the maximum clamps, it does not mute');
-  assert.equal(guard._test.configuredCeil('image'),2000);
-  assert.equal(guard._test.ceilDetail('text').source,'env_clamped');
-  assert.equal(guard._test.ceilDetail('text').requested,10001);
+  delete require.cache[path];
+  const guard=require(path);
+  ['text','image'].forEach(function(kind){
+    const d=guard._test.ceilDetail(kind);
+    assert.equal(d.chosen_by,'nobody_yet','an unconfigured ceiling belongs to nobody');
+    assert.equal(d.unlimited,true,'no ceiling is in force, so nothing may be enforced');
+    assert.equal(d.configured,false);
+    assert.equal(d.needs_review,true,'a gap that reads as a clean run is how the defect survives');
+    assert.equal(guard.allow(kind),true,'an unowned ceiling never mutes her');
+  });
 });
 
-test('a digit run too long to be an exact number still clamps, it does not mute',function(){
-  // The reviewer caught this: rejecting for imprecision reintroduced the exact mute the
-  // clamp exists to remove. Every positive integer that cannot be represented exactly is
-  // necessarily above the maximum, so size decides and precision is irrelevant.
+test('a number far above the old maximum is enforced exactly, not trimmed',function(){
+  // These two values used to be trimmed. They are his numbers and they run at his size now,
+  // because this system holds no maximum on them at all.
+  process.env.DAILY_MODEL_CALL_CEIL='10001';process.env.DAILY_IMAGE_CALL_CEIL='2001';
+  delete require.cache[path];
+  const guard=require(path);
+  assert.equal(guard._test.configuredCeil('text'),10001,'his number, not a trimmed one');
+  assert.equal(guard._test.configuredCeil('image'),2001);
+  assert.equal(guard._test.ceilDetail('text').chosen_by,'the founder');
+  assert.equal(guard._test.ceilDetail('text').requested,10001);
+  assert.equal(guard._test.ceilDetail('text').limited_by,null,'nothing limited it');
+});
+
+test('a digit run too long to be an exact number still never mutes her',function(){
+  // The 20260726 reviewer finding survives the removal of the maximum: refusing an imprecise
+  // value reintroduces the exact mute this whole line of work exists to remove. What is in
+  // force is now the arithmetic edge rather than a coder's cap, and it says so out loud.
   process.env.DAILY_MODEL_CALL_CEIL='999999999999999999999';delete require.cache[path];
   const guard=require(path);
-  assert.equal(guard._test.configuredCeil('text'),10000);
-  assert.equal(guard._test.ceilDetail('text').source,'env_clamped');
+  assert.equal(guard._test.configuredCeil('text'),Number.MAX_SAFE_INTEGER);
+  assert.equal(guard._test.ceilDetail('text').chosen_by,'the founder');
+  assert.equal(guard._test.ceilDetail('text').limited_by,'exact_integer_range');
+  assert.equal(guard._test.ceilDetail('text').unlimited,true);
   assert.equal(guard._test.ceilDetail('text').requested,null,'an inexact number is never reported as exact');
   assert.equal(guard.allow('text'),true,'she speaks');
 });
 
-test('a blank or whitespace ceiling means nobody chose, not a typo',function(){
+test('a blank or whitespace ceiling means nobody chose, not a typo and not a default',function(){
   process.env.DAILY_MODEL_CALL_CEIL='   ';delete require.cache[path];
   const guard=require(path);
-  assert.equal(guard._test.configuredCeil('text'),1500);
-  assert.equal(guard._test.ceilDetail('text').source,'built_in_default');
+  assert.equal(guard._test.ceilDetail('text').chosen_by,'nobody_yet');
+  assert.equal(guard._test.ceilDetail('text').unlimited,true);
+  assert.equal(guard.allow('text'),true);
 });
 
 test('real egress ownership reconciles exactly and never counts admission',async function(){
