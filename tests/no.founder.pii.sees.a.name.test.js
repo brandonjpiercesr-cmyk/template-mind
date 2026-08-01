@@ -21,6 +21,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const GUARD = path.join(__dirname, '..', 'scripts', 'checks', 'no-founder-pii.js');
 const guard = require(GUARD);
@@ -84,19 +85,76 @@ test('a role is the cure, so the cure must not read as a fresh violation', () =>
 
 test('the guard states what it did NOT check, so silence is never read as coverage', () => {
   const src = fs.readFileSync(GUARD, 'utf8');
-  // ⬡B:tests.no_founder_pii_sees_a_name:FIX:a_roster_pinned_as_one_string_blocks_its_own_growth:20260801⬡
-  // This used to match the roster as ONE exact sequence, which meant ADDING a detector broke the
-  // test that exists to make sure detectors are announced. That is backwards: the assertion
-  // should make the roster grow honestly, not hold it still. Each detector is now required by
-  // name, so a new one can be appended freely and a deleted one still fails here.
-  assert.match(src, /const ROSTER = 'checks run: /,
-    'every run must name its detector roster');
-  for (const detector of ['email', 'phone', 'e164', 'us-address-shape', 'denylisted-token',
-    'person-name-shape', 'identity-key']) {
-    assert.ok(src.indexOf(detector) !== -1,
-      'the run output must name the ' + detector + ' detector; a detector that runs without ' +
-      'being announced lets a reader credit the guard for coverage they cannot verify, and a ' +
-      'detector announced after being deleted is the same lie in the other direction');
+  // ⬡B:tests.no_founder_pii_sees_a_name:FIX:asserting_on_source_could_not_hold_the_roster:20260801⬡
+  // TWO WRONG SHAPES BEFORE THIS ONE, both caught by Codex, and the pair is worth naming.
+  // FIRST it pinned the roster as ONE EXACT STRING, so ADDING a detector broke the test that
+  // exists to make sure detectors are announced. Then it checked each name with indexOf over the
+  // WHOLE GUARD SOURCE, where detector names also appear in constants and comments, so REMOVING a
+  // name from the roster string left it green: too strict, then too loose.
+  //
+  // The correct form is neither, and it is not a source scan at all. The guard now BUILDS its
+  // roster from an exported DETECTORS list, and this asserts EXACT SET EQUALITY against what the
+  // program actually EMITS on a real run. Adding a detector without announcing it fails here.
+  // Removing one from the roster fails here. Source text cannot satisfy it either way.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pii-roster-'));
+  let emitted;
+  try {
+    fs.writeFileSync(path.join(dir, 'quiet.md'), '# Nothing personal here.\n');
+    const out = execFileSync(process.execPath, [GUARD, dir], { encoding: 'utf8', stdio: 'pipe' });
+    // Stops at the first '(' or '.', so this parses BOTH repos' emitted forms: this world's
+    // roster may or may not carry a live fingerprint count hanging off its final detector.
+    const m = String(out).match(/checks run: ([^.(]*)/);
+    assert.ok(m, 'the guard must EMIT its roster on every run, not merely contain one in source');
+    emitted = m[1].split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // configured-identity is emitted with its fingerprint count attached, so it is matched
+  // separately below rather than being parsed as one of the comma-separated names.
+  assert.deepStrictEqual(emitted.slice().sort(), guard.DETECTORS.slice().sort(),
+    'the EMITTED roster and the guard\'s own DETECTORS list disagree. A detector that runs ' +
+    'without being announced lets a reader credit coverage they cannot verify; a detector ' +
+    'announced after being deleted is the same lie in the other direction.');
+  // And every announced name must be a detector that really FIRES, so the list cannot become
+  // decoration. Each fixture below plants a value that names nobody: the address sits at an
+  // invented street with a ZIP from the unassigned 00000 block, the email at an RFC 2606
+  // .invalid host, and the phone in the 555 exchange reserved for fiction.
+  const FIRES = {
+    'email': ['leak@no-such-host.invalid', 'hardcoded_email'],
+    'phone': ['call 555-555-0100 today', 'hardcoded_phone'],
+    'e164': ['call +15555550100 today', 'hardcoded_phone'],
+    'us-address-shape': ['home: "742 Nowhere Lane",', 'hardcoded_address'],
+    'person-name-shape': ['signed Alfred Q. Nowhere', 'hardcoded_person_name'],
+    'identity-key': ["founder: 'Alfred Nowhere'", 'identity_key_literal']
+  };
+  // Two detectors cannot be probed with an invented fixture, because they fire only on THIS
+  // world's own stored hashes and any fixture that triggered them would have to carry a real
+  // person. They are exempted BY NAME and by written reason, and the exemption list is closed:
+  // an announced detector that is neither probed nor listed here fails, so "announce a detector
+  // that does not exist" cannot pass. Measured: without this, adding a fictional 'passport-number'
+  // to the roster left the suite 17 pass / 0 fail.
+  const NEEDS_THIS_WORLDS_HASHES = ['denylisted-token', 'configured-identity'];
+  for (const name of guard.DETECTORS) {
+    const probe = FIRES[name];
+    if (!probe) {
+      assert.ok(NEEDS_THIS_WORLDS_HASHES.indexOf(name) !== -1,
+        'the roster announces "' + name + '" and nothing here proves it fires. Either add a probe ' +
+        'to FIRES above whose fixture names nobody, or add the name to NEEDS_THIS_WORLDS_HASHES ' +
+        'with the reason it cannot be probed without carrying a real person. An announced ' +
+        'detector nobody can demonstrate is decoration, and decoration on a roster is a lie.');
+      continue;
+    }
+    const d2 = fs.mkdtempSync(path.join(os.tmpdir(), 'pii-fires-'));
+    try {
+      const f2 = path.join(d2, 'carrier.js');
+      fs.writeFileSync(f2, probe[0] + '\n');
+      const hits = guard.scanFile(f2).filter(function (v) { return v.type === probe[1]; });
+      assert.ok(hits.length >= 1,
+        'the roster announces "' + name + '" but no ' + probe[1] + ' finding was produced for it. ' +
+        'An announced detector that does not fire is the exact lie this roster exists to prevent.');
+    } finally {
+      fs.rmSync(d2, { recursive: true, force: true });
+    }
   }
   assert.match(src, /NOT read: /,
     'the unscanned file types must be printed, or an unstated blind spot reads as coverage');
