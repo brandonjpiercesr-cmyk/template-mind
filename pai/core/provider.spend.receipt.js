@@ -30,14 +30,29 @@ var SUMMARY_LIMIT = 20001;
 // ten thousand. Two changes close it, both matching the migration in
 // migrations/0008_provider_spend_unlimited_ceiling.sql:
 //   1. `ceiling: null` paired with `unlimited: true` is now a legal, explicit "no ceiling"
-//      input, passed to the RPC as SQL NULL rather than smuggled through as a giant integer a
-//      Postgres `integer` column cannot even hold. The RPC skips its admission-count check
-//      entirely when the ceiling is null.
-//   2. A real configured ceiling is now checked against POSTGRES_INTEGER_MAX, the actual
-//      physical ceiling of the `integer` column the RPC stores it in, an arithmetic fact
-//      about the storage type rather than a threshold any coder picked, precisely mirroring
-//      how `core/ceiling.owner.js` already treats `Number.MAX_SAFE_INTEGER` for JavaScript.
-var POSTGRES_INTEGER_MAX = 2147483647;
+//      input, passed to the RPC as SQL NULL rather than smuggled through as a giant integer.
+//      The RPC skips its admission-count check entirely when the ceiling is null.
+//   2. A real configured ceiling is checked against the SAME physical bound
+//      `core/ceiling.owner.js` already publishes to: `Number.MAX_SAFE_INTEGER`.
+//
+// ⬡B:core.provider_spend_receipt:911:the_trap_came_back_one_layer_down:20260801⬡
+// SECOND CATHY (Codex) review, same day: the FIRST version of this fix moved the bound from
+// the coder-picked 10000 up to 2147483647, Postgres `integer`'s own physical max, and called
+// that an arithmetic fact rather than a picked threshold. True of the STORAGE TYPE, and still
+// wrong, because `core/ceiling.owner.js` publishes any safe JavaScript integer up to
+// `Number.MAX_SAFE_INTEGER` (~9.007e15) as a real, enforced, founder-chosen number, not merely
+// up to Postgres `integer`'s ~2.1e9. A founder who set `DAILY_MODEL_CALL_CEIL=4000000000` (4
+// billion, comfortably inside what the guard reads and PUBLISHES as chosen_by:'the founder',
+// enforced:true) would have had that exact value rejected here with
+// provider_spend_ceiling_invalid: the identical trap this whole PR exists to kill, just one
+// layer further down the stack than the first defect. THE FIX, this time aligning the STORAGE
+// TYPE to the published range instead of moving the validator bound again: the RPC parameter
+// (migrations/0008) is now `bigint`, not `integer`, comfortably covering the full
+// `Number.MAX_SAFE_INTEGER` range, and this JS bound reads that exact constant from
+// `core/ceiling.owner.js` rather than restating it, so the two ends cannot drift apart again
+// silently. See `tests/provider.spend.receipt.durable.test.js` for the invariant test pinning
+// this file's own accepted maximum against the guard's published edge.
+var JS_SAFE_INTEGER_MAX = require('./ceiling.owner.js').EXACT_INTEGER_EDGE;
 var SUMMARY_CACHE = null;
 
 function clean(value) { return String(value == null ? '' : value).trim(); }
@@ -369,7 +384,7 @@ async function claimIntent(receipt, options) {
   var unlimited = opts.ceiling === null && opts.unlimited === true;
   var limit = unlimited ? null : Number(opts.ceiling);
   var grace = reconcileGraceSeconds(opts.env);
-  if (!unlimited && (!Number.isInteger(limit) || limit < 1 || limit > POSTGRES_INTEGER_MAX)) {
+  if (!unlimited && (!Number.isInteger(limit) || limit < 1 || limit > JS_SAFE_INTEGER_MAX)) {
     return {ok:false,reason:'provider_spend_ceiling_invalid'};
   }
   if (!Number.isInteger(grace)) return {ok:false,reason:'provider_spend_reconcile_grace_invalid'};
@@ -628,6 +643,7 @@ function cachedSummary() {
 }
 
 module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimIntent,
+  JS_SAFE_INTEGER_MAX:JS_SAFE_INTEGER_MAX,
   writeTerminal:writeTerminal,terminalFromResponse:terminalFromResponse,
   captureTerminalResponse:captureTerminalResponse,
   terminalFromError:terminalFromError,reconcileUnresolved:reconcileUnresolved,
