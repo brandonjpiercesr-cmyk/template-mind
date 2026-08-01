@@ -23,5 +23,17 @@ jobs:
       # rather than months later in somebody else's inherited world.
       - name: Prove the guard can still see what its law forbids
         run: node --test tests/no.founder.pii.sees.a.name.test.js
+      # ⬡B:ci.no_founder_pii:WIRE:a_guard_nobody_registered_never_runs:20260801⬡
+      # tests/no.founder.pii.md.scan.test.js was written on 20260727 to lock the markdown fix and
+      # was never added to any workflow, so it has proved nothing for five days. Registered here,
+      # in the same job as the gate it guards, by this estate's standing lesson.
+      - name: Prove the detectors still bite inside a Markdown file
+        run: node --test tests/no.founder.pii.md.scan.test.js
+      # That suite calls scanFile() directly, and scanFile() never consults the extension list at
+      # all: walk() does. Measured 20260801, removing 'md' from SCANNED_EXT_RE leaves it 2 pass /
+      # 0 fail, so it locks the DETECTORS and never the ROSTER. This one drives the real CLI over
+      # a real temp tree, which is the only way to prove which files a walker actually opens.
+      - name: Prove the gate actually opens every shipped text format
+        run: node --test tests/the.gate.reads.every.shipped.text.format.test.js
       - name: Scan for hardcoded founder identity (must be zero)
         run: node scripts/checks/no-founder-pii.js .

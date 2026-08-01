@@ -115,7 +115,20 @@ test('markdown and shipped dot directories are read now, and what remains unread
       'markdown must be in the scanned-extension list, not just promised in a comment');
     assert.match(src, /ent\.name\s*!==\s*'\.claude'/,
       '.claude must be let through the dot-directory prune the same way .github already is');
-    assert.match(src, /txt, yml/, 'a real remaining gap must still be named in the run output');
-    assert.doesNotMatch(src, /UNSCANNED_NOTE\s*=\s*'md,/,
-      'markdown must not still be listed among the unread extensions once it is actually read');
+    // ⬡B:tests.no_founder_pii_sees_a_name:SUPERSEDE:txt_yml_are_read_now_too:20260801⬡
+    // This used to require the literal string 'txt, yml' in the run output, because those
+    // formats were genuinely still unread. Lane clair/the-identity-gate-never-read-a-doc
+    // widened the roster to every shipped text format (measured: ZERO additional findings on
+    // this tree, so the TRUE ZERO holds with no baseline). The assertion is not deleted, it
+    // INVERTS: the honesty notice must never name a format the guard now reads, and it must
+    // never go empty either, because a guard claiming total coverage is the original disease.
+    const note = src.match(/const UNSCANNED_NOTE = '([^']*)'/);
+    assert.ok(note, 'the guard must keep one readable UNSCANNED_NOTE');
+    for (const ext of ['md', 'txt', 'yml', 'yaml', 'sql', 'sh']) {
+      assert.doesNotMatch(note[1], new RegExp('\\b' + ext + '\\b'),
+        '.' + ext + ' is read now and must not still be advertised as a blind spot');
+    }
+    assert.ok(note[1].trim().length > 0,
+      'a real remaining gap must still be named in the run output; no shape-based detector has ' +
+      'total coverage and a guard that names no blind spot is claiming one');
   });
