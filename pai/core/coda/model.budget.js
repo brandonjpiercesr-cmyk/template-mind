@@ -12,6 +12,11 @@ const ceilingOwner = require('../ceiling.owner.js');
 
 const SCHEMA = 'great-reset.coda-model-budget.v1';
 const providerScope = new AsyncLocalStorage();
+// Telemetry retention bounds memory, never capability. The monotonic used counters and
+// receipt total/omitted fields preserve how many calls happened while only recent detail rows
+// remain resident in one cycle.
+const MODEL_TELEMETRY_ROWS = 20;
+const PROVIDER_TELEMETRY_ROWS = 24;
 
 // ⬡B:core.coda.model_budget:LAW:the_thought_budget_he_set_is_the_budget:20260731⬡
 // THE TRAP THAT LIVED HERE UNTIL 20260731, and it was eating a real edit while it was found.
@@ -78,10 +83,12 @@ function validTicket(value) {
   }
   const max = Number(value.max_llm_calls);
   const remaining = Number(value.remaining_llm_calls);
-  // No upper bound on `max`. Whatever he set is what this ticket is worth.
-  return Number.isInteger(max) && max >= 1 &&
-    Number.isInteger(remaining) && remaining >= 0 && remaining <= max &&
-    Number.isInteger(used) && used >= 0 && used <= max && used + remaining === max &&
+  // A configured value above JavaScript's exact integer range becomes unlimited when the
+  // ticket is minted. A finite ticket must therefore remain inside the exact range in every
+  // counter; otherwise internal consistency itself cannot be proved.
+  return Number.isSafeInteger(max) && max >= 1 &&
+    Number.isSafeInteger(remaining) && remaining >= 0 && remaining <= max &&
+    Number.isSafeInteger(used) && used >= 0 && used <= max && used + remaining === max &&
     Array.isArray(value.calls) && value.calls.length <= used;
 }
 
@@ -104,9 +111,9 @@ function providerAllowanceValid(ticket, cap) {
   }
   const max = Number(ticket.max_paid_provider_attempts);
   const remaining = Number(ticket.remaining_paid_provider_attempts);
-  return Number.isInteger(max) && max >= 1 && max <= cap &&
-    Number.isInteger(remaining) && remaining >= 0 && remaining <= max &&
-    Number.isInteger(used) && used >= 0 && used <= max && used + remaining === max &&
+  return Number.isSafeInteger(max) && max >= 1 && max <= cap &&
+    Number.isSafeInteger(remaining) && remaining >= 0 && remaining <= max &&
+    Number.isSafeInteger(used) && used >= 0 && used <= max && used + remaining === max &&
     Array.isArray(ticket.provider_attempts) && ticket.provider_attempts.length <= used;
 }
 
@@ -128,6 +135,16 @@ function ensureProviderAllowance(ticket, env) {
     ticket.unlimited_paid_provider_attempts = read.unlimited === true;
     ticket.used_paid_provider_attempts = 0;
     ticket.provider_attempts = [];
+  } else if (present.length === fields.length && read.unlimited === true &&
+      ticket.unlimited_paid_provider_attempts !== true) {
+    // A complete finite v1 ticket is an explicit cycle contract, not a fallback minted here.
+    // Preserve it across an unset runtime instead of comparing its max to null and calling it
+    // invalid. Newly minted tickets remain truly unlimited when the setting is absent.
+    if (!providerAllowanceValid(ticket,Number(ticket.max_paid_provider_attempts))) {
+      return {ok:false,reason:'paid_provider_attempt_budget_invalid'};
+    }
+    ticket.unlimited_paid_provider_attempts=false;
+    return {ok:true,ticket:ticket,cap:Number(ticket.max_paid_provider_attempts)};
   } else if (present.length !== fields.length || !providerAllowanceValid(ticket, cap)) {
     return {ok:false,reason:'paid_provider_attempt_budget_invalid'};
   }
@@ -188,17 +205,29 @@ function consume(budget, purpose, now) {
 
 function commitModelCall(budget, purpose, now) {
   if (!validTicket(budget)) return {ok:false,reason:'model_call_budget_invalid'};
+  const used=Number(budget.used_llm_calls);
+  let remaining=null;
   if (budget.unlimited_llm_calls !== true) {
-    const remaining = Number(budget.remaining_llm_calls);
+    remaining = Number(budget.remaining_llm_calls);
+    // A valid finite ticket at its exact configured end is exhausted, even when its counter
+    // also sits on JavaScript's physical precision edge. Keep that attribution truthful.
     if (!Number.isFinite(remaining) || remaining <= 0) {
       return {ok:false,reason:'model_call_budget_exhausted'};
     }
+  }
+  // Refuse before mutating either half of the counter pair. validTicket already rejects
+  // imprecise finite tickets; this protects the last exact unlimited counter value too.
+  if (!Number.isSafeInteger(used) || used >= Number.MAX_SAFE_INTEGER) {
+    return {ok:false,reason:'model_call_counter_precision_exhausted'};
+  }
+  if (budget.unlimited_llm_calls !== true) {
     budget.remaining_llm_calls = remaining - 1;
   }
-  budget.used_llm_calls = Number(budget.used_llm_calls || 0) + 1;
+  budget.used_llm_calls = used + 1;
   if (!Array.isArray(budget.calls)) budget.calls = [];
   budget.calls.push({purpose:String(purpose || 'coda.deliberation').slice(0, 120),
     at:now || new Date().toISOString()});
+  while (budget.calls.length > MODEL_TELEMETRY_ROWS) budget.calls.shift();
   return {ok:true,remaining_llm_calls:budget.remaining_llm_calls,
     unlimited_llm_calls:budget.unlimited_llm_calls === true};
 }
@@ -216,11 +245,11 @@ function receipt(budget) {
     calls:(value.calls || []).map(function(call) {
       return {purpose:String(call && call.purpose || '').slice(0, 120),
         at:call && call.at || null};
-    }).slice(0, 20)};
+    }).slice(0,MODEL_TELEMETRY_ROWS)};
   if (value.unlimited_llm_calls === true) out.unlimited_llm_calls=true;
-  if ((value.calls || []).length > out.calls.length) {
-    out.calls_total = value.calls.length;
-    out.calls_omitted = value.calls.length - out.calls.length;
+  if (Number(value.used_llm_calls) > out.calls.length) {
+    out.calls_total = Number(value.used_llm_calls);
+    out.calls_omitted = Number(value.used_llm_calls) - out.calls.length;
   }
   if (value.unlimited_paid_provider_attempts === true ||
       Number.isInteger(value.max_paid_provider_attempts)) {
@@ -240,10 +269,10 @@ function receipt(budget) {
         started_at:attempt.started_at || null,completed_at:attempt.completed_at || null,
         status_code:Number.isFinite(Number(attempt.status_code)) ? Number(attempt.status_code) : null,
         ok:attempt.ok === true,error:attempt.error || null};
-    }).slice(0, 24);
-    if ((value.provider_attempts || []).length > out.provider_attempts.length) {
-      out.provider_attempts_total = value.provider_attempts.length;
-      out.provider_attempts_omitted = value.provider_attempts.length -
+    }).slice(0,PROVIDER_TELEMETRY_ROWS);
+    if (Number(value.used_paid_provider_attempts) > out.provider_attempts.length) {
+      out.provider_attempts_total = Number(value.used_paid_provider_attempts);
+      out.provider_attempts_omitted = Number(value.used_paid_provider_attempts) -
         out.provider_attempts.length;
     }
   }
@@ -301,6 +330,10 @@ function reserveProviderAttempt(spec, now) {
       scope.ticket.remaining_paid_provider_attempts <= 0) {
     return {ok:false,scoped:true,reason:'paid_provider_attempt_budget_exhausted'};
   }
+  const providerUsed=Number(scope.ticket.used_paid_provider_attempts);
+  if (!Number.isSafeInteger(providerUsed) || providerUsed >= Number.MAX_SAFE_INTEGER) {
+    return {ok:false,scoped:true,reason:'paid_provider_attempt_counter_precision_exhausted'};
+  }
   if (scope.count_model_calls === true) {
     const pending = Array.isArray(scope.pending_model_purposes)
       ? scope.pending_model_purposes.shift() : null;
@@ -308,15 +341,19 @@ function reserveProviderAttempt(spec, now) {
       pending && pending.purpose || spec && spec.purpose || 'paid_provider.fetch',
       pending && pending.at || now);
     if (!counted.ok) {
-      return {ok:false,scoped:true,reason:counted.reason === 'model_call_budget_exhausted'
-        ? 'paid_provider_attempt_budget_exhausted' : 'paid_provider_attempt_budget_invalid'};
+      return {ok:false,scoped:true,reason:
+        counted.reason === 'model_call_budget_exhausted'
+          ? 'paid_provider_attempt_budget_exhausted'
+          : counted.reason === 'model_call_counter_precision_exhausted'
+            ? 'model_call_counter_precision_exhausted'
+            : 'paid_provider_attempt_budget_invalid'};
     }
   }
   const target = providerTarget(spec && spec.url);
   if (scope.ticket.unlimited_paid_provider_attempts !== true) {
     scope.ticket.remaining_paid_provider_attempts -= 1;
   }
-  scope.ticket.used_paid_provider_attempts += 1;
+  scope.ticket.used_paid_provider_attempts = providerUsed + 1;
   const attempt = {attempt:scope.ticket.used_paid_provider_attempts,
     component:scope.component,intent_source:scope.intent_source,
     provider_host:target.provider_host,path:target.path,
@@ -340,6 +377,17 @@ function settleProviderAttempt(reservation, outcome, now) {
   attempt.status_code = Number.isFinite(Number(value.status_code)) ? Number(value.status_code) : null;
   attempt.ok = value.ok === true;
   attempt.error = value.error ? String(value.error).slice(0, 120) : null;
+  let completed=scope.ticket.provider_attempts.reduce(function(count,row){
+    return count+(row&&row.completed_at ? 1 : 0);
+  },0);
+  while(completed>PROVIDER_TELEMETRY_ROWS){
+    const index=scope.ticket.provider_attempts.findIndex(function(row){
+      return !!(row&&row.completed_at);
+    });
+    if(index<0)break;
+    scope.ticket.provider_attempts.splice(index,1);
+    completed-=1;
+  }
 }
 
 module.exports = {SCHEMA:SCHEMA,ensure:ensure,consume:consume,receipt:receipt,
@@ -348,4 +396,6 @@ module.exports = {SCHEMA:SCHEMA,ensure:ensure,consume:consume,receipt:receipt,
   settleProviderAttempt:settleProviderAttempt,
   _test:{readBudgetCeiling:readBudgetCeiling,validTicket:validTicket,
     invalidTicket:invalidTicket,providerAllowanceValid:providerAllowanceValid,
-    providerTarget:providerTarget,commitModelCall:commitModelCall}};
+    providerTarget:providerTarget,commitModelCall:commitModelCall,
+    MODEL_TELEMETRY_ROWS:MODEL_TELEMETRY_ROWS,
+    PROVIDER_TELEMETRY_ROWS:PROVIDER_TELEMETRY_ROWS}};
