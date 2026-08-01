@@ -119,12 +119,21 @@ function fakeBank(options) {
     const since = String(parsed.searchParams.get('created_at') || '').replace(/^gte\./,'');
     const selected = Array.from(rows.values()).filter(function (row) {
       return (!phase || row.phase === phase) && (!since || row.created_at >= since);
+    }).sort(function (left,right) {
+      return String(left.created_at).localeCompare(String(right.created_at)) ||
+        String(left.attempt_id).localeCompare(String(right.attempt_id)) ||
+        String(left.phase).localeCompare(String(right.phase));
     }).map(function (row) {
       return {attempt_id:row.attempt_id,phase:row.phase,provider:row.provider,kind:row.kind,
         key_alias:row.key_alias,component:row.component,disposition:row.disposition,
         status_code:row.status_code,created_at:row.created_at};
     });
-    return json(200,selected);
+    const range=String(init&&init.headers&&(init.headers.Range||init.headers.range)||'0-499');
+    const match=range.match(/^(\d+)-(\d+)$/);
+    const start=match?Number(match[1]):0,endWanted=match?Number(match[2]):start+499;
+    const page=selected.slice(start,endWanted+1);
+    const end=page.length?start+page.length-1:start;
+    return json(200,page,{'Content-Range':page.length?start+'-'+end+'/*':'*/'+selected.length});
   }
   return {rows:rows,calls:calls,fetch:fetchImpl};
 }
@@ -133,7 +142,8 @@ async function listenBank() {
   const rows = new Map();
   const server = http.createServer(function (req,res) {
     const parsed = new URL(req.url,'http://127.0.0.1');
-    function send(status,value){res.writeHead(status,{'Content-Type':'application/json'});
+    function send(status,value,headers){res.writeHead(status,Object.assign(
+      {'Content-Type':'application/json'},headers||{}));
       res.end(JSON.stringify(value));}
     if(req.method==='POST'&&parsed.pathname.includes('/rest/v1/rpc/')){
       const chunks=[];req.on('data',chunk=>chunks.push(chunk));req.on('end',function(){
@@ -169,7 +179,15 @@ async function listenBank() {
     const selected=Array.from(rows.values()).filter(row=>!phase||row.phase===phase).map(row=>({
       attempt_id:row.attempt_id,phase:row.phase,provider:row.provider,kind:row.kind,
       key_alias:row.key_alias,component:row.component,disposition:row.disposition,
-      status_code:row.status_code,created_at:row.created_at}));send(200,selected);
+      status_code:row.status_code,created_at:row.created_at})).sort((left,right)=>
+        String(left.created_at).localeCompare(String(right.created_at))||
+        String(left.attempt_id).localeCompare(String(right.attempt_id))||
+        String(left.phase).localeCompare(String(right.phase)));
+    const range=String(req.headers.range||'0-499').match(/^(\d+)-(\d+)$/);
+    const start=range?Number(range[1]):0,endWanted=range?Number(range[2]):start+499;
+    const page=selected.slice(start,endWanted+1);
+    const end=page.length?start+page.length-1:start;
+    send(200,page,{'Content-Range':page.length?start+'-'+end+'/*':'*/'+selected.length});
   });
   await new Promise(function(resolve,reject){server.once('error',reject);
     server.listen(0,'127.0.0.1',resolve);});
