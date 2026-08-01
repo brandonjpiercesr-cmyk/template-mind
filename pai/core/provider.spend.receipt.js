@@ -11,10 +11,12 @@ var brain = require('./brain.client.js');
 var openrouterSeatSpend = require('./openrouter.seat.spend.js');
 
 var TABLE = 'provider_spend_receipts';
+var RECONCILIATION_TABLE = 'provider_spend_reconciliations';
 var SCHEMA = 'anew.provider-spend-receipt.v1';
 var CLAIM_RPC = 'claim_anew_provider_spend_intent';
 var TERMINAL_RPC = 'write_anew_provider_spend_terminal';
 var RECONCILE_RPC = 'reconcile_anew_provider_spend_unknown';
+var PROVIDER_FACT_RPC = 'write_anew_provider_spend_reconciliation';
 var MAX_STORE_BYTES = 4 * 1024 * 1024;
 var MAX_RESPONSE_BYTES = 1024 * 1024;
 var SUMMARY_LIMIT = 20001;
@@ -81,6 +83,10 @@ function stableJson(value) {
 function identifier(value, maximum) {
   var text = clean(value);
   return text && text.length <= maximum && /^[A-Za-z0-9._:/-]+$/.test(text) ? text : null;
+}
+function providerLabel(value,maximum){
+  var text=clean(value);
+  return text&&text.length<=maximum&&!/[\u0000-\u001f\u007f]/.test(text)?text:null;
 }
 function exactHam(value) {
   var ham = identifier(value, 220);
@@ -447,6 +453,68 @@ async function writeTerminal(receipt, outcome, options) {
   return {ok:true,row:readback.row,replayed:payload.inserted !== true};
 }
 
+async function readReconciliation(attemptId, options) {
+  var config = bankConfig(options && options.env), doFetch = fetchImpl(options);
+  if (!config.ok || !doFetch) return {ok:false,reason:'provider_spend_store_unavailable'};
+  var query = new URLSearchParams({attempt_id:'eq.' + attemptId,limit:'2'});
+  var response;
+  try {
+    response = await doFetch(config.url + '/rest/v1/' + RECONCILIATION_TABLE + '?' +
+      query.toString(),{headers:readHeaders(config),
+        signal:brain.boundedSignal(options && options.signal,options && options.env)});
+  } catch (error) { return {ok:false,reason:'provider_spend_store_unavailable'}; }
+  if (!response || response.ok !== true) return {ok:false,reason:response &&
+    (response.status === 404 || response.status === 400) ? 'provider_spend_schema_unavailable'
+      : 'provider_spend_readback_failed'};
+  try {
+    var rows=await boundedJson(response,MAX_STORE_BYTES);
+    if(!Array.isArray(rows)||rows.length!==1)return{ok:false,
+      reason:rows&&rows.length>1?'provider_spend_readback_ambiguous':
+        'provider_spend_readback_missing'};
+    return{ok:true,row:rows[0]};
+  } catch(error){return{ok:false,reason:'provider_spend_store_readback_invalid'};}
+}
+
+async function writeReconciliation(receipt, outcome, options) {
+  var cost=decimalCost(outcome&&outcome.actual_cost_usd);
+  var row={attempt_id:receipt&&receipt.attempt_id,
+    provider_request_id:identifier(outcome&&outcome.provider_request_id,240),
+    provider_tokens:outcome&&outcome.provider_tokens||null,actual_cost_usd:cost,
+    cost_source:outcome&&outcome.cost_source,
+    provider_fact_digest:identifier(outcome&&outcome.provider_fact_digest,64),
+    provider_model:identifier(outcome&&outcome.provider_model,240),
+    provider_name:providerLabel(outcome&&outcome.provider_name,160),
+    reconciliation_source:'openrouter_generation_api'};
+  if(!receipt||receipt.provider!=='openrouter'||!identifier(row.attempt_id,64)||
+      !row.provider_request_id||!row.provider_tokens||cost===null||
+      row.cost_source!=='provider_reported'||!row.provider_fact_digest){
+    return{ok:false,reason:'provider_spend_reconciliation_input_invalid'};
+  }
+  var written=await rpcCall(PROVIDER_FACT_RPC,{p_fact:row},options,
+    'provider_spend_reconciliation_write_failed');
+  if(!written.ok)return written;
+  var payload=written.payload;
+  if(!payload||payload.ok!==true||payload.stored!==true||
+      clean(payload.attempt_id)!==row.attempt_id){
+    return{ok:false,reason:identifier(payload&&payload.reason,160)||
+      'provider_spend_reconciliation_readback_mismatch'};
+  }
+  var readback=await readReconciliation(row.attempt_id,options);
+  if(!readback.ok)return readback;
+  var actual=readback.row;
+  if(clean(actual.provider_request_id)!==row.provider_request_id||
+      clean(actual.cost_source)!=='provider_reported'||
+      clean(actual.provider_fact_digest)!==row.provider_fact_digest||
+      clean(actual.reconciliation_source)!=='openrouter_generation_api'||
+      identifier(actual.provider_model,240)!==row.provider_model||
+      providerLabel(actual.provider_name,160)!==row.provider_name||
+      decimalCost(actual.actual_cost_usd)!==cost||
+      stableJson(actual.provider_tokens)!==stableJson(row.provider_tokens)){
+    return{ok:false,reason:'provider_spend_reconciliation_readback_mismatch'};
+  }
+  return{ok:true,row:actual,replayed:payload.inserted!==true};
+}
+
 async function reconcileUnresolved(receipt, options) {
   var grace = reconcileGraceSeconds(options && options.env);
   if (!Number.isInteger(grace)) return {ok:false,reason:'provider_spend_reconcile_grace_invalid'};
@@ -522,6 +590,79 @@ function usageFacts(body) {
   }
   return {tokens:tokens,cost:cost,costSource:cost === null ? null : 'provider_reported'};
 }
+function openRouterGenerationFacts(body, expectedId) {
+  var data = body && body.data;
+  var expected = identifier(expectedId, 240);
+  if (!data || typeof data !== 'object' || !expected ||
+      identifier(data.id, 240) !== expected) return null;
+  var input = strictNumber(data.tokens_prompt);
+  var output = strictNumber(data.tokens_completion);
+  var nativeInput = strictNumber(data.native_tokens_prompt);
+  var nativeOutput = strictNumber(data.native_tokens_completion);
+  var nativeReasoning = strictNumber(data.native_tokens_reasoning);
+  var nativeCached = strictNumber(data.native_tokens_cached);
+  var total = input === null || output === null ? null : input + output;
+  var tokens = (input === null && output === null && nativeInput === null &&
+    nativeOutput === null && nativeReasoning === null && nativeCached === null) ? null : {
+    input_tokens:input,output_tokens:output,total_tokens:total,
+    native_input_tokens:nativeInput,native_output_tokens:nativeOutput,
+    native_reasoning_tokens:nativeReasoning,native_cached_tokens:nativeCached
+  };
+  var cost = strictNumber(data.total_cost);
+  if (cost === null) cost = strictNumber(data.usage);
+  if (cost === null) return null;
+  return {provider_request_id:expected,provider_tokens:tokens,
+    actual_cost_usd:cost,cost_source:'provider_reported',
+    provider_model:identifier(data.model,240),provider_name:providerLabel(data.provider_name,160)};
+}
+function providerFactDigest(facts) {
+  var normalized={provider_request_id:identifier(facts&&facts.provider_request_id,240),
+    provider_tokens:facts&&facts.provider_tokens||null,
+    actual_cost_usd:decimalCost(facts&&facts.actual_cost_usd),
+    cost_source:facts&&facts.cost_source,
+    provider_model:identifier(facts&&facts.provider_model,240),
+    provider_name:providerLabel(facts&&facts.provider_name,160)};
+  if(!normalized.provider_request_id||!normalized.provider_tokens||
+      normalized.actual_cost_usd===null||normalized.cost_source!=='provider_reported')return null;
+  return sha(stableJson(normalized));
+}
+async function recoverOpenRouterUsage(receipt, outcome, requestInit, options) {
+  var result = Object.assign({},outcome || {});
+  if (!receipt || receipt.provider !== 'openrouter' || result.disposition !== 'SUCCEEDED' ||
+      result.status_code < 200 || result.status_code > 299 ||
+      // Inline provider facts remain one inseparable authority. Reconcile only the known
+      // capture-failure shape where both are absent; never splice one generation fact into a
+      // different inline fact and then claim the mixed row came from the generation ledger.
+      strictNumber(result.actual_cost_usd) !== null || result.provider_tokens ||
+      !identifier(result.provider_request_id,240)) return result;
+  var authorization = headerValue(requestInit,'authorization');
+  if (!/^Bearer\s+\S+$/i.test(authorization)) return result;
+  var doFetch = fetchImpl(options);
+  if (!doFetch) return result;
+  var query = new URLSearchParams({id:result.provider_request_id});
+  var response;
+  try {
+    response = await doFetch('https://openrouter.ai/api/v1/generation?' + query.toString(),{
+      method:'GET',headers:{Authorization:authorization,Accept:'application/json'},
+      // This governs only the free post-response accounting read. The paid model response has
+      // already been captured and its terminal committed before this call begins.
+      signal:brain.boundedSignal(options&&options.signal,options&&options.env)
+    });
+  } catch (error) { return result; }
+  if (!response || response.ok !== true) return result;
+  var body;
+  try { body = await boundedJson(response,MAX_RESPONSE_BYTES); }
+  catch (error) { return result; }
+  var facts = openRouterGenerationFacts(body,result.provider_request_id);
+  if (!facts) return result;
+  result.actual_cost_usd=facts.actual_cost_usd;
+  result.cost_source=facts.cost_source;
+  result.provider_tokens=facts.provider_tokens;
+  result.provider_fact_digest=providerFactDigest(facts);
+  result.provider_model=facts.provider_model;
+  result.provider_name=facts.provider_name;
+  return result;
+}
 async function captureTerminalResponse(response, options) {
   var bytes = await responseBytes(response, Number(options && options.maxResponseBytes) || MAX_RESPONSE_BYTES);
   var body = null;
@@ -529,7 +670,8 @@ async function captureTerminalResponse(response, options) {
   var usage = usageFacts(body);
   var providerRequestId = headerValue({headers:response && response.headers}, 'x-generation-id') ||
     headerValue({headers:response && response.headers}, 'x-request-id') ||
-    headerValue({headers:response && response.headers}, 'request-id') || null;
+    headerValue({headers:response && response.headers}, 'request-id') ||
+    identifier(body && body.id,240) || null;
   return {outcome:{status_code:response && Number.isInteger(response.status) ? response.status : null,
     disposition:response && response.ok === true ? 'SUCCEEDED' : 'HTTP_ERROR',
     response_digest:bytes ? sha(bytes) : null,provider_request_id:identifier(providerRequestId, 240),
@@ -646,12 +788,17 @@ module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimInt
   JS_SAFE_INTEGER_MAX:JS_SAFE_INTEGER_MAX,
   writeTerminal:writeTerminal,terminalFromResponse:terminalFromResponse,
   captureTerminalResponse:captureTerminalResponse,
+  recoverOpenRouterUsage:recoverOpenRouterUsage,
+  writeReconciliation:writeReconciliation,
   terminalFromError:terminalFromError,reconcileUnresolved:reconcileUnresolved,
   readSummary:readSummary,cachedSummary:cachedSummary,
   _test:{providerFor:providerFor,bodyFacts:bodyFacts,providerModel:providerModel,keyAlias:keyAlias,
-    bankConfig:bankConfig,phaseRow:phaseRow,readPhase:readPhase,decimalCost:decimalCost,
+    bankConfig:bankConfig,phaseRow:phaseRow,readPhase:readPhase,
+    readReconciliation:readReconciliation,decimalCost:decimalCost,
     stableJson:stableJson,
-    boundedJson:boundedJson,usageFacts:usageFacts,responseBytes:responseBytes,
+    boundedJson:boundedJson,usageFacts:usageFacts,
+    openRouterGenerationFacts:openRouterGenerationFacts,providerFactDigest:providerFactDigest,
+    responseBytes:responseBytes,
     replayResponse:replayResponse,
     reconcileGraceSeconds:reconcileGraceSeconds,rpcCall:rpcCall,
     reset:function () { SUMMARY_CACHE=null; }}};

@@ -141,7 +141,10 @@ function combinedSignal(signals) {
 }
 
 function requestSignal(opts, timeout) {
-  return combinedSignal([opts && opts.signal, AbortSignal.timeout(timeout)]);
+  var requested = Number(timeout);
+  var deadline = Number.isFinite(requested) && requested > 0
+    ? AbortSignal.timeout(Math.floor(requested)) : null;
+  return combinedSignal([opts && opts.signal, deadline]);
 }
 
 async function tryRunPodGLM(system, user, opts) {
@@ -212,15 +215,10 @@ async function tryRunPodGLM(system, user, opts) {
     if (!_rpModel || !seatMap || (!_rpIsContestant && seatMap.isBannedProductionModel(_rpModel))) return null;
     var body = { model: _rpModel, messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
-    // ⬡B:core.model_ladder:FIX:runpod_honors_an_explicit_tight_caller_timeout:20260719⬡
-    // The 45s floor here was the council's 42-48s latency and the slow half of the
-    // gaslight cycle: the outbound judge asks for 9s, but this rung silently forced
-    // 45s, so when Together/OpenRouter missed and the turn fell to a cold RunPod pod
-    // it waited out the full cold boot before failing. A caller that sets a tight
-    // timeout (opts.tightTimeout, the council) is honored exactly; everything else
-    // keeps the generous floor so a normal deliberation still tolerates a cold boot.
-    var timeout = opts.realtime === true ? opts.timeout
-      : (opts.tightTimeout ? opts.timeout : Math.max(opts.timeout, 45000));
+    // A deadline exists only when the actual caller chose one. This rung used to invent a
+    // 45-second floor for ordinary calls, which meant an otherwise unlimited ladder was still
+    // governed by a coder clock. Pass the caller's value through exactly, including no value.
+    var timeout = opts.timeout;
     var runpodKey = seatMap && seatMap.sanitizeKey ? seatMap.sanitizeKey(process.env.GLM_RUNPOD_KEY) : String(process.env.GLM_RUNPOD_KEY || '').trim();
     if (!runpodKey) return null;
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runpodKey }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
@@ -404,7 +402,7 @@ async function tryOrnith(system, user, opts) {
       : String(process.env.ORNITH_LADDER_API_KEY || '').trim();
     if (!ornithKey) return null;
     var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + ornithKey },
-      body: JSON.stringify(body), signal: requestSignal(opts, Math.min(opts.timeout, 10000)) });
+      body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
     // ⬡B:core.model_ladder:AMEND:ornith_via_reflects_real_host_not_hardcoded_runpod:20260721⬡
@@ -530,7 +528,13 @@ async function tryAnthropicBackup(system, user, opts) {
 // present in this file and touching spend.guard is out of this file's scope, so it is contained by
 // stamp only; no hot-path behavior is changed here.
 async function deliberate(system, user, options) {
-  var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: 25000, json: false }, options || {});
+  // ⬡B:core.model_ladder:FIX:no_coder_default_deadline_may_abort_a_paid_answer:20260801⬡
+  // The former 25-second default was an invisible coder ceiling on every unspecified model
+  // call. It could fire after OpenRouter had returned HTTP 200 headers, abort the body before
+  // the paid answer and usage facts reached us, and induce the next paid fallback. With no
+  // caller-owned deadline there is now no deadline here. An explicit caller signal/timeout is
+  // still carried exactly as supplied; this one door no longer invents one.
+  var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: null, json: false }, options || {});
   // Reset per call, never inherited from a caller's reused options object: this call's
   // own paid model+key attempts, so no rung repeats a call this call already paid for.
   opts._attempted = [];
@@ -643,7 +647,7 @@ async function transcribe(audio, opts) {
       form.append('model', process.env.TOGETHER_WHISPER_MODEL || 'openai/whisper-large-v3');
       var r = await fetch('https://api.together.xyz/v1/audio/transcriptions', {
         method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form,
-        signal: requestSignal(opts, opts.timeout || 20000) });
+        signal: requestSignal(opts, opts.timeout) });
       if (r.ok) {
         var d = await r.json();
         var text = String(d.text || '').trim();
@@ -663,7 +667,7 @@ async function transcribe(audio, opts) {
       form2.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
       var r2 = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
         method: 'POST', headers: { 'xi-api-key': elKey }, body: form2,
-        signal: requestSignal(opts, opts.timeout || 25000) });
+        signal: requestSignal(opts, opts.timeout) });
       if (r2.ok) {
         var d2 = await r2.json();
         var text2 = String(d2.text || '').trim();
@@ -676,4 +680,5 @@ async function transcribe(audio, opts) {
 
 module.exports = { deliberate: deliberate, transcribe: transcribe,
   _test: { hasAcceptedContent: hasAcceptedContent, cleanModelContent: cleanModelContent,
-    applyOpenRouterThinkingPolicy:applyOpenRouterThinkingPolicy } };
+    applyOpenRouterThinkingPolicy:applyOpenRouterThinkingPolicy,
+    requestSignal:requestSignal } };

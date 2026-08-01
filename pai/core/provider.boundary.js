@@ -439,6 +439,20 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
     }
     return spendReceiptRefusal('provider_spend_terminal_unverified',url);
   }
+  // The paid transport terminal is durable before any optional metadata work begins. A stalled
+  // provider control-plane read can therefore neither strand the INTENT nor erase the answer.
+  // OpenRouter's exact generation fact is then stored beside—not over—the immutable terminal.
+  if(typeof store.recoverOpenRouterUsage==='function'){
+    try{
+      var recoveredOutcome=await store.recoverOpenRouterUsage(prepared.receipt,outcome,
+        requestInit,terminalReceiptOptions);
+      if(recoveredOutcome&&recoveredOutcome.provider_fact_digest&&
+          typeof store.writeReconciliation==='function'){
+        await store.writeReconciliation(prepared.receipt,recoveredOutcome,
+          terminalReceiptOptions);
+      }
+    }catch(eProviderFact){}
+  }
   if (reservation) {
     try {
       providerBudgetAuthority.settleProviderAttempt(reservation, {
