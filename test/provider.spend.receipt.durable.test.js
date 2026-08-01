@@ -41,9 +41,11 @@ function fakeBank(options) {
         if (rows.has(key)) return json(200,{ok:true,admitted:false,duplicate:true,
           reason:'provider_spend_attempt_already_admitted',attempt_id:row.attempt_id,
           admissions:admissions,ceiling:body.p_ceiling});
-        if (admissions >= body.p_ceiling) return json(200,{ok:true,admitted:false,
-          duplicate:false,reason:'daily_spend_ceiling_reached',attempt_id:row.attempt_id,
-          admissions:admissions,ceiling:body.p_ceiling});
+        // p_ceiling null means unlimited (mirrors anew migrations/0008_provider_spend_unlimited_ceiling.sql):
+        // the admission count check is skipped entirely, never compared against null.
+        if (body.p_ceiling !== null && admissions >= body.p_ceiling) return json(200,{ok:true,
+          admitted:false,duplicate:false,reason:'daily_spend_ceiling_reached',
+          attempt_id:row.attempt_id,admissions:admissions,ceiling:body.p_ceiling});
         rows.set(key,Object.assign({created_at:opts.intentCreatedAt || new Date().toISOString()},row));
         if (opts.lostIntentAck && !lostIntentAck) { lostIntentAck=true; return json(503,{error:'lost_ack'}); }
         return json(200,{ok:true,admitted:true,duplicate:false,reason:null,
@@ -264,6 +266,60 @@ test('terminal extraction preserves the original response and stores provider fa
     assert.doesNotMatch(serialized,/bank-secret-fixture|together-secret-fixture/);
     assert.doesNotMatch(serialized,/private prompt fixture|private answer fixture/);
     assert.match(serialized,/provider_reported/);
+  });
+
+// ⬡B:tests.provider_spend_receipt:911:an_unlimited_ceiling_must_not_reject_a_real_paid_call:20260801⬡
+// Mirror of the anew#1494 CATHY (Codex) review fix: core/ceiling.owner.js and
+// core/spend.guard.js report an unconfigured daily call ceiling as unlimited:true, and this
+// door used to forward that as a giant sentinel integer this function's own 1..10000 bound
+// rejected outright. These prove the actual fix, not merely that it compiles.
+test('an explicitly unlimited ceiling admits a call no matter how many admissions already exist',
+  async function () {
+    const bank = fakeBank();
+    const store = require(RECEIPT_PATH);
+    for (let i = 0; i < 5; i++) {
+      const seeded = prepared(store,{attribution:Object.assign({},attribution(),
+        {request_id:'request.receipt.seed.' + i})}).receipt;
+      const seededOut = await store.claimIntent(seeded,
+        {fetchImpl:bank.fetch,env:fixtureEnv(),ceiling:null,unlimited:true});
+      assert.equal(seededOut.ok,true,'seeding admission ' + i + ' must itself succeed unlimited');
+    }
+    const receipt = prepared(store,{attribution:Object.assign({},attribution(),
+      {request_id:'request.receipt.real.call'})}).receipt;
+    const out = await store.claimIntent(receipt,
+      {fetchImpl:bank.fetch,env:fixtureEnv(),ceiling:null,unlimited:true});
+    assert.equal(out.ok,true,'an unlimited ceiling must admit a real paid call');
+    assert.equal(out.ceiling,null,'the ceiling it reports back must be the true null, not a sentinel number');
+  });
+
+test('a null ceiling with no explicit unlimited flag is still refused, never silently unlimited',
+  async function () {
+    const store = require(RECEIPT_PATH);
+    const out = await store.claimIntent(prepared(store).receipt,
+      {fetchImpl:fakeBank().fetch,env:fixtureEnv(),ceiling:null});
+    assert.equal(out.ok,false);
+    assert.equal(out.reason,'provider_spend_ceiling_invalid',
+      'a caller that forgets to pass a ceiling is a bug, not a decision, and must not read as unlimited');
+  });
+
+test('a real founder-chosen ceiling above the old 10000 literal is honored, not rejected',
+  async function () {
+    const bank = fakeBank();
+    const store = require(RECEIPT_PATH);
+    const out = await store.claimIntent(prepared(store).receipt,
+      {fetchImpl:bank.fetch,env:fixtureEnv(),ceiling:50000});
+    assert.equal(out.ok,true,
+      'a founder can type a real number above 10000 and this door must not treat it as invalid');
+    assert.equal(out.ceiling,50000);
+  });
+
+test('a ceiling above the Postgres integer column max is still refused, that bound is physical',
+  async function () {
+    const store = require(RECEIPT_PATH);
+    const out = await store.claimIntent(prepared(store).receipt,
+      {fetchImpl:fakeBank().fetch,env:fixtureEnv(),ceiling:2147483648});
+    assert.equal(out.ok,false);
+    assert.equal(out.reason,'provider_spend_ceiling_invalid');
   });
 
 test('intent schema/write/readback failures are typed and cannot look committed', async function () {

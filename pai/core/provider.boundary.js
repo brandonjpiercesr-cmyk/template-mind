@@ -260,6 +260,19 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   if (!ceilingDetail || !Number.isInteger(ceilingDetail.value)) {
     return spendReceiptRefusal('daily_spend_ceiling_configuration_invalid',url);
   }
+  // ⬡B:core.provider_boundary:FIX:an_unlimited_ceiling_cannot_travel_as_a_giant_integer:20260801⬡
+  // CATHY (Codex) review, 20260801: `core/spend.guard.js` reports an unconfigured call
+  // ceiling as `{value: EXACT_INTEGER_EDGE, unlimited: true}`, the arithmetic edge standing
+  // in only because SOME downstream contracts need an integer rather than an absence. This
+  // door read only `.value` and forwarded it unchanged, so a founder who configured NO
+  // ceiling (the whole point of that PR) got every paid call refused the instant the durable
+  // claim's own numeric bound (now the Postgres `integer` column's real max, see
+  // core/provider.spend.receipt.js) was smaller than the sentinel. `unlimited` is the
+  // authority here, not the number beside it: an unlimited ceiling now travels as an explicit
+  // null plus its own flag, matching what core/provider.spend.receipt.js and the RPC now do
+  // with it, and a real founder-chosen number of any size still travels exactly as typed.
+  var ceilingUnlimited = ceilingDetail.unlimited === true;
+  var ceilingForClaim = ceilingUnlimited ? null : ceilingDetail.value;
 
   var predictedAttempt = providerScope
     ? Number(providerScope.ticket.used_paid_provider_attempts || 0) + 1
@@ -293,13 +306,13 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   }
 
   var receiptOptions = {fetchImpl:realFetch,env:env || process.env,
-    signal:requestInit && requestInit.signal,ceiling:ceilingDetail.value};
+    signal:requestInit && requestInit.signal,ceiling:ceilingForClaim,unlimited:ceilingUnlimited};
   // ⬡B:core.provider_boundary:FIX:the_provider_deadline_cannot_abort_its_own_terminal_receipt:20260730⬡
   // The provider signal governs only provider work. Once bytes may have left, terminal
   // accounting needs its own bounded bank deadline so an expiring model timeout cannot strand
   // a paid INTENT without a TERMINAL receipt.
   var terminalReceiptOptions = {fetchImpl:realFetch,env:env || process.env,
-    signal:null,ceiling:ceilingDetail.value};
+    signal:null,ceiling:ceilingForClaim,unlimited:ceilingUnlimited};
   var reconciled;
   var reconcileKey = [prepared.receipt.ham_uid,prepared.receipt.cycle_id,
     prepared.receipt.request_id].join('|');
