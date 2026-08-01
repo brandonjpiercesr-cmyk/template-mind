@@ -84,8 +84,20 @@ test('a role is the cure, so the cure must not read as a fresh violation', () =>
 
 test('the guard states what it did NOT check, so silence is never read as coverage', () => {
   const src = fs.readFileSync(GUARD, 'utf8');
-  assert.match(src, /checks run: email, phone, e164, denylisted-token, person-name-shape, identity-key/,
+  // ⬡B:tests.no_founder_pii_sees_a_name:FIX:a_roster_pinned_as_one_string_blocks_its_own_growth:20260801⬡
+  // This used to match the roster as ONE exact sequence, which meant ADDING a detector broke the
+  // test that exists to make sure detectors are announced. That is backwards: the assertion
+  // should make the roster grow honestly, not hold it still. Each detector is now required by
+  // name, so a new one can be appended freely and a deleted one still fails here.
+  assert.match(src, /const ROSTER = 'checks run: /,
     'every run must name its detector roster');
+  for (const detector of ['email', 'phone', 'e164', 'us-address-shape', 'denylisted-token',
+    'person-name-shape', 'identity-key']) {
+    assert.ok(src.indexOf(detector) !== -1,
+      'the run output must name the ' + detector + ' detector; a detector that runs without ' +
+      'being announced lets a reader credit the guard for coverage they cannot verify, and a ' +
+      'detector announced after being deleted is the same lie in the other direction');
+  }
   assert.match(src, /NOT read: /,
     'the unscanned file types must be printed, or an unstated blind spot reads as coverage');
   // Comments are stripped first. The guard's own fix note QUOTES the sentence it removed, to
