@@ -10,6 +10,8 @@
 // resolves through the ABAHAM door upstream, never hardcoded here, so a station only
 // ever cooks for the HAM it was handed.
 'use strict';
+var _crypto = require('node:crypto');
+var _spendGuard = require('../core/spend.guard.js');
 // ⬡B:advisors.dispatch:WIRE:funneled_world_agnostic_20260711⬡
 // PORT funnel: world-agnostic brain access (MEMORY_BANK_* with AIBE_BRAIN_* fallback,
 // env-driven table/schema) -> byte-identical legacy, ready for the new world.
@@ -247,7 +249,7 @@ async function stationCook(advisorName, hamUid, assignment, identityHint) {
 
 // THE FULL DISPATCH -- lead plans the team, stations cook in parallel, lead synthesizes
 // the team's real work into one answer. This is teeth: assignments, deliverables, records.
-async function dispatch(advisorName, hamUid, ask, ctx) {
+async function dispatchScoped(advisorName, hamUid, ask, ctx) {
   var HAM = String(hamUid || '').toUpperCase();
   // ⬡B:advisors.dispatch:WIRE:active_awareness:20260713⬡
   // CANON check 16: every agent cycle reads its own last run at start, writes a new
@@ -314,6 +316,26 @@ async function dispatch(advisorName, hamUid, ask, ctx) {
     found: results.filter(function (r) { return r.deliverable; }).map(function (r) { return r.role + ' delivered'; })
   });
   return { ok: true, dispatched: team.length, team: team, deliverables: results, answer: synthesis };
+}
+
+function dispatchProviderAttribution(advisorName,hamUid,ask,cycleContext,env){
+  var runtime=env||process.env,context=cycleContext||{};
+  var ham=String(hamUid||'').trim().toUpperCase();
+  var inherited=context.cycleId||context.cycle_id||context.requestId||context.request_id;
+  var digest=_crypto.createHash('sha256').update(String(advisorName||'')+'\n'+String(ask||''),'utf8')
+    .digest('hex').slice(0,40);
+  var cycle=String(inherited||'advisor.dispatch.'+ham+'.'+digest);
+  return {component:'advisors.dispatch',ham_uid:ham,cycle_id:cycle,
+    request_id:String(context.requestId||context.request_id||cycle+'.team'),seat:'advisors',
+    owner_node_id:'station.advisors',target_wonder_id:'wonder.anu',
+    service_id:String(runtime.RENDER_SERVICE_ID||runtime.ANEW_SERVICE_ID||'').trim()};
+}
+
+async function dispatch(advisorName,hamUid,ask,ctx,cycleContext){
+  return _spendGuard.withAttribution(
+    dispatchProviderAttribution(advisorName,hamUid,ask,cycleContext,process.env),function(){
+      return dispatchScoped(advisorName,hamUid,ask,ctx);
+    });
 }
 
 // \u2b21B:advisors.dispatch:BUILD:universal_one_line_gate:20260711\u2b21

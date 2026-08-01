@@ -236,8 +236,51 @@ function withAttribution(value, fn) {
   // and non-enumerable, so it can never enter a receipt or a public attribution surface.
   Object.defineProperty(next, '_provider_state', {enumerable:false,
     value:active && active._provider_state ||
-      {attempt_order:0,hold:null,reconciliations:new Map()}});
+      {attempt_order:0,hold:null,reconciliations:new Map(),agent_find_bindings:new Map()}});
   return ATTRIBUTION.run(next, fn);
+}
+
+function agentFindKey(value) {
+  var exact=cleanAttribution(value);
+  if(!exact.ham_uid||!exact.cycle_id||!exact.request_id||!exact.seat||
+      !exact.owner_node_id)return'';
+  return [exact.ham_uid,exact.cycle_id,exact.request_id,exact.seat,
+    exact.owner_node_id].join('|');
+}
+
+function rememberAgentFindBinding(value) {
+  var active=ATTRIBUTION.getStore(),binding=value&&typeof value==='object'?value:{};
+  if(!active||!active._provider_state)return false;
+  var key=agentFindKey(binding),source=String(binding.source||'').trim();
+  if(!key||!/^agent\.find\.[A-Z0-9._:-]+\.[a-f0-9]{64}$/.test(source))return false;
+  var map=active._provider_state.agent_find_bindings;
+  if(!(map instanceof Map)){map=new Map();active._provider_state.agent_find_bindings=map;}
+  map.set(key,{source:source,seat_node_id:String(binding.owner_node_id||''),
+    seat_name:String(binding.seat||''),readback_verified:binding.readback_verified===true});
+  return true;
+}
+
+function currentAgentFindBinding(value) {
+  var active=ATTRIBUTION.getStore(),key=agentFindKey(currentAttribution(value));
+  var map=active&&active._provider_state&&active._provider_state.agent_find_bindings;
+  return key&&map instanceof Map&&map.get(key)||null;
+}
+
+function ensureAgentFindBinding(key,fn) {
+  var active=ATTRIBUTION.getStore();
+  if(typeof fn!=='function')return Promise.resolve({ok:false,
+    reason:'agent_find_provider_scope_invalid'});
+  if(!active||!active._provider_state)return Promise.resolve().then(fn);
+  var map=active._provider_state.agent_find_bindings;
+  if(!(map instanceof Map)){map=new Map();active._provider_state.agent_find_bindings=map;}
+  var exact='provider|'+String(key||'');
+  if(!key)return Promise.resolve({ok:false,reason:'agent_find_provider_scope_invalid'});
+  if(map.has(exact))return Promise.resolve(map.get(exact));
+  var promise=Promise.resolve().then(fn);
+  map.set(exact,promise);
+  return promise.then(function(result){map.set(exact,result);return result;},function(error){
+    map.delete(exact);throw error;
+  });
 }
 
 function nextProviderAttemptOrder() {
@@ -542,6 +585,9 @@ module.exports = { lastDenial: lastDenial, allow: allow, preflight:preflight,
   paidEgressHold:paidEgressHold,
   holdPaidEgress:holdPaidEgress,
   ensurePaidReconciliation:ensurePaidReconciliation,
+  rememberAgentFindBinding:rememberAgentFindBinding,
+  currentAgentFindBinding:currentAgentFindBinding,
+  ensureAgentFindBinding:ensureAgentFindBinding,
   checkBalances: checkBalances,
   accountBalance: accountBalance,
   lowProviders: lowProviders,

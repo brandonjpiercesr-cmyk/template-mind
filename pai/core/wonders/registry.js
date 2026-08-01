@@ -58,6 +58,29 @@ const NODES = [
       agent_find:{recent_truth:[{stamp_type:'CODA_WONDER_RESULT',source_prefix:'coda.result.',limit:6}]}}
   },
   {
+    id:'station.advisors', display_name:'ADVISORS', kind:'independent_thinking_station',
+    lifecycle:'active', owner_wonder_id:'wonder.anu', reports_to:'station.pai',
+    ham_scope:'inherited',
+    technical_role:'Research, convene, and synthesize one advisor team brief through the governed advisor dispatch cycle.',
+    product_role:'The named advisor-team deliberation seat, never anonymous PAI spend.',
+    cycle:{triggers:['advisor.dispatch.requested','advisor.team.synthesis'],coordinator:'station.pai'},
+    context_policy:'context.advisors.team.v1',
+    authority_policy:'authority.advisors.research_synthesize_only.v1',
+    return_gate:'gate.ham.active_channel',metadata:{wiring:[wire('advisors/dispatch.js')],
+      agent_find:{recent_truth:[{source_prefix:'dispatch.',limit:12}]}}
+  },
+  {
+    id:'station.press', display_name:'PRESS', kind:'independent_thinking_station',
+    lifecycle:'active', owner_wonder_id:'wonder.anu', reports_to:'station.pai',
+    ham_scope:'inherited',
+    technical_role:'Scan named external news interests through the funded PRESS seat and return grounded candidates for relevance judgment.',
+    product_role:'The named proactive news scan seat.',
+    cycle:{triggers:['press.scan.requested','schedule.proactive.press'],coordinator:'station.pai'},
+    context_policy:'context.press.news.v1',authority_policy:'authority.press.research_only.v1',
+    return_gate:'gate.ham.active_channel',metadata:{wiring:[wire('stations/press.station.js')],
+      agent_find:{recent_truth:[{source_prefix:'press.',limit:12}]}}
+  },
+  {
     id:'agent.span', display_name:'SPAN', kind:'wonder_agent', lifecycle:'contained',
     owner_wonder_id:'station.coda', reports_to:'station.coda', ham_scope:'inherited',
     technical_role:'Decompose approved roadmaps into bounded, owned, dependency-aware tasks.',
@@ -273,9 +296,17 @@ const PERSONA_BASE=Object.freeze({lines:Object.freeze([
   'Use the evidence in this world, stay inside your registered authority, and return through your gate.'
 ])});
 const AGENT_FIND_LEGS=Object.freeze({
-  'station.agent_find':Object.freeze({persona:{differentia:'You decode and navigate the complete wall before another seat thinks.',temperament:'Fast, literal, silent, and exact about provenance.'},jd:{summary:'Bind the complete FCW, recent truth, and employment record to one requesting seat before deliberation.',duties:['Run canonical FIND reads.','Preserve every FCW contributor.','Stamp and verify one typed truth beacon.'],never:['Never call a model.','Never decide what evidence means.','Never turn an unavailable read into empty truth.']},goals:['Every deliberation starts from a complete, seat-bound wall.'],toolbelt:['tool.brain.find'],may_summon:[],may_recommend:[],wakes:['station.pai','station.coda'],hands_to:['station.pai','station.coda']}),
+  'station.agent_find':Object.freeze({persona:{differentia:'You decode and navigate the complete wall before another seat thinks.',temperament:'Fast, literal, silent, and exact about provenance.'},jd:{summary:'Bind the complete FCW, recent truth, and employment record to one requesting seat before deliberation.',duties:['Run canonical FIND reads.','Preserve every FCW contributor.','Stamp and verify one typed truth beacon.'],never:['Never call a model.','Never decide what evidence means.','Never turn an unavailable read into empty truth.']},goals:['Every deliberation starts from a complete, seat-bound wall.'],toolbelt:['tool.brain.find'],may_summon:[],may_recommend:[],wakes:['station.pai','station.coda','station.advisors','station.press'],hands_to:['station.pai','station.coda','station.advisors','station.press']}),
   'station.pai':Object.freeze({persona:{differentia:'You coordinate the governed reasoning cycle.',temperament:'Deliberate and evidence led.'},jd:{summary:'Run the interactive PAI cycle end to end.',duties:['Read the world wall.','Use governed tools and councils.','Return through the active channel.'],never:['Never invent unavailable evidence.']},goals:['Complete each admitted cycle with durable truth.'],toolbelt:['tool.brain.find'],may_summon:['station.coda'],may_recommend:['guardian.clair'],wakes:['station.coda'],hands_to:['gate.ham.active_channel']}),
-  'station.coda':Object.freeze({persona:{differentia:'You lead coding judgment and repair disposition.',temperament:'Exact, practical, and verification hungry.'},jd:{summary:'Convert evidence-backed coding work through the governed coding cycle.',duties:['Read exact repair evidence.','Choose a typed disposition.','Return through the CODA result gate.'],never:['Never claim a repair without source and readback.']},goals:['Every admitted repair reaches a durable disposition.'],toolbelt:['tool.brain.find'],may_summon:['agent.span','agent.mace'],may_recommend:['guardian.clair'],wakes:['agent.span','agent.mace'],hands_to:['gate.coda.result']})
+  'station.coda':Object.freeze({persona:{differentia:'You lead coding judgment and repair disposition.',temperament:'Exact, practical, and verification hungry.'},jd:{summary:'Convert evidence-backed coding work through the governed coding cycle.',duties:['Read exact repair evidence.','Choose a typed disposition.','Return through the CODA result gate.'],never:['Never claim a repair without source and readback.']},goals:['Every admitted repair reaches a durable disposition.'],toolbelt:['tool.brain.find'],may_summon:['agent.span','agent.mace'],may_recommend:['guardian.clair'],wakes:['agent.span','agent.mace'],hands_to:['gate.coda.result']}),
+  'station.advisors':Object.freeze({persona:{differentia:'You are the advisor team room, grounding and synthesizing specialist work.',temperament:'Curious, practical, and disciplined about sources.'},jd:{summary:'Research and synthesize one advisor-team brief.',duties:['Bind the exact advisor and HAM.','Keep specialist work attributable.','Persist the brief before return.'],never:['Never borrow another seat wallet.','Never call one answer a team result.']},goals:['Every advisor deliberation is attributable.'],toolbelt:['tool.brain.find'],may_summon:['station.pai'],may_recommend:[],wakes:[],hands_to:['gate.ham.active_channel']}),
+  'station.press':Object.freeze({persona:{differentia:'You are the proactive news scan seat, grounded and exact about recency.',temperament:'Alert, selective, and quiet when evidence is thin.'},jd:{summary:'Scan named external news interests and return grounded candidates.',duties:['Use the named funded seat.','Bind the HAM before scanning.','Return candidates for relevance judgment.'],never:['Never borrow a shared wallet.','Never invent a headline.']},goals:['Every proactive scan is attributable and grounded.'],toolbelt:['tool.brain.find'],may_summon:[],may_recommend:['station.pai'],wakes:[],hands_to:['station.pai']})
+});
+const CAPABILITIES=Object.freeze({
+  'tool.brain.find':Object.freeze({
+    id:'tool.brain.find', owner_node_id:'station.agent_find', module:'core/agent.find.js',
+    entrypoints:Object.freeze(['bindWall','bindProviderRequest','readRecentCycleTruth'])
+  })
 });
 
 function personaBase() { return {lines:PERSONA_BASE.lines.slice()}; }
@@ -285,6 +316,8 @@ function resolve(id) {
   const raw=BY_ID[String(id||'')]||null,legs=raw&&AGENT_FIND_LEGS[raw.id];
   return raw&&legs?Object.assign({},raw,legs):raw;
 }
+
+function resolveCapability(id) { return CAPABILITIES[String(id||'')]||null; }
 
 function list(options) {
   const opts = options || {};
@@ -307,6 +340,10 @@ function validateRegistry() {
     if (node.owner_wonder_id && !BY_ID[node.owner_wonder_id]) reasons.push(node.id + ':unknown_owner:' + node.owner_wonder_id);
     if (node.reports_to && !BY_ID[node.reports_to]) reasons.push(node.id + ':unknown_reports_to:' + node.reports_to);
     if (node.return_gate && !BY_ID[node.return_gate]) reasons.push(node.id + ':unknown_return_gate:' + node.return_gate);
+    const effective=resolve(node.id);
+    (effective && Array.isArray(effective.toolbelt) ? effective.toolbelt : []).forEach(function (toolId) {
+      if (!resolveCapability(toolId)) reasons.push(node.id + ':unknown_toolbelt_capability:' + toolId);
+    });
   });
   return { ok:reasons.length === 0, contract_version:contract.VERSION, count:NODES.length, reasons:reasons };
 }
@@ -373,6 +410,8 @@ function departments() {
 module.exports = {
   CONTRACT_VERSION:contract.VERSION,
   resolve:resolve,
+  resolveCapability:resolveCapability,
+  CAPABILITIES:CAPABILITIES,
   list:list,
   validateRegistry:validateRegistry,
   snapshot:snapshot,

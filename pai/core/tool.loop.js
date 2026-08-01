@@ -7235,12 +7235,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // _paiSeatName() for the full finding.
   var _channelLower = String(channel || '').toLowerCase();
   var seat = _channelLower === 'voice' ? 'voice_fast' : _channelLower === 'coding' ? 'coda' : 'c2_organ';
+  var ownerNodeId = _channelLower === 'coding' ? 'station.coda' : 'station.pai';
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
   var result;
   try {
     result = await require('./spend.guard.js').withAttribution({ham_uid:exactHam,
       cycle_id:cycleId,request_id:requestId,seat:seat,component:component,
-      owner_node_id:'station.pai',target_wonder_id:'wonder.anu'},function () {
+      owner_node_id:ownerNodeId,target_wonder_id:'wonder.anu'},function () {
         return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
           {cycle_id:cycleId,request_id:requestId});
       });

@@ -222,6 +222,57 @@ function providerAttribution(spendGuard, env) {
   return value;
 }
 
+function agentFindRefusal(reason,url) {
+  return jsonResponse({error:{message:reason || 'agent_find_provider_bind_failed',
+    reason:reason || 'agent_find_provider_bind_failed',host:publicTarget(url)}},503);
+}
+
+function applyAgentFindAppendix(init,appendix) {
+  var body;
+  try { body=init&&init.body?JSON.parse(init.body):null; }
+  catch (error) { body=null; }
+  if(!body||!Array.isArray(body.messages)||!String(appendix||'').trim())return init;
+  return Object.assign({},init,{body:JSON.stringify(Object.assign({},body,{messages:[
+    {role:'system',content:String(appendix).trim()}].concat(body.messages)}))});
+}
+
+async function bindAgentFindRequest(url,init,env,capability) {
+  var body;
+  try { body=init&&init.body?JSON.parse(init.body):null; }
+  catch (error) { body=null; }
+  // Agent FIND governs seated language-model deliberation. Image, audio, embeddings, and
+  // provider control-plane reads have no messages and are not allowed to fake a model seat.
+  if (!body || !Array.isArray(body.messages)) return {ok:true,bound:false,init:init};
+  var spendGuard;
+  try { spendGuard=require('./spend.guard.js'); }
+  catch (error) { return {ok:false,reason:'agent_find_spend_scope_unavailable'}; }
+  var attribution=providerAttribution(spendGuard,env);
+  var prior=typeof spendGuard.currentAgentFindBinding==='function'
+    ? spendGuard.currentAgentFindBinding(attribution):null;
+  if(prior&&prior.readback_verified===true){
+    return {ok:true,bound:true,reused:true,init:init,truth_beacon:prior};
+  }
+  var binder=capability||require('./agent.find.js');
+  if (!binder || typeof binder.bindProviderRequest!=='function') {
+    return {ok:false,reason:'agent_find_provider_capability_unavailable'};
+  }
+  try {
+    var promptDigest=crypto.createHash('sha256').update(JSON.stringify(body.messages)).digest('hex');
+    var key=[attribution.ham_uid,attribution.cycle_id,attribution.request_id,
+      attribution.seat,attribution.owner_node_id,promptDigest].join('|');
+    var bind=function(){return binder.bindProviderRequest({url:url,init:init,
+      attribution:attribution,observed_at:new Date().toISOString()});};
+    var result=typeof spendGuard.ensureAgentFindBinding==='function'
+      ? await spendGuard.ensureAgentFindBinding(key,bind):await bind();
+    if(result&&result.ok===true&&result.prompt_appendix){
+      return Object.assign({},result,{init:applyAgentFindAppendix(init,result.prompt_appendix)});
+    }
+    return result;
+  } catch (error) {
+    return {ok:false,reason:'agent_find_provider_bind_failed'};
+  }
+}
+
 async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   providerBudgetAuthority, receiptStore, requestInit, env) {
   var spendGuard;
@@ -517,12 +568,18 @@ function install(options) {
             message:'anonymous_shared_provider_key_forbidden',
             reason:'anonymous_shared_provider_key_forbidden',provider:sharedCredential.provider,
             host:requestUrl(url)}},429);
+          var agentBinding=await bindAgentFindRequest(url,init,receiptEnv,
+            installOptions.agentFindCapability);
+          if(!agentBinding||agentBinding.ok!==true){
+            return agentFindRefusal(agentBinding&&agentBinding.reason,url);
+          }
+          var paidInit=agentBinding.init||init;
+          var paidFetchArgs=[url,paidInit];
           var fetchThis = this;
-          var fetchArgs = arguments;
-          var guarded = await openrouterSeatSpend.run(url, init, realFetch,
+          var guarded = await openrouterSeatSpend.run(url, paidInit, realFetch,
             function () {
-              return performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
-                providerBudgetAuthority,receiptStore,init,receiptEnv);
+              return performPaidEgress(fetchThis, paidFetchArgs, url, paidKind, realFetch,
+                providerBudgetAuthority,receiptStore,paidInit,receiptEnv);
             });
           if (guarded.blocked) return seatSpendRefusal(guarded, url);
           return guarded.response;
@@ -571,6 +628,8 @@ module.exports = { install: install, isBannedChatCall: isBannedChatCall,
   sharedProviderCredential:sharedProviderCredential,
   publicTarget:publicTarget,
   providerAttribution:providerAttribution,
+  bindAgentFindRequest:bindAgentFindRequest,
+  applyAgentFindAppendix:applyAgentFindAppendix,
   validProviderBudgetAuthority:validProviderBudgetAuthority,
   performPaidEgress:performPaidEgress,
   BANNED_HOSTS: BANNED_HOSTS, METERED_PAID_HOSTS: METERED_PAID_HOSTS };

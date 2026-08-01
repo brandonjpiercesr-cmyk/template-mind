@@ -426,7 +426,10 @@ function installBoundaryHarness(options) {
   const spend = require(SPEND_PATH);
   spend._test.reset();
   boundary.install({providerBudgetAuthority:opts.budget || null,
-    receiptStore:require(RECEIPT_PATH),env:fixtureEnv()});
+    receiptStore:require(RECEIPT_PATH),env:fixtureEnv(),
+    agentFindCapability:{bindProviderRequest:async function(input){
+      return {ok:true,bound:true,init:input.init};
+    }}});
   return {bank:bank,boundary:boundary,spend:spend,providerCalls:function(){return providerCalls;},
     restore:function(){
       global.fetch=prior.fetch;
