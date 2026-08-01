@@ -61,22 +61,73 @@ const E164_RE = /\+\d{11,15}(?!\d)/g;
 // A bare number and a bare city are never flagged. This is a US-shaped detector and it says
 // so rather than implying worldwide coverage; a non-US postal address still walks past it,
 // which is stated in UNSCANNED_NOTE rather than left for someone to discover.
-// MEASURED FALSE POSITIVE, found on the very first run of this detector and fixed rather than
-// shipped: routes/os.api.routes.js:1027 is ordinary prose in a comment that happens to read
-// "<number> <Title> <Title> Way <more words>". Street-type suffixes are common English words
-// (Way, Place, Court, Circle, Drive), so the suffix alone is not a signal. A real address
-// TERMINATES there: it is followed by a comma, a quote, a closing bracket, or end of line,
-// never by three more words of a sentence. That single lookahead removed the whole
-// false-positive class and kept every true hit, verified by re-running before and after.
+// ⬡B:checks.no_founder_pii:FIX:the_address_detector_could_not_see_lowercase:20260801⬡
+// CODEX ON ab33fe515, AND IT IS A P1. Both address shapes below required Title Case and carried
+// no case-insensitive flag, so "742 nowhere lane" and "742 NOWHERE LANE" produced NO finding.
+// MEASURED at the time of the report: of six forms of the same address, FOUR were missed
+// (lowercase street, uppercase street, lowercase city line, uppercase city line). That is worse
+// than an ordinary miss. This detector exists because the law named five things and the roster
+// enforced four, so shipping the fifth with a hole that common lets the gate print a CLEAN RUN
+// over a real home address, and a guard with a known hole is worse than a known-absent guard.
 //
-// LIMIT, stated rather than left to be discovered, in the same spirit as PERSON_NAME_RE above:
-// requiring termination means an address written MID-SENTENCE, with prose continuing after the
-// street type, is not detected. That is a deliberate precision-over-recall trade, taken because
-// this estate's own history says a guard that cries wolf gets switched off and a switched-off
-// guard protects nobody. A partial detector that names which half it covers beats a guard that
-// silently covered none of it, which is exactly what this gate did for address until today.
-const STREET_ADDRESS_RE = /\b\d{1,6}\s+(?:[A-Z][A-Za-z.'-]+\s+){1,4}(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|Way|Pl|Place|Ter|Terrace|Cir|Circle|Hwy|Highway|Pkwy|Parkway)\b\.?(?=\s*(?:[,;"'`)\]}]|$))/g;
-const CITY_STATE_ZIP_RE = /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}(?:-\d{4})?\b/g;
+// THE CURE IS NOT A BARE /i FLAG, MEASURED RATHER THAN ASSUMED. Adding /i alone takes this repo
+// from 2 street matches to 12: the Title Case requirement had been doing real anti-false-positive
+// work, and 10 of the 12 were ordinary lowercase prose ("<number> <words> road,"). A stop list of
+// English function words only got it to 6. The remaining four lowercase false positives are
+// structurally IDENTICAL to a lowercase address: 1 to 2 name words, house-number shaped,
+// terminated. There is no shape left to separate them on.
+//
+// So the split is by ROLE, in two tiers, and both keep the 20260801 termination constraint:
+//   TIER A, Title Case: unchanged. This is an address WRITTEN OUT, and Title Case is the signal.
+//   TIER B, ANY case: an address as a DATA VALUE, which is how a lowercase or uppercase one
+//     actually leaks. It qualifies when it is QUOTE-TERMINATED (a complete value, e.g.
+//     home: "742 nowhere lane") or LOCALITY-ANCHORED (a 5 or 9 digit ZIP within 60 characters
+//     after it). Measured against every candidate in this repo: both true hits kept, and all
+//     four remaining prose false positives dropped, because they end at EOL, at ')' or at ','
+//     with no ZIP anywhere near them.
+// CITY_STATE_ZIP_RE simply becomes case-insensitive: measured across the whole repo that yields
+// exactly 2 matches and BOTH are true, so it costs nothing. That alone means a full lowercase
+// postal address is now caught by its city line even if its street line is not.
+//
+// LIMIT, stated rather than left to be found: a BARE lowercase street line that is neither
+// quoted nor near a ZIP is still not detected. That is materially narrower than "every lowercase
+// address is invisible", which is what this file shipped this morning, and it is written down
+// here so the next reader does not have to rediscover it.
+const STREET_ADDRESS_TITLE_RE = /\b\d{1,6}\s+(?:[A-Z][A-Za-z.'-]+\s+){1,4}(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|Way|Pl|Place|Ter|Terrace|Cir|Circle|Hwy|Highway|Pkwy|Parkway)\b\.?(?=\s*(?:[,;"'`)\]}]|$))/g;
+const STREET_ADDRESS_ANYCASE_RE = /\b\d{1,6}\s+(?:[A-Za-z][A-Za-z.'-]*\s+){1,4}(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Blvd|Boulevard|Ct|Court|Way|Pl|Place|Ter|Terrace|Cir|Circle|Hwy|Highway|Pkwy|Parkway)\b\.?(?=\s*(?:[,;"'`)\]}]|$))/gi;
+const ZIP_NEARBY_RE = /\b\d{5}(?:-\d{4})?\b/;
+// A street NAME is a proper noun, an ordinal or a direction. It is never built out of English
+// function words, and prose wearing an address shape almost always contains one. MEASURED: this
+// one list removed the last three Tier B false positives in this repo ("<n> lanes the same way",
+// "<n> deletions of another lane", "<n> express lane") and cost zero true hits. Applied to TIER B
+// ONLY: Title Case is its own signal and Tier A does not need this.
+const NOT_A_STREET_NAME = new Set(['the', 'a', 'an', 'of', 'to', 'in', 'on', 'at', 'by', 'for',
+  'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'it', 'its', 'this', 'that',
+  'these', 'those', 'with', 'from', 'as', 'if', 'then', 'than', 'so', 'not', 'no', 'all', 'any',
+  'each', 'every', 'more', 'most', 'other', 'same', 'such', 'only', 'own', 'too', 'very', 'can',
+  'will', 'just', 'out', 'up', 'down', 'over', 'under', 'again', 'into', 'one', 'two', 'three',
+  'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'first', 'second', 'third', 'last',
+  'next', 'new', 'old', 'long', 'short', 'full', 'half', 'per', 'via', 'vs', 'etc', 'both',
+  'either', 'neither', 'never', 'always', 'still', 'yet', 'also', 'however', 'because', 'while',
+  'after', 'before', 'during', 'through', 'about', 'above', 'below', 'between', 'among', 'since',
+  'until', 'when', 'where', 'who', 'why', 'how', 'what', 'which', 'whose', 'whom', 'they', 'them',
+  'their', 'we', 'us', 'our', 'you', 'your', 'he', 'him', 'his', 'she', 'her', 'hers', 'i', 'me',
+  'my', 'mine', 'lanes', 'streets', 'roads', 'ways', 'express', 'deletions', 'fast', 'slow']);
+function readsLikeAStreetName(match) {
+  const parts = String(match).trim().split(/\s+/);
+  const mid = parts.slice(1, parts.length - 1);
+  if (!mid.length) return true;
+  return !mid.some(function (w) { return NOT_A_STREET_NAME.has(w.replace(/[^A-Za-z]/g, '').toLowerCase()); });
+}
+// A data VALUE ends at a quote or a closing bracket; a prose clause ends at a comma, a semicolon
+// or the line. That one distinction is what separates a lowercase address from a lowercase
+// sentence, and it is checked on the text AFTER the match rather than inside it.
+function isAddressAsDataValue(line, matchEnd) {
+  const after = line.slice(matchEnd);
+  if (/^\s*["'`)\]}]/.test(after)) return true;
+  return ZIP_NEARBY_RE.test(after.slice(0, 60));
+}
+const CITY_STATE_ZIP_RE = /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}(?:-\d{4})?\b/gi;
 // Mask an address so the guard never prints, stores or baselines the place it protects. Only
 // the SHAPE survives: digits become #, letters become *, punctuation and spacing stay so a
 // reviewer can still tell a street line from a city line without learning where anyone lives.
@@ -145,6 +196,24 @@ const SCANNED_EXT_RE = /\.(js|cjs|mjs|jsx|ts|tsx|json|html|htm|md|markdown|txt|y
 // coverage: extensionless files (Dockerfile, Makefile, LICENSE), binaries, and dot-FILES at any
 // level (walk() skips names starting with a dot; only .github and .claude are entered).
 const UNSCANNED_NOTE = 'extensionless files (Dockerfile, Makefile, LICENSE), binaries, and dot-FILES are NOT read by this guard, and the address detector is US-shaped so a non-US postal address is NOT detected';
+// ⬡B:checks.no_founder_pii:FIX:the_roster_was_prose_so_no_test_could_hold_it:20260801⬡
+// CODEX ON ab33fe515, P2. The roster this guard prints on every run was a hand-typed string, and
+// the test guaranteeing every active detector is ANNOUNCED asserted against the guard's SOURCE
+// TEXT. Detector names also appear here in constants and comments, so deleting a name from the
+// roster string left the test green: the test written to catch an unannounced detector could not
+// catch one. That is the same disease as the roster ruling of the same morning, one level up.
+//
+// The roster is now DATA, built from this one list, and the tripwire asserts against what the
+// program actually EMITS rather than against what its source happens to contain. Asserting on
+// source is what made the previous test weak twice over: first too strict (it pinned one exact
+// string, so ADDING a detector broke it), then too loose (removing one did not). Emitted output
+// is neither: it grows honestly and it shrinks loudly. Add a detector here and announce it in the
+// same edit; the tripwire additionally proves each name here is a detector that really fires.
+// configured-identity is last on purpose: the run appends its live fingerprint count directly
+// after it, so the emitted roster stays one parseable comma-separated list with the annotation
+// hanging off the final name. The tripwire parses exactly that and compares it to this list.
+const DETECTORS = ['email', 'phone', 'e164', 'us-address-shape', 'denylisted-token',
+  'person-name-shape', 'identity-key'];
 // Mask a name so the guard never prints, stores or baselines the plaintext it exists to protect.
 function maskName(s) {
   return String(s).trim().split(/\s+/).map(function (w) { return w.slice(0, 1) + '***'; }).join(' ');
@@ -222,8 +291,17 @@ function scanFile(full) {
       violations.push({ rel, line: i + 1, type: 'hardcoded_phone', hint: '+**...' + d.slice(-4) });
     }
     // a personal address, by shape. The guard never learns the place, only that one is there.
-    STREET_ADDRESS_RE.lastIndex = 0;
-    while ((m = STREET_ADDRESS_RE.exec(line))) {
+    const seenAddr = Object.create(null);
+    STREET_ADDRESS_TITLE_RE.lastIndex = 0;
+    while ((m = STREET_ADDRESS_TITLE_RE.exec(line))) {
+      seenAddr[m[0]] = true;
+      violations.push({ rel, line: i + 1, type: 'hardcoded_address', hint: tokenHint(m[0], maskAddress(m[0])) });
+    }
+    STREET_ADDRESS_ANYCASE_RE.lastIndex = 0;
+    while ((m = STREET_ADDRESS_ANYCASE_RE.exec(line))) {
+      if (seenAddr[m[0]]) continue;                                   // already caught by Tier A
+      if (!readsLikeAStreetName(m[0])) continue;
+      if (!isAddressAsDataValue(line, m.index + m[0].length)) continue;
       violations.push({ rel, line: i + 1, type: 'hardcoded_address', hint: tokenHint(m[0], maskAddress(m[0])) });
     }
     CITY_STATE_ZIP_RE.lastIndex = 0;
@@ -299,7 +377,7 @@ function main() {
   // for a name, and while a real legal name sat in a bead written at mount. A guard that names
   // what it checked cannot be misread as covering what it did not, so every run states its
   // roster and its blind spot, pass or fail.
-  const ROSTER = 'checks run: email, phone, e164, us-address-shape, denylisted-token, person-name-shape, identity-key. '
+  const ROSTER = 'checks run: ' + DETECTORS.join(', ') + '. '
     + 'NOT read: ' + UNSCANNED_NOTE + '. A plain two-word name with no honorific, middle initial '
     + 'or generational suffix is also not detected.';
   if (!all.length) {
@@ -319,4 +397,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { scanFile: scanFile, _h: h };
+module.exports = { scanFile: scanFile, DETECTORS: DETECTORS, _h: h };
