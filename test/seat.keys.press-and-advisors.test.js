@@ -142,7 +142,10 @@ test('the PRESS scan spends the seat named by PRESS_SCAN_SEAT', async function (
     const out = await withEnvAsync(env({ PRESS_SCAN_SEAT: 'c4_watch', OR_KEY_C4_WATCH: 'sk-watch-named', OPENROUTER_API_KEY: 'sk-shared' }), function () {
       return press.scanExternal(['news'],{hamUid:'HAM.PRESS.TEST',
         cycleId:'press.scan.cycle.0001',requestId:'press.scan.request.0001',
-        receiptStore:receiptStoreFixture(),env:{RENDER_SERVICE_ID:'srv-template-test'}});
+        receiptStore:receiptStoreFixture(),env:{RENDER_SERVICE_ID:'srv-template-test'},
+        agentFindCapability:{bindProviderRequest:async function(input){
+          return {ok:true,bound:true,init:input.init};
+        }}});
     });
     assert.ok(Array.isArray(out) && out.length > 0, 'the scan still returns candidates');
     assert.equal(f.sent[0].key, 'sk-watch-named', 'a background tick bleeds onto the seat it was pointed at');

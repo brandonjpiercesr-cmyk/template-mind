@@ -69,10 +69,7 @@ test('admission is free and local egress telemetry is never shared ceiling autho
   assert.equal(guard.usageToday(),2);
 });
 
-// The fixture was '99999999'. An OVERSIZED value now clamps to the maximum instead of
-// refusing: refusing one muted the founder's mind live on 20260726 while he was RAISING the
-// budget, which is the guard causing the exact harm it exists to prevent. Unreadable still
-// fails closed, so this uses a value nobody can read.
+// Unreadable text fails closed. A readable founder number is enforced exactly below.
 test('malformed ceilings fail closed rather than becoming unlimited spend', function () {
   process.env.DAILY_MODEL_CALL_CEIL='two thousand';
   const guard=freshGuard();
@@ -81,13 +78,14 @@ test('malformed ceilings fail closed rather than becoming unlimited spend', func
   assert.equal(guard.usageToday(),0);
 });
 
-test('an oversized ceiling clamps to the maximum and she keeps speaking', function () {
+test('a large founder ceiling is enforced exactly and she keeps speaking', function () {
   process.env.DAILY_MODEL_CALL_CEIL='99999999';
   const guard=freshGuard();
   const detail=guard._test.ceilDetail('text');
-  assert.equal(detail.value,10000,'the brake still exists, at the number this system chose');
-  assert.equal(detail.source,'env_clamped');
-  assert.equal(detail.requested,99999999,'what was asked for is kept, so nobody thinks the edit vanished');
+  assert.equal(detail.value,99999999,'the founder number is not replaced by a coder number');
+  assert.equal(detail.chosen_by,'the founder');
+  assert.equal(detail.setting,'DAILY_MODEL_CALL_CEIL');
+  assert.equal(detail.requested,99999999);
   assert.equal(guard.allow('text'),true,'she can speak; refusing here was the bug');
 });
 

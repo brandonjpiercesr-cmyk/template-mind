@@ -98,7 +98,8 @@ async function scanExternal(interests,options) {
     try { var pb = require('../core/provider.boundary.js');
       if (pb && pb.isBannedChatCall && pb.isBannedChatCall(endpoint)) return []; } catch (e) {}
     try { require('../core/provider.boundary.js').install({
-      receiptStore:options&&options.receiptStore,env:options&&options.env
+      receiptStore:options&&options.receiptStore,env:options&&options.env,
+      agentFindCapability:options&&options.agentFindCapability
     }); } catch (eInstall) { return []; }
     var r = await require('../core/spend.guard.js').withAttribution(attribution,function () {
       return fetch(endpoint, {

@@ -7,6 +7,7 @@
 // Cost: C0. No model, provider, timer, or reach call exists in this module.
 'use strict';
 
+const crypto = require('node:crypto');
 const defaultRegistry = require('./wonders/registry.js');
 const defaultFind = require('./find.js');
 const defaultBrain = require('./brain.client.js');
@@ -23,6 +24,19 @@ function exactHam(value) { return clean(value, 160).toUpperCase(); }
 
 function plain(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stableStringify(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  if (typeof value === 'object') return '{' + Object.keys(value).sort().map(function (key) {
+    return JSON.stringify(key) + ':' + stableStringify(value[key]);
+  }).join(',') + '}';
+  return JSON.stringify(value);
+}
+
+function digest(value) {
+  return crypto.createHash('sha256').update(stableStringify(value)).digest('hex');
 }
 
 function list(value) {
@@ -48,10 +62,15 @@ function copyQuery(query, hamUid, viewerTier) {
 function recentTruthQueries(node, hamUid, viewerTier) {
   const configured = node && node.metadata && node.metadata.agent_find &&
     node.metadata.agent_find.recent_truth;
-  if (!Array.isArray(configured) || !configured.length) {
-    return {ok:false,reason:'agent_find_recent_truth_contract_missing'};
-  }
-  const queries = configured.map(function (query) {
+  // Every registered seat gets an executable default rather than an unresolved toolbelt
+  // string. A seat can narrow this in registry metadata. The default remains exact-HAM,
+  // indexed, bounded, and successful-empty aware.
+  const suffix = clean(node && node.id, 160).split('.').pop()
+    .replace(/[^A-Za-z0-9_-]/g, '_');
+  const source = Array.isArray(configured) && configured.length ? configured
+    : suffix ? [{source_prefix:suffix + '.',limit:12}] : [];
+  if (!source.length) return {ok:false,reason:'agent_find_recent_truth_contract_missing'};
+  const queries = source.map(function (query) {
     return copyQuery(query, hamUid, viewerTier);
   }).filter(function (query) {
     return query.stamp_type || query.source || query.source_prefix || query.agent_global;
@@ -140,7 +159,7 @@ function wallRecord(fcw) {
         reason:state.reason || null};
       return out;
     }, {}) : {};
-  return {
+  const output = {
     available:fcw && fcw.available !== false,
     partial:fcw && fcw.partial === true,
     viewer_tier:fcw && fcw.viewer_tier,
@@ -151,6 +170,16 @@ function wallRecord(fcw) {
     unavailable_contributors:list(fcw && fcw.unavailableContributors),
     partial_contributors:list(fcw && fcw.partialContributors)
   };
+  if (/^[a-f0-9]{64}$/.test(clean(fcw && fcw.context_sha256, 64))) {
+    output.context_sha256 = clean(fcw.context_sha256, 64);
+  }
+  if (clean(fcw && fcw.context_locator, 500)) {
+    output.context_locator = clean(fcw.context_locator, 500);
+  }
+  if (Number.isInteger(fcw && fcw.message_count) && fcw.message_count >= 0) {
+    output.message_count = fcw.message_count;
+  }
+  return output;
 }
 
 function lines(label, values) {
@@ -270,8 +299,14 @@ async function bindWall(input, options) {
     agentFindRecentCycleTruth:{available:true,partial:truth.partial === true,reason:null}
   });
   const priorResolved = Number(fcw.contributorsResolved);
+  const promptAppendix = employmentPrompt(employment, truth);
+  try {
+    require('./spend.guard.js').rememberAgentFindBinding({ham_uid:hamUid,cycle_id:cycleId,
+      request_id:requestId,seat:providerSeat,owner_node_id:target.id,source:built.source,
+      readback_verified:true});
+  } catch (error) {}
   return Object.assign({}, fcw, {
-    system_prompt:fcw.system_prompt + employmentPrompt(employment, truth),
+    system_prompt:fcw.system_prompt + promptAppendix,
     contributors:augmentedContributors,
     contributorAvailability:augmentedAvailability,
     contributorsAvailable:Object.keys(augmentedAvailability).filter(function (name) {
@@ -283,12 +318,81 @@ async function bindWall(input, options) {
       ok:true,schema:'envolve.agent-find.wake.v1',node_id:AGENT_FIND_NODE_ID,
       seat_name:providerSeat,seat_node_id:target.id,employment_record:employment,
       recent_cycle_truth:truth,truth_beacon:{source:built.source,
-        stamp_type:built.beacon.stamp_type,row_id:existing.id || null,readback_verified:true}
+        stamp_type:built.beacon.stamp_type,row_id:existing.id || null,readback_verified:true},
+      prompt_appendix:promptAppendix
     }
   });
 }
 
+function parseProviderBody(init) {
+  try {
+    const body = JSON.parse(init && init.body || 'null');
+    return plain(body) && Array.isArray(body.messages) ? body : null;
+  } catch (error) { return null; }
+}
+
+function messageFacts(messages) {
+  const normalized = messages.map(function (message) {
+    const value = plain(message) ? message : {};
+    return {role:clean(value.role, 40),content:value.content};
+  });
+  return {context_sha256:digest(normalized),message_count:normalized.length};
+}
+
+// The provider boundary is the universal last door shared by the active model estate.
+// It binds the exact already-assembled provider context to the registered owner seat, adds
+// the verified employment wake as model context, and returns a cloned request. Raw prompt
+// bytes never enter the beacon. Non-chat paid transports are not LLM seats and pass through.
+async function bindProviderRequest(input, options) {
+  const value = input || {};
+  const opts = options || {};
+  const body = parseProviderBody(value.init);
+  if (!body) return {ok:true,bound:false,reason:'agent_find_non_chat_transport',
+    init:value.init};
+  const attribution = plain(value.attribution) ? value.attribution : {};
+  const registry = opts.registry || defaultRegistry;
+  const hamUid = exactHam(attribution.ham_uid);
+  const cycleId = clean(attribution.cycle_id, 220);
+  const requestId = clean(attribution.request_id, 220);
+  const seatName = clean(attribution.seat, 120);
+  const seatNodeId = clean(attribution.owner_node_id, 160);
+  const target = registry.resolve(seatNodeId);
+  if (!hamUid || !cycleId || !requestId || !seatName || !target ||
+      !new Set(['active','contained']).has(target.lifecycle)) {
+    return {ok:false,bound:false,reason:'agent_find_provider_binding_invalid'};
+  }
+  const tierModule = opts.peopleTier || require('./privacy/people.tier.js');
+  const tierFact = tierModule.resolveViewerTier(null,hamUid);
+  const viewerTier = tierModule.effectiveTier(tierFact && tierFact.tier);
+  const recent = await readRecentCycleTruth({ham_uid:hamUid,seat_node_id:seatNodeId,
+    viewer_tier:viewerTier},{registry:registry,find:opts.find || defaultFind.find});
+  if (!recent.ok) return {ok:false,bound:false,reason:recent.reason};
+  const facts = messageFacts(body.messages);
+  const fcw = {ok:true,available:true,partial:false,system_prompt:'provider_context_bound',
+    viewer_tier:viewerTier,contributors:{providerContext:true},
+    contributorAvailability:{providerContext:{available:true,partial:false,reason:null}},
+    contributorsResolved:1,contributorsTotal:1,unavailableContributors:[],
+    partialContributors:[],context_sha256:facts.context_sha256,
+    context_locator:'provider.context.' + hamUid + '.' + cycleId + '.' + requestId,
+    message_count:facts.message_count};
+  const bound = await bindWall({fcw:fcw,recent_cycle_truth:recent,ham_uid:hamUid,
+    cycle_id:cycleId,request_id:requestId,channel:attribution.component,
+    seat_name:seatName,seat_node_id:seatNodeId,observed_at:value.observed_at},
+  {registry:registry,brain:opts.brain || defaultBrain});
+  if (!bound.ok || !bound.agent_find || !bound.agent_find.prompt_appendix) {
+    return {ok:false,bound:false,reason:bound.reason || 'agent_find_provider_bind_failed'};
+  }
+  const nextBody = Object.assign({},body,{messages:[{role:'system',
+    content:bound.agent_find.prompt_appendix.trim()}].concat(body.messages)});
+  const nextInit = Object.assign({},value.init,{body:JSON.stringify(nextBody)});
+  return {ok:true,bound:true,init:nextInit,prompt_appendix:bound.agent_find.prompt_appendix,
+    truth_beacon:bound.agent_find.truth_beacon,
+    seat_node_id:seatNodeId,seat_name:seatName,context_sha256:facts.context_sha256};
+}
+
 module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
   readRecentCycleTruth:readRecentCycleTruth,bindWall:bindWall,
+  bindProviderRequest:bindProviderRequest,
   _test:{recentTruthQueries:recentTruthQueries,employmentRecord:employmentRecord,
-    recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt}};
+    recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt,
+    parseProviderBody:parseProviderBody,messageFacts:messageFacts,digest:digest}};

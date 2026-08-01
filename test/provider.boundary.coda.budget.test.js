@@ -65,7 +65,10 @@ function installHarness(options) {
 
   const boundary = require(BOUNDARY_PATH);
   boundary.install({denyPaidEgress:opts.denyPaidEgress === true,
-    providerBudgetAuthority:budget,receiptStore:receiptStore});
+    providerBudgetAuthority:budget,receiptStore:receiptStore,
+    agentFindCapability:{bindProviderRequest:async function(input){
+      return {ok:true,bound:true,init:input.init};
+    }}});
   const spend = require(SPEND_PATH);
 
   return {boundary:boundary,spend:spend,calls:calls,receiptEvents:receiptEvents,
