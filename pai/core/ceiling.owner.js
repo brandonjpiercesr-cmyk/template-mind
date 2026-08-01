@@ -75,6 +75,23 @@ function _out(setting, fields) {
   return Object.assign(base, fields || {});
 }
 
+// ⬡B:core.ceiling_owner:911:a_founders_number_must_never_be_silently_altered_and_then_attributed_to_him:20260801⬡
+// CATHY (Codex) review, fourth pass, 20260801: reformats a parsed value back to plain decimal
+// text at the SAME precision the spec allows, so it can be compared against what was actually
+// typed. `text` here is the input already normalized to lowercase-none, digits-and-one-decimal
+// only (`pattern.test(text)` upstream already guarantees that shape); this only strips leading
+// zeros from the integer part and pads the fractional part to the full requested width, so a
+// human typing '007.5' or '19.9' is compared fairly against the canonical '7.5000'/'19.9000'.
+function _normalizedDecimalText(text, decimals) {
+  var parts = String(text).split('.');
+  var intPart = parts[0].replace(/^0+(?=[0-9])/, '');
+  if (intPart === '') intPart = '0';
+  if (decimals <= 0) return intPart;
+  var fracPart = parts[1] || '';
+  while (fracPart.length < decimals) fracPart += '0';
+  return intPart + '.' + fracPart;
+}
+
 // Read one named ceiling and report who chose it. Never throws, never invents, never caps.
 //
 // name    the env setting name, e.g. 'DAILY_IMAGE_CALL_CEIL'. Named, never anonymous: a setting
@@ -179,6 +196,27 @@ function readCeiling(name, spec, runtime) {
   if (asked <= 0) {
     return _out(setting, { chosen_by: CHOSEN_BY.UNREADABLE, configured: true, needs_review: true,
       requested: asked, reason: 'not_above_zero' });
+  }
+
+  // ⬡B:core.ceiling_owner:911:a_founders_number_must_never_be_silently_altered_and_then_attributed_to_him:20260801⬡
+  // CATHY (Codex) review, fourth pass, 20260801: reached only by values already proved finite
+  // and, for integer specs, already proved a safe integer (the branch above returns first for
+  // anything larger). What survives to here is exactly the DECIMAL spec's own blind spot: money
+  // (`core/seat.map.js`'s per-seat dollar caps) carries no `integer:true` and no safe-integer
+  // check at all, so `Number(text)` can silently ALTER a value at extreme magnitude or
+  // precision and this file would report the CHANGED number as `chosen_by:'the founder'`,
+  // actively confirming a figure he never typed rather than merely failing to enforce one.
+  // `9007199254740991.1` silently became `9007199254740991`; `999999999999999.9999` silently
+  // became `1000000000000000`. Reformatting `asked` back to the exact precision the spec
+  // allows and comparing it to the ORIGINAL text (normalized the same way: leading zeros
+  // stripped, trailing zeros padded to the full width) catches precisely the values that
+  // cannot round-trip, at any magnitude, without needing arbitrary-precision arithmetic. Every
+  // real dollar figure a human types passes this unchanged; `19.99`, `1500.5`, `007.5` all
+  // round-trip exactly. THE RULE: a value reported as his is EXACTLY what he typed, byte for
+  // byte, or it is not reported as his.
+  if (asked.toFixed(decimals) !== _normalizedDecimalText(text, decimals)) {
+    return _out(setting, { chosen_by: CHOSEN_BY.UNREADABLE, configured: true, needs_review: true,
+      requested: null, reason: 'value_cannot_be_represented_exactly_at_this_precision' });
   }
 
   // HIS NUMBER, WHATEVER IT IS. No upper bound is applied here, ever.

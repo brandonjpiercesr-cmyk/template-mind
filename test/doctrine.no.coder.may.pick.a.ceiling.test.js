@@ -264,3 +264,39 @@ test('the one source itself holds no numeric upper bound of any kind', function 
   assert.doesNotMatch(code, /Math\.min\s*\(/, 'nothing here may trim a human number down');
   assert.doesNotMatch(code, /\bclamp\b/i);
 });
+
+// ⬡B:tests.no_coder_may_pick_a_ceiling:911:a_founders_number_must_never_be_silently_altered_and_then_attributed_to_him:20260801⬡
+// Mirror of anew tests/seat.map.test.js. CATHY (Codex) review, fourth pass, 20260801, on
+// pai/core/ceiling.owner.js, exercised here through the real consumer that actually carries
+// decimal (money) values: `9007199254740991.1` silently became `9007199254740991` and
+// `999999999999999.9999` silently became `1000000000000000`, both reported as
+// chosen_by:'the founder', actively confirming a number he never typed. The invariant, not
+// the specific examples: ANY value reported as his must round-trip byte for byte through the
+// parse, or it must be reported as unreadable and needs_review, never silently changed and
+// attributed to him.
+test('a per-seat dollar cap that cannot round-trip exactly is refused as unreadable, never silently altered and attributed to him', function () {
+  const saved = process.env.SEAT_CANON_DAILY_CAP_USD;
+  const badValues = ['9007199254740991.1', '999999999999999.9999', '100000000000000000.0001'];
+  try {
+    for (const bad of badValues) {
+      process.env.SEAT_CANON_DAILY_CAP_USD = bad;
+      const seat = seatMap.seat('canon');
+      assert.equal(seat.dailyCapUsd, null,
+        bad + ' cannot be represented exactly and must never silently become a different number');
+      assert.equal(seat.capChosenBy, 'unreadable_setting',
+        bad + ' must never be reported as chosen_by the founder when it was silently altered');
+      assert.equal(seat.capNeedsReview, true);
+    }
+    // The invariant's other half: every real dollar figure a human actually types still
+    // round-trips exactly and is still honored as his, unaffected by this guard.
+    for (const good of ['1.25', '19.99', '1500.5000', '007.5', '3000']) {
+      process.env.SEAT_CANON_DAILY_CAP_USD = good;
+      const seat = seatMap.seat('canon');
+      assert.equal(seat.capChosenBy, 'the founder', good + ' must still be honored as his');
+      assert.equal(seat.dailyCapUsd, Number(good));
+    }
+  } finally {
+    if (saved === undefined) delete process.env.SEAT_CANON_DAILY_CAP_USD;
+    else process.env.SEAT_CANON_DAILY_CAP_USD = saved;
+  }
+});
