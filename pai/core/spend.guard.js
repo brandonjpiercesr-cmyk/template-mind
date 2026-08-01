@@ -235,7 +235,8 @@ function withAttribution(value, fn) {
   // receipt escape through the next fallback. The state object is deliberately private
   // and non-enumerable, so it can never enter a receipt or a public attribution surface.
   Object.defineProperty(next, '_provider_state', {enumerable:false,
-    value:active && active._provider_state || {attempt_order:0, hold:null,reconcile:null}});
+    value:active && active._provider_state ||
+      {attempt_order:0,hold:null,reconciliations:new Map()}});
   return ATTRIBUTION.run(next, fn);
 }
 
@@ -269,16 +270,20 @@ function ensurePaidReconciliation(key, fn) {
   if (!active || !active._provider_state) return Promise.resolve().then(fn);
   var state = active._provider_state, exact = String(key || '');
   if (!exact) return Promise.resolve({ok:false,reason:'provider_spend_reconcile_scope_invalid'});
-  if (state.reconcile) {
-    if (state.reconcile.key !== exact) {
-      return Promise.resolve({ok:false,reason:'provider_spend_reconcile_scope_mismatch'});
-    }
-    return state.reconcile.promise;
+  var reconciliations=state.reconciliations;
+  if (!(reconciliations instanceof Map)) {
+    reconciliations=new Map();
+    state.reconciliations=reconciliations;
   }
-  // Install the promise before invoking I/O. Concurrent fallbacks in this same live turn
-  // share one pre-admission snapshot and cannot misclassify a sibling INTENT as a crash.
-  var promise = Promise.resolve().then(fn);
-  state.reconcile = {key:exact,promise:promise};
+  if (reconciliations.has(exact)) return reconciliations.get(exact);
+  if (reconciliations.size >= 64) {
+    return Promise.resolve({ok:false,reason:'provider_spend_reconcile_capacity_reached'});
+  }
+  var promise;
+  promise=Promise.resolve().then(fn).finally(function(){
+    if(reconciliations.get(exact)===promise)reconciliations.delete(exact);
+  });
+  reconciliations.set(exact,promise);
   return promise;
 }
 

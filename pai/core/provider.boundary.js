@@ -173,14 +173,18 @@ function spendReceiptRefusal(reason, url, status) {
 // reserveProviderAttempt remains the authority and revalidates the whole ticket
 // synchronously after the daily guard, immediately before realFetch.
 function obviousScopeRefusal(scope) {
-  if (!scope || typeof scope !== 'object' || !scope.ticket ||
+  if (!scope || typeof scope !== 'object' || !scope.ticket) {
+    return 'paid_provider_attempt_budget_invalid';
+  }
+  if (scope.ticket.unlimited_paid_provider_attempts !== true &&
       !Number.isInteger(scope.ticket.remaining_paid_provider_attempts)) {
     return 'paid_provider_attempt_budget_invalid';
   }
-  if (scope.ticket.remaining_paid_provider_attempts <= 0) {
+  if (scope.ticket.unlimited_paid_provider_attempts !== true &&
+      scope.ticket.remaining_paid_provider_attempts <= 0) {
     return 'paid_provider_attempt_budget_exhausted';
   }
-  if (scope.count_model_calls === true &&
+  if (scope.count_model_calls === true && scope.ticket.unlimited_llm_calls !== true &&
       (!Number.isInteger(scope.ticket.remaining_llm_calls) ||
        scope.ticket.remaining_llm_calls <= 0)) {
     return 'paid_provider_attempt_budget_exhausted';
