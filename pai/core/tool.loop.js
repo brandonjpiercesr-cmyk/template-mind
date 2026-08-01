@@ -1159,6 +1159,14 @@ function prioritizeVerifiedEvidence(primary, secondary) {
   return out;
 }
 
+function prioritizeCouncilEvidence(boundServer, identityEvidence, ordinaryEvidence, internalCoda) {
+  return internalCoda
+    ? prioritizeVerifiedEvidence(boundServer,
+      (Array.isArray(identityEvidence) ? identityEvidence : []).concat(ordinaryEvidence || []))
+    : prioritizeVerifiedEvidence(identityEvidence,
+      (Array.isArray(ordinaryEvidence) ? ordinaryEvidence : []).concat(boundServer || []));
+}
+
 // ⬡B:core.tool_loop:BUILD:auto_screen_cook_allowlist_20260715⬡ tools whose real
 // results are worth cooking onto the glass automatically, no model decision needed.
 // Starting with calendar_read -- proven end-to-end live this session (real events,
@@ -6523,8 +6531,21 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         ? item.tool.trim().toLowerCase() : '';
       return _externalEvidenceTools[normalizedTool] === true;
     }) : [];
-  var _priorityEvidence = prioritizeVerifiedEvidence(_identityVerifiedEvidence,
-    _namedAgentVerifiedEvidence.concat(_verifiedToolEvidence, _externalEvidence));
+  // CODA's server wall is granted before runPAI, but it becomes evidence only
+  // HERE, after this loop owns the exact request and cycle. Reserve its slots in
+  // the internal CODA council so later tool traffic cannot evict the facts that
+  // drafted the answer. Invalid/replayed grants contribute nothing.
+  var _boundServerEvidence = !_structuredReachPolicy && identity
+    ? paiToolEvidence.consumeServerPrefetch(identity.server_prefetch_evidence_grant, {
+      hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage
+    }) : [];
+  var _internalCodaEvidence = !!(identity && identity.council_context &&
+    identity.council_context.mode === 'coding' &&
+    identity.council_context.internal_deliberation === true);
+  var _ordinaryEvidence = _namedAgentVerifiedEvidence.concat(_verifiedToolEvidence,
+    _externalEvidence);
+  var _priorityEvidence = prioritizeCouncilEvidence(_boundServerEvidence,
+    _identityVerifiedEvidence,_ordinaryEvidence,_internalCodaEvidence);
   var _memoryEvidence = !_structuredReachPolicy && Array.isArray(fcw&&fcw.context)
     ? fcw.context.slice(0, 8).map(function (bead) {
     var beadContent = bead&&bead.content;
@@ -7232,7 +7253,8 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
   requiredActionToolForMessage,
-  prioritizeVerifiedEvidence,regenerateHollowAnswer,regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
+  prioritizeVerifiedEvidence,prioritizeCouncilEvidence,regenerateHollowAnswer,
+  regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
   verifiedVoiceCallPurposeAnswer,voiceHearingContextSatisfiesTurn,

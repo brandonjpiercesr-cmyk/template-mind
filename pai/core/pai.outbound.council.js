@@ -1815,14 +1815,16 @@ function verifiedFactEvidenceText(ctx) {
   for (var i = 0; i < items.length && remaining > 0; i++) {
     var item = items[i];
     var authenticRead = paiToolEvidence.verify(item, {
-      hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId
+      hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId,
+      question:ctx.question
     }, { requireRead:true });
     var authenticMemory = paiToolEvidence.verifyMemory(item, { hamUid:ctx.hamUid });
     // An authentic executed result that is not read-classified still entered the
     // transcript the mind deliberated from; it grounds only after args masking.
     var authenticExecution = !authenticRead && !authenticMemory &&
       paiToolEvidence.verify(item, {
-        hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId
+        hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId,
+        question:ctx.question
       });
     if (!authenticRead && !authenticMemory && !authenticExecution) continue;
     var contributed = authenticExecution
@@ -1873,11 +1875,18 @@ async function defaultShadowStage(ctx, injected) {
   // claim happens ONLY through the existing heal-and-resubmit cycle below.
   // Default ON per founder order 20260725; ACTION_CLAIM_HOLD=off disables.
   var actionClaimHold = injected.actionClaimHold || require('./action.claim.hold.js');
+  // A prefetched wall is factual input, not a receipt that CODA personally
+  // checked, audited, or verified anything. Keep it available to factual
+  // SHADOW above, but never let its tool name acquit a past-action claim.
+  var actionReceiptEvidence = (ctx.context && Array.isArray(ctx.context.verified_evidence)
+    ? ctx.context.verified_evidence : []).filter(function (item) {
+    return !(item && item.provenance === 'pai.current_turn.bound_server_prefetch');
+  });
   var actionClaimFinding = actionClaimHold.enabled(injected.env || process.env)
     ? actionClaimHold.detect(ctx.answer, {
         tools_used: ctx.context && ctx.context.tools_used,
         pending_effects: ctx.context && ctx.context.pending_effects,
-        verified_evidence: ctx.context && ctx.context.verified_evidence
+        verified_evidence: actionReceiptEvidence
       })
     : { hold: false, reason: null, claims: [] };
   var actionClaimFlags = actionClaimFinding.hold

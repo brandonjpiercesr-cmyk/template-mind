@@ -6,6 +6,8 @@
 
 var crypto = require('node:crypto');
 var minted = new WeakSet();
+var serverPrefetchMinted = new WeakSet();
+var serverPrefetchGrants = new WeakSet();
 var memoryMinted = new WeakSet();
 
 var READ_TOOLS = Object.freeze({
@@ -92,6 +94,7 @@ function bindingFrom(item) {
     request_id:item.request_id,
     cycle_id:item.cycle_id,
     tool_call_id:item.tool_call_id,
+    question_digest:item.question_digest,
     args_digest:item.args_digest,
     source_result_digest:item.source_result_digest,
     args:item.args,
@@ -139,15 +142,146 @@ function mint(input) {
   return item;
 }
 
+// A server-prefetched specialist read happens before runPAI creates its cycle id,
+// so it cannot honestly use the ordinary execute-tool mint above. It is still
+// bound to the exact HAM and finalizer request, and object identity proves the
+// bytes crossed this in-process boundary instead of arriving as caller JSON.
+// Only the narrow specialist ingress is accepted here; generic mint() cannot
+// manufacture this provenance or its WeakSet membership.
+function mintServerPrefetch(input) {
+  input = input || {};
+  var tool = String(input.tool || '').trim();
+  var ham = String(input.hamUid || '').trim().toUpperCase();
+  var requestId = String(input.requestId || '').trim();
+  var cycleId = String(input.cycleId || '').trim();
+  var callId = String(input.toolCallId || '').trim();
+  var questionDigest = String(input.questionDigest || '').trim().toLowerCase();
+  if (tool !== 'specialist_internal_evidence' || !ham || !requestId || !cycleId || !callId ||
+      !/^[a-f0-9]{64}$/.test(questionDigest)) return null;
+  var success = parsedSuccess(input.result);
+  if (!success) return null;
+  var fullArgs = stableStringify(input.args && typeof input.args === 'object' ? input.args : {});
+  var fullResult = success.text;
+  var max = itemMaxBytes();
+  if (Buffer.byteLength(fullArgs, 'utf8') > max ||
+      Buffer.byteLength(fullResult, 'utf8') > max) return null;
+  var item = {
+    schema:'anew.pai.executed-tool-evidence.v1',
+    tool:tool,
+    provenance:'pai.current_turn.bound_server_prefetch',
+    ham_uid:ham,
+    request_id:requestId,
+    cycle_id:cycleId,
+    tool_call_id:callId,
+    question_digest:questionDigest,
+    evidence_kind:'verified_read_result',
+    successful_read:true,
+    args_digest:digest(fullArgs),
+    source_result_digest:digest(fullResult),
+    args:truncateUtf8(fullArgs, max),
+    result:truncateUtf8(fullResult, max),
+    result_truncated:false
+  };
+  item.result_digest = digest(stableStringify(bindingFrom(item)));
+  Object.freeze(item);
+  serverPrefetchMinted.add(item);
+  return item;
+}
+
+function grantServerPrefetch(input) {
+  input = input || {};
+  var ham = String(input.hamUid || '').trim().toUpperCase();
+  var question = String(input.question || '');
+  var sourceText = String(input.sourceText || '');
+  var materialDigest = String(input.materialDigest || '').trim().toLowerCase();
+  var evidence = Array.isArray(input.evidence) ? input.evidence.slice(0, 4).map(function (raw) {
+    return Object.freeze({tool:String(raw && raw.tool || ''),args:String(raw && raw.args || ''),
+      result:String(raw && raw.result || '')});
+  }) : [];
+  if (!ham || !question.trim() || !sourceText || !/^[a-f0-9]{64}$/.test(materialDigest) ||
+      !evidence.length) return null;
+  var grant = {ham_uid:ham,question:question,source_text:sourceText,
+    material_digest:materialDigest,evidence:Object.freeze(evidence)};
+  Object.freeze(grant);
+  serverPrefetchGrants.add(grant);
+  return grant;
+}
+
+function consumeServerPrefetch(grant, expected) {
+  expected = expected || {};
+  var ham = String(expected.hamUid || '').trim().toUpperCase();
+  var question = String(expected.question || '');
+  var requestId = String(expected.requestId || '').trim();
+  var cycleId = String(expected.cycleId || '').trim();
+  if (!grant || !serverPrefetchGrants.has(grant) || !ham || !question.trim() ||
+      !requestId || !cycleId || grant.ham_uid !== ham || grant.question !== question) return [];
+  serverPrefetchGrants.delete(grant);
+  var questionDigest = digest(question);
+  var wallTextDigest = digest(grant.source_text);
+  var chunks = [];
+  var shared = null;
+  for (var i = 0; i < grant.evidence.length; i++) {
+    var raw = grant.evidence[i];
+    if (!raw || raw.tool !== 'specialist_internal_evidence' ||
+        Buffer.byteLength(raw.args, 'utf8') > itemMaxBytes() ||
+        Buffer.byteLength(raw.result, 'utf8') > itemMaxBytes()) return [];
+    var binding;
+    var packet;
+    try { binding = JSON.parse(raw.args); packet = JSON.parse(raw.result); }
+    catch (eParse) { return []; }
+    var fact = packet && packet.facts && packet.facts.operational_projection_chunk;
+    if (!binding || !packet || packet.schema !== 'great-reset.coda-council-evidence.v2' ||
+        binding.schema !== 'great-reset.coda-council-evidence-binding.v2' ||
+        stableStringify(packet.binding) !== stableStringify(binding) ||
+        String(binding.ham_uid || '').trim().toUpperCase() !== ham ||
+        binding.question_digest !== questionDigest ||
+        binding.operational_wall_text_digest !== wallTextDigest ||
+        binding.operational_material_digest !== grant.material_digest ||
+        !/^[a-f0-9]{64}$/.test(String(binding.projection_digest || '')) ||
+        !Number.isInteger(binding.chunk_index) || !Number.isInteger(binding.chunk_count) ||
+        binding.chunk_index !== i || binding.chunk_count !== grant.evidence.length ||
+        typeof fact !== 'string' || !fact) return [];
+    var signature = stableStringify({ham_uid:binding.ham_uid,
+      question_digest:binding.question_digest,
+      operational_wall_text_digest:binding.operational_wall_text_digest,
+      operational_material_digest:binding.operational_material_digest,
+      projection_digest:binding.projection_digest,chunk_count:binding.chunk_count});
+    if (shared === null) shared = signature;
+    else if (shared !== signature) return [];
+    chunks.push(fact);
+  }
+  var projectionText = chunks.join('');
+  var projection;
+  try { projection = JSON.parse(projectionText); }
+  catch (eProjection) { return []; }
+  if (!projection || projection.schema !== 'great-reset.coda-shadow-facts.v1' ||
+      projection.wall_text_digest !== wallTextDigest ||
+      projection.material_digest !== grant.material_digest ||
+      digest(projectionText) !== JSON.parse(grant.evidence[0].args).projection_digest) return [];
+  var mintedItems = grant.evidence.map(function (raw, index) {
+    return mintServerPrefetch({tool:'specialist_internal_evidence',hamUid:ham,
+      requestId:requestId,cycleId:cycleId,questionDigest:questionDigest,
+      toolCallId:'coda-council-evidence-' + index + '-' + questionDigest.slice(0, 16),
+      args:JSON.parse(raw.args),result:raw.result});
+  }).filter(Boolean);
+  return mintedItems.length === grant.evidence.length ? mintedItems : [];
+}
+
 function verify(item, expected, options) {
   expected = expected || {};
   options = options || {};
-  if (!item || typeof item !== 'object' || !minted.has(item) || Object.isFrozen(item) !== true) {
+  var serverPrefetch = !!(item && typeof item === 'object' && serverPrefetchMinted.has(item));
+  if (!item || typeof item !== 'object' || (!minted.has(item) && !serverPrefetch) ||
+      Object.isFrozen(item) !== true) {
     return false;
   }
   if (item.schema !== 'anew.pai.executed-tool-evidence.v1' ||
       String(item.ham_uid || '').toUpperCase() !== String(expected.hamUid || '').toUpperCase() ||
-      item.request_id !== expected.requestId || item.cycle_id !== expected.cycleId ||
+      item.request_id !== expected.requestId ||
+      item.cycle_id !== expected.cycleId ||
+      (serverPrefetch && (item.provenance !== 'pai.current_turn.bound_server_prefetch' ||
+        item.question_digest !== digest(expected.question || '') ||
+        item.tool !== 'specialist_internal_evidence')) ||
       !item.tool_call_id || !item.tool ||
       (options.requireRead === true && item.successful_read !== true)) return false;
   var max = itemMaxBytes();
@@ -251,6 +385,9 @@ function verifyMemory(item, expected) {
 module.exports = {
   append:append,
   mint:mint,
+  mintServerPrefetch:mintServerPrefetch,
+  grantServerPrefetch:grantServerPrefetch,
+  consumeServerPrefetch:consumeServerPrefetch,
   mintMemory:mintMemory,
   verify:verify,
   verifyMemory:verifyMemory,
