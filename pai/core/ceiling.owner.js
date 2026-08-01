@@ -92,6 +92,26 @@ function _normalizedDecimalText(text, decimals) {
   return intPart + '.' + fracPart;
 }
 
+// ⬡B:core.ceiling_owner:911:the_trap_again_this_time_from_a_formatter:20260801⬡
+// CATHY (Codex) review, fifth pass, 20260801: `Number.prototype.toFixed` switches to
+// EXPONENTIAL notation ("1e+21") once the magnitude reaches 1e21, regardless of the requested
+// `decimals`, by spec, unconditionally. An exactly representable configured value at or above
+// that magnitude would then compare unequal to its own normalized text purely because of
+// formatter behavior, not because of any real precision loss, and get mislabelled unreadable:
+// for a seat cap this yields dailyCapUsd null and core/openrouter.seat.spend.js refuses every
+// call, the founder's original dead-seat trap re-entering through a display function. The fix
+// does not need to fight the formatter: 1e21 is comfortably above 2^53
+// (9007199254740991, Number.MAX_SAFE_INTEGER), so once |num| reaches it a double has no
+// representable fractional bits left at all and IS, by construction, already a whole number
+// (the gap between adjacent representable doubles there exceeds 1). BigInt(num) expands that
+// exact integer with no floating point step at all, sidestepping toFixed's formatter switch
+// entirely rather than trying to out-guess it.
+function _toFixedNeverExponential(num, decimals) {
+  if (Math.abs(num) < 1e21) return num.toFixed(decimals);
+  var whole = BigInt(num).toString();
+  return decimals > 0 ? whole + '.' + '0'.repeat(decimals) : whole;
+}
+
 // Read one named ceiling and report who chose it. Never throws, never invents, never caps.
 //
 // name    the env setting name, e.g. 'DAILY_IMAGE_CALL_CEIL'. Named, never anonymous: a setting
@@ -213,8 +233,9 @@ function readCeiling(name, spec, runtime) {
   // cannot round-trip, at any magnitude, without needing arbitrary-precision arithmetic. Every
   // real dollar figure a human types passes this unchanged; `19.99`, `1500.5`, `007.5` all
   // round-trip exactly. THE RULE: a value reported as his is EXACTLY what he typed, byte for
-  // byte, or it is not reported as his.
-  if (asked.toFixed(decimals) !== _normalizedDecimalText(text, decimals)) {
+  // byte, or it is not reported as his. `_toFixedNeverExponential` here, never a bare
+  // `.toFixed()` call: see the fifth-pass note above it, the formatter itself has a cutoff.
+  if (_toFixedNeverExponential(asked, decimals) !== _normalizedDecimalText(text, decimals)) {
     return _out(setting, { chosen_by: CHOSEN_BY.UNREADABLE, configured: true, needs_review: true,
       requested: null, reason: 'value_cannot_be_represented_exactly_at_this_precision' });
   }
@@ -227,5 +248,10 @@ function readCeiling(name, spec, runtime) {
 module.exports = {
   CHOSEN_BY: CHOSEN_BY,
   EXACT_INTEGER_EDGE: EXACT_INTEGER_EDGE,
-  readCeiling: readCeiling
+  readCeiling: readCeiling,
+  // Exported so every consumer that needs an exact, never-exponential decimal
+  // reformatting for a founder-typed round-trip check reads the ONE source, rather than
+  // each site growing its own copy of the 1e21 formatter cutoff and its fix. See the
+  // fifth-pass note above the definition.
+  toFixedNeverExponential: _toFixedNeverExponential
 };

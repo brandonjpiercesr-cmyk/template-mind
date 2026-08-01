@@ -300,3 +300,29 @@ test('a per-seat dollar cap that cannot round-trip exactly is refused as unreada
     else process.env.SEAT_CANON_DAILY_CAP_USD = saved;
   }
 });
+
+// ⬡B:tests.no_coder_may_pick_a_ceiling:911:the_trap_again_this_time_from_a_formatter:20260801⬡
+// Mirror of anew tests/seat.map.test.js. CATHY (Codex) review, fifth pass, 20260801:
+// `Number.prototype.toFixed` switches to exponential notation at 1e21 regardless of decimals
+// requested, which made the round-trip guard above mislabel an EXACTLY representable huge
+// value unreadable purely because of formatter behavior, not real precision loss: the
+// founder's dead-seat trap re-entering through the display function meant to keep him
+// informed. 1e21 is comfortably above Number.MAX_SAFE_INTEGER (2^53), so a value at or above
+// it is already a whole number by construction; this must still be honored as his.
+test('a huge but exactly representable cap is never mislabelled unreadable by a formatter cutoff', function () {
+  const saved = process.env.SEAT_CANON_DAILY_CAP_USD;
+  try {
+    for (const huge of ['1000000000000000000000', '2000000000000000000000.0000',
+      '9007199254740992000000']) {
+      process.env.SEAT_CANON_DAILY_CAP_USD = huge;
+      const seat = seatMap.seat('canon');
+      assert.equal(seat.capChosenBy, 'the founder',
+        huge + ' is exactly representable and must still be honored as his, not unreadable');
+      assert.equal(seat.dailyCapUsd, Number(huge));
+      assert.equal(seat.capNeedsReview, false);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.SEAT_CANON_DAILY_CAP_USD;
+    else process.env.SEAT_CANON_DAILY_CAP_USD = saved;
+  }
+});
