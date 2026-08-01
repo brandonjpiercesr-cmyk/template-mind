@@ -1194,7 +1194,7 @@ var TOOLS = [
 
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
-  {type:'function',function:{name:'read_lane_board',description:'READ THE LANE BOARD. Returns every active build chat/lane working on your system right now, each with its ACL name and the roadmap it is currently on. Use this whenever the founder asks what chats or lanes are working on your build, who is building what, or whether two lanes might collide. The lanes cannot talk to each other, they coordinate by stamping this board, so this is how you know the whole picture. Takes no arguments.',
+  {type:'function',function:{name:'read_lane_board',description:'READ THE LANE BOARD. Returns every build chat/lane on your system, each with its name, what it is on, how long ago it last moved, whether it is still going or has gone quiet, and what it said was NEXT. Use this whenever the founder asks what is next to fix, what is left, who is working on the build, who is building what, or whether two lanes might collide. The lanes cannot talk to each other, they coordinate by stamping this board, so this is how you know the whole picture. Takes no arguments.',
     parameters:{type:'object',properties:{}}}},
   {type:'function',function:{name:'read_wonder_departments',description:'READ YOUR OWN WONDER NETWORK. Returns every department in your system with each wonder in it: its name, what it does for the person, and whether it is live, contained, or not yet born. Use this whenever someone asks about your team, your wonders, your departments, who works for you, or what parts of you exist. This is your real org, derived from the registry, so you answer from what is actually built and never invent a member. Takes no arguments.',
     parameters:{type:'object',properties:{}}}},
@@ -1460,7 +1460,7 @@ function toolSelectionBoundary(name) {
     find_in_brain: 'USE WHEN: the answer requires this HAM\'s stored memory, history, preference, decision, result, or exact bead evidence. DO NOT USE WHEN: the question is general knowledge, opinion, chit-chat, live calendar, live inbox, or a request another exact tool owns.',
     nash_sports: 'USE WHEN: the person asks for a live or recent sports score, result, or whether a team won. DO NOT USE WHEN: they ask which team they personally like, for a sports opinion, or for non-sports current information.',
     consult_mace: 'USE WHEN: a coding request requires reading an exact repository file or directory before deciding or building. DO NOT USE WHEN: the person asks general knowledge, calendar, personal-memory, or non-code questions, or when no repository read is needed.',
-    read_lane_board: 'USE WHEN: the person asks which coding lanes or chats are active, who owns work, or whether lanes may collide. DO NOT USE WHEN: they ask about their calendar, general project advice, repository contents, or ordinary conversation.',
+    read_lane_board: 'USE WHEN: the person asks what is next to fix, what is left, which coding lanes or chats are active, who owns work, or whether lanes may collide. DO NOT USE WHEN: they ask about their calendar, general project advice, repository contents, or ordinary conversation.',
     read_wonder_departments: 'USE WHEN: the person asks about your team, your wonders, your departments, who works for you, or what parts of your system exist and whether they are alive. DO NOT USE WHEN: they ask about human coding chats (that is read_lane_board), their own calendar, or ordinary conversation.',
     update_screen: 'USE WHEN: the person explicitly asks to change or show something on the live glass. DO NOT USE WHEN: they ask for a spoken answer, general advice, stored memory, or a real-world action outside the screen.',
     email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
@@ -2254,10 +2254,27 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       // every real coding operator checks in and out through the CCWA door as CCWA_CHECKIN /
       // CCWA_CHECKOUT rows. So the founder asked who is working on the build, this tool read
       // an empty registry, and she truthfully had nothing. The CCWA ledger is the live board.
+      // ⬡B:core.tool_loop:FIX:she_read_the_rows_the_board_reads_but_never_the_board:20260801⬡
+      // FE-2164, the half the demo-night repair left open. Teaching this tool the CCWA stamp
+      // types got her the ROWS; it never got her the BOARD. The board is a read-model,
+      // core/ccwa.js harness(), and every door that answers this question already goes
+      // through it: GET /ccwa/harness, GET /ccwa/board, GET /ccwa/board2/data, the dashboard
+      // compose door, CODA's own liveness watchdog. This tool was rendering a fourth,
+      // hand-rolled copy of that read, and the copy was missing exactly the two things the
+      // founder asked for on demo night. It had no clock, so a coder who checked in on
+      // Tuesday and died still read as "working now" on Friday, which is her stating a
+      // falsehood in his own words. And it never read `next` at all, while "what's next to
+      // fix" is literally the first half of the question. Same read-model now, fed the
+      // ham-scoped rows this tool is already bound to. `content` joins the select because
+      // the status, the clean act text and the next line all ride there; the display summary
+      // carries a wall prefix that was never written for the person asking.
+      // The window widens to the board's own default because harness() folds many rows per
+      // worker into one card, and a 40-row window is exactly the starvation shape core/ccwa.js
+      // already fixed once: one chatty coder buries a quiet one and she reports a false silence.
       var _ccUrl = _bu().replace(/\/+$/, '') + '/rest/v1/' + _tbl()
         + '?ham_uid=eq.' + encodeURIComponent(_boundLaneHam)
         + '&stamp_type=in.(CCWA_CHECKIN,CCWA_CHECKOUT)&source=ilike.ccwa.cc.*'
-        + '&select=source,agent_global,summary,stamp_type,created_at&order=created_at.desc&limit=40';
+        + '&select=source,agent_global,summary,content,stamp_type,created_at&order=created_at.desc&limit=200';
       var _lbBoth = await Promise.all([
         fetch(_lbUrl, { headers: _lbHeaders, signal: (runtime && runtime.abortSignal) })
           .then(function (x) { return x.ok ? x.json() : []; }).catch(function () { return []; }),
@@ -2281,18 +2298,73 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
         var _short = (_cut.length > 1 ? _cut[1] : _doing).trim().slice(0);
         _lines.push(_nm + ': ' + _short);
       });
-      // one line per CCWA coder, newest row wins, checked-in vs checked-out named plainly
-      var _seenCoder = {};
-      (Array.isArray(_ccRes) ? _ccRes : []).forEach(function (row) {
-        var _coder = String(row.agent_global || '').trim();
-        if (!_coder || _seenCoder[_coder]) return;
-        _seenCoder[_coder] = true;
-        var _what = String(row.summary || '').replace(/\s+/g, ' ').trim().slice(0, 240);
-        var _state = row.stamp_type === 'CCWA_CHECKIN' ? 'working now' : 'last finished';
-        var _when = String(row.created_at || '').slice(0, 16).replace('T', ' ');
-        _lines.push(_coder + ' (' + _state + (_when ? ', ' + _when : '') + '): ' + _what);
-      });
+      // A stamp time is not an answer to "is anyone actually on this". How long ago is.
+      var _lbHowLong = function (minutes) {
+        var _m = Math.round(Number(minutes));
+        if (!isFinite(_m) || _m < 1) return '';
+        if (_m < 60) return _m + (_m === 1 ? ' minute' : ' minutes');
+        var _h = Math.round(_m / 60);
+        if (_h < 48) return _h + (_h === 1 ? ' hour' : ' hours');
+        var _d = Math.round(_h / 24);
+        return _d + (_d === 1 ? ' day' : ' days');
+      };
+      // The board read-model, run over THIS ham's rows only. harness()'s own bank readers are
+      // deliberately global (one board, every world) and must never become the reader inside a
+      // ham-bound tool, so both are injected: the rows already fetched above, and no targeted
+      // per-worker rescue, which is the board door's job and reaches across hams to do it.
+      // Founder broadcasts are written to coders, not to the person asking, so they stay on
+      // the coder wall. A world that carries no command center keeps the plain read below.
+      var _lbCards = null;
+      try {
+        var _lbBoard = require('./ccwa.js');
+        if (_lbBoard && typeof _lbBoard.harness === 'function') {
+          var _lbRead = await _lbBoard.harness({
+            read: function () { return Array.isArray(_ccRes) ? _ccRes : []; },
+            readLatestFor: function () { return null; },
+            readActiveDirectives: function () { return []; }
+          });
+          if (_lbRead && _lbRead.ok && Array.isArray(_lbRead.workers)) _lbCards = _lbRead.workers;
+        }
+      } catch (eBoard) { _lbCards = null; }
+      if (_lbCards) {
+        // The founder's own naming order: a track name is the more specific truth, so when a
+        // family shows both (CLAIR and CLAIR.BOARDHAND) the bare roster card is the duplicate.
+        var _lbTracked = {};
+        _lbCards.forEach(function (card) {
+          if (!card || !card.seen) return;
+          var _w = String(card.worker || '').toUpperCase(), _dot = _w.indexOf('.');
+          if (_dot > 0) _lbTracked[_w.slice(0, _dot)] = true;
+        });
+        _lbCards.forEach(function (card) {
+          if (!card || !card.seen) return;
+          if (_lbTracked[String(card.worker || '').toUpperCase()]) return;
+          var _what = String(card.what || '').replace(/\s+/g, ' ')
+            .replace(/^\[CCWA [A-Z]+ [^\]]*\]\s*/i, '').trim().slice(0, 240);
+          var _ago = _lbHowLong(card.stale_minutes);
+          var _state = card.status === 'DONE'
+            ? (_ago ? 'last finished, ' + _ago + ' ago' : 'just finished')
+            : (card.stale ? 'nothing new for ' + _ago
+              : (_ago ? 'working now, since ' + _ago + ' ago' : 'working now'));
+          var _line = card.worker + ' (' + _state + ')' + (_what ? ': ' + _what : '');
+          var _nextUp = String(card.next || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+          if (_nextUp) _line += '. Next up: ' + _nextUp;
+          _lines.push(_line);
+        });
+      } else {
+        // one line per CCWA coder, newest row wins, checked-in vs checked-out named plainly
+        var _seenCoder = {};
+        (Array.isArray(_ccRes) ? _ccRes : []).forEach(function (row) {
+          var _coder = String(row.agent_global || '').trim();
+          if (!_coder || _seenCoder[_coder]) return;
+          _seenCoder[_coder] = true;
+          var _what = String(row.summary || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+          var _state = row.stamp_type === 'CCWA_CHECKIN' ? 'working now' : 'last finished';
+          var _when = String(row.created_at || '').slice(0, 16).replace('T', ' ');
+          _lines.push(_coder + ' (' + _state + (_when ? ', ' + _when : '') + '): ' + _what);
+        });
+      }
       if (!_lines.length) return 'The lane board has no registered lanes right now.';
+      if (_lines.length === 1) return 'There is 1 build lane on the board right now:\n- ' + _lines[0];
       return 'There are ' + _lines.length + ' build lanes on the board right now:\n- ' + _lines.join('\n- ');
     } catch (e) { return JSON.stringify({ ok:false, reason:'lane_board_error', detail:e.message }); }
   }
