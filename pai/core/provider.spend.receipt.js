@@ -560,6 +560,23 @@ function buckets(rows, key, transform) {
   return Object.keys(counts).map(function (owner) { return {owner:owner,count:counts[owner]}; })
     .sort(function (a,b) { return b.count-a.count || a.owner.localeCompare(b.owner); }).slice(0,24);
 }
+// A terminal row already carries the exact provider status and the exact disposition. Both
+// were being selected and then dropped, so the wall could say 165 attempts failed and could
+// not say whether that was one dead seat, a rate limit, or an empty account. These two
+// labels keep a missing value visibly missing instead of folding it into a real code.
+function statusLabel(value) {
+  var code = Number(value);
+  return Number.isInteger(code) && code >= 100 && code <= 599 ? 'http_' + code : 'no_status';
+}
+function attemptLabel(value) {
+  var order = Number(value);
+  return Number.isInteger(order) && order > 0 ? 'attempt_' + order : 'unknown';
+}
+// A disposition the writer never emits is still countable as a failure by the rule below,
+// so name it plainly rather than let it hide inside the failed total.
+function dispositionLabel(value) {
+  return identifier(value, 60) || 'disposition_missing';
+}
 async function readSummary(options) {
   var requestedScope = options && options.scope && typeof options.scope === 'object'
     ? options.scope : null;
@@ -580,7 +597,7 @@ async function readSummary(options) {
   }
   var since = new Date(Number(options && options.now || Date.now()) - 86400000).toISOString();
   var query = new URLSearchParams({created_at:'gte.' + since,
-    select:'attempt_id,phase,provider,kind,key_alias,component,ham_uid,service_id,disposition,status_code,created_at',
+    select:'attempt_id,phase,provider,kind,key_alias,component,ham_uid,service_id,request_id,attempt_order,disposition,status_code,created_at',
     order:'created_at.asc',limit:String(SUMMARY_LIMIT)});
   var response;
   try {
@@ -608,12 +625,30 @@ async function readSummary(options) {
     var terminals = scopedRows.filter(function(row){return row && row.phase === 'TERMINAL';});
     var terminalByAttempt = new Map();
     terminals.forEach(function(row){terminalByAttempt.set(clean(row.attempt_id),row);});
+    var failedRows = terminals.filter(function(row){return row.disposition !== 'SUCCEEDED' &&
+      row.disposition !== 'OUTCOME_UNKNOWN';});
     var succeeded = terminals.filter(function(row){return row.disposition === 'SUCCEEDED';}).length;
     var outcomeUnknown = terminals.filter(function(row){return row.disposition === 'OUTCOME_UNKNOWN';}).length;
-    var failed = terminals.filter(function(row){return row.disposition !== 'SUCCEEDED' &&
-      row.disposition !== 'OUTCOME_UNKNOWN';}).length;
+    var failed = failedRows.length;
     var provenEgress = terminals.filter(function(row){return row.disposition === 'SUCCEEDED' ||
       row.disposition === 'HTTP_ERROR';}).length;
+    // One request_id is ONE governed turn, and a turn may lawfully buy several provider
+    // attempts: a ladder rung that misses and a declared failover that answers is a working
+    // failover, not a lost answer. Counting attempts alone cannot tell those apart, so the
+    // turn-level roll-up says plainly how many turns ended with nothing at all.
+    var byRequest = new Map();
+    terminals.forEach(function(row){
+      var key = clean(row.ham_uid) + '|' + clean(row.request_id);
+      var state = byRequest.get(key) || {attempts:0,succeeded:false};
+      state.attempts += 1;
+      if (row.disposition === 'SUCCEEDED') state.succeeded = true;
+      byRequest.set(key, state);
+    });
+    var requestsWithSuccess = 0, requestsMultiAttempt = 0;
+    byRequest.forEach(function(state){
+      if (state.succeeded) requestsWithSuccess += 1;
+      if (state.attempts > 1) requestsMultiAttempt += 1;
+    });
     var unresolved = intents.filter(function(row){return !terminalByAttempt.has(clean(row.attempt_id));}).length;
     function latestAt(list) {
       var values = list.map(function(row){return Date.parse(row && row.created_at || '');})
@@ -631,7 +666,18 @@ async function readSummary(options) {
       window_hours:24,reason:null,at:Date.now(),
       by_provider:buckets(intents,'provider'),by_kind:buckets(intents,'kind'),
       by_component:buckets(intents,'component',publicComponent),
-      by_key_alias:buckets(intents,'key_alias')});
+      by_key_alias:buckets(intents,'key_alias'),
+      // Every bucket above counts ADMISSIONS, so none of them can name a failure. These
+      // count TERMINAL rows, which is where the provider's own answer lives.
+      by_disposition:buckets(terminals,'disposition',dispositionLabel),
+      failed_by_status_code:buckets(failedRows,'status_code',statusLabel),
+      failed_by_key_alias:buckets(failedRows,'key_alias'),
+      failed_by_provider:buckets(failedRows,'provider'),
+      failed_by_component:buckets(failedRows,'component',publicComponent),
+      failed_by_attempt_order:buckets(failedRows,'attempt_order',attemptLabel),
+      by_request:{total:byRequest.size,with_a_succeeded_attempt:requestsWithSuccess,
+        no_attempt_succeeded:byRequest.size-requestsWithSuccess,
+        multi_attempt:requestsMultiAttempt}});
   } catch (error) {
     return publish({readable:false,total:null,
       reason:String(error && error.message || error),at:Date.now()});
