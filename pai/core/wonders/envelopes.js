@@ -33,7 +33,19 @@ function lineage(input) {
   const value = input || {};
   const budget = value.budget || {};
   if (!(budget.max_iterations > 0)) throw new Error('budget_max_iterations_required');
-  if (!(budget.max_llm_calls >= 0)) throw new Error('budget_max_llm_calls_required');
+  const unlimitedLlmCalls=budget.unlimited_llm_calls === true;
+  if (unlimitedLlmCalls) {
+    if (budget.max_llm_calls != null) throw new Error('budget_max_llm_calls_unlimited_invalid');
+  } else if (budget.max_llm_calls == null ||
+      !Number.isFinite(Number(budget.max_llm_calls)) || Number(budget.max_llm_calls) < 0) {
+    throw new Error('budget_max_llm_calls_required');
+  }
+  const normalizedBudget={max_iterations:Number(budget.max_iterations)};
+  // Additive and dual-readable inside v1: legacy numeric envelopes retain their exact
+  // two-field shape; only the new nullable form carries the discriminator that makes null
+  // unambiguous to every current reader.
+  if (unlimitedLlmCalls) normalizedBudget.unlimited_llm_calls=true;
+  else normalizedBudget.max_llm_calls=Number(budget.max_llm_calls);
   return Object.freeze({
     envelope_version: VERSION,
     root_cycle_id: required(value.root_cycle_id, 'root_cycle_id'),
@@ -43,10 +55,7 @@ function lineage(input) {
     reason: required(value.reason, 'reason'),
     idempotency_key: required(value.idempotency_key, 'idempotency_key'),
     return_gate: required(value.return_gate, 'return_gate'),
-    budget: Object.freeze({
-      max_iterations: Number(budget.max_iterations),
-      max_llm_calls: Number(budget.max_llm_calls)
-    })
+    budget:Object.freeze(normalizedBudget)
   });
 }
 
