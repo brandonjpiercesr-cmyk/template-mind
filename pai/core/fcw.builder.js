@@ -161,7 +161,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // the wall, so the answer is already in context and the model never has to guess.
   // ⬡B:core.fcw.builder:FIX:armed_bcw_uses_exact_user_question:20260715⬡
   // Coding turns arrive with a large server-built armory prepended. Pulling names
-  // from that whole string spends the eight-name budget on headings such as LIVE,
+  // from that whole string can mistake headings such as LIVE,
   // DOCTRINE, and WINDOW before reaching the actual builder message. The identity
   // envelope is the exact user-message authority. Older/internal callers without
   // that envelope fall back to the text after the LAST builder marker, then raw.
@@ -183,10 +183,10 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   var _isPreferenceQ = /\bfavou?rite\b|\bprefer(ence|red)?\b|what do i (like|love|enjoy)\b|\bmy taste\b/.test(_q);
   // ⬡B:core.fcw.builder:WIRE:question_named_agent_preload:20260715⬡
   // If a person explicitly names ELI-like uppercase agent globals, exact-match
-  // their own HAM's newest records before deliberation. Bounded cold extraction;
+  // their own HAM's newest records before deliberation. Exact cold extraction;
   // no static roster, no aliases, and an ordinary mixed-case sentence adds no read.
   var _namedAgentGlobals = (_questionFocus.match(/\b[A-Z][A-Z0-9_]{2,31}\b/g) || [])
-    .filter(function (name, i, all) { return all.indexOf(name) === i; }).slice(0, 8);
+    .filter(function (name, i, all) { return all.indexOf(name) === i; });
   // ⬡B:core.fcw.builder:WIRE:mixed_case_identity_subjects:20260715⬡
   // Identity provenance is not an agent-roster lookup: title-case people and
   // uppercase stations enter the same bounded exact-HAM reader.
@@ -226,20 +226,19 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     findIdentity(hamUid, _viewerTier),
     findAgentJDs(hamUid, _viewerTier),
     // ⬡B:core.fcw.builder:FIX:read_enough_rows_to_fill_the_widened_window:20260726⬡
-    // Widening the render cap below is useless if the reads only ever return five rows. The
-    // conversation lane gets the larger share because it is the one the founder said was
-    // missing; the adviser lane keeps its own six and can no longer be crowded out of it
-    // (core/find.js findRecentResults now excludes the conversation prefix).
-    findContext(hamUid, 10, _viewerTier),
-    findRecentResults(hamUid, 6, _viewerTier),
-    findDoctrine(hamUid, 3, _viewerTier),
+    // Each lane walks every provider page. The conversation/adviser split still keeps one
+    // evidence class from crowding out the other, but no coder-chosen row ceiling decides
+    // what the seated mind is allowed to remember.
+    findContext(hamUid, undefined, _viewerTier),
+    findRecentResults(hamUid, undefined, _viewerTier),
+    findDoctrine(hamUid, undefined, _viewerTier),
     findPersonProfile(hamUid, _viewerTier),
     // Guarded call: find.js was once replaced wholesale by a 50-line stub (the 8B lobotomy,
     // core/find.js:8), which turned every finder into undefined and broke every turn on every
     // channel. A missing finder must degrade this one contributor to unavailable, never throw
     // the whole wall away.
     (typeof findStatedCommitments === 'function'
-      ? findStatedCommitments(hamUid, 10, _viewerTier) : Promise.resolve(null))
+      ? findStatedCommitments(hamUid, undefined, _viewerTier) : Promise.resolve(null))
   ];
   var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'statedPlans'];
   var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1,
@@ -266,8 +265,8 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     _batch.push(findIdentityEvidence(hamUid, _questionFocus, _viewerTier));
     _labels.push('identityEvidence');
   }
-  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, 5, _viewerTier)); _labels.push('preferences'); }
-  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, 5, _viewerTier)); _labels.push('wonderGames'); }
+  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, undefined, _viewerTier)); _labels.push('preferences'); }
+  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, undefined, _viewerTier)); _labels.push('wonderGames'); }
   var _results = await Promise.allSettled(_batch);
   _results.forEach(function (r, i) {
     if (r.status === 'rejected') console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + (r.reason && r.reason.message || r.reason));
@@ -372,7 +371,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   var _statedOk = _results[6] && _results[6].status === 'fulfilled' && _results[6].value;
   var _stated = _canonicalAvailability.statedPlans.available && _statedOk
     ? _results[6].value : null;
-  var _statedRows = (_stated && Array.isArray(_stated.beads)) ? _stated.beads.slice(0, 10) : [];
+  var _statedRows = (_stated && Array.isArray(_stated.beads)) ? _stated.beads : [];
   var _statedAvailable = _canonicalAvailability.statedPlans.available;
 
   // Build identity summary
@@ -403,7 +402,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // Build agent JD summary (what tools/agents are available)
   var agentList = '';
   if (agentJDs && agentJDs.beads) {
-    agentList = agentJDs.beads.slice(0, 15).map(function(b) {
+    agentList = agentJDs.beads.map(function(b) {
       // ⬡B:core.fcw.builder:WIRE:agent_role_from_live_definition:20260715⬡
       // AGENT_JD and the New World SCW fallback both carry structured role data.
       // Put that real definition on the wall instead of reducing every station to
@@ -413,9 +412,9 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       var name = c && (c.agent || c.name || c.world);
       var role = c && (c.role || c.purpose);
       var summary = (b && (b.summary || b.source)) || '?';
-      if (name && role) return '- ' + String(name).toUpperCase().slice(0, 40) + ': ' + String(role).slice(0, 160);
-      if (name) return '- ' + String(name).toUpperCase().slice(0, 40) + ': ' + String(summary).slice(0, 160);
-      return '- ' + String(summary).slice(0, 160);
+      if (name && role) return '- ' + String(name).toUpperCase() + ': ' + String(role);
+      if (name) return '- ' + String(name).toUpperCase() + ': ' + String(summary);
+      return '- ' + String(summary);
     }).join('\n');
   }
 
@@ -465,7 +464,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       return row && String(row.ham_uid || '').toUpperCase() === _exactHamUid
         && _namedAgentGlobals.indexOf(globalName) >= 0
         && /^[A-Z][A-Z0-9_]{2,31}$/.test(globalName);
-    }).slice(0, 8);
+    });
   // Named-agent evidence leads so both the initial draft and the later SHADOW
   // evidence window receive it; the exact same rows are returned as fcw.context.
   if (_namedAgentRecords.length) allContext = allContext.concat(_namedAgentRecords);
@@ -473,28 +472,10 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   if (_wg && _wg.beads && _wg.beads.length) allContext = allContext.concat(_wg.beads);
   if (context && context.beads) allContext = allContext.concat(context.beads);
   if (recent && recent.beads) allContext = allContext.concat(recent.beads);
-  // ⬡B:core.fcw.builder:FIX:eight_rows_of_one_hundred_characters_was_a_keyhole:20260726⬡
-  // Her ENTIRE recalled world for a turn was 8 rows cut to 100 characters each: about 800
-  // characters, less than one text message, and those 8 slots were contested, so on a
-  // favorites question or any question containing an uppercase token the actual conversation
-  // was pushed out of the window completely. The file already knew: the comment 150 lines
-  // below says in as many words that the 100-character cut destroys meaning, and the cut was
-  // still sitting two lines from the comment describing it.
-  // THE NUMBER, justified from the real budget rather than picked: this section is now capped
-  // at RECALL_ROWS * RECALL_ROW_CHARS = 24 * 600 = 14,400 characters, about 3,600 tokens. The
-  // fixed instruction block assembled below is roughly 8,000 characters (about 2,000 tokens),
-  // the profile and doctrine sections together run a few thousand more, and the authorized
-  // ladder models (GLM 5.2, Qwen) all carry at least a 32,000-token context. So the whole wall
-  // including this section stays under a third of the SMALLEST authorized context, leaving the
-  // large majority for the live conversation history and her answer, and the per-channel answer
-  // ceiling (tokenCapFor) is untouched. 600 characters is chosen because it is the point where
-  // a turn record's "THEY SAID ... SHE ANSWERED ..." summary survives with its meaning intact
-  // instead of being guillotined mid-sentence; 24 rows because 8 could not hold even a single
-  // exchange alongside the question-specific exact reads that ride ahead of it.
-  var RECALL_ROWS = 24;
-  var RECALL_ROW_CHARS = 600;
-  contextStr = allContext.slice(0, RECALL_ROWS).map(function(b) {
-    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '') + '] ' + (b.summary||b.source||'').slice(0,RECALL_ROW_CHARS);
+  // The wall carries every fetched row and its complete summary. Provider pagination controls
+  // transport batches only; it does not become a hidden cognition or prompt ceiling here.
+  contextStr = allContext.map(function(b) {
+    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '') + '] ' + (b.summary||b.source||'');
   }).join('\n');
 
   // ⬡B:core.fcw.builder:WIRE:doctrine_in_fcw_20260701⬡
@@ -502,7 +483,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // roadmap over live text and had nothing, because this assembler never loaded it.
   var doctrineStr = '';
   if (doctrine && doctrine.beads && doctrine.beads.length) {
-    doctrineStr = doctrine.beads.slice(0, 5).map(function(b) {
+    doctrineStr = doctrine.beads.map(function(b) {
       var body = '';
       try {
         var c = typeof b.content === 'string' ? b.content : JSON.stringify(b.content || '');

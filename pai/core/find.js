@@ -33,7 +33,7 @@ function bh() {
   };
 }
 
-function bq(path) {
+function bq(path, signal) {
   var b = bh();
   // ⬡B:core.find:GUARD:generic_read_availability_is_explicit:20260730⬡
   // An unavailable bank and a successful empty query are different facts. Every generic FIND
@@ -45,17 +45,22 @@ function bq(path) {
   });
   return new Promise(function(resolve) {
     var settled = false;
+    var abortHandler = null;
     function finish(result) {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (signal && abortHandler) signal.removeEventListener('abort',abortHandler);
       resolve(result);
     }
-    var timer = setTimeout(function() {
-      finish({ ok:false, available:false, reason:'brain_timeout', rows:[] });
-    }, 2500);
+    if (signal) {
+      abortHandler = function(){finish({ok:false,available:false,reason:'brain_timeout',rows:[]});};
+      if (signal.aborted) return abortHandler();
+      signal.addEventListener('abort',abortHandler,{once:true});
+    }
     Promise.resolve().then(function() {
-      return fetch(b.url + '/rest/v1/' + _tbl() + '?' + path, { headers: b.hdrs });
+      var request = {headers:b.hdrs};
+      if (signal) request.signal = signal;
+      return fetch(b.url + '/rest/v1/' + _tbl() + '?' + path, request);
     }).then(function(response) {
       // A real WHATWG Response exposes `ok`, but the long-lived internal bank adapters and
       // focused contract doubles predate that property and expose a successful JSON body
@@ -77,9 +82,42 @@ function bq(path) {
         finish({ ok:false, available:false, reason:'brain_payload_invalid', rows:[] });
       });
     }).catch(function() {
-      finish({ ok:false, available:false, reason:'brain_transport_error', rows:[] });
+      finish({ok:false,available:false,
+        reason:signal && signal.aborted ? 'brain_timeout' : 'brain_transport_error',rows:[]});
     });
   });
+}
+
+// PostgREST can return a finite transport page even when the matching memory set is larger.
+// A page size is an I/O batch, not a cognition ceiling: exhaustive readers keep walking until
+// the provider returns the terminal short page. No total-row maximum exists here.
+var PROVIDER_PAGE_SIZE = 1000;
+
+async function readAllPages(query, pathBuilder, reader) {
+  var rows = [];
+  var offset = 0;
+  var previousPageKey = null;
+  while (true) {
+    var result = await reader(pathBuilder(query, {
+      limit:PROVIDER_PAGE_SIZE, offset:offset
+    }));
+    if (!result || result.ok !== true || result.available !== true) return result;
+    var page = Array.isArray(result.rows) ? result.rows : [];
+    var first = page[0], last = page[page.length - 1];
+    var pageKey = page.length + '|' + String(first && first.id || first && first.source || '')
+      + '|' + String(last && last.id || last && last.source || '');
+    // A provider or test adapter that ignores offset must fail explicitly instead of spinning.
+    // This is a progress invariant, not a page-count or row-count ceiling.
+    if (offset > 0 && page.length && pageKey === previousPageKey) {
+      return {ok:false, available:false, reason:'brain_pagination_stalled', rows:[]};
+    }
+    previousPageKey = pageKey;
+    rows = rows.concat(page);
+    if (page.length < PROVIDER_PAGE_SIZE) {
+      return {ok:true, available:true, rows:rows};
+    }
+    offset += page.length;
+  }
 }
 
 // ⬡B:core.find:GUARD:identity_read_availability_is_explicit:20260715⬡
@@ -92,18 +130,20 @@ function identityBq(path, timeoutMs) {
     ok:false, available:false, reason:'identity_brain_unconfigured', rows:[]
   });
   var wait = Number(timeoutMs);
-  if (!Number.isFinite(wait) || wait <= 0) wait = 2500;
   return new Promise(function(resolve) {
     var settled = false;
+    var timer = null;
     function finish(result) {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       resolve(result);
     }
-    var timer = setTimeout(function() {
-      finish({ ok:false, available:false, reason:'identity_brain_timeout', rows:[] });
-    }, wait);
+    if (Number.isFinite(wait) && wait > 0) {
+      timer = setTimeout(function() {
+        finish({ ok:false, available:false, reason:'identity_brain_timeout', rows:[] });
+      }, wait);
+    }
     Promise.resolve().then(function() {
       return fetch(b.url + '/rest/v1/' + _tbl() + '?' + path, { headers:b.hdrs });
     }).then(function(response) {
@@ -126,7 +166,7 @@ function identityBq(path, timeoutMs) {
   });
 }
 
-function identityQueryPath(query) {
+function identityQueryPath(query, page) {
   var q = query || {};
   var parts = [];
   if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
@@ -140,8 +180,16 @@ function identityQueryPath(query) {
     if (tierFilter) parts.push(tierFilter);
   }
   parts.push('order=' + (q.order === 'asc' ? 'source.asc' : 'created_at.desc'));
-  parts.push('limit=' + (q.limit || 10));
+  var requested = page && page.limit != null ? page.limit : (q.limit || 10);
+  parts.push('limit=' + requested);
+  if (page && page.offset) parts.push('offset=' + page.offset);
   return parts.join('&');
+}
+
+function identityRead(query) {
+  return query && query.exhaustive === true
+    ? readAllPages(query, identityQueryPath, identityBq)
+    : identityBq(identityQueryPath(query));
 }
 
 function scopedQuery(query, viewerTier) {
@@ -160,12 +208,15 @@ function scopedQueries(queries, viewerTier) {
 }
 
 // FIND entry point — run multiple queries in parallel, merge, dedupe by id
-// queries: array of { stamp_type?, source?, source_prefix?, ham_uid?, importance_gte?, limit? }
-async function find(queries) {
+// queries: array of { stamp_type?, source?, source_prefix?, ham_uid?, importance_gte?,
+//   limit?, exhaustive? }. `limit` preserves explicit newest-singleton and tool contracts;
+//   `exhaustive` walks every provider page and ignores a caller-supplied result ceiling.
+async function find(queries, options) {
   if (!Array.isArray(queries)) queries = [queries];
   var t0 = Date.now();
+  var opts = options || {};
 
-  var promises = queries.map(function(q) {
+  function queryPath(q, page) {
     var parts = [];
     if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
     // Exact doctrine/provenance readers must not let a prefix-colliding child row impersonate
@@ -239,8 +290,18 @@ async function find(queries) {
     // (part01, part02...), so source.asc genuinely means "from the start."
     // Generic capability, not a one-off patch: any caller, any HAM, any document.
     parts.push('order=' + (q.order === 'asc' ? 'source.asc' : 'created_at.desc'));
-    parts.push('limit=' + (q.limit || 10));
-    return bq(parts.join('&'));
+    var requested = page && page.limit != null ? page.limit : q.limit;
+    if (requested == null) requested = PROVIDER_PAGE_SIZE;
+    parts.push('limit=' + requested);
+    if (page && page.offset) parts.push('offset=' + page.offset);
+    return parts.join('&');
+  }
+
+  var promises = queries.map(function(q) {
+    var readPage = function(path){return bq(path,opts.signal);};
+    return q && (q.exhaustive === true || q.limit == null)
+      ? readAllPages(q, queryPath, readPage)
+      : readPage(queryPath(q));
   });
 
   var results = await Promise.all(promises);
@@ -274,8 +335,8 @@ async function find(queries) {
 // Identity: who is this HAM, their context and trust
 async function findIdentity(hamUid, viewerTier) {
   return find(scopedQueries([
-    { stamp_type: 'DIRECTIVE', ham_uid: hamUid, limit: 3 },
-    { stamp_type: 'HAM_IDENTIFIER', ham_uid: hamUid, limit: 5 }
+    { stamp_type: 'DIRECTIVE', ham_uid: hamUid, exhaustive:true },
+    { stamp_type: 'HAM_IDENTIFIER', ham_uid: hamUid, exhaustive:true }
   ], viewerTier));
 }
 
@@ -290,10 +351,10 @@ async function findAgentJDs(hamUid, viewerTier) {
   // as person profiles and feature inventories are excluded because they do not
   // declare content.world. Repeated snapshots of one world collapse to the newest.
   var queries = [
-    { stamp_type: 'AGENT_JD', limit: 30 },
-    { source_prefix: 'agent.jd', limit: 20 }
+    { stamp_type: 'AGENT_JD', exhaustive:true },
+    { source_prefix: 'agent.jd', exhaustive:true }
   ];
-  if (hamUid) queries.push({ stamp_type: 'SCW', ham_uid: hamUid, limit: 100 });
+  if (hamUid) queries.push({ stamp_type: 'SCW', ham_uid: hamUid, exhaustive:true });
   var result = await find(scopedQueries(queries, viewerTier));
   var seenWorld = {};
   result.beads = (result.beads || []).filter(function (bead) {
@@ -310,13 +371,13 @@ async function findAgentJDs(hamUid, viewerTier) {
   return result;
 }
 
-// Exact records for bounded agent names explicitly present in the current ask.
+// Exact newest record for every valid agent name explicitly present in the current ask.
 async function findNamedAgentRecords(hamUid, agentGlobals, viewerTier) {
   // ⬡B:core.find:WIRE:question_named_agents_exact_ham_read:20260715⬡
   // The model cannot reliably invent the right tool arguments for a name it has
   // never seen. The builder supplies only literal uppercase tokens from this turn;
   // this finder keeps the read deterministic: exact agent_global, exact HAM, one
-  // newest row per name, eight names maximum. No alias map or roster lives here.
+  // newest row per name. No alias map, roster, or coder-chosen name-count ceiling lives here.
   var seen = {};
   var names = (Array.isArray(agentGlobals) ? agentGlobals : []).map(function (name) {
     return String(name || '').trim();
@@ -324,7 +385,7 @@ async function findNamedAgentRecords(hamUid, agentGlobals, viewerTier) {
     if (!/^[A-Z][A-Z0-9_]{2,31}$/.test(name) || seen[name]) return false;
     seen[name] = true;
     return true;
-  }).slice(0, 8);
+  });
   if (!hamUid || !names.length) return { beads: [], ms: 0, count: 0 };
   return find(scopedQueries(names.map(function (name) {
     return { agent_global: name, ham_uid: hamUid, limit: 1 };
@@ -348,19 +409,19 @@ async function findIdentityEvidence(hamUid, question, viewerTier) {
   var queries = subjects.filter(function (subject) {
     return /^[A-Za-z][A-Za-z0-9_]{2,31}$/.test(subject);
   }).map(function (subject) {
-    return { agent_global:subject.toUpperCase(), ham_uid:exactHam, limit:3 };
+    return { agent_global:subject.toUpperCase(), ham_uid:exactHam, exhaustive:true };
   });
   queries = scopedQueries(queries.concat([
-    { stamp_type:'HAM_IDENTIFIER', ham_uid:exactHam, limit:5 },
-    { source_prefix:'scw.person_profile.' + exactHam, ham_uid:exactHam, limit:2 },
-    { stamp_type:'AGENT_JD', ham_uid:exactHam, limit:24 },
-    { stamp_type:'SCW', ham_uid:exactHam, limit:48 },
-    { stamp_type:'DOCTRINE', ham_uid:exactHam, limit:48 },
-    { stamp_type:'LOGFUL', ham_uid:exactHam, limit:48 }
+    { stamp_type:'HAM_IDENTIFIER', ham_uid:exactHam, exhaustive:true },
+    { source_prefix:'scw.person_profile.' + exactHam, ham_uid:exactHam, exhaustive:true },
+    { stamp_type:'AGENT_JD', ham_uid:exactHam, exhaustive:true },
+    { stamp_type:'SCW', ham_uid:exactHam, exhaustive:true },
+    { stamp_type:'DOCTRINE', ham_uid:exactHam, exhaustive:true },
+    { stamp_type:'LOGFUL', ham_uid:exactHam, exhaustive:true }
   ]), viewerTier);
   try {
     var reads = await Promise.all(queries.map(function (query) {
-      return identityBq(identityQueryPath(query));
+      return identityRead(query);
     }));
     var unavailable = reads.find(function (read) { return !read || read.ok !== true; });
     if (unavailable) return {
@@ -418,9 +479,9 @@ async function findContext(hamUid, limit, viewerTier) {
   // importance-2 housekeeping markers onto her wall as if a person had said them.
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([
-    { source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid, limit: limit || 5 },
+    { source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid, exhaustive:true },
     { stamp_type: contract.TURN_STAMP_TYPE, ham_uid: hamUid,
-      importance_gte: contract.READER_IMPORTANCE_FLOOR, limit: limit || 5 }
+      importance_gte: contract.READER_IMPORTANCE_FLOOR, exhaustive:true }
   ], viewerTier));
 }
 
@@ -448,7 +509,7 @@ async function findRecentResults(hamUid, limit, viewerTier) {
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([{ stamp_type: 'RESULT', ham_uid: hamUid,
     importance_gte: contract.READER_IMPORTANCE_FLOOR,
-    source_not_prefix: contract.TURN_SOURCE_PREFIX, limit: limit || 10 }], viewerTier));
+    source_not_prefix: contract.TURN_SOURCE_PREFIX, exhaustive:true }], viewerTier));
 }
 
 // ⬡B:core.find:WIRE:findDoctrine_20260701⬡
@@ -459,8 +520,8 @@ async function findRecentResults(hamUid, limit, viewerTier) {
 // the read, any HAM gets their own doctrine.
 async function findDoctrine(hamUid, limit, viewerTier) {
   return find(scopedQueries([
-    { stamp_type: 'ROADMAP', ham_uid: hamUid, limit: limit || 2 },
-    { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: limit || 4 }
+    { stamp_type: 'ROADMAP', ham_uid: hamUid, exhaustive:true },
+    { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, exhaustive:true }
   ], viewerTier));
 }
 
@@ -482,7 +543,7 @@ async function findPersonProfile(hamUid, viewerTier) {
 // filter. UNIVERSALITY: keyed by ham_uid, any HAM gets their own preferences.
 async function findPreferences(hamUid, limit, viewerTier) {
   return find(scopedQueries([
-    { stamp_type: 'PREFERENCE', ham_uid: hamUid, limit: limit || 5 }
+    { stamp_type: 'PREFERENCE', ham_uid: hamUid, exhaustive:true }
   ], viewerTier));
 }
 
@@ -496,9 +557,9 @@ async function findPreferences(hamUid, limit, viewerTier) {
 // UNIVERSALITY: keyed by ham_uid, works for any HAM, no hardcoded content.
 async function findWonderGames(hamUid, limit, viewerTier) {
   return find(scopedQueries([
-    { stamp_type: 'WONDER_GAMES', ham_uid: hamUid, limit: limit || 3 },
-    { source_prefix: 'wonder_games.', ham_uid: hamUid, limit: limit || 3 },
-    { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, limit: limit || 3 }
+    { stamp_type: 'WONDER_GAMES', ham_uid: hamUid, exhaustive:true },
+    { source_prefix: 'wonder_games.', ham_uid: hamUid, exhaustive:true },
+    { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, exhaustive:true }
   ], viewerTier));
 }
 
@@ -538,12 +599,11 @@ async function findWonderGames(hamUid, limit, viewerTier) {
 // UNIVERSALITY: keyed by ham_uid, any HAM gets their own. No person, no content hardcoded.
 async function findStatedCommitments(hamUid, limit, viewerTier) {
   if (!hamUid) return { beads: [] };
-  var n = limit || 6;
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([
-    { source_prefix: contract.GIFT_SOURCE_PREFIX, ham_uid: hamUid, limit: n },
+    { source_prefix: contract.GIFT_SOURCE_PREFIX, ham_uid: hamUid, exhaustive:true },
     { stamp_type: contract.GIFT_STAMP_TYPE, ham_uid: hamUid,
-      importance_gte: contract.READER_IMPORTANCE_FLOOR, limit: n }
+      importance_gte: contract.READER_IMPORTANCE_FLOOR, exhaustive:true }
   ], viewerTier));
 }
 
@@ -591,7 +651,7 @@ async function _tierColumnReachable(tier) {
   if (!filter) return { ok: true };
   try {
     var r = await fetch(b.url + '/rest/v1/' + _tbl() + '?select=id&' + filter + '&limit=1',
-      { headers: b.hdrs, signal: AbortSignal.timeout(4000) });
+      { headers: b.hdrs });
     if (r.ok) return { ok: true };
     return { ok: false, reason: 'tier_ceiling_unenforceable_http_' + r.status };
   } catch (e) {
@@ -600,4 +660,5 @@ async function _tierColumnReachable(tier) {
 }
 
 module.exports = { find, findForWorld, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
-  _test:{ bq:bq, identityBq:identityBq, identityQueryPath:identityQueryPath } };
+  _test:{ bq:bq, identityBq:identityBq, identityQueryPath:identityQueryPath,
+    readAllPages:readAllPages, providerPageSize:PROVIDER_PAGE_SIZE } };

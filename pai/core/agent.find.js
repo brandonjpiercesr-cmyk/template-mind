@@ -40,7 +40,7 @@ function digest(value) {
 }
 
 function list(value) {
-  return Array.isArray(value) ? value.map(function (item) { return clean(item, 500); })
+  return Array.isArray(value) ? value.map(function (item) { return clean(item); })
     .filter(Boolean) : [];
 }
 
@@ -48,7 +48,7 @@ function copyQuery(query, hamUid, viewerTier) {
   const input = plain(query) ? query : {};
   const output = {};
   ['stamp_type','source','source_prefix','source_not_prefix','agent_global','importance_gte',
-    'select','order','limit'].forEach(function (key) {
+    'select','order'].forEach(function (key) {
     if (input[key] !== undefined && input[key] !== null && input[key] !== '') {
       output[key] = input[key];
     }
@@ -56,6 +56,7 @@ function copyQuery(query, hamUid, viewerTier) {
   // The requesting world and its tier are boundary facts, never registry configuration.
   output.ham_uid = hamUid;
   output.viewer_tier = viewerTier;
+  output.exhaustive = true;
   return output;
 }
 
@@ -64,11 +65,11 @@ function recentTruthQueries(node, hamUid, viewerTier) {
     node.metadata.agent_find.recent_truth;
   // Every registered seat gets an executable default rather than an unresolved toolbelt
   // string. A seat can narrow this in registry metadata. The default remains exact-HAM,
-  // indexed, bounded, and successful-empty aware.
+  // indexed, exhaustively paginated, and successful-empty aware.
   const suffix = clean(node && node.id, 160).split('.').pop()
     .replace(/[^A-Za-z0-9_-]/g, '_');
   const source = Array.isArray(configured) && configured.length ? configured
-    : suffix ? [{source_prefix:suffix + '.',limit:12}] : [];
+    : suffix ? [{source_prefix:suffix + '.'}] : [];
   if (!source.length) return {ok:false,reason:'agent_find_recent_truth_contract_missing'};
   const queries = source.map(function (query) {
     return copyQuery(query, hamUid, viewerTier);
@@ -139,9 +140,9 @@ function employmentRecord(registry, node, providerSeat) {
 function recentTruthRecord(result) {
   const rows = (result && Array.isArray(result.beads) ? result.beads : []).map(function (row) {
     return {
-      source:clean(row && row.source, 500),
-      stamp_type:clean(row && row.stamp_type, 120),
-      summary:clean(row && row.summary, 500),
+      source:clean(row && row.source),
+      stamp_type:clean(row && row.stamp_type),
+      summary:clean(row && row.summary),
       created_at:clean(row && row.created_at, 80) || null
     };
   });
@@ -218,9 +219,9 @@ function employmentPrompt(record, truth) {
     'SHARED MISSION: ' + record.shared_mission,
     'PERSONA BASE:',
     personaLines.map(function (line) { return '- ' + line; }).join('\n'),
-    'YOUR SEAT DIFFERENTIA: ' + clean(record.persona && record.persona.differentia, 2000),
-    'YOUR TEMPERAMENT: ' + clean(record.persona && record.persona.temperament, 1000),
-    'YOUR JOB: ' + clean(record.jd && record.jd.summary, 2000),
+    'YOUR SEAT DIFFERENTIA: ' + clean(record.persona && record.persona.differentia),
+    'YOUR TEMPERAMENT: ' + clean(record.persona && record.persona.temperament),
+    'YOUR JOB: ' + clean(record.jd && record.jd.summary),
     lines('YOUR DUTIES', duties),
     lines('YOUR HARD NEVERS', never),
     lines('YOUR GOALS', record.goals),

@@ -194,7 +194,7 @@ function grantServerPrefetch(input) {
   var question = String(input.question || '');
   var sourceText = String(input.sourceText || '');
   var materialDigest = String(input.materialDigest || '').trim().toLowerCase();
-  var evidence = Array.isArray(input.evidence) ? input.evidence.slice(0, 4).map(function (raw) {
+  var evidence = Array.isArray(input.evidence) ? input.evidence.map(function (raw) {
     return Object.freeze({tool:String(raw && raw.tool || ''),args:String(raw && raw.args || ''),
       result:String(raw && raw.result || '')});
   }) : [];

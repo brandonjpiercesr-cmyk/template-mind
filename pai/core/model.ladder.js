@@ -233,18 +233,6 @@ async function tryRunPodGLM(system, user, opts) {
 var seatMap = null;
 try { seatMap = require('./seat.map.js'); } catch (eSeatMap) { seatMap = null; }
 
-function applyOpenRouterThinkingPolicy(body, model) {
-  var target=body||{},exactModel=String(model||'').trim().toLowerCase();
-  if(/^(?:qwen\/|z-ai\/glm)/.test(exactModel)){
-    target.chat_template_kwargs={enable_thinking:false};
-    target.reasoning={enabled:false};
-  }else{
-    delete target.chat_template_kwargs;
-    delete target.reasoning;
-  }
-  return target;
-}
-
 // ⬡B:core.model_ladder:911:the_rung_spent_the_seats_KEY_and_threw_away_its_MODEL:20260728⬡
 // THE OPEN LEDGER row B7, "re-seat the ladder onto funded seat-map models". It was real, and
 // this is what it was. Both OpenRouter rungs below already resolved the funded seat and paid
@@ -318,9 +306,8 @@ function ladderSeatName(opts) {
   return String((opts && opts.seat) || process.env.MODEL_LADDER_SEAT || 'deliberation');
 }
 
-// One paid model+key pair per deliberate() call. `attempts` is created fresh per call in
-// deliberate() and lives on that call's own opts, so two concurrent cycles cannot see each
-// other's attempts and no process state is mutated.
+// Do not pay the same model+key pair twice inside one deliberate() call. This is deduplication,
+// not an attempt ceiling: every distinct configured rung remains reachable in sequence.
 function alreadyAttempted(opts, candidate) {
   if (!opts || !candidate) return false;
   var stamp = candidate.model + '|' + candidate.key;
@@ -358,14 +345,8 @@ async function tryOpenRouterGLM(system, user, opts) {
     var glmModel = candidate.model;
     var body = { model: glmModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
-    // ⬡B:core.model_ladder:FIX:glm52_no_thinking_on_openrouter_too:20260719⬡
-    // Same disease as the Together rung: GLM-5.2 thinks by default, the content
-    // arrives with reasoning residue, hasAcceptedContent rejects it on json
-    // calls, and the turn falls to a COLD RunPod pod. With Together out of
-    // credits (live 402 receipt today) OpenRouter is the working warm rung, so
-    // it must answer clean. Both passthrough shapes are sent because OpenRouter
-    // providers differ in which one they honor.
-    applyOpenRouterThinkingPolicy(body,glmModel);
+    // Keep the model's native reasoning available. The return boundary still
+    // requires usable content before this rung can win.
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
@@ -436,25 +417,8 @@ async function tryQwen(system, user, opts) {
     var qwenModel = candidate.model;
     var body = { model: qwenModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
-    // ⬡B:core.model_ladder:911:the_last_warm_rung_thought_itself_empty:20260726⬡
-    // FOUND 20260726 while chasing her silence for a full day, and it is the same disease
-    // this file already cured on its sibling rung sixty lines up, on a rung nobody went back
-    // for. Qwen3 is a HYBRID REASONING model and it thinks by default, exactly like GLM-5.2.
-    // Left to think, it spends the whole max_tokens budget on reasoning and returns content
-    // that is EMPTY, hasAcceptedContent correctly rejects it, and this rung answers null.
-    //
-    // Null is not visibly a failure. It is indistinguishable from a rung that is simply
-    // down, so the ladder walks on, and this file's own comment at tryAnthropicBackup
-    // already wrote down what happens next: the open-weight rungs can all be out at once,
-    // deliberate() returns null, "the founder experiences as A'NU going silent."
-    //
-    // That is the state that was live today. Together is out of credits, Ornith is retired,
-    // RunPod is out, and the Anthropic floor is off by default since the cost audit. GLM and
-    // Qwen were the last two warm rungs, and only ONE of them had been told not to think.
-    //
-    // Both passthrough shapes go out because OpenRouter providers differ in which one they
-    // honour, which is the reasoning the GLM rung already carries and the reason it works.
-    applyOpenRouterThinkingPolicy(body,qwenModel);
+    // Keep the failover model's native reasoning available too. Empty or unusable
+    // content still loses this rung and the ladder continues.
     var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
@@ -476,20 +440,13 @@ async function tryQwen(system, user, opts) {
 // Sonnet for C2/C3) are a live hosted API immune to the open-weight outage. This adds them as
 // the last-resort floor: it only ever runs after every open-weight rung has definitively
 // failed, so it changes nothing when they work and gives the cycle a live answer when they do
-// not. Still gated by the one spend door at deliberate() entry, so the ceiling holds.
+// not. A configured named key makes the floor reachable without a second off switch.
 async function tryAnthropicBackup(system, user, opts) {
-  // ⬡B:core.model_ladder:FIX:anthropic_floor_off_unless_explicitly_armed:20260722⬡
-  // COST AUDIT follow-up (founder 911 20260722): this "last-resort floor" quietly became a hot
-  // path -- when Together depleted and the open-weight rungs missed, every miss fell through to
-  // claude-sonnet-4-6 and billed Anthropic silently (~$12/day), which also VIOLATES the house law
-  // that Anthropic is CODA + cook-off ONLY (board/gate/provider.gate.js). A key being PRESENT (it
-  // may be needed for the sanctioned cook-off path) must not arm the general-answer floor. Require
-  // an explicit opt-in: ANTHROPIC_BACKUP_FLOOR=on. Off by default -> an open-weight miss returns
-  // null (the cycle surfaces ok:false, the founder's own "ok:false over a hollow reply" doctrine)
-  // instead of paying the most expensive closed model to hide the open-weight outage.
-  if (process.env.ANTHROPIC_BACKUP_FLOOR !== 'on') return null;
   var key = process.env.ANTHROPIC_LADDER_API_KEY;
   if (!key) return null;
+  // Anthropic's Messages API literally requires max_tokens. The ladder will not manufacture
+  // one. If a caller explicitly chooses this provider, that caller must choose the value too.
+  if (!Number.isSafeInteger(Number(opts.max_tokens)) || Number(opts.max_tokens) < 1) return null;
   // ⬡B:core.model_ladder:FIX:the_anthropic_floor_read_its_override_raw:20260729⬡
   // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1: ANTHROPIC_LADDER_MODEL was read
   // with a raw `||`, the exact vulnerable shape already fixed at every TOGETHER_MODEL/
@@ -500,7 +457,7 @@ async function tryAnthropicBackup(system, user, opts) {
   try {
     var r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: model, max_tokens: opts.max_tokens || 3000,
+      body: JSON.stringify({ model: model, max_tokens: Number(opts.max_tokens),
         temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.4,
         system: outputGuard.englishSystem(system), messages: [{ role: 'user', content: user }] }),
       signal: requestSignal(opts, opts.timeout) });
@@ -517,16 +474,8 @@ async function tryAnthropicBackup(system, user, opts) {
 // all deleted. Nothing reaches for it anymore.
 
 // deliberate(system, user, opts) -> { content, model, via } | null
-// THE LADDER, founder's authorized order: GLM 5.2 -> Ornith -> Qwen -> the Groq
-// floor last, only if the open-weight authorized set is unreachable.
-// ⬡COLD:decide:tag:PROVIDER_SPEND_ATTRIBUTION:20260723⬡
-// COLD-ANEW-LADDER-0007 stamped, needs-live-verification. The entry spend guard below consumes one
-// anonymous slot before any provider is attempted, while provider.boundary meters each actual paid
-// fetch again, so accounting is split across two layers with no component or key identity. The
-// honest fix (meter each real attempt exactly once inside a canonical provider client that carries
-// component, wonder, key label, and cost context) is PROVIDER_SPEND_ATTRIBUTION. That client is not
-// present in this file and touching spend.guard is out of this file's scope, so it is contained by
-// stamp only; no hot-path behavior is changed here.
+// Every distinct configured rung remains reachable in sequence. The ladder does
+// not suppress a model with a coder spend ceiling or reasoning-off request.
 async function deliberate(system, user, options) {
   // ⬡B:core.model_ladder:FIX:no_coder_default_deadline_may_abort_a_paid_answer:20260801⬡
   // The former 25-second default was an invisible coder ceiling on every unspecified model
@@ -534,27 +483,19 @@ async function deliberate(system, user, options) {
   // the paid answer and usage facts reached us, and induce the next paid fallback. With no
   // caller-owned deadline there is now no deadline here. An explicit caller signal/timeout is
   // still carried exactly as supplied; this one door no longer invents one.
-  var opts = Object.assign({ max_tokens: 3000, temperature: 0.4, timeout: null, json: false }, options || {});
+  var opts = Object.assign({ temperature: 0.4, timeout: null, json: false }, options || {});
   // Reset per call, never inherited from a caller's reused options object: this call's
   // own paid model+key attempts, so no rung repeats a call this call already paid for.
   opts._attempted = [];
-  // ⬡B:core.model_ladder:LAW:spend_guard_at_the_one_door:20260719⬡ the daily
-  // ceiling lives at the single door every paid text call flows through, so a
-  // runaway loop or retry storm trips a brake instead of draining a balance to
-  // zero. Health probes and free rungs pass opts.noGuard to bypass.
-  if (!opts.noGuard) {
-    try { if (!require('./spend.guard.js').allow('text')) return null; } catch (eSG) {}
-  }
-  // ⬡B:core.model_ladder:KILL:ornith_out_of_the_default_order_founder_911:20260722⬡
-  // FOUNDER 911 20260722: Ornith retired, RunPod out. The default rung order no
-  // longer contains ornith. An explicit per-call or env order plus the exact
-  // ORNITH_LADDER_API_KEY is required before that rung can leave the process.
+  // An explicit per-call or environment order still wins. The production-safe
+  // Qwen rung is the default; contest-only model families remain reachable only
+  // when their governed caller names them explicitly.
   // A caller may pin its rung and functional seat per call. This is request
   // state, never process.env mutation: overlapping contests cannot reseat one
   // another, and a throw cannot leave the whole process on the wrong ladder.
   var requestedOrder = opts.order == null ? process.env.MODEL_LADDER_ORDER : opts.order;
   var order = (Array.isArray(requestedOrder) ? requestedOrder :
-    String(requestedOrder || 'glm,qwen').split(','))
+    String(requestedOrder || 'qwen').split(','))
     .map(function (s) { return String(s || '').trim().toLowerCase(); })
     .filter(function (name,index,list) {
       return name && list.indexOf(name) === index;
@@ -578,21 +519,6 @@ async function deliberate(system, user, options) {
     openrouter: function (o) { return tryOpenRouterGLM(system, user, o); } };
   var glmChain = glmSeq.filter(function (n) { return typeof glmRunners[n] === 'function'; });
   if (!glmChain.length) glmChain = ['openrouter'];
-  // \u2b21B:core.model_ladder:FIX:tight_timeout_skips_runpod_glm:20260720\u2b21
-  // FOUNDER 911 20260720: the RunPod GLM endpoint showed 2708 failed jobs against
-  // 1402 completed, a real live number pulled from RunPod's own health API. Root
-  // cause found: council/judge callers set tightTimeout with a real budget as low
-  // as 7 seconds, but this rung is a scale-to-zero serverless GPU that can genuinely
-  // take longer than that on any cold start, and RunPod bills for GPU time already
-  // spent even when the caller gives up and aborts. A tight caller hitting a cold
-  // RunPod pod is close to a guaranteed wasted, billed failure. RunPod cannot
-  // reliably promise a sub-10-second answer the way a hosted API can, so a
-  // tight-timeout caller skips it and continues through the exact sequential
-  // OpenRouter seat. Realtime uses the same sequential rule.
-  if (opts.tightTimeout) {
-    glmChain = glmChain.filter(function (n) { return n !== 'runpod'; });
-    if (!glmChain.length) glmChain = ['openrouter'];
-  }
   var runners = { glm: async function (runOpts) {
       runOpts = runOpts || opts;
       for (var gi = 0; gi < glmChain.length; gi++) {
@@ -607,8 +533,8 @@ async function deliberate(system, user, options) {
   // The Anthropic backup is always the last rung whenever a key is present, so the cycle has a
   // live floor beneath the open-weight ladder. Appended, never inserted, so it runs only after
   // every higher rung has failed, and only added when it is not already in the configured order.
-  if (opts.order == null && process.env.ANTHROPIC_BACKUP_FLOOR === 'on' &&
-      process.env.ANTHROPIC_LADDER_API_KEY && order.indexOf('anthropic') === -1) {
+  if (opts.order == null && process.env.ANTHROPIC_LADDER_API_KEY &&
+      order.indexOf('anthropic') === -1) {
     order.push('anthropic');
   }
   // Realtime changes the deadline profile only. It never launches paid rungs
@@ -680,5 +606,4 @@ async function transcribe(audio, opts) {
 
 module.exports = { deliberate: deliberate, transcribe: transcribe,
   _test: { hasAcceptedContent: hasAcceptedContent, cleanModelContent: cleanModelContent,
-    applyOpenRouterThinkingPolicy:applyOpenRouterThinkingPolicy,
     requestSignal:requestSignal } };
