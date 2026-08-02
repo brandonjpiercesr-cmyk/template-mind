@@ -509,6 +509,8 @@ function reportedDollars(value) {
 // balance, and pretending otherwise is how a monitor takes her voice down.
 function unknownBalance(reason) {
   return {known:false,remaining:null,dry:false,reason:reason,
+    total_credits_usd:null,total_usage_usd:null,observed_at:null,
+    statement_persisted:false,statement_reason:null,
     source:'openrouter_credits_control_plane',read_by_seat:null};
 }
 
@@ -525,9 +527,28 @@ async function readAccountBalance(options) {
     var credits = d ? reportedDollars(d.total_credits) : null;
     var used = d ? reportedDollars(d.total_usage) : null;
     if (credits === null || used === null) return unknownBalance('credits_body_invalid');
+    var observedAt=new Date(Number.isFinite(Number(options.now))?Number(options.now):Date.now())
+      .toISOString();
     var remaining = Math.round((credits - used) * 100) / 100;
+    var statement={ok:false,reason:'provider_statement_store_unavailable'};
+    var runtime=options.env||process.env;
+    if(runtime.MEMORY_BANK_URL&&runtime.MEMORY_BANK_KEY){
+      try{
+        var store=options.statementStore||require('./provider.spend.receipt.js');
+        if(store&&typeof store.writeProviderAccountStatement==='function'){
+          statement=await store.writeProviderAccountStatement({provider:'openrouter',
+            observed_at:observedAt,total_credits_usd:credits,total_usage_usd:used,
+            source:'openrouter_credits_control_plane',read_by_seat:'account_monitor'},
+          {env:runtime,fetchImpl:options.statementFetchImpl||doFetch,signal:null});
+        }
+      }catch(statementError){statement={ok:false,reason:'provider_statement_write_failed'};}
+    }
     // DRY only when the ACCOUNT itself reports a finite balance at or below zero.
     return {known:true,remaining:remaining,dry:remaining <= 0,reason:null,
+      total_credits_usd:credits,total_usage_usd:used,observed_at:observedAt,
+      statement_persisted:statement&&statement.ok===true,
+      statement_reason:statement&&statement.ok===true?null:
+        String(statement&&statement.reason||'provider_statement_write_failed'),
       source:'openrouter_credits_control_plane',read_by_seat:OR.seat};
   } catch (e) { return unknownBalance('credits_unreachable'); }
 }
