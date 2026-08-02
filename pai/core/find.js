@@ -90,13 +90,29 @@ function bq(path, signal) {
 
 // PostgREST can return a finite transport page even when the matching memory set is larger.
 // A page size is an I/O batch, not a cognition ceiling: exhaustive readers keep walking until
-// the provider returns the terminal short page. No total-row maximum exists here.
+// the provider returns the terminal short page.
 var PROVIDER_PAGE_SIZE = 1000;
+
+// ⬡B:core.find:FIX:exhaustive_read_needs_a_process_memory_bound_20260802⬡
+// LIVE 911 20260802: aibebase.onrender.com went into a sustained OOM crash loop (SIGABRT
+// nonZeroExit:134, repeated V8 "JavaScript heap out of memory" fatal errors) starting ~3
+// minutes after #1609 merged, which turned findIdentity/findAgentJDs/findIdentityEvidence/
+// findContext/findDoctrine/etc. from small bounded limits into exhaustive:true. This is not
+// the founder-facing spend/call ceiling this codebase has spent the day correctly removing --
+// it is the process's own physical memory. A single Node process on a 512MB container holding
+// every bead a HAM has ever accumulated, in memory, per request, across several concurrent
+// exhaustive queries, is an engineering resource bound, not a coder-invented cognition cap.
+// MAX_EXHAUSTIVE_PAGES caps how many pages one exhaustive read will walk before returning what
+// it has with a truncated flag, rather than growing rows without limit until the process dies.
+// Chosen generously (50,000 rows) so no real HAM's identity/context read is likely to ever hit
+// it in practice; it exists only to make "impossible to OOM one query" true instead of assumed.
+var MAX_EXHAUSTIVE_PAGES = 50;
 
 async function readAllPages(query, pathBuilder, reader) {
   var rows = [];
   var offset = 0;
   var previousPageKey = null;
+  var pageCount = 0;
   while (true) {
     var result = await reader(pathBuilder(query, {
       limit:PROVIDER_PAGE_SIZE, offset:offset
@@ -113,8 +129,12 @@ async function readAllPages(query, pathBuilder, reader) {
     }
     previousPageKey = pageKey;
     rows = rows.concat(page);
+    pageCount += 1;
     if (page.length < PROVIDER_PAGE_SIZE) {
       return {ok:true, available:true, rows:rows};
+    }
+    if (pageCount >= MAX_EXHAUSTIVE_PAGES) {
+      return {ok:true, available:true, rows:rows, truncated:true, reason:'brain_pagination_max_pages'};
     }
     offset += page.length;
   }
@@ -377,7 +397,14 @@ async function findNamedAgentRecords(hamUid, agentGlobals, viewerTier) {
   // The model cannot reliably invent the right tool arguments for a name it has
   // never seen. The builder supplies only literal uppercase tokens from this turn;
   // this finder keeps the read deterministic: exact agent_global, exact HAM, one
-  // newest row per name. No alias map, roster, or coder-chosen name-count ceiling lives here.
+  // newest row per name. No alias map or roster lives here.
+  // ⬡B:core.find:FIX:fanout_bound_is_a_resource_guard_not_a_cognition_cap_20260802⬡
+  // LIVE 911 20260802 (see readAllPages above, same PR #1609): each entry here becomes
+  // its own concurrent outbound brain request. Bounding how many names one turn can fan
+  // out to is a process resource guard (outstanding-connection ceiling), not a
+  // founder-facing name-count ceiling; a real question naming more than this many exact
+  // agents in one turn is not a real-world shape this needs to serve today.
+  var MAX_NAMED_AGENT_FANOUT = 64;
   var seen = {};
   var names = (Array.isArray(agentGlobals) ? agentGlobals : []).map(function (name) {
     return String(name || '').trim();
@@ -385,7 +412,7 @@ async function findNamedAgentRecords(hamUid, agentGlobals, viewerTier) {
     if (!/^[A-Z][A-Z0-9_]{2,31}$/.test(name) || seen[name]) return false;
     seen[name] = true;
     return true;
-  });
+  }).slice(0, MAX_NAMED_AGENT_FANOUT);
   if (!hamUid || !names.length) return { beads: [], ms: 0, count: 0 };
   return find(scopedQueries(names.map(function (name) {
     return { agent_global: name, ham_uid: hamUid, limit: 1 };
