@@ -368,7 +368,8 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   // accounting needs its own bounded bank deadline so an expiring model timeout cannot strand
   // a paid INTENT without a TERMINAL receipt.
   var terminalReceiptOptions = {fetchImpl:realFetch,env:env || process.env,
-    signal:null,ceiling:ceilingForClaim,unlimited:ceilingUnlimited};
+    signal:null,ceiling:ceilingForClaim,unlimited:ceilingUnlimited,
+    receipt:prepared.receipt};
   var reconciled;
   var reconcileKey = [prepared.receipt.ham_uid,prepared.receipt.cycle_id,
     prepared.receipt.request_id].join('|');
@@ -505,6 +506,15 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
       }
     }catch(eProviderFact){}
   }
+  // ElevenLabs reports billed characters in the successful response headers. Keep that exact
+  // provider unit beside the immutable transport terminal, never turn subscription credits into
+  // invented per-request USD. The same usage-fact writer is also used by delayed provider
+  // control-plane recovery below.
+  if(outcome&&outcome.provider_usage_fact&&
+      typeof store.writeUsageReconciliation==='function'){
+    try{await store.writeUsageReconciliation(prepared.receipt,outcome.provider_usage_fact,
+      terminalReceiptOptions);}catch(eUsageFact){}
+  }
   // A prior OpenRouter terminal whose generation fact was not ready on the immediate read
   // remains durable. Let this completed request trigger one same-seat, non-generative retry.
   // The work is detached so accounting cannot hold the paid answer; a crash is safe because
@@ -512,6 +522,15 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   if(typeof store.recoverDelayedOpenRouterCost==='function'){
     Promise.resolve().then(function(){
       return store.recoverDelayedOpenRouterCost(prepared.receipt,requestInit,
+        terminalReceiptOptions);
+    }).catch(function(){});
+  }
+  // An organic request drains at most one older same-provider, same-key terminal whose exact
+  // usage was not available inline. ElevenLabs history and LiveAvatar historic sessions are
+  // authenticated, non-generative provider facts. No timer, paid replay, or guessed rate exists.
+  if(typeof store.recoverDelayedProviderUsage==='function'){
+    Promise.resolve().then(function(){
+      return store.recoverDelayedProviderUsage(prepared.receipt,requestInit,
         terminalReceiptOptions);
     }).catch(function(){});
   }
