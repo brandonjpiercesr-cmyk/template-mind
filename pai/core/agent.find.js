@@ -442,8 +442,10 @@ async function bindProviderRequest(input, options) {
 // protected-main, focused-test, merge, and two-service live proof before the canonical writer is
 // allowed to persist the exact edge-bearing receipt.
 async function recordExternalClosureVerification(input, original, options) {
-  const opts=options||{},brain=opts.brain||defaultBrain,proof=opts.deliveryProof||
-    require('./coda/repair.delivery.proof.js'),candidate=await proof.verifyExternalCandidate(
+  const opts=options||{},brain=opts.brain||defaultBrain,proof=opts.deliveryProof;
+  if(!proof||typeof proof.verifyExternalCandidate!=='function')return{ok:false,
+    reason:'agent_find_external_closure_delivery_proof_missing'};
+  const candidate=await proof.verifyExternalCandidate(
       input,original,Object.assign({},opts,{brain:brain}));
   if(!candidate||candidate.ok!==true||candidate.schema!==
       'envolve.cathy-shadow-external-candidate.v1')return candidate||{ok:false,
