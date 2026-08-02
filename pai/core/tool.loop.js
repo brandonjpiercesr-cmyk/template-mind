@@ -3715,6 +3715,14 @@ function toolDefinitionsForTurn(tools, readOnlyNames, identity, flags) {
   });
 }
 
+function agentFindClosedWorldReason(flags) {
+  var state=flags||{};
+  if(state.structuredReachPolicy===true)return'structured_reach_policy';
+  if(state.reachIncidentIntake===true)return'reach_incident_intake';
+  if(state.roomSafeVoice===true)return'room_safe_voice';
+  return null;
+}
+
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
@@ -5222,6 +5230,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       var _policyFormat=_structuredReachResponseFormat();
       if(_policyFormat)_providerBody.response_format=_policyFormat;
       _providerBody.provider={require_parameters:true};
+    }
+    // Closed-world PAI modes deliberately skip ambient Memory Bank assembly. They still need
+    // a real FCW before paid deliberation, not the former provider-boundary fiction that called
+    // an arbitrary messages array a complete wall. Bind the exact server-owned evidence here,
+    // under the registered PAI context policy, and return its receipt with the cycle. Signed
+    // voice acknowledgements never reach this block because their exact bytes were selected
+    // before the loop and therefore buy no model call.
+    var _closedWorldReason=agentFindClosedWorldReason({
+      structuredReachPolicy:_structuredReachPolicy,
+      reachIncidentIntake:_reachIncidentIntake,roomSafeVoice:_roomSafeVoice});
+    if(_closedWorldReason){
+      var _closedBound=await require('./agent.find.js').bindClosedWorld({
+        messages:_providerBody.messages,ham_uid:hamUid,cycle_id:_cycleId,
+        request_id:_requestId,channel:channel,seat_name:_providerSeat,
+        seat_node_id:_agentFindSeatNodeId(),context_policy:'context.pai.full.v1',
+        closed_world_reason:_closedWorldReason,
+        evidence_refs:[_closedWorldReason,_cycleId,_requestId],
+        observed_at:new Date().toISOString()
+      });
+      if(!_closedBound||_closedBound.ok!==true||!_closedBound.agent_find||
+          !_closedBound.agent_find.prompt_appendix){
+        var _closedReason=_closedBound&&_closedBound.reason||
+          'agent_find_closed_world_binding_failed';
+        _noteCycleFailure(_closedReason);
+        return {ok:false,reason:_closedReason,cycleId:_cycleId,requestId:_requestId};
+      }
+      fcw=_closedBound;
+      _providerBody.messages=[{role:'system',
+        content:_closedBound.agent_find.prompt_appendix.trim()}].concat(_providerBody.messages);
     }
     _effectRuntime.offeredToolNames = offeredToolNameSet(_providerBody.tools);
     r=await _callPaiProvider(_providerBody,_providerSeat);
@@ -7268,6 +7305,7 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
+  agentFindClosedWorldReason,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
   requiredActionToolForMessage,
   prioritizeVerifiedEvidence,prioritizeCouncilEvidence,regenerateHollowAnswer,
