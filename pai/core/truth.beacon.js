@@ -19,6 +19,14 @@ const BEACONS = Object.freeze({
     owner_node_id:'station.agent_find',
     producer:'core/agent.find.js',
     lifecycle:'active'
+  }),
+  'agent.find.external-closure': Object.freeze({
+    id:'agent.find.external-closure',
+    schema:'envolve.truth-beacon.agent-find-external-closure.v1',
+    stamp_type:'AGENT_FIND_CLOSURE_VERIFICATION',
+    owner_node_id:'station.agent_find',
+    producer:'core/agent.find.js#recordExternalClosureVerification',
+    lifecycle:'active'
   })
 });
 
@@ -144,6 +152,113 @@ function validateAgentFindRow(row, expected) {
   return {ok:true,content:content,edges:edges};
 }
 
+function validSha(value, size) {
+  return new RegExp('^[a-f0-9]{' + size + '}$').test(text(value).toLowerCase());
+}
+
+function exactEdges(value) {
+  return (Array.isArray(value) ? value : []).map(function (edge) {
+    return {type:text(edge && edge.type, 80),target:text(edge && edge.target, 500)};
+  }).sort(function (a, b) {
+    return (a.type + '\u0000' + a.target).localeCompare(b.type + '\u0000' + b.target);
+  });
+}
+
+function externalClosureEdges(value) {
+  return [
+    {type:'PRODUCED_BY',target:'station.agent_find'},
+    {type:'REPORTS_TO',target:'station.coda'},
+    {type:'SERVES',target:value.original_incident_source},
+    {type:'SERVES',target:value.target_wonder},
+    {type:'AUDITS',target:value.repository + ':' + value.path},
+    {type:'EVIDENCE_FROM',target:value.original_finding_source},
+    {type:'EVIDENCE_FROM',target:value.focused_checkout_source}
+  ];
+}
+
+function buildExternalClosureReceipt(input) {
+  const beacon=resolve('agent.find.external-closure'),value=input||{},exactHam=ham(value.ham_uid),
+    serviceIds=Array.isArray(value.live_service_ids)?value.live_service_ids.map(function (id) {
+      return text(id,160);
+    }).sort():[],deployments=Array.isArray(value.live_deployments)?value.live_deployments.map(
+      function (row) { return {service_id:text(row&&row.service_id,160),
+        deploy_id:text(row&&row.deploy_id,220),commit_sha:text(row&&row.commit_sha,40).toLowerCase(),
+        status:text(row&&row.status,40)}; }).sort(function (a,b) {
+          return a.service_id.localeCompare(b.service_id);
+        }):[];
+  if(!exactHam||!validId(value.original_incident_source,500)||
+      !validId(value.original_finding_source,500)||!validId(value.classification_id,200)||
+      !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(text(value.repository,240))||
+      !text(value.path,500)||!validId(value.target_wonder,240)||
+      !Number.isInteger(Number(value.pr_number))||Number(value.pr_number)<1||
+      !validSha(value.head_sha,40)||!validSha(value.merge_sha,40)||
+      !validSha(value.protected_main_sha,40)||!validSha(value.live_sha,40)||
+      value.protected_main_sha!==value.live_sha||
+      !validId(value.focused_checkout_source,500)||!validSha(value.focused_checkout_sha256,64)||
+      !/^cathy\.focused-test\.[a-f0-9]{64}$/.test(text(value.focused_test_token,100))||
+      serviceIds.length!==2||new Set(serviceIds).size!==2||
+      serviceIds.some(function (id) { return !/^srv-[A-Za-z0-9]+$/.test(id); })||
+      deployments.length!==2||deployments.some(function (row) { return !serviceIds.includes(
+        row.service_id)||!row.deploy_id||row.commit_sha!==value.live_sha||row.status!=='live'; })) {
+    return {ok:false,reason:'agent_find_external_closure_binding_invalid'};
+  }
+  const core={schema:beacon.schema,beacon_id:beacon.id,receipt_type:beacon.stamp_type,
+    status:'VERIFIED_POST_MERGE',ham_uid:exactHam,
+    original_incident_source:text(value.original_incident_source,500),
+    original_finding_source:text(value.original_finding_source,500),
+    classification_id:text(value.classification_id,200),repository:text(value.repository,240),
+    path:text(value.path,500),target_wonder:text(value.target_wonder,240),
+    pr_number:Number(value.pr_number),head_sha:text(value.head_sha,40).toLowerCase(),
+    merge_sha:text(value.merge_sha,40).toLowerCase(),
+    protected_main_sha:text(value.protected_main_sha,40).toLowerCase(),
+    focused_checkout_source:text(value.focused_checkout_source,500),
+    focused_checkout_sha256:text(value.focused_checkout_sha256,64).toLowerCase(),
+    focused_test_token:text(value.focused_test_token,100),live_service_ids:serviceIds,
+    live_sha:text(value.live_sha,40).toLowerCase(),live_deployments:deployments,
+    verified_at:text(value.verified_at,40)||new Date().toISOString()};
+  const content=Object.assign({},core,{receipt_sha256:digest(core)}),edges=externalClosureEdges(core),
+    source='agent.find.closure.'+exactHam+'.'+digest({original_incident_source:
+      core.original_incident_source,original_finding_source:core.original_finding_source,
+      classification_id:core.classification_id,repository:core.repository,path:core.path,
+      target_wonder:core.target_wonder,pr_number:core.pr_number,head_sha:core.head_sha,
+      merge_sha:core.merge_sha,protected_main_sha:core.protected_main_sha,
+      focused_checkout_source:core.focused_checkout_source,
+      focused_checkout_sha256:core.focused_checkout_sha256,
+      focused_test_token:core.focused_test_token,live_service_ids:core.live_service_ids,
+      live_sha:core.live_sha,live_deployments:core.live_deployments});
+  return {ok:true,beacon:beacon,source:source,content:content,edges:edges,spec:{hamUid:exactHam,
+    agentGlobal:'AGENT_FIND',source:source,type:beacon.stamp_type,
+    summary:'[AGENT FIND] verified external repair closure for '+core.classification_id,
+    content:content,importance:8,edges:edges,abcdTag:beacon.stamp_type}};
+}
+
+function validateExternalClosureRow(row, expected) {
+  const beacon=resolve('agent.find.external-closure'),content=parseContent(row&&row.content),want=expected||{};
+  if(!row||row.agent_global!=='AGENT_FIND'||row.stamp_type!==beacon.stamp_type||
+      row.superseded_by!==null||
+      !content||content.schema!==beacon.schema||content.beacon_id!==beacon.id||
+      content.receipt_type!==beacon.stamp_type||content.status!=='VERIFIED_POST_MERGE'||
+      row.source!==want.source||ham(row.ham_uid)!==ham(want.ham_uid))return{ok:false,
+        reason:'agent_find_external_closure_row_invalid'};
+  const receipt=Object.assign({},content);delete receipt.receipt_sha256;delete receipt.edges;
+  if(!validSha(content.receipt_sha256,64)||digest(receipt)!==content.receipt_sha256)return{ok:false,
+    reason:'agent_find_external_closure_digest_invalid'};
+  const fields=['original_incident_source','original_finding_source','classification_id','repository',
+    'path','target_wonder','head_sha','merge_sha','protected_main_sha','focused_checkout_source',
+    'focused_checkout_sha256','focused_test_token','live_sha'];
+  if(fields.some(function (field) { return want[field]!=null&&content[field]!==want[field]; })||
+      want.pr_number!=null&&Number(content.pr_number)!==Number(want.pr_number)||
+      want.live_service_ids&&stableStringify(content.live_service_ids)!==
+        stableStringify(want.live_service_ids.slice().sort()))return{ok:false,
+          reason:'agent_find_external_closure_binding_mismatch'};
+  const required=externalClosureEdges(content),column=exactEdges(row.edges),embedded=exactEdges(content.edges),
+    wanted=exactEdges(required);
+  if(stableStringify(column)!==stableStringify(wanted)||
+      stableStringify(embedded)!==stableStringify(wanted))return{ok:false,
+        reason:'agent_find_external_closure_edges_invalid'};
+  return {ok:true,content:content,edges:column};
+}
+
 function validateRegistry() {
   const reasons = [];
   Object.keys(BEACONS).forEach(function (id) {
@@ -158,5 +273,7 @@ function validateRegistry() {
 }
 
 module.exports = {BEACONS:BEACONS,resolve:resolve,buildAgentFindReceipt:buildAgentFindReceipt,
-  validateAgentFindRow:validateAgentFindRow,validateRegistry:validateRegistry,
-  _test:{parseContent:parseContent,validId:validId}};
+  validateAgentFindRow:validateAgentFindRow,buildExternalClosureReceipt:buildExternalClosureReceipt,
+  validateExternalClosureRow:validateExternalClosureRow,validateRegistry:validateRegistry,
+  _test:{parseContent:parseContent,validId:validId,externalClosureEdges:externalClosureEdges,
+    exactEdges:exactEdges}};
