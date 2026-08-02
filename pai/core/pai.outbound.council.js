@@ -2237,6 +2237,7 @@ async function defaultShadowStage(ctx, injected) {
       } : judgment ? {
         approved: parsed && parsed.approved === true,
         reason: parsed && parsed.reason,
+        claim: _verbatimClaimFound(parsed) ? String(parsed.claim) : null,
         model: judgment.model,
         via: judgment.via,
         response_digest: digestText(judgment.content || ''),
@@ -2246,6 +2247,7 @@ async function defaultShadowStage(ctx, injected) {
       review_judgment: reviewJudgment ? {
         approved: reviewParsed && reviewParsed.approved === true,
         reason: reviewParsed && reviewParsed.reason,
+        claim: _verbatimClaimFound(reviewParsed) ? String(reviewParsed.claim) : null,
         model: reviewJudgment.model,
         via: reviewJudgment.via,
         response_digest: digestText(reviewJudgment.content || '')
@@ -2391,9 +2393,8 @@ async function defaultQuillStage(ctx) {
 // and a heal whose only tool is that same ladder cannot cure a dead ladder by
 // construction. What is fixed here is every case where a mind IS reachable, plus a
 // receipt that finally names which hollow disease happened and why the heal missed.
-// Penny hustle holds: the budget grows only with the real answer and is hard capped,
-// the timeout is capped, and the retry is exactly ONE extra call that runs only after
-// a hollow miss. Nothing here relaxes the gate. A repair that is itself protocol or
+// The repair room grows with the real answer instead of imposing a hidden maximum.
+// A repair that is itself protocol or
 // empty is still rejected and the turn still fails closed. Silence over hollow.
 async function healAnswer(answer, reason, stage, input, deps) {
   var modelLadder = (deps && deps.modelLadder) || require('./model.ladder.js');
@@ -2423,10 +2424,10 @@ async function healAnswer(answer, reason, stage, input, deps) {
   // the SHADOW stage only: a WRIT, QUILL, or META hold is a craft repair that usually
   // succeeds, and turning a fixable style hold into boundary speech would lose a real
   // answer. Every named cure above this line keeps precedence (one disease, one cure), and
-  // boundary.speech's own maySpeak exclusions run again inside guidanceFor. OFF at birth:
-  // with BOUNDARY_SPEECH unset this resolves to null and the selection below is byte for
-  // byte what it was. The require is lazy and fail-closed so a world without the module
-  // heals exactly as before. The healed boundary sentence is composed by the MIND and still
+  // boundary.speech's own maySpeak exclusions run again inside guidanceFor. The prior
+  // dark switch is retired: a completed canonical ability is alive without a second
+  // arming ceremony. The require stays lazy and fail-closed so a world without the module
+  // still heals. The healed boundary sentence is composed by the MIND and still
   // resubmits through the same judge; cold code authors nothing.
   var boundarySpeechGuidance = null;
   if (stage === 'SHADOW') {
@@ -2485,13 +2486,12 @@ async function healAnswer(answer, reason, stage, input, deps) {
   // answer instead of guessed once for every length. The old flat 1200 stays as the
   // FLOOR, so a short or medium answer asks for exactly what it asked for before and
   // this costs nothing new on the common path; only a genuinely long-form answer buys
-  // more room, and the ceiling is hard so no input can buy an unbounded generation.
-  var healTokens = Math.min(4000,
-    Math.max(1200, Math.ceil(String(answer || '').length / 3) + 400));
+  // more room. There is no coder-authored maximum that can truncate the repair.
+  var healTokens = Math.max(1200, Math.ceil(String(answer || '').length / 3) + 400);
   var baseHealTimeout = parseInt((deps && deps.env && deps.env.PAI_HEAL_TIMEOUT_MS) ||
     process.env.PAI_HEAL_TIMEOUT_MS || '12000', 10);
   if (!Number.isFinite(baseHealTimeout) || baseHealTimeout <= 0) baseHealTimeout = 12000;
-  var healTimeout = Math.min(30000, baseHealTimeout * Math.ceil(healTokens / 1200));
+  var healTimeout = baseHealTimeout * Math.ceil(healTokens / 1200);
 
   async function healOnce(systemText) {
     try {
@@ -3059,6 +3059,49 @@ function boundedCouncilFailureCodes(result) {
     flags.forEach(function (flag) { add(flag && flag.reason); });
   }
   return codes.join(',');
+}
+
+// A failed council is not a committed answer, but its final judge disposition is
+// still operational evidence. Select the last failed SHADOW attempt, including a
+// healer resubmission when present, so the hold receipt names what the actual final
+// judge saw instead of reading fields that do not exist on the council envelope.
+function councilHoldEvidence(result) {
+  var stages = result && Array.isArray(result.stages) ? result.stages : [];
+  var held = null;
+  for (var i = stages.length - 1; i >= 0; i--) {
+    if (String(stages[i] && stages[i].stage || '').toUpperCase() === 'SHADOW' &&
+        stages[i] && stages[i].ok === false) {
+      held = stages[i];
+      break;
+    }
+  }
+  if (!held) return null;
+  var root = held.evidence && typeof held.evidence === 'object' ? held.evidence : {};
+  var resubmission = root.resubmission && root.resubmission.evidence &&
+    typeof root.resubmission.evidence === 'object' ? root.resubmission.evidence : null;
+  var finalEvidence = resubmission || root;
+  var judgment = finalEvidence.judgment && typeof finalEvidence.judgment === 'object'
+    ? finalEvidence.judgment : null;
+  var review = finalEvidence.review_judgment &&
+    typeof finalEvidence.review_judgment === 'object' ? finalEvidence.review_judgment : null;
+  var claim = review && review.claim ? String(review.claim)
+    : (judgment && judgment.claim ? String(judgment.claim) : '');
+  return {
+    stage: 'SHADOW',
+    stage_reason: held.reason || result.reason || null,
+    judge_reason: judgment && judgment.reason ? String(judgment.reason) : null,
+    review_reason: review && review.reason ? String(review.reason) : null,
+    claim_digest: claim ? digestText(claim) : null,
+    claim_in_answer: !!claim,
+    deterministic_flags: finalEvidence.deterministic &&
+      Array.isArray(finalEvidence.deterministic.flags)
+      ? finalEvidence.deterministic.flags.map(function (flag) {
+          return String(flag && flag.reason || '').trim();
+        }).filter(Boolean) : [],
+    heal_attempted: root.heal_attempted === true || !!resubmission,
+    heal_outcome: root.heal_outcome || (resubmission ? 'resubmitted_and_held' : null),
+    final_disposition: result.reason || held.reason || 'shadow_hold'
+  };
 }
 
 function buildStageContext(input, currentAnswer, quillRequired, stages, extra) {
@@ -4058,6 +4101,7 @@ module.exports = {
   preferenceJudgmentFindings: preferenceJudgmentFindings,
   directNamedEvidenceRequest: directNamedEvidenceRequest,
   boundedCouncilFailureCodes: boundedCouncilFailureCodes,
+  councilHoldEvidence: councilHoldEvidence,
   buildAclStamp: buildAclStamp,
   digestText: digestText,
   stableStringify: stableStringify,
@@ -4097,6 +4141,7 @@ module.exports = {
     preferenceJudgmentFindings: preferenceJudgmentFindings,
     directNamedEvidenceRequest: directNamedEvidenceRequest,
     boundedCouncilFailureCodes: boundedCouncilFailureCodes,
+    councilHoldEvidence: councilHoldEvidence,
     categoricalMemoryContradiction: categoricalMemoryContradiction,
     identityEvidenceReceiptContradictions:identityEvidenceReceiptContradictions,
     verifiedFactEvidenceText:verifiedFactEvidenceText,

@@ -315,7 +315,7 @@ const { runOutboundCouncil, runPreWriteCouncil, requireVerifiedCouncilResult,
   compactCouncilProof, canonicalizeDeliveryTarget,
   extractNamedContextEvidence, namedContextContradictions,
   currentAssistantPreferenceRequest, preferenceJudgmentFindings,
-  boundedCouncilFailureCodes, isHumanFacingAnswer } = require('./pai.outbound.council.js');
+  boundedCouncilFailureCodes, councilHoldEvidence, isHumanFacingAnswer } = require('./pai.outbound.council.js');
 // ⬡B:core.tool.loop:WIRE:ledger_tools_registered:20260707⬡
 // CLAIR fix, real gap found in audit 20260707: LEDGER (Budget OS) had a live
 // backend, 16 real BNPL plans, a working /budget/ask endpoint -- and was never
@@ -6720,9 +6720,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // keeps model judgment out of the CYCLE_STEP breadcrumb, so this is a separate
     // governed COUNCIL_HOLD row: bounded reason strings only, never answer bytes.
     try {
-      var _holdEv = _council && _council.evidence || {};
-      var _holdJudge = _holdEv.judgment && _holdEv.judgment.reason || null;
-      var _holdReview = _holdEv.review && _holdEv.review.reason || null;
+      var _holdEv = councilHoldEvidence(_council);
       if (_BU && _BK) fetch(_bu() + '/rest/v1/' + _tbl(), { method:'POST',
         headers:{ apikey:_BK, Authorization:'Bearer '+_BK, 'Accept-Profile':_schema(),
           'Content-Profile':_schema(), 'Content-Type':'application/json', Prefer:'return=minimal' },
@@ -6732,8 +6730,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           acl_stamp:'\u2b21B:pai.council:HOLD:' + _cycleId + ':' + ymd() + '\u2b21',
           summary:('[COUNCIL HOLD] cycle ' + _cycleId + ': ' + (_blockedCouncilCodes || 'receipt_unverified')).slice(0, 280),
           content: JSON.stringify({ codes:_blockedCouncilCodes || null,
-            judge_reason:_holdJudge ? String(_holdJudge).slice(0) : null,
-            review_reason:_holdReview ? String(_holdReview).slice(0) : null }) }) }).catch(function () {});
+            hold_evidence:_holdEv || null }) }) }).catch(function () {});
     } catch (_eHold) {}
     return {ok:false,reason:(_council&&_council.reason)
         || (_committedCouncil&&_committedCouncil.reason) || 'pai_council_receipt_unverified',
