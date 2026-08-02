@@ -85,7 +85,16 @@ const LIVE = [
   { id: 'team',     label: 'Team',               mark: 'U', color: '#06B6D4', keywords: ['team','collective','colleagues','brothers'], aliases: ['Team'], path: function (H) { return '/team/' + H; } },
   { id: 'coffee',   label: 'Coffee with ED',     mark: 'H', color: '#F59E0B', keywords: ['coffee','ed email','daily note','team email'], aliases: ['Coffee'], path: function (H) { return '/coffee-view/' + H; } },
   { id: 'writing',  label: 'Writing Analyzer',    mark: 'Y', color: '#EF4444', keywords: ['writing','analyzer','writ','ai detection','draft'], aliases: ['Writing','WRIT'], path: function (H) { return '/writing-view/' + H; } },
-  { id: 'inbox-manager', label: 'Inbox Manager',  mark: 'X', color: '#06B6D4', keywords: ['inbox','triage','priority','email manager'], aliases: ['Inbox Manager'], path: function (H) { return '/inbox-manager-view/' + H; } },
+  // ⬡B:os.registry:FIX:the_inbox_manager_tile_opened_a_second_fake_inbox_20260802⬡ FOUNDER
+  // 911, 20260802: "not truly a fully functional inbox that she's commanding and
+  // controlling." Root cause: this tile opened /inbox-manager-view, a static unread-mail
+  // list with a decorative ask box that never triaged, drafted, or replied to anything.
+  // The REAL inbox (real per-message triage, her reasoning, her draft, edit, reply, and a
+  // "Check inbox now" button that runs an actual Inbox Zero pass) was already built
+  // 20260727 for this identical complaint and lives at /advisors/:hamUid, the Inbox tab of
+  // whichever world opens first. Repointed the tile there instead of building a third
+  // inbox surface. See routes/face/more.surfaces.routes.js for the retired route.
+  { id: 'inbox-manager', label: 'Inbox Manager',  mark: 'X', color: '#06B6D4', keywords: ['inbox','triage','priority','email manager'], aliases: ['Inbox Manager'], path: function (H) { return '/advisors/' + H; } },
   { id: 'references', label: 'References',        mark: 'F', color: '#14B8A6', keywords: ['references','citations','sources','library'], aliases: ['References'], path: function (H) { return '/references-view/' + H; } },
   // ⬡B:os.registry:REPOINT:meeting_interview_to_three_panel_copilot_phase5:20260720⬡
   // ⬡B:os.registry:FIX:mesa_dock_chip_repointed_red_to_cyan_20260801⬡ the founder's
