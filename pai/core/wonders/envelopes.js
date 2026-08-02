@@ -32,7 +32,10 @@ function evidenceRefs(value) {
 function lineage(input) {
   const value = input || {};
   const budget = value.budget || {};
-  if (!(budget.max_iterations > 0)) throw new Error('budget_max_iterations_required');
+  const unlimitedIterations=budget.unlimited_iterations === true;
+  if (unlimitedIterations) {
+    if (budget.max_iterations != null) throw new Error('budget_max_iterations_unlimited_invalid');
+  } else if (!(budget.max_iterations > 0)) throw new Error('budget_max_iterations_required');
   const unlimitedLlmCalls=budget.unlimited_llm_calls === true;
   if (unlimitedLlmCalls) {
     if (budget.max_llm_calls != null) throw new Error('budget_max_llm_calls_unlimited_invalid');
@@ -40,7 +43,9 @@ function lineage(input) {
       !Number.isFinite(Number(budget.max_llm_calls)) || Number(budget.max_llm_calls) < 0) {
     throw new Error('budget_max_llm_calls_required');
   }
-  const normalizedBudget={max_iterations:Number(budget.max_iterations)};
+  const normalizedBudget={};
+  if (unlimitedIterations) normalizedBudget.unlimited_iterations=true;
+  else normalizedBudget.max_iterations=Number(budget.max_iterations);
   // Additive and dual-readable inside v1: legacy numeric envelopes retain their exact
   // two-field shape; only the new nullable form carries the discriminator that makes null
   // unambiguous to every current reader.
