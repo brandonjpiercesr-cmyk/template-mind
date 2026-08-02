@@ -111,6 +111,29 @@ test('a deterministic hold still fails closed after the same bounded repair',
     assert.equal(h.calls.some(call => call.stage === 'META_COMMENTARY'), false);
   });
 
+test('a structured reach policy decision never carries a model-only hold, even with clean typed evidence',
+  { concurrency: false }, async function () {
+    // Codex review, live, on the anew-side companion: this carry path only re-validates the
+    // deterministic board and the model's own quoted claim, never core/reach's closed-world
+    // evidence check. A structured reach_policy_decision turn whose SHADOW hold names an
+    // unsupported claim must stay fail-closed even with otherwise-clean typed evidence, or
+    // an unevidenced reach decision could still be committed.
+    const reachAnswer = JSON.stringify({
+      action: 'send', channel: 'sms', importance: 5,
+      message: 'The transfer cleared this morning.', reach: 'now',
+      reason: 'unsupported reach decision', recheck_at: null
+    });
+    const reachInput = Object.assign({}, INPUT, { answer: reachAnswer, channel: 'reach',
+      context: { mode: 'reach_policy_decision', outbound_finalize: true } });
+    const h = makeHarness([modelOnlyHold(reachAnswer), answer => modelOnlyHold(answer)],
+      [reachAnswer]);
+    const result = await council.runOutboundCouncil(clone(reachInput), h.deps);
+
+    assert.equal(result.ok, false,
+      'a structured reach policy decision carried a model-only SHADOW hold as if evidenced');
+    assert.equal(result.reason, 'shadow_model_hold');
+  });
+
 test('a forged bare reason cannot enter the clean-board exception',
   { concurrency: false }, async function () {
     const forged = answer => ({ ok: false, reason: 'shadow_model_hold', answer,
