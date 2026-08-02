@@ -80,6 +80,33 @@ test('provider-reported daily usage blocks the exact seat before paid egress',
     }
   });
 
+test('the advisor estate stays attributable without a coder dollar ceiling',
+  {concurrency:false}, async function () {
+    const saved = preserveEnv();
+    try {
+      process.env.OR_KEY_ADVISORS = 'advisor-seat-key';
+      process.env.SEAT_ADVISORS_DAILY_CAP_USD = '0.01';
+      delete process.env.OR_KEY_CANON;
+      delete process.env.OPENROUTER_API_KEY;
+      delete require.cache[GUARD_PATH];
+      const guard = require(GUARD_PATH);
+      let paid = 0;
+      const result = await guard.run(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {headers:{Authorization:'Bearer advisor-seat-key'}},
+        async function () { return keyResponse(999); },
+        async function () { paid += 1; return new Response('paid'); });
+      assert.equal(result.blocked,false);
+      assert.equal(result.seat,'advisors');
+      assert.equal(result.unlimitedDailySpend,true);
+      assert.equal(result.capUsd,null);
+      assert.equal(paid,1);
+    } finally {
+      require(GUARD_PATH)._test.reset();
+      restoreEnv(saved);
+    }
+  });
+
 test('same-seat calls serialize so a concurrent retry sees the first call spend',
   {concurrency:false}, async function () {
     const saved = preserveEnv();
