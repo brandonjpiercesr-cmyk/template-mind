@@ -17,19 +17,24 @@ function callerSlug(value) {
 
 function canonicalRequest(input) {
   input = input || {};
+  var hamUid = String(input.ham_uid || input.hamUid || '').trim().toUpperCase();
   var task = String(input.task || '').trim();
   var system = input.system == null ? '' : String(input.system);
-  var maxTokens = input.max_tokens == null ? 2000 : Number(input.max_tokens);
-  var invokedBy = String(input.invoked_by || input.caller || '').trim().slice(0,120);
-  if (!task || task.length > 20000) return {ok:false,reason:'cookoff_client_task_invalid'};
-  if (system.length > 8000) return {ok:false,reason:'cookoff_client_system_invalid'};
-  if (!Number.isInteger(maxTokens) || maxTokens < 64 || maxTokens > 4000) {
+  var maxTokens = input.max_tokens == null ? null : Number(input.max_tokens);
+  var invokedBy = String(input.invoked_by || input.caller || '').trim();
+  if (!hamUid || !/^[A-Z0-9][A-Z0-9._:-]{2,127}$/.test(hamUid)) {
+    return {ok:false,reason:'cookoff_client_exact_ham_required'};
+  }
+  if (!task) return {ok:false,reason:'cookoff_client_task_invalid'};
+  if (maxTokens !== null && (!Number.isSafeInteger(maxTokens) || maxTokens < 1)) {
     return {ok:false,reason:'cookoff_client_token_budget_invalid'};
   }
   // Property order is deliberate. The exact bytes signed here are the exact
   // bytes put on the wire and preserved by index.js as req.rawBody.
-  return {ok:true,body:{task:task,system:system,max_tokens:maxTokens,
-    invoked_by:invokedBy || 'internal_cookoff_client'}};
+  var body = {ham_uid:hamUid,task:task,system:system,
+    invoked_by:invokedBy || 'internal_cookoff_client'};
+  if (maxTokens !== null) body.max_tokens = maxTokens;
+  return {ok:true,body:body};
 }
 
 function idempotencyKey(caller, cycleId, rawBody, prefix) {
@@ -89,10 +94,12 @@ async function runCookoff(input, options) {
   if (!signed.ok) return signed;
   var fetchImpl = opts.fetch || global.fetch;
   try {
-    var response = await fetchImpl(base + '/cookoff/run',{
-      method:'POST',headers:signed.headers,body:rawBody,
-      signal:AbortSignal.timeout(Math.max(1000,Math.min(180000,Number(opts.timeoutMs) || 150000)))
-    });
+    var request = {method:'POST',headers:signed.headers,body:rawBody};
+    var requestedTimeout = Number(opts.timeoutMs);
+    if (Number.isFinite(requestedTimeout) && requestedTimeout > 0) {
+      request.signal = AbortSignal.timeout(Math.floor(requestedTimeout));
+    }
+    var response = await fetchImpl(base + '/cookoff/run',request);
     var parsed = await parsedResponse(response);
     if (parsed && typeof parsed === 'object') {
       parsed.client_idempotency_key = idem;
@@ -100,7 +107,7 @@ async function runCookoff(input, options) {
     }
     return parsed;
   } catch (e) {
-    return {ok:false,reason:'cookoff_request_unavailable',detail:String(e && e.message || e).slice(0,160),
+    return {ok:false,reason:'cookoff_request_unavailable',detail:String(e && e.message || e),
       client_idempotency_key:idem};
   }
 }

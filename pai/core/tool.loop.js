@@ -1791,7 +1791,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
         if (!_task) return JSON.stringify({ok:false,note:'no task given'});
         var _cookoffCycleId = runtime && (runtime.cycleId || runtime.parentCycleId ||
           runtime.requestId || runtime.parentRequestId);
-        var _c = await cookoffClient.runCookoff({task:_task,invoked_by:'anew_cycle',
+        var _c = await cookoffClient.runCookoff({ham_uid:hamUid,task:_task,invoked_by:'anew_cycle',
           max_tokens:2000,caller:'core.tool.loop',cycle_id:_cookoffCycleId});
         if (!_c || !_c.ok) return JSON.stringify({ok:false,reason:(_c && _c.reason) || 'cookoff_no_result'});
         var _j = (_c.result && _c.result.judge) || {};

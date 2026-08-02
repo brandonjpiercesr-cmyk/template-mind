@@ -89,10 +89,13 @@ test('generic FIND separates valid empty, HTTP, transport, payload, and unconfig
 test('generic FIND timeout is explicit instead of becoming an empty history', async function (t) {
   const find = armFind(t);
   global.fetch = function () { return new Promise(function () {}); };
+  const controller = new AbortController();
+  const abortTimer = setTimeout(function () { controller.abort(); },10);
+  t.after(function () { clearTimeout(abortTimer); });
   const out = await find.find([
     {stamp_type:'TIMEOUT_A',ham_uid:'HAM.TEST',limit:1},
     {stamp_type:'TIMEOUT_B',ham_uid:'HAM.TEST',limit:1}
-  ]);
+  ],{signal:controller.signal});
   assert.equal(out.ok, false);
   assert.equal(out.available, false);
   assert.equal(out.reason, 'brain_timeout');
