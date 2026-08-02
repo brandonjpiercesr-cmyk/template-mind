@@ -171,19 +171,8 @@ function runtimeContextBudgets(value) {
   const requestedFcw = Number(value && value.fcw_byte_budget);
   const compact = Number.isFinite(requestedCompact) && requestedCompact >= 16384
     ? requestedCompact : Math.max(16384, Math.floor(headroom / 128));
-  // ⬡B:core.agent.find:FIX:the_default_wall_budget_binds_to_the_model_not_the_heap:20260802⬡
-  // headroom/32 on a multi-GB heap is a budget in the tens of megabytes: a bound that never
-  // binds. Measured live 20260802 on the founder's own world: 2,012 beads and a 3,076,009
-  // character prompt sailed past this function and died downstream at the provider window,
-  // which is not capability, it is a dead turn. This is NOT a cap on her thinking, and the
-  // distinction is the whole point: an explicit seat context policy still names its own budget
-  // and is never touched here, and the ceiling itself lives in env, never a literal person or
-  // seat. All this does is stop the DEFAULT from promising a wall no provider can accept.
-  const modelWindowRaw = Number(process.env.FCW_MODEL_CONTEXT_BYTES);
-  const modelWindow = Number.isFinite(modelWindowRaw) && modelWindowRaw >= 16384
-    ? modelWindowRaw : 786432;
   const fcw = Number.isFinite(requestedFcw) && requestedFcw >= 16384
-    ? requestedFcw : Math.max(16384, Math.min(modelWindow, Math.floor(headroom / 32)));
+    ? requestedFcw : Math.max(16384, Math.floor(headroom / 32));
   return {compact_bytes:compact,fcw_bytes:fcw,heap_limit_bytes:heapLimit,
     heap_used_bytes:heapUsed,source:Number.isFinite(requestedFcw) && requestedFcw >= 16384
       ? 'requesting_seat_context_policy' : 'node_v8_heap_headroom'};

@@ -4266,6 +4266,22 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       fcw_build_ms:_fcwBuildMs,fcw_contributors:null,
       fcw_contributors_resolved:0,fcw_contributors_total:0};
   }
+  // ⬡B:core.tool_loop:WIRE:the_ride_starts_the_moment_find_comes_back:20260802⬡
+  // FREESTYLE_CHATTER_SPEC_20260802 section 3, stage 1. Agent FIND already ran FIRST inside
+  // the builder and its receipt is on the wall; the wall guard above has passed; no paid
+  // deliberation has begun. This is the one instant in the turn where a real measured fact
+  // about THIS question exists and nothing has been said yet, which is exactly the window the
+  // founder's freestyle doctrine asks to fill. Fire and forget at the same altitude as
+  // _stampStep: a throw here can never touch the turn, and the emitter refuses by default
+  // (no channel listed, no live screen, no user message, a closed world lane) rather than
+  // opting in. It composes no words: see core/freestyle.chatter.js for the voice law it is
+  // built around.
+  try {
+    require('./freestyle.chatter.js').emitInterim({hamUid:hamUid, channel:channel,
+      cycleId:_cycleId, fcw:fcw, prompted:!!String(message||'').trim(),
+      closedWorld:!!(_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
+        _roomSafeVoice || _internalCodaTurn)});
+  } catch (eFreestyleRide) {}
   // A structured REACH policy is a closed-world decision over one exact
   // candidate packet. Ambient recent rows, contributors, prior turns, screen
   // state, and fused summaries may not steer whether this candidate reaches
@@ -7164,6 +7180,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }
     }
   } catch (eScreenCommit) {}
+  // ⬡B:core.tool_loop:WIRE:the_ride_ends_when_her_committed_answer_lands:20260802⬡
+  // The paired half of the freestyle seam above. Her committed answer is on its way through
+  // the door, so the interim surface collapses. Placed here, after the committed council and
+  // beside the existing post commit screen push, because nothing may move a screen before the
+  // commit. Idempotent by construction: the emitter forgets the ride before it pushes, so the
+  // wrapper's own collapse below is a clean no-op on this path.
+  try { require('./freestyle.chatter.js').emitReplace({cycleId:_cycleId}); }
+  catch (eFreestyleLand) {}
   if (await _turnCancelled()) return _turnCancelledResult('before_completion');
   _stampStep('cycle_end', finalAns.slice(0,80) + (_screenPushed ? (' [screen:'+_screenPushed+']') : ''));
   try {
@@ -7370,6 +7394,16 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       {ok:false, reason:'pai_threw: ' + (eTurn && eTurn.message), cycleId:cycleId,
         requestId:requestId});
     throw eTurn;
+  } finally {
+    // ⬡B:core.tool_loop:GUARD:a_ride_never_outlives_the_turn_it_rode:20260802⬡
+    // The freestyle interim surface collapses on the committed path beside the screen push
+    // inside runPAIInner. This is the every-other-exit half: a failed wall, a blocked council,
+    // a cancelled turn, a thrown cycle. Without it one of those paths could leave a person
+    // looking at a surface for a turn that already ended, which is the stranded-chrome shape
+    // the spec's own test list forbids. Idempotent, so the ordinary committed path pays
+    // nothing for it, and guarded, so a collapse can never change what the turn returned.
+    try { require('./freestyle.chatter.js').emitReplace({cycleId:cycleId}); }
+    catch (eFreestyleCollapse) {}
   }
   _stampGrandmotherLedger(hamUid, message, channel, identity, result);
   return result;
