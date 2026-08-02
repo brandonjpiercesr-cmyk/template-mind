@@ -1557,6 +1557,18 @@ function toolsForIntent(tools, intent) {
   });
 }
 
+// This is a transport boundary, not a meaning judgment. A short whole-utterance
+// continuation asks the current speaker to keep the same answer moving and adds
+// no new subject for an advisor to investigate. Anchoring the complete utterance
+// keeps substantive asks such as "continue with the budget analysis" on the
+// ordinary council-capable path.
+function isPureConversationalContinuation(message) {
+  var exact = String(message || '').trim().toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\s+/g, ' ');
+  return /^(?:(?:please\s+)?(?:go\s+on|continue|keep\s+going|carry\s+on|say\s+more)(?:\s*[,]?\s+please)?|tell\s+me\s+more|(?:and\s+)?then)\s*[.!?]*$/i.test(exact);
+}
+
 // ⬡B:core.tool_loop:WONDER:surface_intent_is_a_hint_not_a_decision:20260721⬡
 // A prior version detected an "imperative background set" with a growing regex and FORCED the tool.
 // The founder pulled it: MAKE THE GENERATIVE UI A WONDER, NOT COLD CODE. Deciding "the founder wants
@@ -4816,10 +4828,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         _routedToolIntent);
       _routedRequiresLiveTool = !!_routedRequiredReadTool;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
+      var _pureVoiceContinuation = _routeEveryVoicePass &&
+        _routedToolIntent === 'general' && isPureConversationalContinuation(
+          (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
       // A pure voice continuation such as "go on" is conversation, not a
       // council dispatch. Keep ordinary substantial language council-capable,
       // while preserving the fast natural voice continuation with no schemas.
-      if (_routeEveryVoicePass && _routedToolIntent === 'general') body.tools = [];
+      if (_pureVoiceContinuation) body.tools = [];
       if (_routedRequiredReadTool || _routedRequiredActionTool) {
         var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
         body.tools = body.tools.filter(function (tool) {
@@ -4833,7 +4848,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // reasons about whether to use them in the canonical model pass, and it is
       // her call, never a force. Skipped only when a single read tool is required for the turn.
       if (!_routedRequiredReadTool && !_routedRequiredActionTool &&
-          (!_routeEveryVoicePass || _routedToolIntent !== 'general') &&
+          !_pureVoiceContinuation &&
           Array.isArray(_turnToolDefinitions)) {
         var _haveSurfaceTool = {};
         (Array.isArray(body.tools) ? body.tools : []).forEach(function (t) {
@@ -5033,10 +5048,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       else if (_isDayQ) _toolNudge='calendar_read';
       else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
         // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
-        // Removing the irrelevant tool schema also keeps the one required model
-        // draft inside a phone-conversation budget. This is not an action lane;
-        // mixed requests such as "why, and email me" do not match this predicate.
-        delete body.tools;
+        // Remove the irrelevant personal and surface schemas, but preserve the
+        // advisor council entrance. Only the whole-utterance continuation seam
+        // above is allowed to remove that cross-domain organ from a voice turn.
+        // Mixed requests such as "why, and email me" do not match this predicate.
+        body.tools = toolsForIntent(body.tools, 'general');
       }
       else if (_looksPublicKnowledgeQ &&
           (!_routedToolIntent || _routedToolIntent === 'general')) {
@@ -5044,11 +5060,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // knowledge. Receipts showed that merely UNFORCING find_in_brain was not
         // enough -- with the personal-tool schema still in front of her she reached
         // for read_own_code / find_in_brain anyway and deflected ("I don't have
-        // access to product databases"). So the personal tool schema is REMOVED for
-        // this turn: nothing to reach for, she answers from her own knowledge. The
-        // full council still guards fabrication. Personal and day questions above
-        // keep their tools untouched.
-        delete body.tools;
+        // access to product databases"). So the personal tool schemas are removed
+        // for this turn, but the cross-domain advisor entrance remains available.
+        // Personal and day questions above keep their tools untouched.
+        body.tools = toolsForIntent(body.tools, 'general');
         delete body.tool_choice;
       }
       else if ((!_routedToolIntent || _routedToolIntent === 'general') &&
@@ -7276,6 +7291,7 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
+  isPureConversationalContinuation,
   agentFindClosedWorldReason,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
   requiredActionToolForMessage,
