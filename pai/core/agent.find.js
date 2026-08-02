@@ -145,7 +145,10 @@ function recentTruthRecord(result) {
       created_at:clean(row && row.created_at, 80) || null
     };
   });
-  return {available:true,partial:result && result.partial === true,count:rows.length,rows:rows,
+  const policyExcluded = !!(result && result.policy_excluded === true);
+  return {available:policyExcluded ? false : true,policy_excluded:policyExcluded,
+    exclusion_reason:policyExcluded ? clean(result && result.exclusion_reason, 240) : null,
+    partial:result && result.partial === true,count:rows.length,rows:rows,
     query_count:result && Array.isArray(result.queries) ? result.queries.length : 0,
     failures:result && Array.isArray(result.failures) ? result.failures : []};
 }
@@ -170,6 +173,16 @@ function wallRecord(fcw) {
     unavailable_contributors:list(fcw && fcw.unavailableContributors),
     partial_contributors:list(fcw && fcw.partialContributors)
   };
+  if (clean(fcw && fcw.wall_scope, 80)) output.wall_scope=clean(fcw.wall_scope,80);
+  if (clean(fcw && fcw.context_policy, 160)) {
+    output.context_policy=clean(fcw.context_policy,160);
+  }
+  if (clean(fcw && fcw.closed_world_reason, 160)) {
+    output.closed_world_reason=clean(fcw.closed_world_reason,160);
+  }
+  if (/^[a-f0-9]{64}$/.test(clean(fcw && fcw.evidence_refs_sha256,64))) {
+    output.evidence_refs_sha256=clean(fcw.evidence_refs_sha256,64);
+  }
   if (/^[a-f0-9]{64}$/.test(clean(fcw && fcw.context_sha256, 64))) {
     output.context_sha256 = clean(fcw.context_sha256, 64);
   }
@@ -219,7 +232,11 @@ function employmentPrompt(record, truth) {
     lines('RUN OF SHOW, WAKES', record.capabilities.wakes),
     lines('RUN OF SHOW, HANDS TO', record.capabilities.hands_to),
     'RECENT CYCLE TRUTH FROM THE WALL' + (truth.partial ? ' (PARTIAL READ)' : '') + ':',
-    recent.length ? recent.join('\n') : '- AVAILABLE, SUCCESSFUL EMPTY. No prior cycle rows matched.',
+    truth.policy_excluded
+      ? '- POLICY EXCLUDED FOR THIS CLOSED-WORLD DELIBERATION: ' + truth.exclusion_reason +
+        '. Use only the exact evidence in this request.'
+      : (recent.length ? recent.join('\n')
+        : '- AVAILABLE, SUCCESSFUL EMPTY. No prior cycle rows matched.'),
     'This wake record is internal context. Never narrate Agent FIND, registry ids, policies, or '
       + 'cycle rows to the person. Use them to do the job, and return through the registered gate.',
     ''
@@ -256,7 +273,9 @@ async function bindWall(input, options) {
     return {ok:false,available:false,reason:'agent_find_seat_binding_invalid'};
   }
   const recent = value.recent_cycle_truth;
-  if (!recent || recent.ok !== true || recent.available !== true) {
+  const policyExcluded=!!(recent&&recent.ok===true&&recent.available===false&&
+    recent.policy_excluded===true&&clean(recent.exclusion_reason,240));
+  if (!recent || recent.ok !== true || (recent.available !== true && !policyExcluded)) {
     return {ok:false,available:false,
       reason:clean(recent && recent.reason || 'agent_find_recent_truth_unavailable', 160)};
   }
@@ -291,19 +310,21 @@ async function bindWall(input, options) {
   if (!checked.ok || parsedContent(existing) === null) {
     return {ok:false,available:false,reason:checked.reason || 'agent_find_truth_beacon_readback_mismatch'};
   }
-  const augmentedContributors = Object.assign({}, fcw.contributors || {}, {
-    agentFindSeat:true,agentFindRecentCycleTruth:true
-  });
+  const truthContributor=truth.policy_excluded?'agentFindContextPolicy':'agentFindRecentCycleTruth';
+  const augmentedContributors = Object.assign({}, fcw.contributors || {}, {agentFindSeat:true});
+  augmentedContributors[truthContributor]=true;
   const augmentedAvailability = Object.assign({}, fcw.contributorAvailability || {}, {
-    agentFindSeat:{available:true,partial:false,reason:null},
-    agentFindRecentCycleTruth:{available:true,partial:truth.partial === true,reason:null}
+    agentFindSeat:{available:true,partial:false,reason:null}
   });
+  augmentedAvailability[truthContributor]={available:true,partial:truth.partial === true,
+    reason:truth.policy_excluded?truth.exclusion_reason:null};
   const priorResolved = Number(fcw.contributorsResolved);
   const promptAppendix = employmentPrompt(employment, truth);
   try {
     require('./spend.guard.js').rememberAgentFindBinding({ham_uid:hamUid,cycle_id:cycleId,
       request_id:requestId,seat:providerSeat,owner_node_id:target.id,source:built.source,
-      readback_verified:true});
+      readback_verified:true,wall_scope:wall.wall_scope||'full_fcw',
+      context_sha256:wall.context_sha256||null});
   } catch (error) {}
   return Object.assign({}, fcw, {
     system_prompt:fcw.system_prompt + promptAppendix,
@@ -339,10 +360,48 @@ function messageFacts(messages) {
   return {context_sha256:digest(normalized),message_count:normalized.length};
 }
 
-// The provider boundary is the universal last door shared by the active model estate.
-// It binds the exact already-assembled provider context to the registered owner seat, adds
-// the verified employment wake as model context, and returns a cloned request. Raw prompt
-// bytes never enter the beacon. Non-chat paid transports are not LLM seats and pass through.
+function closedWorldRecent(reason) {
+  return {ok:true,available:false,policy_excluded:true,partial:false,beads:[],count:0,ms:0,
+    queries:[],failures:[],exclusion_reason:clean(reason,240)};
+}
+
+async function bindClosedWorld(input, options) {
+  const value=input||{},opts=options||{},registry=opts.registry||defaultRegistry;
+  const target=registry.resolve(value.seat_node_id);
+  const messages=Array.isArray(value.messages)?value.messages:null;
+  const contextPolicy=clean(value.context_policy,160);
+  const reason=clean(value.closed_world_reason,160);
+  if(!target||!messages||!messages.length||!contextPolicy||
+      contextPolicy!==clean(target.context_policy,160)||!reason){
+    return {ok:false,available:false,reason:'agent_find_closed_world_contract_invalid'};
+  }
+  const facts=messageFacts(messages);
+  const refs=list(value.evidence_refs).sort();
+  const tierModule=opts.peopleTier||require('./privacy/people.tier.js');
+  const tierFact=tierModule.resolveViewerTier(null,exactHam(value.ham_uid));
+  const viewerTier=tierModule.effectiveTier(tierFact&&tierFact.tier);
+  const fcw={ok:true,available:true,partial:false,system_prompt:'closed_world_context_bound',
+    wall_scope:'closed_world',context_policy:contextPolicy,closed_world_reason:reason,
+    viewer_tier:viewerTier,contributors:{closedWorldEvidence:true,registryContextPolicy:true},
+    contributorAvailability:{closedWorldEvidence:{available:true,partial:false,reason:null},
+      registryContextPolicy:{available:true,partial:false,reason:null}},
+    contributorsResolved:2,contributorsTotal:2,unavailableContributors:[],
+    partialContributors:[],context_sha256:facts.context_sha256,
+    evidence_refs_sha256:digest(refs),
+    context_locator:'closed.world.'+exactHam(value.ham_uid)+'.'+clean(value.cycle_id,220)+'.'+
+      clean(value.request_id,220),message_count:facts.message_count};
+  const bound=await bindWall({fcw:fcw,recent_cycle_truth:closedWorldRecent(reason),
+    ham_uid:value.ham_uid,cycle_id:value.cycle_id,request_id:value.request_id,
+    channel:value.channel,seat_name:value.seat_name,seat_node_id:value.seat_node_id,
+    observed_at:value.observed_at},{registry:registry,brain:opts.brain||defaultBrain});
+  if(!bound.ok)return bound;
+  return Object.assign({},bound,{bound:true,context_sha256:facts.context_sha256});
+}
+
+// The provider boundary is the universal last door shared by the active model estate. A seat
+// whose registry context policy is explicitly bounded can graduate the exact request into a
+// closed-world FCW here. A full-context seat must arrive with its complete FCW already bound.
+// Raw prompt bytes never enter the beacon. Non-chat paid transports are not LLM seats.
 async function bindProviderRequest(input, options) {
   const value = input || {};
   const opts = options || {};
@@ -361,38 +420,27 @@ async function bindProviderRequest(input, options) {
       !new Set(['active','contained']).has(target.lifecycle)) {
     return {ok:false,bound:false,reason:'agent_find_provider_binding_invalid'};
   }
-  const tierModule = opts.peopleTier || require('./privacy/people.tier.js');
-  const tierFact = tierModule.resolveViewerTier(null,hamUid);
-  const viewerTier = tierModule.effectiveTier(tierFact && tierFact.tier);
-  const recent = await readRecentCycleTruth({ham_uid:hamUid,seat_node_id:seatNodeId,
-    viewer_tier:viewerTier},{registry:registry,find:opts.find || defaultFind.find});
-  if (!recent.ok) return {ok:false,bound:false,reason:recent.reason};
-  const facts = messageFacts(body.messages);
-  const fcw = {ok:true,available:true,partial:false,system_prompt:'provider_context_bound',
-    viewer_tier:viewerTier,contributors:{providerContext:true},
-    contributorAvailability:{providerContext:{available:true,partial:false,reason:null}},
-    contributorsResolved:1,contributorsTotal:1,unavailableContributors:[],
-    partialContributors:[],context_sha256:facts.context_sha256,
-    context_locator:'provider.context.' + hamUid + '.' + cycleId + '.' + requestId,
-    message_count:facts.message_count};
-  const bound = await bindWall({fcw:fcw,recent_cycle_truth:recent,ham_uid:hamUid,
-    cycle_id:cycleId,request_id:requestId,channel:attribution.component,
-    seat_name:seatName,seat_node_id:seatNodeId,observed_at:value.observed_at},
-  {registry:registry,brain:opts.brain || defaultBrain});
+  const contextPolicy=clean(target.context_policy,160);
+  if(!contextPolicy||/\.full\./.test(contextPolicy))return{ok:false,bound:false,
+    reason:'agent_find_complete_fcw_binding_required'};
+  const bound=await bindClosedWorld({messages:body.messages,ham_uid:hamUid,cycle_id:cycleId,
+    request_id:requestId,channel:attribution.component,seat_name:seatName,
+    seat_node_id:seatNodeId,context_policy:contextPolicy,
+    closed_world_reason:'registry_context_policy',
+    evidence_refs:[attribution.component,attribution.request_id],observed_at:value.observed_at},
+  {registry:registry,brain:opts.brain||defaultBrain,peopleTier:opts.peopleTier});
   if (!bound.ok || !bound.agent_find || !bound.agent_find.prompt_appendix) {
     return {ok:false,bound:false,reason:bound.reason || 'agent_find_provider_bind_failed'};
   }
-  const nextBody = Object.assign({},body,{messages:[{role:'system',
-    content:bound.agent_find.prompt_appendix.trim()}].concat(body.messages)});
-  const nextInit = Object.assign({},value.init,{body:JSON.stringify(nextBody)});
-  return {ok:true,bound:true,init:nextInit,prompt_appendix:bound.agent_find.prompt_appendix,
+  return {ok:true,bound:true,init:value.init,prompt_appendix:bound.agent_find.prompt_appendix,
     truth_beacon:bound.agent_find.truth_beacon,
-    seat_node_id:seatNodeId,seat_name:seatName,context_sha256:facts.context_sha256};
+    seat_node_id:seatNodeId,seat_name:seatName,context_sha256:bound.context_sha256};
 }
 
 module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
   readRecentCycleTruth:readRecentCycleTruth,bindWall:bindWall,
-  bindProviderRequest:bindProviderRequest,
+  bindClosedWorld:bindClosedWorld,bindProviderRequest:bindProviderRequest,
   _test:{recentTruthQueries:recentTruthQueries,employmentRecord:employmentRecord,
     recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt,
-    parseProviderBody:parseProviderBody,messageFacts:messageFacts,digest:digest}};
+    parseProviderBody:parseProviderBody,messageFacts:messageFacts,closedWorldRecent:closedWorldRecent,
+    digest:digest}};

@@ -32,7 +32,7 @@ test('template registry resolves one executable Agent FIND capability for every 
   }
 });
 
-test('template provider request is seat-bound before paid bytes can leave', async () => {
+test('template bounded provider request is seat-bound before paid bytes can leave', async () => {
   const h = brainHarness();
   const result = await agentFind.bindProviderRequest({
     init:{method:'POST',headers:{Authorization:'Bearer fixture'},body:JSON.stringify({
@@ -46,9 +46,11 @@ test('template provider request is seat-bound before paid bytes can leave', asyn
     effectiveTier:function(value){return value;}}});
   assert.equal(result.ok, true);
   assert.equal(result.bound, true);
-  assert.match(JSON.parse(result.init.body).messages[0].content,
-    /AGENT FIND WAKE RECORD/);
+  assert.equal(JSON.parse(result.init.body).messages[0].content,'governed prompt');
+  assert.match(result.prompt_appendix,/AGENT FIND WAKE RECORD/);
   assert.equal(h.writes.length, 1);
+  assert.equal(h.writes[0].content.wall.wall_scope,'closed_world');
+  assert.equal(h.writes[0].content.recent_cycle_truth.policy_excluded,true);
   assert.ok(h.writes[0].edges.some(function (edge) {
     return edge.type === 'SERVES' && edge.target === 'station.coda';
   }));

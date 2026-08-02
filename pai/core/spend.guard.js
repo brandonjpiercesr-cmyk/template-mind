@@ -255,8 +255,13 @@ function rememberAgentFindBinding(value) {
   if(!key||!/^agent\.find\.[A-Z0-9._:-]+\.[a-f0-9]{64}$/.test(source))return false;
   var map=active._provider_state.agent_find_bindings;
   if(!(map instanceof Map)){map=new Map();active._provider_state.agent_find_bindings=map;}
+  var wallScope=String(binding.wall_scope||'full_fcw').trim();
+  var contextSha=String(binding.context_sha256||'').trim();
+  if(!/^(full_fcw|closed_world)$/.test(wallScope))return false;
+  if(contextSha&&!/^[a-f0-9]{64}$/.test(contextSha))return false;
   map.set(key,{source:source,seat_node_id:String(binding.owner_node_id||''),
-    seat_name:String(binding.seat||''),readback_verified:binding.readback_verified===true});
+    seat_name:String(binding.seat||''),readback_verified:binding.readback_verified===true,
+    wall_scope:wallScope,context_sha256:contextSha||null});
   return true;
 }
 

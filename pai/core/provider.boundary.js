@@ -247,9 +247,11 @@ async function bindAgentFindRequest(url,init,env,capability) {
   try { spendGuard=require('./spend.guard.js'); }
   catch (error) { return {ok:false,reason:'agent_find_spend_scope_unavailable'}; }
   var attribution=providerAttribution(spendGuard,env);
+  var promptDigest=crypto.createHash('sha256').update(JSON.stringify(body.messages)).digest('hex');
   var prior=typeof spendGuard.currentAgentFindBinding==='function'
     ? spendGuard.currentAgentFindBinding(attribution):null;
-  if(prior&&prior.readback_verified===true){
+  if(prior&&prior.readback_verified===true&&
+      (prior.wall_scope==='full_fcw'||prior.context_sha256===promptDigest)){
     return {ok:true,bound:true,reused:true,init:init,truth_beacon:prior};
   }
   var binder=capability||require('./agent.find.js');
@@ -257,7 +259,6 @@ async function bindAgentFindRequest(url,init,env,capability) {
     return {ok:false,reason:'agent_find_provider_capability_unavailable'};
   }
   try {
-    var promptDigest=crypto.createHash('sha256').update(JSON.stringify(body.messages)).digest('hex');
     var key=[attribution.ham_uid,attribution.cycle_id,attribution.request_id,
       attribution.seat,attribution.owner_node_id,promptDigest].join('|');
     var bind=function(){return binder.bindProviderRequest({url:url,init:init,
