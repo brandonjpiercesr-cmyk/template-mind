@@ -38,12 +38,6 @@ function _boundEnvInt(name, fallback, lo, hi) {
   if (n > hi) return hi;
   return n;
 }
-var MAX_TOKENS = _boundEnvInt('PAI_MAX_TOKENS', 8000, 1, 1000000); // ⬡B:core.tool.loop:REPAIR:configurable_token_cap:20260707⬡ was hardcoded 400 in three places, now one env-driven value
-// ⬡B:core.tool.loop:FOUNDER_LAW:no_length_ceiling_on_her_voice:20260722⬡ Founder law, verbatim
-// intent ("remove all length ceilings everywhere"): her composed answers are NEVER truncated. This
-// hard floor holds on every channel and no lower Render env value can hold her under it; a per-channel
-// env may only RAISE it. Being cut off mid-thought is the one thing that uncrowns a living mind.
-var ANSWER_FLOOR = _boundEnvInt('PAI_ANSWER_FLOOR', 8000, 1, 1000000);
 var _crypto = require('crypto');
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
@@ -62,26 +56,6 @@ var realNameBoundary = require('./real.name.boundary.js');
 var CANONICAL_ASSISTANT_NAME = "A'NU";
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
-// ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
-// Real incident: GUIDE pass 2 (strict JSON, 12 fields per destination) was
-// truncated mid-JSON by the one global 700 cap and died as
-// unstructured_answer_pass2 every single time. A channel may carry its own
-// cap via PAI_MAX_TOKENS_<CHANNEL>; absent that, the global cap holds.
-function tokenCapFor(channel) {
-  var c = String(channel || '').toUpperCase().replace(/[^A-Z0-9]/g, '_');
-  // ⬡B:core.tool_loop:FIX:the_channel_cap_was_the_anti_pattern_itself:20260726⬡ This line
-  // WAS `Math.max(v || 0, MAX_TOKENS, ANSWER_FLOOR)` over a parseInt. A typo'd
-  // PAI_MAX_TOKENS made MAX_TOKENS NaN, Math.max returned NaN, and `max_tokens: NaN` went
-  // to the provider. The founder law below promises a floor her voice can never fall
-  // under; a NaN floor is not a floor. Shape first, then bound, so the promise is real.
-  var v = _boundEnvInt('PAI_MAX_TOKENS_' + c, 0, 0, 1000000);
-  // FOUNDER LAW 20260722: every channel gets at least ANSWER_FLOOR, generalizing the old
-  // PORTAL-only minimum so no surface, and no lower Render env value, can hold her under it.
-  // Coding handoffs, the daily knock, and her long answers all run past the old 3000 cap; a
-  // per-channel env (PAI_MAX_TOKENS_<CHANNEL>) may only RAISE the ceiling, never lower it.
-  return Math.max(v, MAX_TOKENS, ANSWER_FLOOR);
-}
-
 function shouldIncludeWorldContext(channel, identity, hamUid, question) {
   if (String(channel || '').toLowerCase() !== 'voice') return true;
   if (voiceRoomSafe.isAuthorized(identity)) return false;
@@ -437,12 +411,6 @@ var DATA_READER_TOOLS = {
 // turn, so 72 is reachable only by 72 consecutive passes of real, new evidence. That is
 // a runaway that never happens, which is exactly what a backstop should be.
 // Floor 4 keeps the closing pass off iteration one, where the forced first read lives.
-function _iterationCeiling() { return _boundEnvInt('PAI_MAX_ITERATIONS', 72, 4, 500); }
-// TOOLS FOR THE WHOLE RUN, not for three turns. 0 is the default and it means every
-// iteration carries them: she can ask for evidence at iteration forty exactly as she
-// could at iteration one. A positive value restores a window for an operator who wants
-// one, but nothing in the code chooses one for her.
-function _toolIterationWindow() { return _boundEnvInt('PAI_TOOL_ITERATIONS', 0, 0, 500); }
 // THE PROGRESS STOP has TWO thresholds, because one signal is exact and one is robust,
 // and neither alone is honest. Both are defended at the detector itself, below. Both
 // floors are 2, so a single repeat, which is exactly what a legitimate retry after a
@@ -967,7 +935,6 @@ function primaryProviderBody(body, msgs, model) {
   var providerBody = {
     model:model,
     messages:openAiCompatibleHistory(body.messages || msgs),
-    max_tokens:body.max_tokens,
     temperature:body.temperature
   };
   if (Array.isArray(body.tools) && body.tools.length) providerBody.tools = body.tools;
@@ -1334,7 +1301,7 @@ var TOOLS = [
       due_at:{type:'string',description:'ISO 8601 timestamp, ONLY if the HAM actually stated a real date or timeframe. Leave this out entirely otherwise -- never invent a specific date that was not given.'}}}}},
   {type:'function',function:{name:'consult_advisor',description:'Route a question or substantial task through the HAM\'s real born advisor department and return that advisor\'s committed brief. '
     +'Use this automatically whenever the work materially belongs to a specialized advisor, even when the HAM speaks normally and does not name an advisor. Also use it whenever the HAM explicitly asks to talk to or get input from one. '
-    +'A\'NU/AU anchors whole-life and cross-advisor work; NOVA owns business; PLI owns legal-adjacent work; LEDGER owns finance; CODA owns coding; ROAM owns jobs; GUIDE owns place/navigation; CONSULTANT owns capacity building; and the real roster can also include DIRECTOR, GHOSTWRITER, POLITICAL, STOCKBROKER, REAL ESTATE, RELATIONSHIP, PUSHBACK, PROGRAM COORDINATOR, and protected client worlds such as BDIF, GMG, MEDIATORS, and MH ACTION. '
+    +'A\'NU/AU anchors whole-life and cross-advisor work; NOVA owns business; ELI (Envolve Legal Intelligence) owns legal-adjacent work; LEDGER owns finance; CODA owns coding; ROAM owns jobs; GUIDE owns place/navigation; CONSULTANT owns capacity building; and the real roster can also include DIRECTOR, GHOSTWRITER, POLITICAL, STOCKBROKER, REAL ESTATE, RELATIONSHIP, PUSHBACK, PROGRAM COORDINATOR, and protected client worlds such as BDIF, GMG, MEDIATORS, and MH ACTION. '
     +'Pass the best-fit public name, alias, or station slug. The handler uses the canonical resolver exposed by that runtime when present, then validates against the born per-HAM roster; never invent a seat. The selected advisor may convene its real specialists and advisor council, then A\'NU voices the coherent result.',
     parameters:{type:'object',required:['ham_uid','advisor','question'],
     properties:{ham_uid:{type:'string'},advisor:{type:'string',description:'the advisor/station slug, e.g. bdif, gmg, business, mediators, mh_action'},
@@ -1614,10 +1581,25 @@ function routeToolIntent(message) {
 }
 
 function toolsForIntent(tools, intent) {
-  var allowed = TOOL_INTENT_NAMES[intent] || TOOL_INTENT_NAMES.general;
+  var allowed = (TOOL_INTENT_NAMES[intent] || TOOL_INTENT_NAMES.general).slice();
+  // The advisor department is A'NU's cross-domain council. It must remain on
+  // the table for ordinary language, not only for turns a regex calls "code".
+  if (allowed.indexOf('consult_advisor') === -1) allowed.push('consult_advisor');
   return (tools || []).filter(function (tool) {
     return tool && tool.function && allowed.indexOf(tool.function.name) !== -1;
   });
+}
+
+// This is a transport boundary, not a meaning judgment. A short whole-utterance
+// continuation asks the current speaker to keep the same answer moving and adds
+// no new subject for an advisor to investigate. Anchoring the complete utterance
+// keeps substantive asks such as "continue with the budget analysis" on the
+// ordinary council-capable path.
+function isPureConversationalContinuation(message) {
+  var exact = String(message || '').trim().toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\s+/g, ' ');
+  return /^(?:(?:please\s+)?(?:go\s+on|continue|keep\s+going|carry\s+on|say\s+more)(?:\s*[,]?\s+please)?|tell\s+me\s+more|(?:and\s+)?then)\s*[.!?]*$/i.test(exact);
 }
 
 // ⬡B:core.tool_loop:WONDER:surface_intent_is_a_hint_not_a_decision:20260721⬡
@@ -1825,7 +1807,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
         var _cookoffCycleId = runtime && (runtime.cycleId || runtime.parentCycleId ||
           runtime.requestId || runtime.parentRequestId);
         var _c = await cookoffClient.runCookoff({ham_uid:hamUid,task:_task,invoked_by:'anew_cycle',
-          max_tokens:2000,caller:'core.tool.loop',cycle_id:_cookoffCycleId});
+          caller:'core.tool.loop',cycle_id:_cookoffCycleId});
         if (!_c || !_c.ok) return JSON.stringify({ok:false,reason:(_c && _c.reason) || 'cookoff_no_result'});
         var _j = (_c.result && _c.result.judge) || {};
         return JSON.stringify({ok:true,winner:_c.winner,why:_j.why||'',correction:_j.correction||'',
@@ -1835,7 +1817,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       if (!_wtask) return JSON.stringify({ok:false,note:'no task given'});
       var _wonderCycleId=runtime&&(runtime.cycleId||runtime.parentCycleId||
         runtime.requestId||runtime.parentRequestId);
-      var _w=await wonderGamesClient.compete({task:_wtask,ham_uid:hamUid,max_tokens:4000,
+      var _w=await wonderGamesClient.compete({task:_wtask,ham_uid:hamUid,
         invoked_by:'anew_cycle',caller:'core.tool.loop',cycle_id:_wonderCycleId});
       if (!_w) return JSON.stringify({ok:false,reason:'wonder_games_no_result'});
       return JSON.stringify({ok:true,result:_w});
@@ -2939,8 +2921,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       var taskName = 'span.task.agent_birth_'+cHam.toLowerCase()+'_'+Date.now();
       var lineage = { spawner: 'request_new_capability',
         parent: runtime && runtime.parentCycleId || 'unknown' };
-      var budget = { maxIterations: 20, maxLlmCalls: 10 };
-      try { spawnGuard.validateTask({ lineage: lineage, budget: budget }); } catch (eGuard) { return JSON.stringify({ok:false,built:false,reason:'spawn_guard_rejected',error:eGuard.message}); }
+      try { spawnGuard.validateTask({ lineage: lineage }); } catch (eGuard) { return JSON.stringify({ok:false,built:false,reason:'spawn_guard_rejected',error:eGuard.message}); }
       var capabilityWriteCancelled = await cancelBeforeEffect(name, runtime);
       if (capabilityWriteCancelled) return capabilityWriteCancelled;
       var taskWrite = await fetch(_bu() + '/rest/v1/' + _tbl() + '',{method:'POST',
@@ -3096,7 +3077,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       if (_worlds.indexOf(_station) === -1) return JSON.stringify({ok:false,reason:'no_such_advisor',advisor:_station,available:_worlds});
       var _mod = _ar.loadStationModule(_station);
       if (!_mod || typeof _mod.runCycle !== 'function') return JSON.stringify({ok:false,reason:'advisor_has_no_cycle',advisor:_station});
-      var _q = String(args.question||'').slice(0,2000);
+      var _q = String(args.question||'');
       var _res = await _mod.runCycle(_q,_cHam,_q,{cycleId:runtime && runtime.cycleId,
         requestId:runtime && runtime.requestId});
       var _brief = _res && (_res.answer || _res.output || _res.summary || _res.brief);
@@ -3212,7 +3193,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
         var _rq = _rNb + '/rest/v1/' + (process.env.BEAD_TABLE || 'beads')
           + '?select=summary,created_at&ham_uid=eq.' + encodeURIComponent(_rUid)
           + '&stamp_type=eq.REMINDER' + (_reminderTierFilter ? '&' + _reminderTierFilter : '')
-          + '&order=created_at.desc&limit=8';
+          + '&order=created_at.desc';
         var _rc = new AbortController(); var _rt = setTimeout(function(){ _rc.abort(); }, 6000);
         _rRows = await fetch(_rq, { signal:_rc.signal, headers:{ apikey:_rNk, Authorization:'Bearer '+_rNk, 'Accept-Profile':(process.env.BRAIN_SCHEMA||'memory_bank') } })
           .then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
@@ -3237,7 +3218,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
         var _fFetched = await _field.fieldCheck(_rUid, Date.now(), 4000,
           runtime && runtime.readAuthority);
         if (_fFetched && _fFetched.ok) {
-          _fieldDue = (_fFetched.due || []).slice(0, 8).map(function (d) {
+          _fieldDue = (_fFetched.due || []).map(function (d) {
             return { note: String(d.note || '').slice(0, 180),
               due_at: Number.isFinite(d.dueAt) ? new Date(d.dueAt).toISOString() : null,
               for_whom: d.forWhom === 'self' ? 'self' : 'ham',
@@ -3284,7 +3265,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       var _msgs = (_ir.emails || []);
       var _unreadOnly = !(args && args.unread_only === false);
       if (_unreadOnly) _msgs = _msgs.filter(function(m){ return m.unread; });
-      _msgs = _msgs.slice(0, 8).map(function(m){
+      _msgs = _msgs.map(function(m){
         return { from: String(m.from||'someone').slice(0,80), subject: String(m.subject||'(no subject)').slice(0),
           snippet: String(m.snippet||m.preview||'').slice(0), unread: !!m.unread, id: m.id||null, grant: m.grant||null };
       });
@@ -3386,7 +3367,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       // The source (/os/calendar) sends endAt on every event and sets it equal to at when the
       // provider gave no distinct end. So no end is represented honestly as no end, and no
       // end_date is emitted at all; an end is never invented to fill the hole.
-      var _shaped = _realEvents.slice(0,20).map(function(ev){
+      var _shaped = _realEvents.map(function(ev){
         var _at = Number(ev.at || ev.start || 0);
         var _endAt = Number(ev.endAt || ev.end || 0) || _at;
         var _d = _at ? new Date(_at) : null;
@@ -3443,11 +3424,11 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       var _want = args.want || 'both';
       var _events = await _sl.getRadarEvents(_calHam);
       var _out = {ok:true, ham_uid:_calHam};
-      if (_want === 'events' || _want === 'both') _out.events = (_events||[]).slice(0,25);
+      if (_want === 'events' || _want === 'both') _out.events = (_events||[]).slice(0);
       if (_want === 'slots' || _want === 'both') {
         var _prefs = await _sl.getHamPrefs(_calHam);
         if (args.days) _prefs = Object.assign({}, _prefs, {daysAhead: args.days});
-        _out.free_slots = _sl.computeFreeSlots(_events||[], _prefs).slice(0,25);
+        _out.free_slots = _sl.computeFreeSlots(_events||[], _prefs).slice(0);
       }
       if ((!_out.events || !_out.events.length) && (!_out.free_slots || !_out.free_slots.length)) {
         _out.note = 'no calendar events found for this HAM yet (calendar may not be synced to RADAR)';
@@ -4083,19 +4064,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     var candidate = _paiSeatCandidate(seatName);
     if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
-    try {
-      if (!require('./spend.guard.js').allow('text')) {
-        return {error:{code:'daily_spend_ceiling_reached',seat:candidate.seat.seat}};
-      }
-    } catch (ePaiSpend) {
-      return {error:{code:'spend_guard_unavailable',seat:candidate.seat.seat}};
-    }
     return paiSeatFailover(function (c) { return _attemptPaiSeat(requestBody, c); },
       candidate, _paiFallbackCandidate(seatName));
   }
   async function callPAIPlain(sys, user, maxTokens) {
     var messages = sys ? [{role:'system',content:sys},{role:'user',content:user}] : user;
-    var result = await _callPaiProvider({messages:messages,max_tokens:maxTokens||3000,
+    var result = await _callPaiProvider({messages:messages,
       temperature:0.3});
     return result && result.choices && result.choices[0] && result.choices[0].message &&
       result.choices[0].message.content || null;
@@ -4837,8 +4811,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   // ⬡B:core.tool_loop:BUILD:the_progress_stop_and_the_closing_pass:20260726⬡
   // She should stop because she is not getting anywhere, never because a counter ran out.
-  var _iterCeiling = _iterationCeiling();
-  var _toolWindow = _toolIterationWindow();
   var _barrenLimit = _noNewEvidenceLimit();
   var _repeatLimit = _repeatQuestionLimit();
   var _seenEvidence = Object.create(null); // every (tool, args, result) triple this turn
@@ -4859,11 +4831,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // is asked to speak, and the honest working-limit line further down is what is left
     // only if she is handed the floor and still says nothing.
     if (_closingReason && _closingPassRan) break;
-    if (!_closingReason && iter >= _iterCeiling - 1) _closingReason = 'iteration_ceiling';
     if (_closingReason && !_closingPassRan) {
       _closingPassRan = true;
-      _stampStep('closing_pass_opened', _closingReason + ' iter=' + iter +
-        ' ceiling=' + _iterCeiling + ' tools_used=' + tools.length);
+      _stampStep('closing_pass_opened', _closingReason + ' iter=' + iter + ' tools_used=' + tools.length);
       msgs.push({role:'system',content:
         'This is the last pass of this turn. Answer the whole request now, completely, in '
         + 'your own words, from the evidence already gathered above. Do not call any tool. '
@@ -4887,7 +4857,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // Lowered to reduce that variance; still warm enough for natural replies.
     // This is a real improvement, not a guarantee -- instruction-following on
     // a growing system prompt stays worth watching, not a closed case.
-    var body={model:model,messages:msgs,max_tokens:tokenCapFor(channel),
+    var body={model:model,messages:msgs,
       temperature:_structuredReachPolicy?0:_reachIncidentIntake?0.1:0.3};
     // ⬡B:core.tool_loop:FOUNDER_LAW:she_holds_her_tools_for_the_whole_run:20260726⬡
     // WAS `if (iter<=3)`. From iteration four on she held nothing, so she could not ask
@@ -4895,7 +4865,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // window 0 means every iteration carries them. The closing pass is the one deliberate
     // exception: that pass exists so she can SPEAK from what she gathered, so nothing is
     // on the table to reach for.
-    if (!_closingPassRan && (_toolWindow <= 0 || iter <= _toolWindow)) {
+    if (!_closingPassRan) {
       body.tools=_turnToolDefinitions;
     }
     // Once the exact explicit action has produced its durable pending effect, the next
@@ -4932,6 +4902,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         _routedToolIntent);
       _routedRequiresLiveTool = !!_routedRequiredReadTool;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
+      var _pureVoiceContinuation = _routeEveryVoicePass &&
+        _routedToolIntent === 'general' && isPureConversationalContinuation(
+          (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
+      // A pure voice continuation such as "go on" is conversation, not a
+      // council dispatch. Keep ordinary substantial language council-capable,
+      // while preserving the fast natural voice continuation with no schemas.
+      if (_pureVoiceContinuation) body.tools = [];
       if (_routedRequiredReadTool || _routedRequiredActionTool) {
         var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
         body.tools = body.tools.filter(function (tool) {
@@ -4945,7 +4922,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // reasons about whether to use them in the canonical model pass, and it is
       // her call, never a force. Skipped only when a single read tool is required for the turn.
       if (!_routedRequiredReadTool && !_routedRequiredActionTool &&
-          (!_routeEveryVoicePass || _routedToolIntent !== 'general') &&
+          !_pureVoiceContinuation &&
           Array.isArray(_turnToolDefinitions)) {
         var _haveSurfaceTool = {};
         (Array.isArray(body.tools) ? body.tools : []).forEach(function (t) {
@@ -5145,10 +5122,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       else if (_isDayQ) _toolNudge='calendar_read';
       else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
         // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
-        // Removing the irrelevant tool schema also keeps the one required model
-        // draft inside a phone-conversation budget. This is not an action lane;
-        // mixed requests such as "why, and email me" do not match this predicate.
-        delete body.tools;
+        // Remove the irrelevant personal and surface schemas, but preserve the
+        // advisor council entrance. Only the whole-utterance continuation seam
+        // above is allowed to remove that cross-domain organ from a voice turn.
+        // Mixed requests such as "why, and email me" do not match this predicate.
+        body.tools = toolsForIntent(body.tools, 'general');
       }
       else if (_looksPublicKnowledgeQ &&
           (!_routedToolIntent || _routedToolIntent === 'general')) {
@@ -5156,11 +5134,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // knowledge. Receipts showed that merely UNFORCING find_in_brain was not
         // enough -- with the personal-tool schema still in front of her she reached
         // for read_own_code / find_in_brain anyway and deflected ("I don't have
-        // access to product databases"). So the personal tool schema is REMOVED for
-        // this turn: nothing to reach for, she answers from her own knowledge. The
-        // full council still guards fabrication. Personal and day questions above
-        // keep their tools untouched.
-        delete body.tools;
+        // access to product databases"). So the personal tool schemas are removed
+        // for this turn, but the cross-domain advisor entrance remains available.
+        // Personal and day questions above keep their tools untouched.
+        body.tools = toolsForIntent(body.tools, 'general');
         delete body.tool_choice;
       }
       else if ((!_routedToolIntent || _routedToolIntent === 'general') &&
@@ -5389,8 +5366,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         var _usr=_hist.filter(function(m){return m.role!=='system';})
           .map(function(m){return String(m.role||'user').toUpperCase()+': '+_flattenTurnText(m.content);})
           .join('\n\n');
-        var _lr=await _lad.deliberate(_sys,_usr,{max_tokens:tokenCapFor(channel),
-          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
+        var _lr=await _lad.deliberate(_sys,_usr,{temperature:_structuredReachPolicy?0:0.3,timeout:60000,
           json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
         if(_lr&&_lr.content){
           r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
@@ -5453,8 +5429,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         var _stitchMsgs=openAiCompatibleHistory(msgs).concat([
           {role:'assistant',content:String(msg.content||'')},
           {role:'user',content:'Your previous message was cut off by a length limit mid-generation. Continue it exactly where it stopped, starting with the very next word. No preamble, no apology, no repetition of anything already written.'}]);
-        var _stitchR=await _callPaiProvider({messages:_stitchMsgs,
-          max_tokens:tokenCapFor(channel),temperature:0.1});
+        var _stitchR=await _callPaiProvider({messages:_stitchMsgs,temperature:0.1});
         var _stitchCh=_stitchR&&_stitchR.choices&&_stitchR.choices[0];
         var _stitchTxt=_stitchCh&&_stitchCh.message&&_stitchCh.message.content;
         if(!_stitchTxt)break;
@@ -5475,7 +5450,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try {
         var _englishRewrite = await require('./model.ladder.js').deliberate(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
-          String(msg.content || ''), { max_tokens:tokenCapFor(channel), temperature:0.2, timeout:12000, noGuard:true });
+          String(msg.content || ''), { temperature:0.2, timeout:12000, noGuard:true });
         msg.content = _englishRewrite && _englishRewrite.content || '';
         _stampStep('cjk_output_regenerated', msg.content ? 'english' : 'failed_closed');
       } catch (_eEnglish) {
@@ -5595,7 +5570,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       var retryMsgs=msgs.concat([{role:'assistant',content:msg.content||''},
         {role:'user',content:'You were required to call ' + _requiredToolName
           + ' and did not. Call that exact tool now before saying anything else.'}]);
-      var retryBody={model:model,messages:retryMsgs,max_tokens:tokenCapFor(channel),temperature:0.1,
+      var retryBody={model:model,messages:retryMsgs,temperature:0.1,
         tools:body.tools,tool_choice:body.tool_choice};
       var retryR=await _callPaiProvider(retryBody);
       var retryMsg=retryR&&retryR.choices&&retryR.choices[0]&&retryR.choices[0].message;
@@ -5989,8 +5964,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // to the unchanged break.
     if (/^<[a-z_]+>\s*\{.*\}\s*<\/[a-z_]+>$/is.test(ans)) {
       ans = '';
-      var _toolsNextPass = !_closingReason && !_closingPassRan && iter < _iterCeiling &&
-        (_toolWindow <= 0 || (iter + 1) <= _toolWindow);
+      var _toolsNextPass = !_closingReason && !_closingPassRan;
       _stampStep('unexecuted_tool_call_text_rejected', 'iter=' + iter +
         ' corrective_pass=' + (_toolTextRejectedOnce ? 'already_used' :
           (_closingPassRan ? 'not_on_the_closing_pass' : 'opening')) +
@@ -6066,7 +6040,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         return String(entry.role || 'user').toUpperCase() + ': ' + _flattenTurnText(entry.content);
       }).join('\n\n');
       var _repairResult = await _repairLadder.deliberate(_repairSystem, _repairUser,
-        {max_tokens:maxTokens || tokenCapFor(channel),temperature:temperature == null ? 0.1 : temperature,
+        {temperature:temperature == null ? 0.1 : temperature,
           timeout:60000,json:jsonMode === true,signal:_modelRequestSignal()});
       if (await _turnCancelled(true)) return '';
       return _repairResult && (_repairResult.content || _repairResult.answer ||
@@ -6076,7 +6050,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   async function _repairHumanOnce(candidate, failureCode) {
     if (_preCouncilHumanRepairUsed) return {answer:'',repaired:false};
     _preCouncilHumanRepairUsed = true;
-    var _oneRepairCap = tokenCapFor(channel);
+    var _oneRepairCap;
     var _nameBoundaryRepair = /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
       String(failureCode || ''));
     // A privacy-held attribution is evidence of what must NOT be repeated. Feeding
@@ -6141,7 +6115,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       'Choose one of the options named by the user and explicitly distinguish the choice as your fresh/current judgment or an actually stored preference. ' +
       'Ground every factual reason in the completed evidence. Do not mention this correction, internal tools, or a rejected draft.' }]);
     var _preferenceRetry = await _completeBoundHistoryOnLadder(_preferenceRetryMessages,
-      tokenCapFor(channel), 0.1, false);
+      undefined, 0.1, false);
     if (await _turnCancelled(true)) return _turnCancelledResult('after_preference_repair');
     _preferenceRetry = String(_preferenceRetry || '').trim();
     var _preferenceRetryFlags = preferenceJudgmentFindings(
@@ -6213,7 +6187,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // mutation guard, STAMP commit, and readback. It never degrades into plain prose.
   if (_structuredReachPolicy&&!_validStructuredReachPolicy(finalAns)) {
     _stampStep('reach_policy_invalid_healing','regenerating_strict_policy_json');
-    var _rpCap = tokenCapFor(channel);
+    var _rpCap;
     var _rpStrict = await regenerateStructuredReachPolicy(finalAns, msgs, [
       async function (repairMessages) {
         return _completeBoundHistoryOnLadder(repairMessages, _rpCap, 0, true);
@@ -6355,7 +6329,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
               {role:'user',content:'FULL REQUEST: ' + String(message||'').slice(0) +
                 String.fromCharCode(10,10) + 'EVIDENCE GATHERED THIS TURN:' +
                 String.fromCharCode(10) + _forcedTail.slice(0)}
-            ], tokenCapFor(channel), 0.2, false);
+            ], undefined, 0.2, false);
           } catch(_eForce){ _forced = ''; }
         }
         if (await _turnCancelled(true)) return _turnCancelledResult('after_exhaustion_synthesis');
@@ -6446,7 +6420,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
             +'replacement number either.'}
         ]);
         _retryText = await _completeBoundHistoryOnLadder(_retryMsgs,
-          tokenCapFor(channel), 0.1, false);
+          undefined, 0.1, false);
       } catch (eVerify) { /* verification itself must never crash a real turn */ }
       if (await _turnCancelled(true)) return _turnCancelledResult('after_number_repair');
       if (_retryText && _retryText.trim()) {
@@ -7391,6 +7365,7 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
+  isPureConversationalContinuation,
   agentFindClosedWorldReason,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
   requiredActionToolForMessage,
@@ -7406,7 +7381,7 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   // ⬡B:core.tool_loop:WIRE:the_bounds_and_the_progress_stop_are_testable:20260726⬡ A guard
   // whose rule cannot be run by a test is a guard nobody has ever run. RULINGS 20260726.
   _boundEnvInt,_stableJson,_evidenceKey,_callKey,
-  _iterationCeiling,_toolIterationWindow,_noNewEvidenceLimit,_repeatQuestionLimit,
+  _noNewEvidenceLimit,_repeatQuestionLimit,
   paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,
