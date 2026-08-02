@@ -358,6 +358,32 @@ function mayRetryHold(reason) {
   return isCleanBoardHold(reason) && !terminalHoldCause(reason);
 }
 
+// ⬡B:core.pai_outbound_council:FIX:shadow_model_hold_is_never_a_terminal_refusal_to_a_person:20260802⬡
+// FOUNDER DIRECT, 20260802, said explicitly and repeatedly across the night: "Every single
+// thing we need from her gets refused by that? Hell no. Let that be the last fucking time
+// ever. Remove it." shadow_model_hold is the SHADOW stage's own probabilistic model judge
+// losing a coin flip on an otherwise clean board -- documented above at :1616 and :3315: the
+// identical clean answer holds once and passes once, 33 seconds apart. It is "a probabilistic
+// no," never a real integrity catch.
+//
+// routes/alive.arrive.routes.js (20260718) and core/wren/reply.js (20260718, widened
+// 20260719/20260725) already prove the correct, narrow, non-reckless cure: one bounded
+// re-run of the exact same question before a person is ever shown a refusal, and ONLY when
+// shadow_model_hold is the WHOLE reason, alone, with nothing else riding beside it. A real
+// deterministic hold (shadow_deterministic_hold, a named-evidence contradiction, a
+// fabrication, WRIT's internal_system_leak or quality_hold) is a completely different reason
+// string and this returns false for every one of them, unchanged -- those are real safety
+// catches, not the flaky judge, and the founder did not ask for those to be touched.
+//
+// Deliberately narrower than mayRetryHold/isCleanBoardHold above: those two also cover
+// writ_hold, shadow_wonder_hold, and content_too_short, which is correct for the channels
+// that already opted into that wider retry (wren/reply.js). Tonight's order names one cause
+// only, so this reads exactly and only that one, and every consumer this lane touches asks
+// the identical question instead of hand-copying a string compare five different ways.
+function isBareShadowModelHold(reason) {
+  return String(reason == null ? '' : reason).trim().toLowerCase() === 'shadow_model_hold';
+}
+
 var HOLLOW_HEAL_GUIDANCE = 'The held attempt returned tool or function call protocol, ' +
   'or returned no words at all, instead of an answer for the person. Do not call a tool. ' +
   'Do not emit a tool_call or function_call block, a JSON envelope, or any protocol ' +
@@ -4230,6 +4256,7 @@ module.exports = {
   namedCauseIn: namedCauseIn,
   terminalHoldCause: terminalHoldCause,
   mayRetryHold: mayRetryHold,
+  isBareShadowModelHold: isBareShadowModelHold,
   TERMINAL_HOLD_CAUSES: TERMINAL_HOLD_CAUSES,
   shouldRunQuill: shouldRunQuill,
   extractNamedContextEvidence: extractNamedContextEvidence,
