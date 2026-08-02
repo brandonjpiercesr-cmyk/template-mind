@@ -234,11 +234,11 @@ var SEATS = {
   // model or a coder-chosen cap merely by loading the template.
   audra_watch: { role:'AUDRA C4 factual triage',envModel:'AUDRA_WATCH_MODEL',model:null,
     envProvider:'AUDRA_WATCH_PROVIDER',provider:'openrouter',keyEnv:'OR_KEY_AUDRA_WATCH',
-    via:'openrouter',capEnv:'AUDRA_WATCH_DAILY_CAP_USD',dailyCapUsd:null,
+    via:'openrouter',capEnv:null,dailyCapUsd:null,unlimitedDailySpend:true,
     requiredEnv:true,vision:false,tools:false },
   audra_organ: { role:'AUDRA C2 shadow judgment',envModel:'AUDRA_ORGAN_MODEL',model:null,
     envProvider:'AUDRA_ORGAN_PROVIDER',provider:'openrouter',keyEnv:'OR_KEY_AUDRA_ORGAN',
-    via:'openrouter',capEnv:'AUDRA_ORGAN_DAILY_CAP_USD',dailyCapUsd:null,
+    via:'openrouter',capEnv:null,dailyCapUsd:null,unlimitedDailySpend:true,
     requiredEnv:true,vision:false,tools:false },
   // ⬡B:core.seat_map:FIX:codas_coder_invented_cap_was_stopping_her_on_demo_eve:20260728⬡
   // Raised 8 to 40 on the founder's own direct instruction. He said he had raised the kimi
@@ -362,9 +362,12 @@ function seat(name, runtime) {
   var isContestant = isContestantSeat(name);
   var resolvedModel = env(d.envModel, d.model, runtime);
   var resolvedProvider = d.envProvider ? env(d.envProvider, '', runtime) : d.provider;
-  var cap = capDetail(d.capEnv, d.dailyCapUsd, runtime);
+  var unlimitedDailySpend = d.unlimitedDailySpend === true;
+  var cap = unlimitedDailySpend ? {value:null,chosen_by:'nobody_yet',requested:null,
+    reason:null,needs_review:false} : capDetail(d.capEnv, d.dailyCapUsd, runtime);
   var resolvedCap = cap.value;
-  if (d.requiredEnv && (!resolvedModel || resolvedProvider !== d.provider || resolvedCap === null)) {
+  if (d.requiredEnv && (!resolvedModel || resolvedProvider !== d.provider ||
+      (!unlimitedDailySpend && resolvedCap === null))) {
     return null;
   }
   if (!isContestant && isBannedProductionModel(resolvedModel)) resolvedModel = d.model;
@@ -387,6 +390,7 @@ function seat(name, runtime) {
     keyEnv: d.keyEnv,
     via: d.via,
     dailyCapUsd: resolvedCap,
+    unlimitedDailySpend: unlimitedDailySpend,
     capEnv: d.capEnv,
     // WHO CHOSE THIS DOLLAR FIGURE, published beside it rather than inferred by each caller.
     // 'the founder' means his env value is in force exactly. 'this_lane' means the number baked
@@ -444,7 +448,9 @@ function fallback(name, runtime) {
   // The failover attempt is the SAME governed seat on the same wallet, so it reads the same cap
   // through the same one source and publishes the same ownership facts. Deriving them a second
   // way here is how the two halves of one seat start disagreeing about what is in force.
-  var fbCap = capDetail(d.capEnv, d.dailyCapUsd, runtime);
+  var unlimitedDailySpend = d.unlimitedDailySpend === true;
+  var fbCap = unlimitedDailySpend ? {value:null,chosen_by:'nobody_yet',requested:null,
+    reason:null,needs_review:false} : capDetail(d.capEnv, d.dailyCapUsd, runtime);
   return {
     seat: name + '.fallback',
     role: d.role + ' (fallback)',
@@ -453,6 +459,7 @@ function fallback(name, runtime) {
     keyEnv: d.fallbackKeyEnv,
     via: d.fallbackProvider,
     dailyCapUsd: fbCap.value,
+    unlimitedDailySpend: unlimitedDailySpend,
     capEnv: d.capEnv,
     capChosenBy: fbCap.chosen_by,
     capRequested: fbCap.requested,
