@@ -654,6 +654,14 @@ function requireAnyHamSession(req, res) {
 // own gate compares the session to the env named host, and a world_id credential for the host's
 // own world would have satisfied that comparison. core/world.birth.js now checks the tier
 // itself as well, so this is defense in depth and not the only lock.
+//
+// ⬡B:core.ham_session_authorization:WIRE:the_roster_status_page_earns_the_same_lock:20260802⬡
+// /arrive/roster (routes/arrival.roster.status.routes.js, FE-18) is the identical shape one
+// door along: reading it is the harm, because it lists every person who has been given access
+// and whether their invite code currently works. It calls the same core/world.birth.js
+// authorizeHost as /arrive/provision, so a world_id credential is already refused by that
+// function's own requireSignInTier check; the entry below is the same defense in depth, not
+// the only lock, kept consistent with its sibling rather than left one door weaker on the wall.
 // ⬡B:core.ham_session_authorization:FIX:the_first_sweep_grepped_for_the_wrong_words:20260728⬡
 // The two file download doors were found by CATHY (Codex) AFTER the ConvAI fix above, and the
 // miss is worth recording because the rule was already written and the sweep still missed them.
@@ -714,6 +722,7 @@ function requireAnyHamSession(req, res) {
 // console and wonder wall matched only on crypto's own hmac update().
 const SIGN_IN_TIER_ONLY_PATHS = [
   /^\/arrive\/provision(\/|$)/i,
+  /^\/arrive\/roster(\/|$)/i,
   /^\/vara\/convai\/url(\/|$)/i,
   /^\/cara\/files\/[^/]+\/download(\/|$)/i,
   /^\/clair\/[^/]+\/files\/download(\/|$)/i,
