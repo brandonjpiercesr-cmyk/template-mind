@@ -391,9 +391,24 @@ function isBareShadowModelHold(reason) {
 // cannot manufacture the founder's model-only exception by returning one magic word.
 // The caller lives inside runOutboundCouncil's existing heal-and-resubmit seam, so the
 // candidate stays on the same request and cycle and never buys a second runPAI turn.
-function mayCarryBareShadowModelHold(result) {
+// ⬡B:core.pai_outbound_council:FIX:a_reach_policy_decision_never_carries_a_hold:20260802⬡
+// Codex review, live: this carry path only re-validates the DETERMINISTIC board and the
+// model's own quoted claim; it never re-runs the closed-world evidence check
+// (core/reach/policy.contract.js only checks JSON shape/field relationships, and
+// core/reach/cycle.decision.js treats a committed structured answer as authoritative and
+// can execute a NOW decision). A structured reach_policy_decision turn (the same shape
+// structuredReachPolicyContext already recognizes for the meta-commentary/other stage
+// pass-throughs) whose SHADOW hold names an unsupported claim must stay fail-closed, since
+// carrying it here could commit a policy the mind itself said was not evidenced, and that
+// policy can drive a real external reach. `input` is the second, optional argument so
+// every existing caller in this file keeps working unmodified; callers inside
+// runOutboundCouncil (the only place a real reach_policy_decision turn is ever built)
+// always pass it.
+function mayCarryBareShadowModelHold(result, input) {
   if (!result || result.ok === true || !isBareShadowModelHold(result.reason) ||
       !isHumanFacingAnswer(result.answer)) return false;
+  if (structuredReachPolicyContext({ channel: input && input.channel,
+      context: input && input.context, answer: result.answer })) return false;
   var evidence = result.evidence && typeof result.evidence === 'object'
     ? result.evidence : {};
   var deterministic = evidence.deterministic &&
@@ -3501,7 +3516,7 @@ async function runOutboundCouncil(input, injected) {
       // fail -- a genuine, twice-confirmed integrity problem, not one probabilistic no.
       var _healReason = receipt.reason || 'stage_held';
       var _initialModelOnlyCarry = stage === 'SHADOW' && humanStageAnswer &&
-        mayCarryBareShadowModelHold(normalized);
+        mayCarryBareShadowModelHold(normalized, input);
       // ⬡B:core.pai_outbound_council:FIX:the_expression_stage_gets_a_repair_too:20260725⬡
       // ANU_EXPRESSION was the one TRANSFORMING stage with no heal attempt at all, so
       // an emptied or hollow expression killed the turn on the very first no while
@@ -3547,7 +3562,7 @@ async function runOutboundCouncil(input, injected) {
             var _reEnded = nowMs(deps);
             var _reHuman = isHumanFacingAnswer(_reNorm.answer);
             var _reModelOnlyCarry = stage === 'SHADOW' && _reHuman &&
-              mayCarryBareShadowModelHold(_reNorm);
+              mayCarryBareShadowModelHold(_reNorm, input);
             var _rePassed = (_reNorm.ok || _reModelOnlyCarry) && _reHuman;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
