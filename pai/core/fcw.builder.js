@@ -21,8 +21,7 @@ function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
 function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
 function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
-const findModule = require('./find.js');
-const { findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments } = findModule;
+const { findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments } = require('./find.js');
 const identityProvenance = require('./identity.provenance.js');
 
 // A HAM may have several identifier events (device links, OMI links, aliases).
@@ -223,47 +222,23 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // Cold code CAPTURES and SURFACES this evidence and labels what it is. It never decides what
   // his day means and it never speaks: A'NU reads it and A'NU answers (granddaddy-911).
   var _agentFindWake = options && options.agentFindWake;
-  // Agent FIND harvests compact indexed metadata first, across every page, and selects the exact
-  // evidence IDs for this question and seat before any full body enters process memory. Direct
-  // builder callers use the canonical PAI seat; paid callers supply their exact registered seat.
-  var _agentFind = require('./agent.find.js');
-  var _evidencePlan = null;
-  if (typeof findModule.scanFcwEvidence === 'function' &&
-      typeof findModule.expandFcwEvidence === 'function' &&
-      typeof _agentFind.planWallEvidence === 'function') {
-    _evidencePlan = await _agentFind.planWallEvidence({ham_uid:hamUid,viewer_tier:_viewerTier,
-      question:_questionFocus,seat_node_id:_agentFindWake && _agentFindWake.seat_node_id ||
-        'station.pai',seat_name:_agentFindWake && _agentFindWake.seat_name || 'pai',
-      named_agents:_namedAgentGlobals,include_preferences:_isPreferenceQ,
-      include_wonder_games:_isWonderGamesQ,
-      compact_byte_budget:options && options.agentFindCompactByteBudget,
-      fcw_byte_budget:options && options.agentFindFcwByteBudget});
-    if (!_evidencePlan || _evidencePlan.ok !== true) {
-      return {ok:false,available:false,reason:String(_evidencePlan && _evidencePlan.reason ||
-        'agent_find_evidence_plan_unavailable'),agent_find:_evidencePlan || null,
-        ms:Date.now() - t0};
-    }
-  }
-  function planned(label, fallback) {
-    return _evidencePlan ? Promise.resolve(_evidencePlan.contributors[label]) : fallback();
-  }
   var _batch = [
-    planned('identity', function () { return findIdentity(hamUid, _viewerTier); }),
-    planned('agentJDs', function () { return findAgentJDs(hamUid, _viewerTier); }),
+    findIdentity(hamUid, _viewerTier),
+    findAgentJDs(hamUid, _viewerTier),
     // ⬡B:core.fcw.builder:FIX:read_enough_rows_to_fill_the_widened_window:20260726⬡
     // Each lane walks every provider page. The conversation/adviser split still keeps one
     // evidence class from crowding out the other, but no coder-chosen row ceiling decides
     // what the seated mind is allowed to remember.
-    planned('context', function () { return findContext(hamUid, undefined, _viewerTier); }),
-    planned('recent', function () { return findRecentResults(hamUid, undefined, _viewerTier); }),
-    planned('doctrine', function () { return findDoctrine(hamUid, undefined, _viewerTier); }),
-    planned('profile', function () { return findPersonProfile(hamUid, _viewerTier); }),
+    findContext(hamUid, undefined, _viewerTier),
+    findRecentResults(hamUid, undefined, _viewerTier),
+    findDoctrine(hamUid, undefined, _viewerTier),
+    findPersonProfile(hamUid, _viewerTier),
     // Guarded call: find.js was once replaced wholesale by a 50-line stub (the 8B lobotomy,
     // core/find.js:8), which turned every finder into undefined and broke every turn on every
     // channel. A missing finder must degrade this one contributor to unavailable, never throw
     // the whole wall away.
-    planned('statedPlans', function () { return typeof findStatedCommitments === 'function'
-      ? findStatedCommitments(hamUid, undefined, _viewerTier) : Promise.resolve(null); })
+    (typeof findStatedCommitments === 'function'
+      ? findStatedCommitments(hamUid, undefined, _viewerTier) : Promise.resolve(null))
   ];
   var _labels = ['identity', 'agentJDs', 'context', 'recent', 'doctrine', 'profile', 'statedPlans'];
   var _namedAgentsIdx = -1, _identityEvidenceIdx = -1, _prefIdx = -1, _wgIdx = -1,
@@ -282,36 +257,16 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   }
   if (_namedAgentGlobals.length) {
     _namedAgentsIdx = _batch.length;
-    _batch.push(planned('namedAgentRecords', function () {
-      return findNamedAgentRecords(hamUid, _namedAgentGlobals, _viewerTier);
-    }));
+    _batch.push(findNamedAgentRecords(hamUid, _namedAgentGlobals, _viewerTier));
     _labels.push('namedAgentRecords');
   }
   if (_identitySubjects.length) {
     _identityEvidenceIdx = _batch.length;
-    if (_evidencePlan) {
-      var _identityRows = [];
-      Object.keys(_evidencePlan.contributors).forEach(function (label) {
-        (_evidencePlan.contributors[label].beads || []).forEach(function (row) {
-          if (_identityRows.indexOf(row) < 0) _identityRows.push(row);
-        });
-      });
-      var _storedIdentity = identityProvenance.buildStoredEvidence(_identityRows,
-        _identitySubjects, String(hamUid || '').toUpperCase());
-      _batch.push(Promise.resolve({schema:identityProvenance.EVIDENCE_RESULT_SCHEMA,
-        ok:true,available:true,ham_uid:String(hamUid || '').toUpperCase(),
-        subjects:_identitySubjects,records:_storedIdentity,count:_storedIdentity.length,ms:0}));
-    } else {
-      _batch.push(findIdentityEvidence(hamUid, _questionFocus, _viewerTier));
-    }
+    _batch.push(findIdentityEvidence(hamUid, _questionFocus, _viewerTier));
     _labels.push('identityEvidence');
   }
-  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(planned('preferences', function () {
-    return findPreferences(hamUid, undefined, _viewerTier);
-  })); _labels.push('preferences'); }
-  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(planned('wonderGames', function () {
-    return findWonderGames(hamUid, undefined, _viewerTier);
-  })); _labels.push('wonderGames'); }
+  if (_isPreferenceQ) { _prefIdx = _batch.length; _batch.push(findPreferences(hamUid, undefined, _viewerTier)); _labels.push('preferences'); }
+  if (_isWonderGamesQ) { _wgIdx = _batch.length; _batch.push(findWonderGames(hamUid, undefined, _viewerTier)); _labels.push('wonderGames'); }
   var _results = await Promise.allSettled(_batch);
   _results.forEach(function (r, i) {
     if (r.status === 'rejected') console.log('[Memory Bank] ' + _labels[i] + ' rejected: ' + (r.reason && r.reason.message || r.reason));
@@ -932,8 +887,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   var _builtWall = {
     ok: true,
     available: true,
-    partial: _unavailableReads.length > 0 || _partialReads.length > 0 ||
-      !!(_evidencePlan && _evidencePlan.partial),
+    partial: _unavailableReads.length > 0 || _partialReads.length > 0,
     viewer_tier: _viewerTier,
     viewer_tier_source: _viewerTierSource,
     system_prompt: systemPrompt,
@@ -953,8 +907,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     canonicalContributorsAvailable: _canonicalAvailableReadCount,
     canonicalContributorsTotal: 7,
     unavailableContributors: _unavailableReads,
-    partialContributors: _partialReads.concat(_evidencePlan && _evidencePlan.partial
-      ? ['agentFindEvidencePlan'] : []),
+    partialContributors: _partialReads,
     contributorsResolved: _contributorsResolved,
     contributorsTotal: Object.keys(contributors).length,
     ms: ms,
@@ -964,26 +917,6 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       context: context ? context.ms : 0
     }
   };
-  if (_evidencePlan) {
-    _builtWall.agent_find = {
-      ok:true,schema:_evidencePlan.schema,node_id:'station.agent_find',
-      seat_node_id:_evidencePlan.seat_node_id,
-      question_sha256:_evidencePlan.question_sha256,
-      selected_row_ids:_evidencePlan.selected_row_ids,
-      selections:_evidencePlan.selections,query_ms:_evidencePlan.query_ms,
-      candidates_seen:_evidencePlan.candidates_seen,compact_pages:_evidencePlan.compact_pages,
-      fcw_bytes:Buffer.byteLength(systemPrompt,'utf8'),
-      evidence_body_bytes:_evidencePlan.fcw_bytes,
-      fcw_byte_budget:_evidencePlan.fcw_byte_budget,
-      context_budget_source:_evidencePlan.context_budget_source,
-      byte_envelope_reached:_evidencePlan.byte_envelope_reached,
-      omitted:_evidencePlan.omitted,
-      complete:_evidencePlan.complete,partial:_evidencePlan.partial,
-      continuations:_evidencePlan.continuations,
-      full_history_expansion_available:_evidencePlan.full_history_expansion_available,
-      heap_high_water_bytes:_evidencePlan.heap_high_water_bytes
-    };
-  }
   if (!_agentFindWake) return _builtWall;
   var _agentFindRecent = (_agentFindRecentIdx >= 0 && _results[_agentFindRecentIdx] &&
     _results[_agentFindRecentIdx].status === 'fulfilled')
