@@ -247,7 +247,8 @@ async function bindAgentFindRequest(url,init,env,capability) {
   try { spendGuard=require('./spend.guard.js'); }
   catch (error) { return {ok:false,reason:'agent_find_spend_scope_unavailable'}; }
   var attribution=providerAttribution(spendGuard,env);
-  var promptDigest=crypto.createHash('sha256').update(JSON.stringify(body.messages)).digest('hex');
+  var promptDigest=require('./agent.find.js').providerMessageDigest(body.messages);
+  if(!promptDigest)return {ok:false,reason:'agent_find_provider_binding_invalid'};
   var prior=typeof spendGuard.currentAgentFindBinding==='function'
     ? spendGuard.currentAgentFindBinding(attribution):null;
   if(prior&&prior.readback_verified===true&&
