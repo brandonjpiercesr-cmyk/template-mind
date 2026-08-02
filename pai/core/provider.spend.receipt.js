@@ -664,6 +664,77 @@ async function recoverOpenRouterUsage(receipt, outcome, requestInit, options) {
   result.provider_name=facts.provider_name;
   return result;
 }
+
+async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
+  var empty={ok:true,attempted:0,recovered:0,reason:null};
+  if(!receipt||receipt.provider!=='openrouter'||
+      !/^[a-f0-9]{64}$/.test(clean(receipt.attempt_id))||
+      !identifier(receipt.key_alias,160))return empty;
+  var authorization=headerValue(requestInit,'authorization');
+  if(!/^Bearer\s+\S+$/i.test(authorization))return empty;
+  var runtime=options&&options.env||process.env;
+  var owner=openrouterSeatSpend.keyOwner(authorization.replace(/^Bearer\s+/i,''),runtime);
+  var expectedAlias=owner&&owner.ok===true?'seat.'+owner.seat.seat:null;
+  if(!expectedAlias||expectedAlias!==receipt.key_alias){
+    return{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_reconciliation_seat_mismatch'};
+  }
+  var config=bankConfig(runtime),doFetch=fetchImpl(options);
+  if(!config.ok||!doFetch)return{ok:false,attempted:0,recovered:0,
+    reason:'provider_spend_store_unavailable'};
+  // A later organic request for this exact seat drains one earlier durable terminal. There is
+  // no timer, paid generation, estimate, mutable terminal, or process-local cursor. A crash
+  // leaves the terminal eligible for the next request, and the immutable reconciliation RPC
+  // makes concurrent recovery idempotent.
+  var query=new URLSearchParams({select:'attempt_id,provider_request_id,status_code,'+
+    'disposition,key_alias,provider_tokens,actual_cost_usd,cost_source',
+    provider:'eq.openrouter',phase:'eq.TERMINAL',disposition:'eq.SUCCEEDED',
+    key_alias:'eq.'+receipt.key_alias,provider_request_id:'not.is.null',
+    provider_tokens:'is.null',actual_cost_usd:'is.null',cost_source:'is.null',
+    attempt_id:'neq.'+receipt.attempt_id,order:'created_at.desc,attempt_id.desc',limit:'1'});
+  var response;
+  try{
+    response=await doFetch(config.url+'/rest/v1/'+BILLABLE_TABLE+'?'+query.toString(),{
+      headers:readHeaders(config),
+      signal:brain.boundedSignal(options&&options.signal,runtime)});
+  }catch(error){return{ok:false,attempted:0,recovered:0,
+    reason:'provider_spend_store_unavailable'};}
+  if(!response||response.ok!==true)return{ok:false,attempted:0,recovered:0,
+    reason:response&&(response.status===404||response.status===400)
+      ?'provider_spend_schema_unavailable':'provider_spend_reconciliation_read_failed'};
+  var rows;
+  try{rows=await boundedJson(response,MAX_STORE_BYTES);}
+  catch(error){return{ok:false,attempted:0,recovered:0,
+    reason:'provider_spend_store_readback_invalid'};}
+  if(!Array.isArray(rows)||rows.length>1)return{ok:false,attempted:0,recovered:0,
+    reason:'provider_spend_reconciliation_candidate_invalid'};
+  if(!rows.length)return empty;
+  var candidate=rows[0],attemptId=clean(candidate&&candidate.attempt_id);
+  var providerRequestId=identifier(candidate&&candidate.provider_request_id,240);
+  var statusCode=Number(candidate&&candidate.status_code);
+  if(!/^[a-f0-9]{64}$/.test(attemptId)||attemptId===receipt.attempt_id||
+      clean(candidate.key_alias)!==receipt.key_alias||candidate.disposition!=='SUCCEEDED'||
+      !Number.isInteger(statusCode)||statusCode<200||statusCode>299||!providerRequestId||
+      candidate.provider_tokens!=null||strictNumber(candidate.actual_cost_usd)!==null||
+      candidate.cost_source!=null){
+    return{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_reconciliation_candidate_invalid'};
+  }
+  var outcome={status_code:statusCode,disposition:'SUCCEEDED',
+    provider_request_id:providerRequestId,provider_tokens:null,
+    actual_cost_usd:null,cost_source:null};
+  var recovered=await recoverOpenRouterUsage({provider:'openrouter'},outcome,
+    requestInit,options);
+  if(!recovered||!recovered.provider_fact_digest){
+    return{ok:true,attempted:1,recovered:0,reason:'openrouter_generation_fact_not_ready'};
+  }
+  var written=await writeReconciliation({attempt_id:attemptId,provider:'openrouter'},
+    recovered,options);
+  if(!written||written.ok!==true)return{ok:false,attempted:1,recovered:0,
+    reason:written&&written.reason||'provider_spend_reconciliation_write_failed'};
+  return{ok:true,attempted:1,recovered:1,reason:null,attempt_id:attemptId,
+    replayed:written.replayed===true};
+}
 async function captureTerminalResponse(response, options) {
   var bytes = await responseBytes(response, Number(options && options.maxResponseBytes) || MAX_RESPONSE_BYTES);
   var body = null;
@@ -847,6 +918,7 @@ module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimInt
   writeTerminal:writeTerminal,terminalFromResponse:terminalFromResponse,
   captureTerminalResponse:captureTerminalResponse,
   recoverOpenRouterUsage:recoverOpenRouterUsage,
+  recoverDelayedOpenRouterCost:recoverDelayedOpenRouterCost,
   writeReconciliation:writeReconciliation,
   terminalFromError:terminalFromError,reconcileUnresolved:reconcileUnresolved,
   readSummary:readSummary,cachedSummary:cachedSummary,
