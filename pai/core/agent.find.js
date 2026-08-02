@@ -8,6 +8,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const v8 = require('node:v8');
 const defaultRegistry = require('./wonders/registry.js');
 const defaultFind = require('./find.js');
 const defaultBrain = require('./brain.client.js');
@@ -48,7 +49,7 @@ function copyQuery(query, hamUid, viewerTier) {
   const input = plain(query) ? query : {};
   const output = {};
   ['stamp_type','source','source_prefix','source_not_prefix','agent_global','importance_gte',
-    'select','order'].forEach(function (key) {
+    'select','order','limit'].forEach(function (key) {
     if (input[key] !== undefined && input[key] !== null && input[key] !== '') {
       output[key] = input[key];
     }
@@ -56,7 +57,10 @@ function copyQuery(query, hamUid, viewerTier) {
   // The requesting world and its tier are boundary facts, never registry configuration.
   output.ham_uid = hamUid;
   output.viewer_tier = viewerTier;
-  output.exhaustive = true;
+  // The registry owns how much recent seat truth belongs on this wake. A declared per-seat
+  // limit is not replaced by a lifetime materialization; only an explicitly unbounded contract
+  // uses the full-history path.
+  if (output.limit == null) output.exhaustive = true;
   return output;
 }
 
@@ -103,6 +107,181 @@ async function readRecentCycleTruth(input, options) {
   return {ok:true,available:true,partial:found.partial === true,beads:found.beads,
     count:found.beads.length,ms:Number(found.ms || 0),queries:built.queries,
     failures:Array.isArray(found.failures) ? found.failures : []};
+}
+
+function questionTerms(value) {
+  const stop = new Set(['about','after','again','also','been','being','could','from','have','into',
+    'just','like','more','that','their','them','then','there','these','they','this','what','when',
+    'where','which','with','would','your']);
+  return clean(value, 12000).toLowerCase().split(/[^a-z0-9_]+/).filter(function (term) {
+    return term.length >= 3 && !stop.has(term);
+  }).filter(function (term, index, all) { return all.indexOf(term) === index; });
+}
+
+function candidateFacts(row, receipt, terms, anchors) {
+  const contributor = clean(receipt && receipt.contributor, 80);
+  const text = [row && row.source,row && row.summary,row && row.stamp_type,
+    row && row.agent_global].map(function (item) { return clean(item, 4000).toLowerCase(); }).join(' ');
+  const hits = terms.filter(function (term) { return text.indexOf(term) >= 0; });
+  const reasons = hits.map(function (term) { return 'question_term:' + term; });
+  let score = hits.length * 200 + Math.max(0, Number(row && row.importance || 0));
+  if (!anchors.has(contributor)) {
+    anchors.add(contributor);
+    score += 500;
+    reasons.push('contributor_anchor');
+  }
+  if (contributor === 'identity' || contributor === 'profile') {
+    score += 900;
+    reasons.push('exact_ham_identity');
+  } else if (contributor === 'agentJDs') {
+    score += 600;
+    reasons.push('seat_employment_context');
+  } else if (contributor === 'namedAgentRecords') {
+    score += 800;
+    reasons.push('question_named_seat');
+  } else if (contributor === 'preferences' || contributor === 'wonderGames') {
+    score += 700;
+    reasons.push('question_triggered_contributor');
+  }
+  return {contributor:contributor,reasons:reasons,score:score,text:text};
+}
+
+function compareCandidates(a, b) {
+  if (a.score !== b.score) return b.score - a.score;
+  const created = String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  return created || String(a.id).localeCompare(String(b.id));
+}
+
+function runtimeContextBudgets(value) {
+  const heapLimit = Number(v8.getHeapStatistics().heap_size_limit || 0);
+  const heapUsed = Number(process.memoryUsage().heapUsed || 0);
+  const headroom = Math.max(0, heapLimit - heapUsed);
+  const requestedCompact = Number(value && value.compact_byte_budget);
+  const requestedFcw = Number(value && value.fcw_byte_budget);
+  const compact = Number.isFinite(requestedCompact) && requestedCompact >= 16384
+    ? requestedCompact : Math.max(16384, Math.floor(headroom / 128));
+  const fcw = Number.isFinite(requestedFcw) && requestedFcw >= 16384
+    ? requestedFcw : Math.max(16384, Math.floor(headroom / 32));
+  return {compact_bytes:compact,fcw_bytes:fcw,heap_limit_bytes:heapLimit,
+    heap_used_bytes:heapUsed,source:Number.isFinite(requestedFcw) && requestedFcw >= 16384
+      ? 'requesting_seat_context_policy' : 'node_v8_heap_headroom'};
+}
+
+// Agent FIND now runs before FCW body expansion. It mechanically routes compact indexed facts
+// for the exact question and requesting seat, keeps a bounded metadata heap on the indexed hot
+// path, then expands only the selected row IDs. It makes no semantic ruling and calls no
+// model. The receipt exposes every selected ID, inclusion reason, query time, byte envelope, and
+// observed heap high-water so a later cycle can expand instead of pretending omitted history did
+// not exist.
+async function planWallEvidence(input, options) {
+  const value = input || {};
+  const opts = options || {};
+  const finder = opts.findModule || defaultFind;
+  const hamUid = exactHam(value.ham_uid);
+  const seatNodeId = clean(value.seat_node_id, 160);
+  if (!hamUid || !seatNodeId || typeof finder.scanFcwEvidence !== 'function' ||
+      typeof finder.expandFcwEvidence !== 'function') {
+    return {ok:false,available:false,reason:'agent_find_navigator_unavailable'};
+  }
+  const started = Date.now();
+  const heapStart = process.memoryUsage().heapUsed;
+  let heapHighWater = heapStart;
+  let compactBytes = 0;
+  let candidatesSeen = 0;
+  const budgets = runtimeContextBudgets(value);
+  const compactBudget = budgets.compact_bytes;
+  const questionOnlyTerms = questionTerms(value.question);
+  const terms = questionOnlyTerms.concat(questionTerms([value.seat_node_id,value.seat_name]
+    .join(' '))).filter(function (term, index, all) { return all.indexOf(term) === index; });
+  const selected = new Map();
+  const compactOmitted = new Map();
+  const anchors = new Set();
+  const scan = await finder.scanFcwEvidence({ham_uid:hamUid,viewer_tier:value.viewer_tier,
+    named_agents:value.named_agents,include_preferences:value.include_preferences,
+    include_wonder_games:value.include_wonder_games,question_terms:questionOnlyTerms},
+    {signal:opts.signal,
+      onPage:async function (rows, receipt) {
+        heapHighWater = Math.max(heapHighWater, process.memoryUsage().heapUsed);
+        rows.forEach(function (row) {
+          candidatesSeen += 1;
+          if (!row || row.id == null) return;
+          const facts = candidateFacts(row, receipt, terms, anchors);
+          if (!facts.score) return;
+          const key = String(row.id);
+          const prior = selected.get(key);
+          if (prior) {
+            if (prior.contributors.indexOf(facts.contributor) < 0) {
+              prior.contributors.push(facts.contributor);
+            }
+            facts.reasons.forEach(function (reason) {
+              if (prior.reasons.indexOf(reason) < 0) prior.reasons.push(reason);
+            });
+            prior.score = Math.max(prior.score, facts.score);
+            return;
+          }
+          const entry = {id:row.id,contributors:[facts.contributor],reasons:facts.reasons,
+            score:facts.score,created_at:row.created_at || null,source:row.source || null};
+          entry.compact_bytes = Buffer.byteLength(stableStringify(entry), 'utf8');
+          selected.set(key, entry);
+          compactOmitted.delete(key);
+          compactBytes += entry.compact_bytes;
+          if (compactBytes > compactBudget) {
+            const ordered = Array.from(selected.values()).sort(compareCandidates);
+            while (compactBytes > compactBudget && ordered.length > 1) {
+              const dropped = ordered.pop();
+              selected.delete(String(dropped.id));
+              compactBytes -= dropped.compact_bytes;
+              compactOmitted.set(String(dropped.id), {id:dropped.id,
+                contributors:dropped.contributors,reasons:dropped.reasons,
+                reason:'agent_find_compact_byte_envelope_reached'});
+            }
+          }
+        });
+      }});
+  heapHighWater = Math.max(heapHighWater, process.memoryUsage().heapUsed);
+  if (!scan || scan.ok !== true || scan.available !== true) {
+    return {ok:false,available:false,reason:clean(scan && scan.reason ||
+      'agent_find_compact_scan_unavailable',160),scan:scan || null};
+  }
+  const selection = Array.from(selected.values()).sort(compareCandidates);
+  const expanded = await finder.expandFcwEvidence(selection, value.viewer_tier, {
+    signal:opts.signal,max_bytes:budgets.fcw_bytes
+  });
+  heapHighWater = Math.max(heapHighWater, process.memoryUsage().heapUsed);
+  if (!expanded || expanded.ok !== true || expanded.available !== true) return expanded;
+  const labels = ['identity','agentJDs','context','recent','doctrine','profile','statedPlans',
+    'namedAgentRecords','preferences','wonderGames'];
+  const failures = Array.isArray(scan.failures) ? scan.failures : [];
+  const contributors = {};
+  labels.forEach(function (label) {
+    const rows = expanded.by_contributor[label] || [];
+    const failed = failures.filter(function (failure) { return failure.contributor === label; });
+    contributors[label] = {ok:failed.length === 0 || rows.length > 0,
+      available:failed.length === 0 || rows.length > 0,partial:failed.length > 0,
+      reason:failed.length && !rows.length ? failed[0].reason : null,
+      failures:failed,beads:rows,count:rows.length,ms:Date.now() - started};
+  });
+  const compactOmissions = Array.from(compactOmitted.values()).filter(function (entry) {
+    return !selected.has(String(entry.id));
+  });
+  const partial = scan.partial === true || expanded.envelope_reached === true ||
+    compactOmissions.length > 0;
+  return {ok:true,available:true,complete:!partial,partial:partial,
+    schema:'envolve.agent-find.evidence-plan.v1',
+    ham_uid:hamUid,seat_node_id:seatNodeId,question_sha256:digest(clean(value.question,12000)),
+    query_ms:Date.now() - started,candidates_seen:candidatesSeen,compact_pages:scan.pages,
+    compact_bytes:compactBytes,compact_byte_budget:compactBudget,
+    selected_row_ids:selection.map(function (entry) { return entry.id; }),
+    selections:selection.map(function (entry) { return {id:entry.id,
+      contributors:entry.contributors,reasons:entry.reasons}; }),
+    fcw_bytes:expanded.retained_bytes,fcw_byte_budget:expanded.max_bytes,
+    context_budget_source:budgets.source,heap_limit_bytes:budgets.heap_limit_bytes,
+    byte_envelope_reached:expanded.envelope_reached,omitted:expanded.omitted,
+    compact_omitted:compactOmissions,
+    continuations:Array.isArray(scan.continuations) ? scan.continuations : [],
+    full_history_expansion_available:typeof finder.walkFcwEvidence === 'function',
+    heap_start_bytes:heapStart,heap_high_water_bytes:heapHighWater,
+    contributors:contributors,scan:scan};
 }
 
 function employmentRecord(registry, node, providerSeat) {
@@ -336,13 +515,13 @@ async function bindWall(input, options) {
     }).length,
     contributorsTotal:Object.keys(augmentedContributors).length,
     contributorsResolved:(Number.isFinite(priorResolved) ? priorResolved : 0) + 2,
-    agent_find:{
+    agent_find:Object.assign({}, fcw.agent_find || {}, {
       ok:true,schema:'envolve.agent-find.wake.v1',node_id:AGENT_FIND_NODE_ID,
       seat_name:providerSeat,seat_node_id:target.id,employment_record:employment,
       recent_cycle_truth:truth,truth_beacon:{source:built.source,
         stamp_type:built.beacon.stamp_type,row_id:existing.id || null,readback_verified:true},
       prompt_appendix:promptAppendix
-    }
+    })
   });
 }
 
@@ -498,10 +677,12 @@ async function recordExternalClosureVerification(input, original, options) {
 }
 
 module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
-  readRecentCycleTruth:readRecentCycleTruth,bindWall:bindWall,
+  readRecentCycleTruth:readRecentCycleTruth,planWallEvidence:planWallEvidence,bindWall:bindWall,
   bindClosedWorld:bindClosedWorld,bindProviderRequest:bindProviderRequest,
   recordExternalClosureVerification:recordExternalClosureVerification,
   _test:{recentTruthQueries:recentTruthQueries,employmentRecord:employmentRecord,
     recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt,
     parseProviderBody:parseProviderBody,messageFacts:messageFacts,closedWorldRecent:closedWorldRecent,
+    questionTerms:questionTerms,candidateFacts:candidateFacts,compareCandidates:compareCandidates,
+    runtimeContextBudgets:runtimeContextBudgets,
     digest:digest}};
