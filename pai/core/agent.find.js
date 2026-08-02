@@ -437,9 +437,69 @@ async function bindProviderRequest(input, options) {
     seat_node_id:seatNodeId,seat_name:seatName,context_sha256:bound.context_sha256};
 }
 
+// Agent FIND owns the organic closure observation. CATHY may point at her immutable audit and
+// checkout, but she cannot author this row or supply its facts. Agent FIND replays every source,
+// protected-main, focused-test, merge, and two-service live proof before the canonical writer is
+// allowed to persist the exact edge-bearing receipt.
+async function recordExternalClosureVerification(input, original, options) {
+  const opts=options||{},brain=opts.brain||defaultBrain,proof=opts.deliveryProof;
+  if(!proof||typeof proof.verifyExternalCandidate!=='function')return{ok:false,
+    reason:'agent_find_external_closure_delivery_proof_missing'};
+  const candidate=await proof.verifyExternalCandidate(
+      input,original,Object.assign({},opts,{brain:brain}));
+  if(!candidate||candidate.ok!==true||candidate.schema!==
+      'envolve.cathy-shadow-external-candidate.v1')return candidate||{ok:false,
+        reason:'agent_find_external_closure_candidate_invalid'};
+  const external=candidate.result.external,
+    built=truthBeacons.buildExternalClosureReceipt({ham_uid:original.row.ham_uid,
+      original_incident_source:original.row.source,
+      original_finding_source:original.context.cold_audit_source,
+      classification_id:original.finding.classification_id,repository:original.repository,
+      path:original.path,target_wonder:original.finding.target_wonder,
+      pr_number:external.pr_number,head_sha:external.head_sha,merge_sha:external.merge_sha,
+      protected_main_sha:candidate.source.main_head_sha,
+      focused_checkout_source:candidate.result.focused_row.source,
+      focused_checkout_sha256:candidate.focused_checkout_sha256,
+      focused_test_token:candidate.focused_test_token,
+      live_service_ids:external.live_service_ids,live_sha:external.live_sha,
+      live_deployments:candidate.live.deployments,
+      verified_at:opts.observed_at||new Date(opts.now||Date.now()).toISOString()});
+  if(!built.ok)return built;
+  let row;
+  try { row=await brain.findBySource(built.source,exactHam(original.row.ham_uid)); }
+  catch(error){return{ok:false,reason:'agent_find_external_closure_read_failed'};}
+  if(!row){
+    try { await brain.writeBead(built.spec); }
+    catch(error){return{ok:false,reason:'agent_find_external_closure_write_failed'};}
+    try { row=await brain.findBySource(built.source,exactHam(original.row.ham_uid)); }
+    catch(error){return{ok:false,reason:'agent_find_external_closure_readback_failed'};}
+  }
+  const expected={source:built.source,ham_uid:exactHam(original.row.ham_uid),
+    original_incident_source:original.row.source,
+    original_finding_source:original.context.cold_audit_source,
+    classification_id:original.finding.classification_id,repository:original.repository,
+    path:original.path,target_wonder:original.finding.target_wonder,
+    pr_number:Number(external.pr_number),head_sha:external.head_sha,merge_sha:external.merge_sha,
+    protected_main_sha:candidate.source.main_head_sha,
+    focused_checkout_source:candidate.result.focused_row.source,
+    focused_checkout_sha256:candidate.focused_checkout_sha256,
+    focused_test_token:candidate.focused_test_token,
+    live_service_ids:external.live_service_ids.slice().sort(),live_sha:external.live_sha,
+    live_deployments:candidate.live.deployments.map(function (row) {
+      return {service_id:clean(row&&row.service_id,160),deploy_id:clean(row&&row.deploy_id,220),
+        commit_sha:clean(row&&row.commit_sha,40).toLowerCase(),status:clean(row&&row.status,40)};
+    }).sort(function (a,b) { return a.service_id.localeCompare(b.service_id); })};
+  const checked=truthBeacons.validateExternalClosureRow(row,expected);
+  if(!checked.ok)return{ok:false,reason:'agent_find_external_closure_readback_mismatch',
+    detail:checked.reason};
+  return{ok:true,source:built.source,row:row,expected:expected,candidate:candidate,
+    readback_verified:true};
+}
+
 module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
   readRecentCycleTruth:readRecentCycleTruth,bindWall:bindWall,
   bindClosedWorld:bindClosedWorld,bindProviderRequest:bindProviderRequest,
+  recordExternalClosureVerification:recordExternalClosureVerification,
   _test:{recentTruthQueries:recentTruthQueries,employmentRecord:employmentRecord,
     recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt,
     parseProviderBody:parseProviderBody,messageFacts:messageFacts,closedWorldRecent:closedWorldRecent,
