@@ -961,10 +961,19 @@ async function captureTerminalResponse(response, options) {
   var body = null;
   if (bytes) { try { body = JSON.parse(bytes.toString('utf8')); } catch (error) { body = null; } }
   var usage = usageFacts(body);
-  var providerRequestId = headerValue({headers:response && response.headers}, 'x-generation-id') ||
-    headerValue({headers:response && response.headers}, 'x-request-id') ||
-    headerValue({headers:response && response.headers}, 'request-id') ||
-    identifier(body && body.id,240) || identifier(body&&body.data&&body.data.session_id,240) || null;
+  var receiptProvider=identifier(options&&options.receipt&&options.receipt.provider,80);
+  // Provider control-plane identity outranks generic HTTP trace headers. ElevenLabs' usage
+  // fact is keyed by its documented `request-id`; LiveAvatar's historic ledger is keyed by
+  // `data.session_id`. Banking an x-request-id trace instead makes the immutable terminal
+  // impossible to reconcile to the provider fact later.
+  var providerRequestId=receiptProvider==='elevenlabs'
+    ? headerValue({headers:response&&response.headers},'request-id')||null
+    : receiptProvider==='liveavatar'
+      ? identifier(body&&body.data&&body.data.session_id,240)||null
+      : headerValue({headers:response&&response.headers},'x-generation-id')||
+        headerValue({headers:response&&response.headers},'x-request-id')||
+        headerValue({headers:response&&response.headers},'request-id')||
+        identifier(body&&body.id,240)||null;
   var providerUsage=inlineProviderUsage(options&&options.receipt,response);
   return {outcome:{status_code:response && Number.isInteger(response.status) ? response.status : null,
     disposition:response && response.ok === true ? 'SUCCEEDED' : 'HTTP_ERROR',
