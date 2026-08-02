@@ -1124,8 +1124,13 @@ function bucketRows(counts) {
 function responseRange(response) {
   var raw = response && response.headers && response.headers.get &&
     response.headers.get('content-range');
-  var match = String(raw || '').match(/^(\d+)-(\d+)\/(?:\d+|\*)$/);
-  return match ? {start:Number(match[1]),end:Number(match[2])} : null;
+  var text=String(raw||'');
+  var match=text.match(/^(\d+)-(\d+)\/(\d+|\*)$/);
+  if(match)return{start:Number(match[1]),end:Number(match[2]),empty:false,
+    total:match[3]==='*'?null:Number(match[3])};
+  var empty=text.match(/^\*\/(\d+|\*)$/);
+  return empty?{start:null,end:null,empty:true,
+    total:empty[1]==='*'?null:Number(empty[1])}:null;
 }
 function costUnits(value) {
   var normalized=decimalCost(value);
@@ -1215,8 +1220,13 @@ async function readProviderStatementInterval(options) {
             'provider_statement_schema_unavailable':'provider_statement_activity_read_failed'});
       rows=await boundedJson(response,MAX_STORE_BYTES);
       if(!Array.isArray(rows))throw new Error('provider_statement_activity_invalid');
-      if(!rows.length)break;
       var range=responseRange(response);
+      if(!rows.length){
+        if(!range||range.empty!==true||range.total!==null&&offset<range.total){
+          throw new Error('provider_statement_activity_pagination_unverified');
+        }
+        break;
+      }
       if(!range||range.start!==offset||range.end-range.start+1!==rows.length){
         throw new Error('provider_statement_activity_pagination_unverified');
       }
@@ -1319,8 +1329,16 @@ async function readSummary(options) {
       }
       var rows = await boundedJson(response, MAX_STORE_BYTES);
       if (!Array.isArray(rows)) throw new Error('provider_spend_summary_payload_invalid');
-      if (!rows.length) break;
       var range = responseRange(response);
+      // An empty transport page is terminal only when Content-Range proves there is no
+      // known remainder. A provider returning */4000 at offset 500 has not delivered a
+      // complete ledger, so the spend wall must fail closed instead of publishing 500 rows.
+      if (!rows.length) {
+        if (!range || range.empty !== true || range.total !== null && offset < range.total) {
+          throw new Error('provider_spend_summary_pagination_unverified');
+        }
+        break;
+      }
       if (!range || range.start !== offset || range.end - range.start + 1 !== rows.length) {
         throw new Error('provider_spend_summary_pagination_unverified');
       }
