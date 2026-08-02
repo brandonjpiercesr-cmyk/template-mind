@@ -358,6 +358,70 @@ function mayRetryHold(reason) {
   return isCleanBoardHold(reason) && !terminalHoldCause(reason);
 }
 
+// ⬡B:core.pai_outbound_council:FIX:shadow_model_hold_is_never_a_terminal_refusal_to_a_person:20260802⬡
+// FOUNDER DIRECT, 20260802, said explicitly and repeatedly across the night: "Every single
+// thing we need from her gets refused by that? Hell no. Let that be the last fucking time
+// ever. Remove it." shadow_model_hold is the SHADOW stage's own probabilistic model judge
+// losing a coin flip on an otherwise clean board -- documented above at :1616 and :3315: the
+// identical clean answer holds once and passes once, 33 seconds apart. It is "a probabilistic
+// no," never a real integrity catch.
+//
+// routes/alive.arrive.routes.js (20260718) and core/wren/reply.js (20260718, widened
+// 20260719/20260725) already prove the correct, narrow, non-reckless cure: one bounded
+// re-run of the exact same question before a person is ever shown a refusal, and ONLY when
+// shadow_model_hold is the WHOLE reason, alone, with nothing else riding beside it. A real
+// deterministic hold (shadow_deterministic_hold, a named-evidence contradiction, a
+// fabrication, WRIT's internal_system_leak or quality_hold) is a completely different reason
+// string and this returns false for every one of them, unchanged -- those are real safety
+// catches, not the flaky judge, and the founder did not ask for those to be touched.
+//
+// Deliberately narrower than mayRetryHold/isCleanBoardHold above: those two also cover
+// writ_hold, shadow_wonder_hold, and content_too_short, which is correct for the channels
+// that already opted into that wider retry (wren/reply.js). Tonight's order names one cause
+// only, so this reads exactly and only that one, and every consumer this lane touches asks
+// the identical question instead of hand-copying a string compare five different ways.
+function isBareShadowModelHold(reason) {
+  return String(reason == null ? '' : reason).trim().toLowerCase() === 'shadow_model_hold';
+}
+
+// A bare model-only SHADOW hold may be carried only after the canonical stage itself
+// proves that the deterministic board was clean and names the exact quoted claim the
+// model disliked. This is deliberately stricter than reading the reason string alone:
+// a custom stage, forged result, unavailable signed relay, or deterministic finding
+// cannot manufacture the founder's model-only exception by returning one magic word.
+// The caller lives inside runOutboundCouncil's existing heal-and-resubmit seam, so the
+// candidate stays on the same request and cycle and never buys a second runPAI turn.
+// ⬡B:core.pai_outbound_council:FIX:a_reach_policy_decision_never_carries_a_hold:20260802⬡
+// Codex review, live: this carry path only re-validates the DETERMINISTIC board and the
+// model's own quoted claim; it never re-runs the closed-world evidence check
+// (core/reach/policy.contract.js only checks JSON shape/field relationships, and
+// core/reach/cycle.decision.js treats a committed structured answer as authoritative and
+// can execute a NOW decision). A structured reach_policy_decision turn (the same shape
+// structuredReachPolicyContext already recognizes for the meta-commentary/other stage
+// pass-throughs) whose SHADOW hold names an unsupported claim must stay fail-closed, since
+// carrying it here could commit a policy the mind itself said was not evidenced, and that
+// policy can drive a real external reach. `input` is the second, optional argument so
+// every existing caller in this file keeps working unmodified; callers inside
+// runOutboundCouncil (the only place a real reach_policy_decision turn is ever built)
+// always pass it.
+function mayCarryBareShadowModelHold(result, input) {
+  if (!result || result.ok === true || !isBareShadowModelHold(result.reason) ||
+      !isHumanFacingAnswer(result.answer)) return false;
+  if (structuredReachPolicyContext({ channel: input && input.channel,
+      context: input && input.context, answer: result.answer })) return false;
+  var evidence = result.evidence && typeof result.evidence === 'object'
+    ? result.evidence : {};
+  var deterministic = evidence.deterministic &&
+    typeof evidence.deterministic === 'object' ? evidence.deterministic : null;
+  var judgment = evidence.judgment && typeof evidence.judgment === 'object'
+    ? evidence.judgment : null;
+  var claim = judgment && judgment.approved === false
+    ? String(judgment.claim || '').trim() : '';
+  return !!(deterministic && deterministic.verdict === 'PASS' &&
+    Array.isArray(deterministic.flags) && deterministic.flags.length === 0 &&
+    claim.length >= 12 && String(result.answer).indexOf(claim) !== -1);
+}
+
 var HOLLOW_HEAL_GUIDANCE = 'The held attempt returned tool or function call protocol, ' +
   'or returned no words at all, instead of an answer for the person. Do not call a tool. ' +
   'Do not emit a tool_call or function_call block, a JSON envelope, or any protocol ' +
@@ -1838,6 +1902,143 @@ function verifiedFactEvidenceText(ctx) {
   return parts.join('\n');
 }
 
+var SHADOW_CONTEXT_STRING_FIELDS = Object.freeze({
+  mode: 80,
+  call_id: 240,
+  session_id: 240,
+  turn_id: 240,
+  call_binding_schema: 160,
+  call_binding_digest: 64
+});
+
+var SHADOW_CONTEXT_BOOLEAN_FIELDS = Object.freeze([
+  'outbound_finalize',
+  'internal_deliberation',
+  'reach_handoff_eligible'
+]);
+var SHADOW_CONTEXT_MAX_BYTES = 256000;
+
+// The public compatibility door cannot hand arbitrary JSON to SHADOW. This is the
+// one production carriage for the context fields the canonical stage actually
+// understands. Unknown top-level fields die here and trace arrays remain finite.
+// Accepted signed evidence retains its exact bytes; oversized envelopes fail closed
+// instead of silently truncating a signature into different evidence.
+function canonicalShadowContext(value) {
+  var source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  var context = {};
+  Object.keys(SHADOW_CONTEXT_STRING_FIELDS).forEach(function (name) {
+    if (typeof source[name] !== 'string') return;
+    context[name] = source[name];
+  });
+  var overlongString = Object.keys(SHADOW_CONTEXT_STRING_FIELDS).some(function (name) {
+    return typeof context[name] === 'string' &&
+      Buffer.byteLength(context[name], 'utf8') > SHADOW_CONTEXT_STRING_FIELDS[name];
+  });
+  if (overlongString) return { ok:false, reason:'shadow_context_string_too_large' };
+  SHADOW_CONTEXT_BOOLEAN_FIELDS.forEach(function (name) {
+    if (typeof source[name] === 'boolean') context[name] = source[name];
+  });
+  if (Array.isArray(source.tools_used)) {
+    if (source.tools_used.length > 40 || source.tools_used.some(function (item) {
+      return typeof item !== 'string' || Buffer.byteLength(item, 'utf8') > 160;
+    })) return { ok:false, reason:'shadow_tools_used_invalid' };
+    context.tools_used = source.tools_used.slice();
+  }
+  if (Array.isArray(source.pending_effects)) {
+    if (source.pending_effects.length > 20) {
+      return { ok:false, reason:'shadow_pending_effects_too_many' };
+    }
+    context.pending_effects = source.pending_effects.slice();
+  }
+  if (Array.isArray(source.verified_evidence)) {
+    if (source.verified_evidence.length > 8) {
+      return { ok:false, reason:'shadow_verified_evidence_too_many' };
+    }
+    context.verified_evidence = source.verified_evidence.slice();
+  }
+  if (source.identity_provenance && typeof source.identity_provenance === 'object' &&
+      !Array.isArray(source.identity_provenance)) {
+    context.identity_provenance = source.identity_provenance;
+  }
+  if (source.identity_evidence_receipt &&
+      typeof source.identity_evidence_receipt === 'object' &&
+      !Array.isArray(source.identity_evidence_receipt)) {
+    context.identity_evidence_receipt = source.identity_evidence_receipt;
+  }
+  var serialized;
+  try { serialized = stableStringify(context); }
+  catch (eContext) { return { ok:false, reason:'shadow_context_invalid' }; }
+  if (Buffer.byteLength(serialized, 'utf8') > SHADOW_CONTEXT_MAX_BYTES) {
+    return { ok:false, reason:'shadow_context_too_large' };
+  }
+  return { ok:true, context:context };
+}
+
+function canonicalShadowStageInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok:false, reason:'shadow_context_required' };
+  }
+  var hamUid = String(value.hamUid || '').trim().toUpperCase();
+  var requestId = String(value.requestId || '').trim();
+  var cycleId = String(value.cycleId || '').trim();
+  var question = typeof value.question === 'string' ? value.question : '';
+  var deliberationInput = typeof value.deliberationInput === 'string'
+    ? value.deliberationInput : '';
+  var answer = typeof value.answer === 'string' ? value.answer : '';
+  var channel = String(value.channel || '').trim().toLowerCase();
+  if (!/^[A-Z0-9._:-]{2,160}$/.test(hamUid)) {
+    return { ok:false, reason:'shadow_ham_unverified' };
+  }
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(requestId)) {
+    return { ok:false, reason:'shadow_request_id_unverified' };
+  }
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(cycleId)) {
+    return { ok:false, reason:'shadow_cycle_id_unverified' };
+  }
+  if (!question.trim()) return { ok:false, reason:'shadow_question_required' };
+  if (!deliberationInput.trim()) {
+    return { ok:false, reason:'shadow_deliberation_input_required' };
+  }
+  if (!answer.trim() || !isHumanFacingAnswer(answer)) {
+    return { ok:false, reason:'shadow_answer_required' };
+  }
+  if (!/^[a-z0-9._:-]{1,40}$/.test(channel)) {
+    return { ok:false, reason:'shadow_channel_unverified' };
+  }
+  var canonicalContext = canonicalShadowContext(value.context);
+  if (!canonicalContext.ok) return canonicalContext;
+  var input = {
+    hamUid:hamUid,
+    requestId:requestId,
+    cycleId:cycleId,
+    question:question,
+    deliberationInput:deliberationInput,
+    answer:answer,
+    channel:channel,
+    context:canonicalContext.context
+  };
+  if (typeof value.activeWorld === 'string' &&
+      /^[A-Za-z0-9._:-]{1,160}$/.test(value.activeWorld.trim())) {
+    input.activeWorld = value.activeWorld.trim();
+  }
+  return { ok:true, input:input };
+}
+
+// Supported production entry for a single SHADOW stage. core/council.js used to
+// reach into `_test`, which made a testing seam the live API and bypassed all input
+// shaping. Every production caller now enters here and receives the same canonical
+// stage after identity, lineage, channel, and evidence carriage validate.
+async function runShadowStage(value, injected) {
+  var canonical = canonicalShadowStageInput(value);
+  if (!canonical.ok) {
+    return { ok:false, answer:String(value && value.answer || ''),
+      reason:canonical.reason, evidence:{ flags:[], input_rejected:true } };
+  }
+  var stage = injected && typeof injected.shadowStage === 'function'
+    ? injected.shadowStage : defaultShadowStage;
+  return stage(canonical.input, injected || {});
+}
+
 async function defaultShadowStage(ctx, injected) {
   injected = injected || {};
   var structuredPolicy = structuredReachPolicyContext(ctx);
@@ -3314,6 +3515,8 @@ async function runOutboundCouncil(input, injected) {
       // per stage. If the stage still holds the healed answer, only THEN does the turn
       // fail -- a genuine, twice-confirmed integrity problem, not one probabilistic no.
       var _healReason = receipt.reason || 'stage_held';
+      var _initialModelOnlyCarry = stage === 'SHADOW' && humanStageAnswer &&
+        mayCarryBareShadowModelHold(normalized, input);
       // ⬡B:core.pai_outbound_council:FIX:the_expression_stage_gets_a_repair_too:20260725⬡
       // ANU_EXPRESSION was the one TRANSFORMING stage with no heal attempt at all, so
       // an emptied or hollow expression killed the turn on the very first no while
@@ -3358,14 +3561,18 @@ async function runOutboundCouncil(input, injected) {
             }
             var _reEnded = nowMs(deps);
             var _reHuman = isHumanFacingAnswer(_reNorm.answer);
-            var _rePassed = _reNorm.ok && _reHuman;
+            var _reModelOnlyCarry = stage === 'SHADOW' && _reHuman &&
+              mayCarryBareShadowModelHold(_reNorm, input);
+            var _rePassed = (_reNorm.ok || _reModelOnlyCarry) && _reHuman;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
             // Replace the held receipt in place and span the original stage input
             // to the retry output so the seven-stage digest chain stays continuous.
             stages[stages.length - 1] = makeStageReceipt(stage, i, true, true,
               _rePassed, before, _reNorm.answer, started, _reEnded,
-              _rePassed ? 'STAGE_HEALED_PASS' :
+              _rePassed ? (_reModelOnlyCarry
+                ? 'SHADOW_PASS_MODEL_ONLY_HOLD_CARRIED'
+                : 'STAGE_HEALED_PASS') :
                 (_reHuman ? (_reNorm.reason || 'stage_held')
                   : hollowStageReason(_reNorm.answer, _reNorm.reason)),
               {
@@ -3389,21 +3596,48 @@ async function runOutboundCouncil(input, injected) {
                   ended_at: new Date(_reEnded).toISOString(),
                   ms: Math.max(0, _reEnded - _reStarted),
                   evidence: _reNorm.evidence || {}
-                }
+                },
+                model_only_hold_carried: _reModelOnlyCarry,
+                carried_candidate_digest: _reModelOnlyCarry
+                  ? digestText(_reNorm.answer) : null
               });
-            if (_reNorm.ok && typeof _reNorm.answer === 'string' &&
+            if ((_reNorm.ok || _reModelOnlyCarry) && typeof _reNorm.answer === 'string' &&
                 _reNorm.answer.trim() !== '' && _reHuman) {
               currentAnswer = _reNorm.answer;
               continue; // healed and passed; move to the next stage
             }
-            return failureResult(!_reHuman
-              ? hollowStageReason(_reNorm.answer, _reNorm.reason)
-              : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
+            if (!_initialModelOnlyCarry) {
+              return failureResult(!_reHuman
+                ? hollowStageReason(_reNorm.answer, _reNorm.reason)
+                : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
+            }
+            _healOutcome = !_reHuman
+              ? 'heal_resubmission_hollow'
+              : 'heal_resubmission_still_held';
           }
         } catch (_healErr) {
           // heal is best-effort; fall through to the honest failure, but say it threw
           _healOutcome = 'heal_threw:' + errorReason(_healErr).slice(0, 60);
         }
+      }
+      // ⬡B:core.pai_outbound_council:FIX:model_only_shadow_never_buys_a_second_cycle:20260802⬡
+      // The one canonical same-cycle repair above got first refusal. If it could not
+      // produce a better committed candidate, carry the original only when SHADOW's own
+      // typed evidence proves this was the exact bare model-only hold on a clean
+      // deterministic board. No route retries runPAI, no new cycle id is minted, and no
+      // deterministic, WRIT, signed-relay, or other hold can enter this branch.
+      if (_initialModelOnlyCarry) {
+        stages[stages.length - 1] = makeStageReceipt(stage, i, true, true, true,
+          before, normalized.answer, started, ended,
+          'SHADOW_PASS_MODEL_ONLY_HOLD_CARRIED',
+          Object.assign({}, normalized.evidence || {}, {
+            heal_attempted: _healableStage && isHumanFacingAnswer(before),
+            heal_outcome: _healOutcome || 'heal_missed',
+            model_only_hold_carried: true,
+            carried_candidate_digest: digestText(normalized.answer)
+          }));
+        currentAnswer = normalized.answer;
+        continue;
       }
       // Re-stamp the held receipt with the heal outcome. Same stage, same ordinal, same
       // input and output digests and the same held reason; only the diagnostic evidence
@@ -4093,6 +4327,7 @@ module.exports = {
   namedCauseIn: namedCauseIn,
   terminalHoldCause: terminalHoldCause,
   mayRetryHold: mayRetryHold,
+  isBareShadowModelHold: isBareShadowModelHold,
   TERMINAL_HOLD_CAUSES: TERMINAL_HOLD_CAUSES,
   shouldRunQuill: shouldRunQuill,
   extractNamedContextEvidence: extractNamedContextEvidence,
@@ -4102,6 +4337,7 @@ module.exports = {
   directNamedEvidenceRequest: directNamedEvidenceRequest,
   boundedCouncilFailureCodes: boundedCouncilFailureCodes,
   councilHoldEvidence: councilHoldEvidence,
+  runShadowStage: runShadowStage,
   buildAclStamp: buildAclStamp,
   digestText: digestText,
   stableStringify: stableStringify,
@@ -4142,6 +4378,8 @@ module.exports = {
     directNamedEvidenceRequest: directNamedEvidenceRequest,
     boundedCouncilFailureCodes: boundedCouncilFailureCodes,
     councilHoldEvidence: councilHoldEvidence,
+    canonicalShadowContext: canonicalShadowContext,
+    canonicalShadowStageInput: canonicalShadowStageInput,
     categoricalMemoryContradiction: categoricalMemoryContradiction,
     identityEvidenceReceiptContradictions:identityEvidenceReceiptContradictions,
     verifiedFactEvidenceText:verifiedFactEvidenceText,

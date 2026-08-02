@@ -40,7 +40,7 @@ function digest(value) {
 }
 
 function list(value) {
-  return Array.isArray(value) ? value.map(function (item) { return clean(item, 500); })
+  return Array.isArray(value) ? value.map(function (item) { return clean(item); })
     .filter(Boolean) : [];
 }
 
@@ -48,7 +48,7 @@ function copyQuery(query, hamUid, viewerTier) {
   const input = plain(query) ? query : {};
   const output = {};
   ['stamp_type','source','source_prefix','source_not_prefix','agent_global','importance_gte',
-    'select','order','limit'].forEach(function (key) {
+    'select','order'].forEach(function (key) {
     if (input[key] !== undefined && input[key] !== null && input[key] !== '') {
       output[key] = input[key];
     }
@@ -56,6 +56,7 @@ function copyQuery(query, hamUid, viewerTier) {
   // The requesting world and its tier are boundary facts, never registry configuration.
   output.ham_uid = hamUid;
   output.viewer_tier = viewerTier;
+  output.exhaustive = true;
   return output;
 }
 
@@ -64,11 +65,11 @@ function recentTruthQueries(node, hamUid, viewerTier) {
     node.metadata.agent_find.recent_truth;
   // Every registered seat gets an executable default rather than an unresolved toolbelt
   // string. A seat can narrow this in registry metadata. The default remains exact-HAM,
-  // indexed, bounded, and successful-empty aware.
+  // indexed, exhaustively paginated, and successful-empty aware.
   const suffix = clean(node && node.id, 160).split('.').pop()
     .replace(/[^A-Za-z0-9_-]/g, '_');
   const source = Array.isArray(configured) && configured.length ? configured
-    : suffix ? [{source_prefix:suffix + '.',limit:12}] : [];
+    : suffix ? [{source_prefix:suffix + '.'}] : [];
   if (!source.length) return {ok:false,reason:'agent_find_recent_truth_contract_missing'};
   const queries = source.map(function (query) {
     return copyQuery(query, hamUid, viewerTier);
@@ -139,9 +140,9 @@ function employmentRecord(registry, node, providerSeat) {
 function recentTruthRecord(result) {
   const rows = (result && Array.isArray(result.beads) ? result.beads : []).map(function (row) {
     return {
-      source:clean(row && row.source, 500),
-      stamp_type:clean(row && row.stamp_type, 120),
-      summary:clean(row && row.summary, 500),
+      source:clean(row && row.source),
+      stamp_type:clean(row && row.stamp_type),
+      summary:clean(row && row.summary),
       created_at:clean(row && row.created_at, 80) || null
     };
   });
@@ -218,9 +219,9 @@ function employmentPrompt(record, truth) {
     'SHARED MISSION: ' + record.shared_mission,
     'PERSONA BASE:',
     personaLines.map(function (line) { return '- ' + line; }).join('\n'),
-    'YOUR SEAT DIFFERENTIA: ' + clean(record.persona && record.persona.differentia, 2000),
-    'YOUR TEMPERAMENT: ' + clean(record.persona && record.persona.temperament, 1000),
-    'YOUR JOB: ' + clean(record.jd && record.jd.summary, 2000),
+    'YOUR SEAT DIFFERENTIA: ' + clean(record.persona && record.persona.differentia),
+    'YOUR TEMPERAMENT: ' + clean(record.persona && record.persona.temperament),
+    'YOUR JOB: ' + clean(record.jd && record.jd.summary),
     lines('YOUR DUTIES', duties),
     lines('YOUR HARD NEVERS', never),
     lines('YOUR GOALS', record.goals),
@@ -437,9 +438,69 @@ async function bindProviderRequest(input, options) {
     seat_node_id:seatNodeId,seat_name:seatName,context_sha256:bound.context_sha256};
 }
 
+// Agent FIND owns the organic closure observation. CATHY may point at her immutable audit and
+// checkout, but she cannot author this row or supply its facts. Agent FIND replays every source,
+// protected-main, focused-test, merge, and two-service live proof before the canonical writer is
+// allowed to persist the exact edge-bearing receipt.
+async function recordExternalClosureVerification(input, original, options) {
+  const opts=options||{},brain=opts.brain||defaultBrain,proof=opts.deliveryProof;
+  if(!proof||typeof proof.verifyExternalCandidate!=='function')return{ok:false,
+    reason:'agent_find_external_closure_delivery_proof_missing'};
+  const candidate=await proof.verifyExternalCandidate(
+      input,original,Object.assign({},opts,{brain:brain}));
+  if(!candidate||candidate.ok!==true||candidate.schema!==
+      'envolve.cathy-shadow-external-candidate.v1')return candidate||{ok:false,
+        reason:'agent_find_external_closure_candidate_invalid'};
+  const external=candidate.result.external,
+    built=truthBeacons.buildExternalClosureReceipt({ham_uid:original.row.ham_uid,
+      original_incident_source:original.row.source,
+      original_finding_source:original.context.cold_audit_source,
+      classification_id:original.finding.classification_id,repository:original.repository,
+      path:original.path,target_wonder:original.finding.target_wonder,
+      pr_number:external.pr_number,head_sha:external.head_sha,merge_sha:external.merge_sha,
+      protected_main_sha:candidate.source.main_head_sha,
+      focused_checkout_source:candidate.result.focused_row.source,
+      focused_checkout_sha256:candidate.focused_checkout_sha256,
+      focused_test_token:candidate.focused_test_token,
+      live_service_ids:external.live_service_ids,live_sha:external.live_sha,
+      live_deployments:candidate.live.deployments,
+      verified_at:opts.observed_at||new Date(opts.now||Date.now()).toISOString()});
+  if(!built.ok)return built;
+  let row;
+  try { row=await brain.findBySource(built.source,exactHam(original.row.ham_uid)); }
+  catch(error){return{ok:false,reason:'agent_find_external_closure_read_failed'};}
+  if(!row){
+    try { await brain.writeBead(built.spec); }
+    catch(error){return{ok:false,reason:'agent_find_external_closure_write_failed'};}
+    try { row=await brain.findBySource(built.source,exactHam(original.row.ham_uid)); }
+    catch(error){return{ok:false,reason:'agent_find_external_closure_readback_failed'};}
+  }
+  const expected={source:built.source,ham_uid:exactHam(original.row.ham_uid),
+    original_incident_source:original.row.source,
+    original_finding_source:original.context.cold_audit_source,
+    classification_id:original.finding.classification_id,repository:original.repository,
+    path:original.path,target_wonder:original.finding.target_wonder,
+    pr_number:Number(external.pr_number),head_sha:external.head_sha,merge_sha:external.merge_sha,
+    protected_main_sha:candidate.source.main_head_sha,
+    focused_checkout_source:candidate.result.focused_row.source,
+    focused_checkout_sha256:candidate.focused_checkout_sha256,
+    focused_test_token:candidate.focused_test_token,
+    live_service_ids:external.live_service_ids.slice().sort(),live_sha:external.live_sha,
+    live_deployments:candidate.live.deployments.map(function (row) {
+      return {service_id:clean(row&&row.service_id,160),deploy_id:clean(row&&row.deploy_id,220),
+        commit_sha:clean(row&&row.commit_sha,40).toLowerCase(),status:clean(row&&row.status,40)};
+    }).sort(function (a,b) { return a.service_id.localeCompare(b.service_id); })};
+  const checked=truthBeacons.validateExternalClosureRow(row,expected);
+  if(!checked.ok)return{ok:false,reason:'agent_find_external_closure_readback_mismatch',
+    detail:checked.reason};
+  return{ok:true,source:built.source,row:row,expected:expected,candidate:candidate,
+    readback_verified:true};
+}
+
 module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
   readRecentCycleTruth:readRecentCycleTruth,bindWall:bindWall,
   bindClosedWorld:bindClosedWorld,bindProviderRequest:bindProviderRequest,
+  recordExternalClosureVerification:recordExternalClosureVerification,
   _test:{recentTruthQueries:recentTruthQueries,employmentRecord:employmentRecord,
     recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt,
     parseProviderBody:parseProviderBody,messageFacts:messageFacts,closedWorldRecent:closedWorldRecent,

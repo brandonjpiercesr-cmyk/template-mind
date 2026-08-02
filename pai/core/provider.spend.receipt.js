@@ -13,6 +13,7 @@ var openrouterSeatSpend = require('./openrouter.seat.spend.js');
 var TABLE = 'provider_spend_receipts';
 var RECONCILIATION_TABLE = 'provider_spend_reconciliations';
 var USAGE_RECONCILIATION_TABLE = 'provider_spend_usage_reconciliations';
+var PROVIDER_STATEMENT_TABLE = 'provider_account_statements';
 var BILLABLE_TABLE = 'provider_spend_receipts_billable';
 var SCHEMA = 'anew.provider-spend-receipt.v1';
 var CLAIM_RPC = 'claim_anew_provider_spend_intent';
@@ -20,6 +21,7 @@ var TERMINAL_RPC = 'write_anew_provider_spend_terminal';
 var RECONCILE_RPC = 'reconcile_anew_provider_spend_unknown';
 var PROVIDER_FACT_RPC = 'write_anew_provider_spend_reconciliation';
 var PROVIDER_USAGE_RPC = 'write_anew_provider_spend_usage_reconciliation';
+var PROVIDER_STATEMENT_RPC = 'append_anew_provider_account_statement';
 var MAX_STORE_BYTES = 4 * 1024 * 1024;
 var MAX_RESPONSE_BYTES = 1024 * 1024;
 var SUMMARY_PAGE_SIZE = 500;
@@ -266,6 +268,13 @@ function bankConfig(env) {
   var key = clean(runtime.MEMORY_BANK_KEY || runtime.AIBE_BRAIN_KEY);
   var schema = clean(runtime.BRAIN_SCHEMA || (runtime.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'));
   return {url:url,key:key,schema:schema,ok:!!(url && key && identifier(schema, 80))};
+}
+function statementBankConfig(env) {
+  var runtime=env||process.env;
+  var url=clean(runtime.MEMORY_BANK_URL).replace(/\/$/,'');
+  var key=clean(runtime.MEMORY_BANK_KEY);
+  var schema=clean(runtime.BRAIN_SCHEMA||'memory_bank');
+  return{url:url,key:key,schema:schema,ok:!!(url&&key&&schema==='memory_bank')};
 }
 function readHeaders(config) {
   var out = {apikey:config.key,Authorization:'Bearer ' + config.key};
@@ -540,6 +549,77 @@ async function writeReconciliation(receipt, outcome, options) {
   return{ok:true,row:actual,replayed:payload.inserted!==true};
 }
 
+function exactIso(value) {
+  var parsed=Date.parse(clean(value));
+  if(!Number.isFinite(parsed))return null;
+  return new Date(parsed).toISOString();
+}
+function normalizedProviderStatement(fact) {
+  var observedAt=exactIso(fact&&fact.observed_at);
+  var credits=decimalCost(fact&&fact.total_credits_usd);
+  var usage=decimalCost(fact&&fact.total_usage_usd);
+  if(!fact||fact.provider!=='openrouter'||!observedAt||credits===null||usage===null||
+      fact.source!=='openrouter_credits_control_plane'||fact.read_by_seat!=='account_monitor'){
+    return null;
+  }
+  var authority={schema:'anew.provider-account-statement.v1',provider:'openrouter',
+    observed_at:observedAt,total_credits_usd:credits,total_usage_usd:usage,
+    source:'openrouter_credits_control_plane',read_by_seat:'account_monitor'};
+  var digest=sha(stableJson(authority));
+  return Object.assign({statement_id:digest,provider_fact_digest:digest},authority);
+}
+function sameProviderStatement(actual, expected) {
+  return clean(actual&&actual.statement_id)===expected.statement_id&&
+    clean(actual&&actual.provider_fact_digest)===expected.provider_fact_digest&&
+    clean(actual&&actual.provider)===expected.provider&&
+    exactIso(actual&&actual.observed_at)===expected.observed_at&&
+    decimalCost(actual&&actual.total_credits_usd)===expected.total_credits_usd&&
+    decimalCost(actual&&actual.total_usage_usd)===expected.total_usage_usd&&
+    clean(actual&&actual.source)===expected.source&&
+    clean(actual&&actual.read_by_seat)===expected.read_by_seat;
+}
+async function readProviderStatement(statementId, options) {
+  var config=statementBankConfig(options&&options.env),doFetch=fetchImpl(options);
+  if(!config.ok||!doFetch)return{ok:false,reason:'provider_statement_store_unavailable'};
+  var query=new URLSearchParams({statement_id:'eq.'+statementId,limit:'2'}),response;
+  try{
+    response=await doFetch(config.url+'/rest/v1/'+PROVIDER_STATEMENT_TABLE+'?'+query.toString(),{
+      headers:readHeaders(config),signal:brain.boundedSignal(options&&options.signal,
+        options&&options.env)});
+  }catch(error){return{ok:false,reason:'provider_statement_store_unavailable'};}
+  if(!response||response.ok!==true)return{ok:false,reason:response&&
+    (response.status===404||response.status===400)?'provider_statement_schema_unavailable':
+      'provider_statement_readback_failed'};
+  try{
+    var rows=await boundedJson(response,MAX_STORE_BYTES);
+    if(!Array.isArray(rows)||rows.length!==1)return{ok:false,reason:rows&&rows.length>1?
+      'provider_statement_readback_ambiguous':'provider_statement_readback_missing'};
+    return{ok:true,row:rows[0]};
+  }catch(error){return{ok:false,reason:'provider_statement_readback_invalid'};}
+}
+async function writeProviderAccountStatement(fact, options) {
+  var row=normalizedProviderStatement(fact);
+  if(!row)return{ok:false,reason:'provider_statement_input_invalid'};
+  if(!statementBankConfig(options&&options.env).ok){
+    return{ok:false,reason:'provider_statement_store_unavailable'};
+  }
+  var written=await rpcCall(PROVIDER_STATEMENT_RPC,{p_statement:row},options,
+    'provider_statement_write_failed');
+  if(!written.ok)return written;
+  var payload=written.payload;
+  if(!payload||payload.ok!==true||payload.stored!==true||
+      clean(payload.statement_id)!==row.statement_id){
+    return{ok:false,reason:identifier(payload&&payload.reason,160)||
+      'provider_statement_readback_mismatch'};
+  }
+  var readback=await readProviderStatement(row.statement_id,options);
+  if(!readback.ok)return readback;
+  if(!sameProviderStatement(readback.row,row)){
+    return{ok:false,reason:'provider_statement_readback_mismatch'};
+  }
+  return{ok:true,row:readback.row,replayed:payload.inserted!==true};
+}
+
 function normalizedProviderUsage(value) {
   if(!value || typeof value!=='object' || Array.isArray(value))return null;
   var unit=identifier(value.unit,32),quantity=strictNumber(value.quantity);
@@ -784,9 +864,10 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
   if(!config.ok||!doFetch)return{ok:false,attempted:0,recovered:0,
     reason:'provider_spend_store_unavailable'};
   // A later organic request for this exact seat drains one earlier durable terminal. There is
-  // no timer, paid generation, estimate, mutable terminal, or process-local cursor. A crash
-  // leaves the terminal eligible for the next request, and the immutable reconciliation RPC
-  // makes concurrent recovery idempotent.
+  // no timer, paid generation, estimate, mutable terminal, or process-local cursor. Candidate
+  // selection is distributed by the current immutable attempt id across the exact outstanding
+  // count. One provider fact that is permanently unavailable therefore cannot sit at the head
+  // of the queue and prevent every other exact generation fact from healing.
   var query=new URLSearchParams({select:'attempt_id,provider_request_id,status_code,'+
     'disposition,key_alias,provider_tokens,actual_cost_usd,cost_source',
     provider:'eq.openrouter',phase:'eq.TERMINAL',disposition:'eq.SUCCEEDED',
@@ -796,7 +877,7 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
   var response;
   try{
     response=await doFetch(config.url+'/rest/v1/'+BILLABLE_TABLE+'?'+query.toString(),{
-      headers:readHeaders(config),
+      headers:Object.assign({},readHeaders(config),{Prefer:'count=exact',Range:'0-0'}),
       signal:brain.boundedSignal(options&&options.signal,runtime)});
   }catch(error){return{ok:false,attempted:0,recovered:0,
     reason:'provider_spend_store_unavailable'};}
@@ -809,7 +890,30 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
     reason:'provider_spend_store_readback_invalid'};}
   if(!Array.isArray(rows)||rows.length>1)return{ok:false,attempted:0,recovered:0,
     reason:'provider_spend_reconciliation_candidate_invalid'};
-  if(!rows.length)return empty;
+  var contentRange=String(response.headers&&response.headers.get&&
+    response.headers.get('content-range')||'');
+  var totalMatch=contentRange.match(/\/(\d+)$/),total=totalMatch?Number(totalMatch[1]):null;
+  if(!Number.isSafeInteger(total)||total<0||total===0&&rows.length!==0||
+      total>0&&rows.length!==1)return{ok:false,attempted:0,recovered:0,
+    reason:'provider_spend_reconciliation_count_invalid'};
+  if(total===0)return empty;
+  var candidateIndex=parseInt(receipt.attempt_id.slice(0,12),16)%total;
+  if(candidateIndex>0){
+    try{
+      response=await doFetch(config.url+'/rest/v1/'+BILLABLE_TABLE+'?'+query.toString(),{
+        headers:Object.assign({},readHeaders(config),{Range:candidateIndex+'-'+candidateIndex}),
+        signal:brain.boundedSignal(options&&options.signal,runtime)});
+    }catch(error){return{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_store_unavailable'};}
+    if(!response||response.ok!==true)return{ok:false,attempted:0,recovered:0,
+      reason:response&&(response.status===404||response.status===400)
+        ?'provider_spend_schema_unavailable':'provider_spend_reconciliation_read_failed'};
+    try{rows=await boundedJson(response,MAX_STORE_BYTES);}
+    catch(error){return{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_store_readback_invalid'};}
+    if(!Array.isArray(rows)||rows.length!==1)return{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_reconciliation_candidate_raced'};
+  }
   var candidate=rows[0],attemptId=clean(candidate&&candidate.attempt_id);
   var providerRequestId=identifier(candidate&&candidate.provider_request_id,240);
   var statusCode=Number(candidate&&candidate.status_code);
@@ -834,7 +938,7 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
   if(!written||written.ok!==true)return{ok:false,attempted:1,recovered:0,
     reason:written&&written.reason||'provider_spend_reconciliation_write_failed'};
   return{ok:true,attempted:1,recovered:1,reason:null,attempt_id:attemptId,
-    replayed:written.replayed===true};
+    candidate_index:candidateIndex,candidate_count:total,replayed:written.replayed===true};
 }
 async function bankUsageCandidate(receipt, options) {
   var config=bankConfig(options&&options.env),doFetch=fetchImpl(options);
@@ -1023,6 +1127,145 @@ function responseRange(response) {
   var match = String(raw || '').match(/^(\d+)-(\d+)\/(?:\d+|\*)$/);
   return match ? {start:Number(match[1]),end:Number(match[2])} : null;
 }
+function costUnits(value) {
+  var normalized=decimalCost(value);
+  if(normalized===null)return null;
+  var pieces=normalized.split('.');
+  return BigInt(pieces[0])*100000000n+
+    BigInt(String(pieces[1]||'').padEnd(8,'0'));
+}
+function unitsDecimal(value) {
+  var negative=value<0n,absolute=negative?-value:value;
+  var whole=absolute/100000000n,fraction=String(absolute%100000000n).padStart(8,'0')
+    .replace(/0+$/,'');
+  return(negative?'-':'')+String(whole)+(fraction?'.'+fraction:'');
+}
+function publicCostUnits(value) { return Number(unitsDecimal(value)); }
+
+async function readProviderStatementInterval(options) {
+  var config=statementBankConfig(options&&options.env),doFetch=fetchImpl(options);
+  var empty={provider_statement_reconciled:false,provider_account_total_usd:null,
+    provider_total_credits_usd:null,provider_statement_interval_start:null,
+    provider_statement_interval_end:null,provider_statement_usage_delta_usd:null,
+    bank_provider_interval_cost_usd:null,provider_statement_delta_usd:null,
+    provider_statement_interval_unresolved:null,provider_statement_interval_outcome_unknown:null,
+    provider_statement_interval_uncosted:null,provider_statement_authority:null,
+    provider_statement_latest_id:null,provider_statement_baseline_id:null};
+  if(!config.ok||!doFetch)return Object.assign(empty,{provider_statement_reason:
+    'provider_statement_store_unavailable'});
+  var statementQuery=new URLSearchParams({select:'statement_id,provider,observed_at,'+
+    'total_credits_usd,total_usage_usd,source,read_by_seat,provider_fact_digest',
+    provider:'eq.openrouter',order:'observed_at.desc,statement_id.desc',limit:'2'}),response,rows;
+  try{
+    response=await doFetch(config.url+'/rest/v1/'+PROVIDER_STATEMENT_TABLE+'?'+
+      statementQuery.toString(),{headers:readHeaders(config),signal:brain.boundedSignal(
+        options&&options.signal,options&&options.env)});
+  }catch(error){return Object.assign(empty,{provider_statement_reason:
+    'provider_statement_store_unavailable'});}
+  if(!response||response.ok!==true)return Object.assign(empty,{provider_statement_reason:
+    response&&(response.status===404||response.status===400)?
+      'provider_statement_schema_unavailable':'provider_statement_read_failed'});
+  try{rows=await boundedJson(response,MAX_STORE_BYTES);}
+  catch(error){return Object.assign(empty,{provider_statement_reason:
+    'provider_statement_readback_invalid'});}
+  if(!Array.isArray(rows)||rows.length>2)return Object.assign(empty,
+    {provider_statement_reason:'provider_statement_readback_invalid'});
+  var normalized=rows.map(normalizedProviderStatement);
+  if(normalized.some(function(row,index){return !row||!sameProviderStatement(rows[index],row);})){
+    return Object.assign(empty,{provider_statement_reason:'provider_statement_readback_mismatch'});
+  }
+  if(!normalized.length)return Object.assign(empty,{provider_statement_reason:
+    'authenticated_provider_statement_not_ingested'});
+  var current=normalized[0],currentUsage=costUnits(current.total_usage_usd);
+  var intervalNow=Number(options&&options.now||Date.now());
+  var withCurrent=Object.assign({},empty,{provider_account_total_usd:Number(current.total_usage_usd),
+    provider_total_credits_usd:Number(current.total_credits_usd),
+    provider_statement_interval_end:current.observed_at,
+    provider_statement_latest_id:current.statement_id});
+  if(!Number.isFinite(intervalNow)||Date.parse(current.observed_at)>intervalNow){
+    return Object.assign(withCurrent,{provider_statement_reason:
+      'provider_statement_timestamp_mismatch'});
+  }
+  if(normalized.length<2)return Object.assign(withCurrent,{provider_statement_reason:
+    'provider_statement_baseline_missing'});
+  var baseline=normalized[1],baselineUsage=costUnits(baseline.total_usage_usd);
+  if(baselineUsage===null||currentUsage===null||
+      baseline.observed_at>=current.observed_at||currentUsage<baselineUsage){
+    return Object.assign(withCurrent,{provider_statement_interval_start:baseline.observed_at,
+      provider_statement_reason:'provider_statement_timestamp_mismatch'});
+  }
+  var providerDelta=currentUsage-baselineUsage;
+  var activityQuery=new URLSearchParams({select:'attempt_id,phase,provider,disposition,'+
+    'actual_cost_usd,cost_source,created_at',provider:'eq.openrouter',
+    order:'created_at.asc,attempt_id.asc,phase.asc'});
+  activityQuery.append('created_at','gt.'+baseline.observed_at);
+  activityQuery.append('created_at','lte.'+current.observed_at);
+  var offset=0,seen=new Set(),intents=new Set(),terminals=new Set(),unknown=0,uncosted=0;
+  var bankUnits=0n;
+  try{
+    while(true){
+      var headers=readHeaders(config);
+      headers.Range=offset+'-'+(offset+SUMMARY_PAGE_SIZE-1);
+      response=await doFetch(config.url+'/rest/v1/'+BILLABLE_TABLE+'?'+
+        activityQuery.toString(),{headers:headers,signal:brain.boundedSignal(
+          options&&options.signal,options&&options.env)});
+      if(!response||response.ok!==true)return Object.assign(withCurrent,
+        {provider_statement_interval_start:baseline.observed_at,
+          provider_statement_reason:response&&(response.status===404||response.status===400)?
+            'provider_statement_schema_unavailable':'provider_statement_activity_read_failed'});
+      rows=await boundedJson(response,MAX_STORE_BYTES);
+      if(!Array.isArray(rows))throw new Error('provider_statement_activity_invalid');
+      if(!rows.length)break;
+      var range=responseRange(response);
+      if(!range||range.start!==offset||range.end-range.start+1!==rows.length){
+        throw new Error('provider_statement_activity_pagination_unverified');
+      }
+      rows.forEach(function(row){
+        var attemptId=clean(row&&row.attempt_id),phase=clean(row&&row.phase);
+        var rowKey=attemptId+':'+phase,createdAt=exactIso(row&&row.created_at);
+        if(!/^[a-f0-9]{64}$/.test(attemptId)||!new Set(['INTENT','TERMINAL']).has(phase)||
+            seen.has(rowKey)||row.provider!=='openrouter'||!createdAt||
+            createdAt<=baseline.observed_at||createdAt>current.observed_at){
+          throw new Error('provider_statement_activity_timestamp_mismatch');
+        }
+        seen.add(rowKey);
+        if(phase==='INTENT'){intents.add(attemptId);return;}
+        terminals.add(attemptId);intents.delete(attemptId);
+        if(row.disposition==='OUTCOME_UNKNOWN'){unknown+=1;return;}
+        if(row.disposition==='SUCCEEDED'||row.disposition==='HTTP_ERROR'){
+          var units=costUnits(row.actual_cost_usd);
+          if(units===null||clean(row.cost_source)!=='provider_reported'){uncosted+=1;return;}
+          bankUnits+=units;
+        }
+      });
+      offset+=rows.length;
+    }
+  }catch(error){return Object.assign(withCurrent,
+    {provider_statement_interval_start:baseline.observed_at,
+      provider_statement_reason:/timestamp_mismatch/.test(String(error&&error.message||error))?
+        'provider_statement_timestamp_mismatch':'provider_statement_activity_read_failed'});}
+  var unresolved=Array.from(intents).filter(function(id){return !terminals.has(id);}).length;
+  var delta=providerDelta-bankUnits;
+  var result=Object.assign(withCurrent,{provider_statement_interval_start:baseline.observed_at,
+    provider_statement_baseline_id:baseline.statement_id,
+    provider_statement_usage_delta_usd:publicCostUnits(providerDelta),
+    bank_provider_interval_cost_usd:publicCostUnits(bankUnits),
+    provider_statement_delta_usd:publicCostUnits(delta),
+    provider_statement_interval_unresolved:unresolved,
+    provider_statement_interval_outcome_unknown:unknown,
+    provider_statement_interval_uncosted:uncosted});
+  if(unresolved>0)return Object.assign(result,{provider_statement_reason:
+    'provider_statement_interval_unresolved_attempts'});
+  if(unknown>0)return Object.assign(result,{provider_statement_reason:
+    'provider_statement_interval_outcome_unknown'});
+  if(uncosted>0)return Object.assign(result,{provider_statement_reason:
+    'provider_statement_interval_uncosted_egress'});
+  if(delta!==0n)return Object.assign(result,{provider_statement_reason:
+    'provider_statement_bank_delta_nonzero'});
+  return Object.assign(result,{provider_statement_reconciled:true,
+    provider_statement_reason:null,
+    provider_statement_authority:'memory_bank.provider_account_statements.service_role_readback'});
+}
 async function readSummary(options) {
   var requestedScope = options && options.scope && typeof options.scope === 'object'
     ? options.scope : null;
@@ -1134,7 +1377,8 @@ async function readSummary(options) {
     }
     var unresolvedTimes = Array.from(intents.values()).map(function(value){return Date.parse(value || '');})
       .filter(Number.isFinite);
-    return publish({readable:true,total:admissions,admissions:admissions,
+    var statementInterval=scoped?{}:await readProviderStatementInterval(options);
+    return publish(Object.assign({readable:true,total:admissions,admissions:admissions,
       terminal:terminal,succeeded:succeeded,failed:failed,unresolved:intents.size,
       outcome_unknown:outcomeUnknown,proven_egress:provenEgress,
       provider_reported_cost_usd:Number(providerReportedCostUsd.toFixed(8)),
@@ -1152,7 +1396,7 @@ async function readSummary(options) {
       scope:Object.keys(scope).length ? scope : null,
       window_hours:24,snapshot_at:snapshotAt,pages:pages,rows_scanned:rowsScanned,
       reason:null,at:Date.now(),by_provider:bucketRows(providers),by_kind:bucketRows(kinds),
-      by_component:bucketRows(components),by_key_alias:bucketRows(keyAliases)});
+      by_component:bucketRows(components),by_key_alias:bucketRows(keyAliases)},statementInterval));
   } catch (error) {
     return publish({readable:false,total:null,
       reason:/provider_spend_summary_/.test(String(error && error.message || error))
@@ -1173,6 +1417,7 @@ module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimInt
   recoverDelayedProviderUsage:recoverDelayedProviderUsage,
   writeReconciliation:writeReconciliation,
   writeUsageReconciliation:writeUsageReconciliation,
+  writeProviderAccountStatement:writeProviderAccountStatement,
   terminalFromError:terminalFromError,reconcileUnresolved:reconcileUnresolved,
   readSummary:readSummary,cachedSummary:cachedSummary,
   _test:{providerFor:providerFor,bodyFacts:bodyFacts,providerModel:providerModel,keyAlias:keyAlias,

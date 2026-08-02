@@ -64,7 +64,6 @@ const WORLD_ID_MARK = 'w1';
 const WORLD_ID_TTL_SECONDS = 12 * 60 * 60;
 const INTERNAL_CYCLE_VERSION = 'anew.ham.internal-cycle-context.v1';
 const INTERNAL_CYCLE_MAX_LIFETIME_MS = 2 * 60 * 1000;
-const INTERNAL_CYCLE_PATH = '/cycle';
 // ⬡B:core.ham_session_authorization:FIX:uppercasing_before_checking_let_case_folding_invent_a_world:20260726⬡
 // The SAME shape of the world ID pattern, but written to be tested against the input BEFORE
 // it is uppercased, which is the whole point of its existing.
@@ -360,20 +359,45 @@ function stableStringify(value) {
   }).join(',') + '}';
 }
 
-function internalCyclePayload(hamUid, body, expiresAt, nonce, now) {
+function internalCycleTarget(opts) {
+  opts = opts || {};
+  const purpose = String(opts.purpose || '').trim();
+  const method = String(opts.method || '').trim().toUpperCase();
+  const path = String(opts.path || '').trim();
+  if (!/^[a-z][a-z0-9._:-]{2,100}$/.test(purpose) ||
+      !/^(?:POST|PUT|PATCH|DELETE)$/.test(method) ||
+      !/^\/[A-Za-z0-9._~!$&'()*+,;=:@%\/-]{1,239}$/.test(path) ||
+      path.includes('//')) return null;
+  return { purpose:purpose, method:method, path:path };
+}
+
+function requestTarget(req) {
+  const method = String(req && req.method || '').trim().toUpperCase();
+  let path = String(req && req.path || '').trim();
+  if (!path) {
+    const raw = String(req && (req.originalUrl || req.url) || '').trim();
+    path = raw ? raw.split('?')[0] : '';
+  }
+  return internalCycleTarget({ purpose:'request_target', method:method, path:path });
+}
+
+function internalCyclePayload(hamUid, body, expiresAt, nonce, opts) {
+  opts = opts || {};
   const normalized = normalizeHamUid(hamUid);
   const expiry = Number(expiresAt);
-  const current = Number.isFinite(now) ? now : Date.now();
+  const current = Number.isFinite(opts.now) ? opts.now : Date.now();
   const nonceValue = String(nonce || '');
+  const target = internalCycleTarget(opts);
   if (!normalized || !body || typeof body !== 'object' || Array.isArray(body) ||
+      !target ||
       !Number.isSafeInteger(expiry) || expiry <= current ||
       expiry - current > INTERNAL_CYCLE_MAX_LIFETIME_MS ||
       !/^[A-Za-z0-9._:-]{16,220}$/.test(nonceValue)) return null;
   return {
     version: INTERNAL_CYCLE_VERSION,
-    purpose: 'internal_cycle_context',
-    method: 'POST',
-    path: INTERNAL_CYCLE_PATH,
+    purpose: target.purpose,
+    method: target.method,
+    path: target.path,
     ham_uid: normalized,
     expires_at: expiry,
     nonce: nonceValue,
@@ -385,7 +409,7 @@ function internalCyclePayload(hamUid, body, expiresAt, nonce, now) {
 function signInternalCycleContext(input) {
   const secret = signingSecret();
   const value = input && internalCyclePayload(input.hamUid, input.body,
-    input.expiresAt, input.nonce, input.now);
+    input.expiresAt, input.nonce, input);
   if (!secret || !value) return null;
   return crypto.createHmac('sha256', secret)
     .update(Buffer.from(stableStringify(value), 'utf8')).digest('hex');
@@ -400,7 +424,8 @@ function internalCycleHeaders(hamUid, body, opts) {
   const expiresAt = now + ttl;
   const nonce = typeof opts.nonce === 'string' ? opts.nonce : crypto.randomUUID();
   const signature = signInternalCycleContext({ hamUid:hamUid, body:body,
-    expiresAt:expiresAt, nonce:nonce, now:now });
+    expiresAt:expiresAt, nonce:nonce, now:now, purpose:opts.purpose,
+    method:opts.method, path:opts.path });
   const session = internalSessionHeaders(hamUid);
   if (!signature || !session) return null;
   return Object.assign({}, session, {
@@ -422,10 +447,18 @@ function verifyInternalCycleContext(req, expectedHamUid, opts) {
     return { ok:false, presented:true, status:503,
       reason:'internal_cycle_authorization_unconfigured' };
   }
+  const expectedTarget = internalCycleTarget(opts);
+  const actualTarget = requestTarget(req);
+  if (!expectedTarget || !actualTarget || actualTarget.method !== expectedTarget.method ||
+      actualTarget.path !== expectedTarget.path) {
+    return { ok:false, presented:true, status:401,
+      reason:'internal_cycle_authorization_target_invalid' };
+  }
   const value = internalCyclePayload(expectedHamUid, req && req.body,
-    expiresAt, nonce, opts.now);
+    expiresAt, nonce, opts);
   const expected = value && signInternalCycleContext({ hamUid:expectedHamUid,
-    body:req && req.body, expiresAt:expiresAt, nonce:nonce, now:opts.now });
+    body:req && req.body, expiresAt:expiresAt, nonce:nonce, now:opts.now,
+    purpose:opts.purpose, method:opts.method, path:opts.path });
   if (!expected || !/^[a-f0-9]{64}$/.test(supplied.toLowerCase())) {
     return { ok:false, presented:true, status:401,
       reason:'internal_cycle_authorization_invalid_or_expired' };
@@ -438,6 +471,51 @@ function verifyInternalCycleContext(req, expectedHamUid, opts) {
       reason:'internal_cycle_authorization_invalid_or_expired' };
   }
   return { ok:true, presented:true, hamUid:value.ham_uid, payload:value };
+}
+
+// Verification proves who signed the exact bytes for one exact endpoint. Consumption
+// delegates winner election to the caller's canonical admission organ. There is no
+// default claim store here: a missing admission organ fails closed, so this shared
+// authority can never fall back to the retired brain merely because legacy env exists.
+async function consumeInternalCycleContext(req, expectedHamUid, opts) {
+  opts = opts || {};
+  var verified = verifyInternalCycleContext(req, expectedHamUid, opts);
+  if (!verified.ok) return verified;
+  var now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  var stableCycle = {
+    version:verified.payload.version,
+    purpose:verified.payload.purpose,
+    method:verified.payload.method,
+    path:verified.payload.path,
+    ham_uid:verified.payload.ham_uid,
+    expires_at:verified.payload.expires_at,
+    nonce:verified.payload.nonce,
+    body_digest:verified.payload.body_digest
+  };
+  var digest = crypto.createHash('sha256')
+    .update(Buffer.from(stableStringify(stableCycle), 'utf8')).digest('hex');
+  var leaseMs = Math.max(1000, verified.payload.expires_at - now + 1000);
+  if (typeof opts.admit !== 'function') {
+    return { ok:false, presented:true, consumed:false, status:503,
+      reason:'internal_cycle_canonical_admission_unconfigured', digest:digest };
+  }
+  try {
+    var admission = await opts.admit({ digest:digest, hamUid:verified.hamUid,
+      payload:verified.payload, leaseMs:leaseMs });
+    if (admission && admission.ok === true && admission.claimed === true) {
+      return { ok:true, presented:true, consumed:true, hamUid:verified.hamUid,
+        payload:verified.payload, digest:digest, admission:admission };
+    }
+    if (admission && admission.ok === true && admission.duplicate === true) {
+      return { ok:false, presented:true, consumed:false, status:409,
+        reason:'internal_cycle_request_replayed', digest:digest };
+    }
+    return { ok:false, presented:true, consumed:false, status:503,
+      reason:'internal_cycle_request_claim_uncertain', digest:digest };
+  } catch (eClaim) {
+    return { ok:false, presented:true, consumed:false, status:503,
+      reason:'internal_cycle_request_claim_uncertain', digest:digest };
+  }
 }
 
 function requireHamSession(req, res, expectedHamUid) {
@@ -997,9 +1075,11 @@ module.exports = {
   INTERNAL_CYCLE_VERSION,
   INTERNAL_CYCLE_MAX_LIFETIME_MS,
   internalCyclePayload,
+  internalCycleTarget,
   signInternalCycleContext,
   internalCycleHeaders,
   verifyInternalCycleContext,
+  consumeInternalCycleContext,
   requireHamSession,
   requireExactHamSession,
   requireAnyHamSession,

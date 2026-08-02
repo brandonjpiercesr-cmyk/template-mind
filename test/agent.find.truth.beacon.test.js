@@ -3,9 +3,12 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const registry = require('../pai/core/wonders/registry.js');
 const agentFind = require('../pai/core/agent.find.js');
 
+const ROOT = path.join(__dirname, '..');
 const HAM = 'HAM.TEST';
 
 function brainHarness() {
@@ -30,6 +33,29 @@ test('template registry resolves one executable Agent FIND capability for every 
   for (const id of ['station.pai','station.coda','station.advisors','station.press']) {
     assert.ok(registry.resolve(id).toolbelt.includes('tool.brain.find'));
   }
+});
+
+test('the TRUE ZERO keeps external closure injectable without an A NEW-only owner', async () => {
+  const source = fs.readFileSync(path.join(ROOT, 'pai', 'core', 'agent.find.js'), 'utf8');
+  assert.equal(source.includes("require('./coda/repair.delivery.proof.js')"), false);
+  assert.equal(fs.existsSync(path.join(ROOT, 'pai', 'core', 'coda',
+    'repair.delivery.proof.js')), false);
+  const absent = await agentFind.recordExternalClosureVerification({}, {}, {});
+  assert.equal(absent.ok, false);
+  assert.equal(absent.reason, 'agent_find_external_closure_delivery_proof_missing');
+  const callers = [];
+  function walk(dir) {
+    fs.readdirSync(dir, {withFileTypes:true}).forEach(function (entry) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile() && entry.name.endsWith('.js') &&
+          file !== path.join(ROOT, 'pai', 'core', 'agent.find.js') &&
+          file !== path.join(ROOT, 'pai', 'core', 'truth.beacon.js') &&
+          fs.readFileSync(file, 'utf8').includes('recordExternalClosureVerification')) callers.push(file);
+    });
+  }
+  walk(path.join(ROOT, 'pai'));
+  assert.deepEqual(callers, []);
 });
 
 test('template bounded provider request is seat-bound before paid bytes can leave', async () => {
