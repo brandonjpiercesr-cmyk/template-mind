@@ -108,7 +108,9 @@ module.exports = function registerCycleRoute(app, options) {
       var tier = privacy.effectiveTier(readAuthority && readAuthority.tier);
       var identity = serverIdentity(authorized, HAM, message, tier);
 
-      var internalProof = auth.verifyInternalCycleContext(req, HAM);
+      var internalProof = auth.verifyInternalCycleContext(req, HAM, {
+        purpose:'world_cycle', method:'POST', path:'/cycle'
+      });
       if (internalProof.presented && !internalProof.ok) return deny(res, internalProof);
       var channel = 'new_world';
       if (internalProof.ok) {

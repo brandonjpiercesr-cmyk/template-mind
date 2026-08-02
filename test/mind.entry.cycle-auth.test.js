@@ -206,7 +206,8 @@ test('only an exact-body server proof preserves legitimate internal context', as
     }
   };
   const headers = auth.internalCycleHeaders(TEST_HAM, body,
-    { nonce:'test.internal.cycle.nonce.1234' });
+    { nonce:'test.internal.cycle.nonce.1234', purpose:'world_cycle',
+      method:'POST', path:'/cycle' });
   const result = await post(body, headers);
   assert.equal(result.status, 200);
   const call = calls.at(-1);
@@ -229,7 +230,8 @@ test('an exact signed internal request is durable single use', async function ()
   const body = { message:'single use machine turn', channel:'coding',
     identity:{ outbound_finalize:true, council_context:{ mode:'coding' } } };
   const headers = auth.internalCycleHeaders(TEST_HAM, body,
-    { nonce:'test.internal.single.use.nonce.1234' });
+    { nonce:'test.internal.single.use.nonce.1234', purpose:'world_cycle',
+      method:'POST', path:'/cycle' });
   const first = await post(body, headers);
   assert.equal(first.status, 200);
   assert.equal(first.body.ok, true);

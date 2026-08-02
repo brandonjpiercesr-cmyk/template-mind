@@ -1838,6 +1838,143 @@ function verifiedFactEvidenceText(ctx) {
   return parts.join('\n');
 }
 
+var SHADOW_CONTEXT_STRING_FIELDS = Object.freeze({
+  mode: 80,
+  call_id: 240,
+  session_id: 240,
+  turn_id: 240,
+  call_binding_schema: 160,
+  call_binding_digest: 64
+});
+
+var SHADOW_CONTEXT_BOOLEAN_FIELDS = Object.freeze([
+  'outbound_finalize',
+  'internal_deliberation',
+  'reach_handoff_eligible'
+]);
+var SHADOW_CONTEXT_MAX_BYTES = 256000;
+
+// The public compatibility door cannot hand arbitrary JSON to SHADOW. This is the
+// one production carriage for the context fields the canonical stage actually
+// understands. Unknown top-level fields die here and trace arrays remain finite.
+// Accepted signed evidence retains its exact bytes; oversized envelopes fail closed
+// instead of silently truncating a signature into different evidence.
+function canonicalShadowContext(value) {
+  var source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  var context = {};
+  Object.keys(SHADOW_CONTEXT_STRING_FIELDS).forEach(function (name) {
+    if (typeof source[name] !== 'string') return;
+    context[name] = source[name];
+  });
+  var overlongString = Object.keys(SHADOW_CONTEXT_STRING_FIELDS).some(function (name) {
+    return typeof context[name] === 'string' &&
+      Buffer.byteLength(context[name], 'utf8') > SHADOW_CONTEXT_STRING_FIELDS[name];
+  });
+  if (overlongString) return { ok:false, reason:'shadow_context_string_too_large' };
+  SHADOW_CONTEXT_BOOLEAN_FIELDS.forEach(function (name) {
+    if (typeof source[name] === 'boolean') context[name] = source[name];
+  });
+  if (Array.isArray(source.tools_used)) {
+    if (source.tools_used.length > 40 || source.tools_used.some(function (item) {
+      return typeof item !== 'string' || Buffer.byteLength(item, 'utf8') > 160;
+    })) return { ok:false, reason:'shadow_tools_used_invalid' };
+    context.tools_used = source.tools_used.slice();
+  }
+  if (Array.isArray(source.pending_effects)) {
+    if (source.pending_effects.length > 20) {
+      return { ok:false, reason:'shadow_pending_effects_too_many' };
+    }
+    context.pending_effects = source.pending_effects.slice();
+  }
+  if (Array.isArray(source.verified_evidence)) {
+    if (source.verified_evidence.length > 8) {
+      return { ok:false, reason:'shadow_verified_evidence_too_many' };
+    }
+    context.verified_evidence = source.verified_evidence.slice();
+  }
+  if (source.identity_provenance && typeof source.identity_provenance === 'object' &&
+      !Array.isArray(source.identity_provenance)) {
+    context.identity_provenance = source.identity_provenance;
+  }
+  if (source.identity_evidence_receipt &&
+      typeof source.identity_evidence_receipt === 'object' &&
+      !Array.isArray(source.identity_evidence_receipt)) {
+    context.identity_evidence_receipt = source.identity_evidence_receipt;
+  }
+  var serialized;
+  try { serialized = stableStringify(context); }
+  catch (eContext) { return { ok:false, reason:'shadow_context_invalid' }; }
+  if (Buffer.byteLength(serialized, 'utf8') > SHADOW_CONTEXT_MAX_BYTES) {
+    return { ok:false, reason:'shadow_context_too_large' };
+  }
+  return { ok:true, context:context };
+}
+
+function canonicalShadowStageInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok:false, reason:'shadow_context_required' };
+  }
+  var hamUid = String(value.hamUid || '').trim().toUpperCase();
+  var requestId = String(value.requestId || '').trim();
+  var cycleId = String(value.cycleId || '').trim();
+  var question = typeof value.question === 'string' ? value.question : '';
+  var deliberationInput = typeof value.deliberationInput === 'string'
+    ? value.deliberationInput : '';
+  var answer = typeof value.answer === 'string' ? value.answer : '';
+  var channel = String(value.channel || '').trim().toLowerCase();
+  if (!/^[A-Z0-9._:-]{2,160}$/.test(hamUid)) {
+    return { ok:false, reason:'shadow_ham_unverified' };
+  }
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(requestId)) {
+    return { ok:false, reason:'shadow_request_id_unverified' };
+  }
+  if (!/^[A-Za-z0-9._:-]{8,160}$/.test(cycleId)) {
+    return { ok:false, reason:'shadow_cycle_id_unverified' };
+  }
+  if (!question.trim()) return { ok:false, reason:'shadow_question_required' };
+  if (!deliberationInput.trim()) {
+    return { ok:false, reason:'shadow_deliberation_input_required' };
+  }
+  if (!answer.trim() || !isHumanFacingAnswer(answer)) {
+    return { ok:false, reason:'shadow_answer_required' };
+  }
+  if (!/^[a-z0-9._:-]{1,40}$/.test(channel)) {
+    return { ok:false, reason:'shadow_channel_unverified' };
+  }
+  var canonicalContext = canonicalShadowContext(value.context);
+  if (!canonicalContext.ok) return canonicalContext;
+  var input = {
+    hamUid:hamUid,
+    requestId:requestId,
+    cycleId:cycleId,
+    question:question,
+    deliberationInput:deliberationInput,
+    answer:answer,
+    channel:channel,
+    context:canonicalContext.context
+  };
+  if (typeof value.activeWorld === 'string' &&
+      /^[A-Za-z0-9._:-]{1,160}$/.test(value.activeWorld.trim())) {
+    input.activeWorld = value.activeWorld.trim();
+  }
+  return { ok:true, input:input };
+}
+
+// Supported production entry for a single SHADOW stage. core/council.js used to
+// reach into `_test`, which made a testing seam the live API and bypassed all input
+// shaping. Every production caller now enters here and receives the same canonical
+// stage after identity, lineage, channel, and evidence carriage validate.
+async function runShadowStage(value, injected) {
+  var canonical = canonicalShadowStageInput(value);
+  if (!canonical.ok) {
+    return { ok:false, answer:String(value && value.answer || ''),
+      reason:canonical.reason, evidence:{ flags:[], input_rejected:true } };
+  }
+  var stage = injected && typeof injected.shadowStage === 'function'
+    ? injected.shadowStage : defaultShadowStage;
+  return stage(canonical.input, injected || {});
+}
+
 async function defaultShadowStage(ctx, injected) {
   injected = injected || {};
   var structuredPolicy = structuredReachPolicyContext(ctx);
@@ -4102,6 +4239,7 @@ module.exports = {
   directNamedEvidenceRequest: directNamedEvidenceRequest,
   boundedCouncilFailureCodes: boundedCouncilFailureCodes,
   councilHoldEvidence: councilHoldEvidence,
+  runShadowStage: runShadowStage,
   buildAclStamp: buildAclStamp,
   digestText: digestText,
   stableStringify: stableStringify,
@@ -4142,6 +4280,8 @@ module.exports = {
     directNamedEvidenceRequest: directNamedEvidenceRequest,
     boundedCouncilFailureCodes: boundedCouncilFailureCodes,
     councilHoldEvidence: councilHoldEvidence,
+    canonicalShadowContext: canonicalShadowContext,
+    canonicalShadowStageInput: canonicalShadowStageInput,
     categoricalMemoryContradiction: categoricalMemoryContradiction,
     identityEvidenceReceiptContradictions:identityEvidenceReceiptContradictions,
     verifiedFactEvidenceText:verifiedFactEvidenceText,
