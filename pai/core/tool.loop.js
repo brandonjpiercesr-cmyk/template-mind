@@ -62,6 +62,7 @@ var realNameBoundary = require('./real.name.boundary.js');
 var CANONICAL_ASSISTANT_NAME = "A'NU";
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
+var wonderConsult = require('./wonder.consult.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
 // Real incident: GUIDE pass 2 (strict JSON, 12 fields per destination) was
 // truncated mid-JSON by the one global 700 cap and died as
@@ -1199,6 +1200,22 @@ var TOOLS = [
     +'Contestants are the authorized open-weight set: Ornith 35B, GLM 5.2, Qwen 3. '
     +'Use it to decide whether something is actually a wonder yet instead of asserting that it is. Takes up to 150 seconds.',
     parameters:{type:'object',properties:{task:{type:'string',description:'the task the candidates compete on'}},required:['task']}}},
+  // ⬡B:tool.loop:TOOL:instant_communication_between_agents_20260802⬡ Delta closing question
+  // (Demo Day pt3, 20260801/02): "have we built instant communication yet." core/rooms.js has
+  // carried digest-checkpoint messaging since 20260709, but that is read-on-next-wake, not a
+  // live exchange. core/rooms.meeting.js already runs a real, same-request, bounded, judged
+  // multi-seat exchange (proven live for LIFE convening her advisors); core/wonder.consult.js
+  // generalizes that exact engine to any initiator. This is its first interactive-loop door.
+  {type:'function',function:{name:'consult_wonder_meeting',description:'CONVENE A REAL, LIVE, SAME-TURN MEETING with other seats in your own system. '
+    +'Each named seat states its OWN real position, grounded in its own exact-HAM context, then a real judge call decides honestly whether they actually agree. '
+    +'Returns the real outcome (reached or not, the honest minutes, how many rounds it took) within this turn, never on a later wake. '
+    +'Use this when a real answer needs more than one department\'s judgment right now, not a guess at what another seat would say. '
+    +'Never fabricates a position for a seat that did not answer, and never fabricates consensus. Takes up to 60 seconds.',
+    parameters:{type:'object',properties:{
+      agenda:{type:'string',description:'the real question or decision the meeting is about'},
+      participants:{type:'array',items:{type:'string'},description:'seat names to convene, e.g. ["CODING","LEGAL"]. Omit to convene every other registered station.'},
+      initiator:{type:'string',description:'who is convening this meeting; defaults to PAI'}},
+      required:['agenda']}}},
 
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
@@ -1507,7 +1524,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   reminders:['read_reminders','create_reminder','stop_mentioning'],
   budget:['get_budget_summary','get_budget_upcoming'],
   memory:['find_in_brain','find_identity_evidence','write_to_brain'],
-  code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','find_in_brain',
+  code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','find_in_brain',
     'read_lane_board','read_wonder_departments','read_render_logs','get_recent_builds','read_own_code','consult_coda',
     'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
   screen:['update_screen','save_layout','edit_layout','set_background'],
@@ -1806,6 +1823,23 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
         invoked_by:'anew_cycle',caller:'core.tool.loop',cycle_id:_wonderCycleId});
       if (!_w) return JSON.stringify({ok:false,reason:'wonder_games_no_result'});
       return JSON.stringify({ok:true,result:_w});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
+  }
+
+  if (name === 'consult_wonder_meeting') {
+    var _agenda = String(args.agenda || '').trim();
+    if (!_agenda) return JSON.stringify({ok:false,note:'no agenda given'});
+    var _participants = Array.isArray(args.participants)
+      ? args.participants.map(function (p) { return String(p || '').trim(); }).filter(Boolean) : null;
+    var _initiator = String(args.initiator || '').trim() || 'PAI';
+    try {
+      var _meet = await wonderConsult.convene(hamUid, _initiator, _participants, _agenda, {deadlineMs:60000});
+      if (!_meet || _meet.ok !== true) {
+        return JSON.stringify({ok:false,reason:(_meet && _meet.reason) || 'wonder_consult_no_result'});
+      }
+      return JSON.stringify({ok:true,reached:_meet.reached,minutes:_meet.minutes,rounds:_meet.rounds,
+        participants:_meet.participants,absent:_meet.absent||[],
+        note:'Real meeting. Every named seat spoke in its own voice and a real judge call decided consensus.'});
     } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
   }
 
