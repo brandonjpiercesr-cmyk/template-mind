@@ -16,8 +16,13 @@ function asksForCurrentTurnProof(question) {
   return proofSubject && currentTurn;
 }
 
-function falseCurrentTurnFailureClaim(question, answer) {
-  if (!asksForCurrentTurnProof(question)) return false;
+function guardApplies(question, options) {
+  if (options && options.internalDeliberation === true) return false;
+  return asksForCurrentTurnProof(question);
+}
+
+function falseCurrentTurnFailureClaim(question, answer, options) {
+  if (!guardApplies(question, options)) return false;
   var text = String(answer || '');
   var subject = '(?:PAI(?:\\s+cycle)?|STAMP(?:\\s+readback)?|council(?:\\s+proof)?|readback|current\\s+(?:turn|cycle)|this\\s+(?:turn|cycle)|contributors?)';
   var negative = '(?:did\\s+not|didn[\u2019\']t|has\\s+not|hasn[\u2019\']t|was\\s+not|wasn[\u2019\']t|is\\s+not|isn[\u2019\']t|cannot|can[\u2019\']t|could\\s+not|couldn[\u2019\']t|do\\s+not|don[\u2019\']t|no)';
@@ -26,14 +31,14 @@ function falseCurrentTurnFailureClaim(question, answer) {
     || new RegExp('\\b' + negative + '\\b[^.!?\\n]{0,100}' + subject + '(?:[^.!?\\n]{0,100}\\b' + outcome + '\\b)?', 'i').test(text);
 }
 
-function systemInstruction(question) {
-  if (!asksForCurrentTurnProof(question)) return '';
+function systemInstruction(question, options) {
+  if (!guardApplies(question, options)) return '';
   return '\n\nCURRENT-TURN PROOF INVARIANT: You are drafting before the final council commit and STAMP readback by design. Do not infer that this current turn failed, did not run, or did not complete merely because post-draft proof is not visible while drafting. A response from this path reaches the human only after council commit and STAMP readback verify, and the delivery surface returns that current-turn proof after commit. Never invent a cycle ID, request ID, contributor result, or proof field. Describe the release invariant and use only evidence actually present for any further claim.';
 }
 
-function repairDraft(question, answer) {
+function repairDraft(question, answer, options) {
   var original = String(answer || '');
-  if (!falseCurrentTurnFailureClaim(question, original)) {
+  if (!falseCurrentTurnFailureClaim(question, original, options)) {
     return { answer:original, repaired:false };
   }
   return { answer:RELEASE_INVARIANT, repaired:true,
@@ -43,6 +48,7 @@ function repairDraft(question, answer) {
 module.exports = {
   RELEASE_INVARIANT:RELEASE_INVARIANT,
   asksForCurrentTurnProof:asksForCurrentTurnProof,
+  guardApplies:guardApplies,
   falseCurrentTurnFailureClaim:falseCurrentTurnFailureClaim,
   systemInstruction:systemInstruction,
   repairDraft:repairDraft
