@@ -1299,8 +1299,10 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','text'],
     properties:{ham_uid:{type:'string'},text:{type:'string',description:'the reminder text, in plain words'},
       due_at:{type:'string',description:'ISO 8601 timestamp, ONLY if the HAM actually stated a real date or timeframe. Leave this out entirely otherwise -- never invent a specific date that was not given.'}}}}},
-  {type:'function',function:{name:'consult_advisor',description:'Consult one of the HAM\'s real advisors (their named worlds/stations such as bdif, gmg, business, mediators, mh_action) about a question or task, and get their brief back. '
-    +'Use whenever the HAM asks to talk to, ask, run something by, or get input from an advisor. The advisor roster is per-HAM and real -- never invent an advisor name; if unsure, the tool returns the real available list.',
+  {type:'function',function:{name:'consult_advisor',description:'Route a question or substantial task through the HAM\'s real born advisor department and return that advisor\'s committed brief. '
+    +'Use this automatically whenever the work materially belongs to a specialized advisor, even when the HAM speaks normally and does not name an advisor. Also use it whenever the HAM explicitly asks to talk to or get input from one. '
+    +'A\'NU/AU anchors whole-life and cross-advisor work; NOVA owns business; PLI owns legal-adjacent work; LEDGER owns finance; CODA owns coding; ROAM owns jobs; GUIDE owns place/navigation; CONSULTANT owns capacity building; and the real roster can also include DIRECTOR, GHOSTWRITER, POLITICAL, STOCKBROKER, REAL ESTATE, RELATIONSHIP, PUSHBACK, PROGRAM COORDINATOR, and protected client worlds such as BDIF, GMG, MEDIATORS, and MH ACTION. '
+    +'Pass the best-fit public name, alias, or station slug. The handler resolves it against the canonical registry and the born per-HAM roster; never invent a seat. The selected advisor may convene its real specialists and advisor council, then A\'NU voices the coherent result.',
     parameters:{type:'object',required:['ham_uid','advisor','question'],
     properties:{ham_uid:{type:'string'},advisor:{type:'string',description:'the advisor/station slug, e.g. bdif, gmg, business, mediators, mh_action'},
       question:{type:'string',description:'what to ask the advisor, in plain words'}}}}},
@@ -3011,7 +3013,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     // with the actual available list, never a fabricated brief.
     try {
       var _ar = require('../advisors/advisor-router.js');
-      var _station = String(args.advisor||'').toLowerCase().replace(/[^a-z_]/g,'');
+      var _advisorRegistry = require('../advisors/registry.js');
+      var _station = _advisorRegistry.resolve(args.advisor);
       var _cHam = args.ham_uid || hamUid;
       if (!_station || !_cHam) return JSON.stringify({ok:false,reason:'need advisor and ham_uid'});
       var _worlds = await _ar.discoverStations(_cHam);
