@@ -49,6 +49,22 @@ const LIVE = [
   { id: 'command',  label: 'Command Center',     mark: 'M', color: '#EC4899',
     keywords: ['command', 'command center', 'dashboard', 'ceecee', 'agents', 'cycle'],
     aliases: ['Command Center', 'ceecee'], path: function (H) { return '/command-center/' + H; } },
+  // ⬡B:os.registry:BUILD:the_work_wall_becomes_a_real_window_on_the_desktop:20260802⬡ FOUNDER
+  // ORDER 20260802: "Move every work that we do inside computer in a browser... Also, command
+  // center doesn't even look like my CIB computer in the browser." The wall at /ccwa/board had
+  // no tile at all, so it could only ever be a page on its own, which is exactly why it did not
+  // look like this computer: the window chrome he designed (the bar on the LEFT with Widget,
+  // Expand and Close), the glass and the wallpaper behind it are drawn by the desktop around a
+  // mounted app, and nothing was mounting it. With a tile it opens as one of his windows like
+  // everything else. Points at the wall that already exists; nothing was copied to make this
+  // entry, and it reads the same doors it always read.
+  // Named for what a person opens it to do, not for the machinery: it is where he sees who is
+  // working, what landed, and what it can be checked against.
+  { id: 'ccwa-board', label: 'The Work Wall',    mark: 'Q', color: '#c9a24a',
+    keywords: ['work wall', 'wall', 'workers', 'who is working', 'what landed', 'receipts',
+      'check in', 'checkout', 'command center', 'ccwa board', 'progress'],
+    aliases: ['The Work Wall', 'Work Wall', 'CCWA Board', 'The Command Center'],
+    path: function () { return '/ccwa/board'; } },
   { id: 'today',    label: 'Today',              mark: 'T', color: '#F97316',
     keywords: ['today', 'now', 'hunches', 'reminders', 'widgets', 'daily'],
     aliases: ['Today'], path: function (H) { return '/os/today/' + H; } },
