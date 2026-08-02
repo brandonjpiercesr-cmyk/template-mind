@@ -1166,6 +1166,39 @@ var TOOLS = [
     +'Contestants are the authorized open-weight set: Ornith 35B, GLM 5.2, Qwen 3. '
     +'Use it to decide whether something is actually a wonder yet instead of asserting that it is. Takes up to 150 seconds.',
     parameters:{type:'object',properties:{task:{type:'string',description:'the task the candidates compete on'}},required:['task']}}},
+  // ⬡B:tool.loop:TOOL:instant_communication_between_agents_20260802⬡ Delta closing question
+  // (Demo Day pt3, 20260801/02): "have we built instant communication yet." core/rooms.js has
+  // carried digest-checkpoint messaging since 20260709, but that is read-on-next-wake, not a
+  // live exchange. core/rooms.meeting.js already runs a real, same-request, bounded, judged
+  // multi-seat exchange (proven live for LIFE convening her advisors); core/wonder.consult.js
+  // generalizes that exact engine to any initiator. This is its first interactive-loop door.
+  {type:'function',function:{name:'consult_wonder_meeting',description:'CONVENE A REAL, LIVE, SAME-TURN MEETING with other seats in your own system. '
+    +'Each named seat states its OWN real position, grounded in its own exact-HAM context, then a real judge call decides honestly whether they actually agree. '
+    +'Returns the real outcome (reached or not, the honest minutes, how many rounds it took) within this turn, never on a later wake. '
+    +'Use this when a real answer needs more than one department\'s judgment right now, not a guess at what another seat would say. '
+    +'Never fabricates a position for a seat that did not answer, and never fabricates consensus. Takes up to 60 seconds.',
+    parameters:{type:'object',properties:{
+      agenda:{type:'string',description:'the real question or decision the meeting is about'},
+      participants:{type:'array',items:{type:'string'},description:'seat names to convene, e.g. ["CODING","LEGAL"]. Omit to convene every other registered station.'},
+      initiator:{type:'string',description:'who is convening this meeting; defaults to PAI'}},
+      required:['agenda']}}},
+
+  // ⬡B:tool.loop:TOOL:911_escalation_a_real_judged_pass_never_a_cold_bypass:20260802⬡
+  // New World Order pt1 doctrine, founder direct. GRANDDADDY 911 law and core/outreach.js's
+  // own standing comments both hold: cold code never decides to reach a human, and a force
+  // hint never bypasses a real model judgment. This tool's only path to the desk is a
+  // genuine judged urgent:true verdict from core/escalation.911.js; every claim, genuine or
+  // false, is durably recorded so a pattern of false alarms becomes queryable (the naughty
+  // list). Never call this for a routine failure, a normal bug, or anything that can wait
+  // for the usual reporting cycle -- most claims judged this way are refused, by design.
+  {type:'function',function:{name:'raise_911_escalation',description:'RAISE A GENUINE 911-GRADE EMERGENCY toward the founder\'s desk. '
+    +'A real, honest, skeptical judge call decides whether this actually qualifies (a live secret exposed, irreversible data loss in progress, a security breach, a production outage) -- most claims do NOT qualify and are refused, never silently forced through. '
+    +'Every claim you raise here, genuine or refused, is durably recorded under your own seat name, so a pattern of false alarms becomes visible later. '
+    +'Only a genuine urgent verdict actually surfaces to the desk. Never use this for a routine bug, a normal failure, or anything that can wait.',
+    parameters:{type:'object',properties:{
+      claim:{type:'string',description:'the real, specific emergency claim, in your own words'},
+      evidence:{type:'array',items:{type:'string'},description:'short evidence lines backing the claim, e.g. log lines or specifics'}},
+      required:['claim']}}},
 
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
@@ -1474,7 +1507,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   reminders:['read_reminders','create_reminder','stop_mentioning'],
   budget:['get_budget_summary','get_budget_upcoming'],
   memory:['find_in_brain','find_identity_evidence','write_to_brain'],
-  code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','find_in_brain',
+  code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','raise_911_escalation','find_in_brain',
     'read_lane_board','read_wonder_departments','read_render_logs','get_recent_builds','read_own_code','consult_coda',
     'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
   screen:['update_screen','save_layout','edit_layout','set_background'],
@@ -1788,6 +1821,47 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
         invoked_by:'anew_cycle',caller:'core.tool.loop',cycle_id:_wonderCycleId});
       if (!_w) return JSON.stringify({ok:false,reason:'wonder_games_no_result'});
       return JSON.stringify({ok:true,result:_w});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
+  }
+
+  if (name === 'consult_wonder_meeting') {
+    var _agenda = String(args.agenda || '').trim();
+    if (!_agenda) return JSON.stringify({ok:false,note:'no agenda given'});
+    var _participants = Array.isArray(args.participants)
+      ? args.participants.map(function (p) { return String(p || '').trim(); }).filter(Boolean) : null;
+    var _initiator = String(args.initiator || '').trim() || 'PAI';
+    try {
+      // ⬡B:core.tool_loop:WIRE:lazy_require_never_a_load_time_crash_for_a_world_without_the_roster:20260802⬡
+      // core/wonder.consult.js itself pulls in advisors/registry.js and advisors/state.position.js,
+      // this founder's org-chart-specific roster; template-mind ships without either, on purpose
+      // (identity by env only, no world's roster hardcoded into the shared template). A top-level
+      // require here would fail the whole module for every inherited world at load time. Required
+      // lazily, inside the one branch that ever calls it, so a world without a seated roster gets
+      // an honest ok:false the first time this tool is actually invoked, never a crash on boot.
+      var _meet = await require('./wonder.consult.js').convene(hamUid, _initiator, _participants, _agenda, {deadlineMs:60000});
+      if (!_meet || _meet.ok !== true) {
+        return JSON.stringify({ok:false,reason:(_meet && _meet.reason) || 'wonder_consult_no_result'});
+      }
+      return JSON.stringify({ok:true,reached:_meet.reached,minutes:_meet.minutes,rounds:_meet.rounds,
+        participants:_meet.participants,absent:_meet.absent||[],
+        note:'Real meeting. Every named seat spoke in its own voice and a real judge call decided consensus.'});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
+  }
+
+  if (name === 'raise_911_escalation') {
+    var _claim = String(args.claim || '').trim();
+    if (!_claim) return JSON.stringify({ok:false,note:'no claim given'});
+    var _evidence = Array.isArray(args.evidence)
+      ? args.evidence.map(function (e) { return String(e || '').trim(); }).filter(Boolean) : [];
+    var _seat = String(args.seat || '').trim() || 'PAI';
+    try {
+      // core/escalation.911.js's own dependencies (advisors/advisor.exit.js,
+      // core/model.ladder.js, core/brain.client.js) are all generic, no anew-specific
+      // roster, and ship in every inherited world -- unlike consult_wonder_meeting's
+      // require above, this one is safe to load eagerly. Lazy anyway, matching this
+      // block's own house style and keeping tool.loop.js's own load-time cost flat.
+      var _raised = await require('./escalation.911.js').raise911(hamUid, _seat, _claim, _evidence);
+      return JSON.stringify(_raised || {ok:false,reason:'escalation_911_no_result'});
     } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
   }
 
