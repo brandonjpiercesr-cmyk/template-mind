@@ -171,8 +171,18 @@ function runtimeContextBudgets(value) {
   const requestedFcw = Number(value && value.fcw_byte_budget);
   const compact = Number.isFinite(requestedCompact) && requestedCompact >= 16384
     ? requestedCompact : Math.max(16384, Math.floor(headroom / 128));
+  // ⬡B:core.agent.find:FIX:the_default_wall_budget_binds_to_the_model_not_the_heap:20260802⬡
+  // headroom/32 on a multi-GB heap is a budget in the tens of megabytes, a bound that never
+  // binds: a 3.0MB wall left this function alive and then died at the provider window, which
+  // is not capability, it is a dead turn (measured live 20260802, 2012 beads, 3,076,009
+  // prompt chars). The DEFAULT now also respects what a provider window can actually
+  // swallow; an explicit seat context policy still names its own budget untouched, and the
+  // ceiling lives in env, never a literal person or seat.
+  const modelWindowRaw = Number(process.env.FCW_MODEL_CONTEXT_BYTES);
+  const modelWindow = Number.isFinite(modelWindowRaw) && modelWindowRaw >= 16384
+    ? modelWindowRaw : 786432;
   const fcw = Number.isFinite(requestedFcw) && requestedFcw >= 16384
-    ? requestedFcw : Math.max(16384, Math.floor(headroom / 32));
+    ? requestedFcw : Math.max(16384, Math.min(modelWindow, Math.floor(headroom / 32)));
   return {compact_bytes:compact,fcw_bytes:fcw,heap_limit_bytes:heapLimit,
     heap_used_bytes:heapUsed,source:Number.isFinite(requestedFcw) && requestedFcw >= 16384
       ? 'requesting_seat_context_policy' : 'node_v8_heap_headroom'};
@@ -455,10 +465,19 @@ async function bindWall(input, options) {
   if (!fcw || fcw.ok !== true || typeof fcw.system_prompt !== 'string' || !fcw.system_prompt) {
     return {ok:false,available:false,reason:'agent_find_wall_unavailable'};
   }
-  if (fcw.partial === true || list(fcw.unavailableContributors).length ||
-      list(fcw.partialContributors).length) {
-    return {ok:false,available:false,reason:'agent_find_wall_incomplete'};
-  }
+  // ⬡B:core.agent.find:FIX:a_partial_wall_binds_with_its_partiality_on_the_receipt:20260802⬡
+  // 20260801 shipped completeness-or-death here: one partial contributor out of twenty-plus,
+  // or an evidence plan that honestly reached its byte envelope, refused the WHOLE wall as
+  // agent_find_wall_incomplete, surfaced upstream as memory_bank_build_failed on every
+  // ordinary live turn (reproduced offline with the exact live wake shape, 20260802). A
+  // twenty-contributor wall almost always has one short read, so the gate was structurally
+  // unpassable on real hardware and she went mute. Unchaining law and the Great Correction
+  // both hold: real answer over refusal, honesty carried, never hollow. A partial wall is
+  // honest partial context, the wall text already names what is missing, so it BINDS, and
+  // wallRecord below already carries partial, unavailable_contributors, and
+  // partial_contributors onto the durable receipt instead of killing the turn.
+  const wallIncomplete = fcw.partial === true || list(fcw.unavailableContributors).length > 0 ||
+    list(fcw.partialContributors).length > 0;
   if (!hamUid || !cycleId || !requestId || !providerSeat || !target || !self ||
       self.lifecycle !== 'active' || (target.lifecycle !== 'active' && target.lifecycle !== 'contained')) {
     return {ok:false,available:false,reason:'agent_find_seat_binding_invalid'};
@@ -531,6 +550,9 @@ async function bindWall(input, options) {
       seat_name:providerSeat,seat_node_id:target.id,employment_record:employment,
       recent_cycle_truth:truth,truth_beacon:{source:built.source,
         stamp_type:built.beacon.stamp_type,row_id:existing.id || null,readback_verified:true},
+      wall_incomplete:wallIncomplete,
+      unavailable_contributors:list(fcw.unavailableContributors),
+      partial_contributors:list(fcw.partialContributors),
       prompt_appendix:promptAppendix
     })
   });
