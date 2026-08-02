@@ -4816,6 +4816,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         _routedToolIntent);
       _routedRequiresLiveTool = !!_routedRequiredReadTool;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
+      // A pure voice continuation such as "go on" is conversation, not a
+      // council dispatch. Keep ordinary substantial language council-capable,
+      // while preserving the fast natural voice continuation with no schemas.
+      if (_routeEveryVoicePass && _routedToolIntent === 'general') body.tools = [];
       if (_routedRequiredReadTool || _routedRequiredActionTool) {
         var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
         body.tools = body.tools.filter(function (tool) {
