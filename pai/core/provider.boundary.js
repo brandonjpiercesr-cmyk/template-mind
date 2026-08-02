@@ -505,6 +505,16 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
       }
     }catch(eProviderFact){}
   }
+  // A prior OpenRouter terminal whose generation fact was not ready on the immediate read
+  // remains durable. Let this completed request trigger one same-seat, non-generative retry.
+  // The work is detached so accounting cannot hold the paid answer; a crash is safe because
+  // the immutable terminal remains eligible for a future organic request.
+  if(typeof store.recoverDelayedOpenRouterCost==='function'){
+    Promise.resolve().then(function(){
+      return store.recoverDelayedOpenRouterCost(prepared.receipt,requestInit,
+        terminalReceiptOptions);
+    }).catch(function(){});
+  }
   if (reservation) {
     try {
       providerBudgetAuthority.settleProviderAttempt(reservation, {
