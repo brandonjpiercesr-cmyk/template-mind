@@ -21,6 +21,7 @@ function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
 function _tbl(){return process.env.BEAD_TABLE||(process.env.MEMORY_BANK_URL?'beads':'aibe_brain');}
 function _schema(){return process.env.BRAIN_SCHEMA||(process.env.MEMORY_BANK_URL?'memory_bank':'abacia_core');}
 
+const crypto = require('node:crypto');
 const findModule = require('./find.js');
 const { findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments } = findModule;
 const identityProvenance = require('./identity.provenance.js');
@@ -123,11 +124,19 @@ function memoryReadLine(label, availability, result) {
 // different contributors, and advisor exhaust rode both the recent and context reads. A row
 // is one fact; a second copy is pure prompt weight. First occurrence wins so the
 // question-specific exact reads that ride ahead of ordinary context keep their lead position.
+// The id-less fallback key also carries a summary fingerprint: two DISTINCT rows sharing a
+// source and a created_at would otherwise collapse into one fact, losing evidence rather than
+// weight. Every concatenated feed carries brain ids today, so this path is defensive only.
 function dedupeContextRows(rows) {
   var seen = new Set();
   return (Array.isArray(rows) ? rows : []).filter(function (b) {
-    var key = b && b.id != null ? 'id:' + b.id
-      : 'src:' + String(b && b.source || '') + '|' + String(b && b.created_at || '');
+    var key;
+    if (b && b.id != null) key = 'id:' + b.id;
+    else {
+      var body = String(b && b.summary || '') + ' ' + String(b && b.stamp_type || '');
+      key = 'src:' + String(b && b.source || '') + '|' + String(b && b.created_at || '') +
+        '|' + crypto.createHash('sha256').update(body).digest('hex').slice(0, 16);
+    }
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
