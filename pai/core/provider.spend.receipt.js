@@ -24,6 +24,27 @@ var PROVIDER_USAGE_RPC = 'write_anew_provider_spend_usage_reconciliation';
 var PROVIDER_STATEMENT_RPC = 'append_anew_provider_account_statement';
 var MAX_STORE_BYTES = 4 * 1024 * 1024;
 var MAX_RESPONSE_BYTES = 1024 * 1024;
+// ⬡B:core.provider_spend_receipt:911:a_response_bound_was_deciding_whether_a_request_named_its_model:20260802⬡
+// REPRODUCED DETERMINISTICALLY 20260802, and it is the wall that had her answering
+// `no_answer:pai_seat: provider_spend_attribution_missing_model` on a live turn.
+// `bodyFacts()` below reads the OUTBOUND REQUEST we ourselves built, and it was gating that
+// read on MAX_RESPONSE_BYTES, a bound written for what a provider sends BACK. One byte over
+// one mebibyte and the JSON was never parsed, so `providerModel()` found no `model`, and
+// `prepare()` refused the call saying the caller never named a model. The caller did name it:
+// core/tool.loop.js `_attemptPaiSeat` puts the seat's exact slug in the first forty bytes of
+// every body it sends. A long turn (a full wall plus tools plus history, or one inline image
+// part) crosses a mebibyte easily on a seat whose context window is a million tokens, so the
+// biggest turns were the ones that could not buy a single token, under a reason that sends the
+// next debugger to the seat map, where nothing is wrong.
+//
+// Two things change and both are the same rule: a bound must be about the thing it bounds.
+//   1. A REQUEST body gets its own bound, sized to a real provider request rather than to a
+//      response. The bytes are already fully in memory before this function is reached (we
+//      serialized them), so parsing them adds no new exposure, only the parse itself.
+//   2. A body that IS genuinely past the bound no longer borrows another wall's name. It
+//      refuses as `provider_spend_attribution_body_too_large`, which is the true fault and is
+//      traceable to this line instead of to a seat that named its model correctly.
+var MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024;
 var SUMMARY_PAGE_SIZE = 500;
 // ⬡B:core.provider_spend_receipt:LAW:a_no_maximum_ceiling_cannot_be_smuggled_through_a_coder_bound:20260801⬡
 // CATHY (Codex) review, 20260801, on anew#1494: `core/ceiling.owner.js` and
@@ -150,10 +171,11 @@ function bodyFacts(init) {
   if (typeof body === 'string') bytes = Buffer.from(body);
   else if (Buffer.isBuffer(body) || body instanceof Uint8Array) bytes = Buffer.from(body);
   else if (body instanceof URLSearchParams) bytes = Buffer.from(body.toString());
-  if (bytes && bytes.length <= MAX_RESPONSE_BYTES) {
+  var oversized = !!(bytes && bytes.length > MAX_REQUEST_BODY_BYTES);
+  if (bytes && !oversized) {
     try { parsed = JSON.parse(bytes.toString('utf8')); } catch (error) { parsed = null; }
   }
-  return {parsed:parsed, digest:bytes ? sha(bytes) : null};
+  return {parsed:parsed, digest:bytes ? sha(bytes) : null, oversized:oversized};
 }
 
 function providerModel(provider, parsed, body) {
@@ -246,7 +268,11 @@ function prepare(spec) {
   }
   var body = bodyFacts(input.init);
   var model = providerModel(provider, parsed, body.parsed);
-  if (!model) return {ok:false,reason:'provider_spend_attribution_missing_model'};
+  // A body we could not read is not a body that named no model. Saying so is the whole
+  // ⬡B:core.provider_spend_receipt:911⬡ above: the refusal names the fault it actually hit.
+  if (!model) return {ok:false,reason:body.oversized
+    ? 'provider_spend_attribution_body_too_large'
+    : 'provider_spend_attribution_missing_model'};
   var alias = keyAlias(provider, input.init, parsed, attribution, input.env);
   if (!alias.ok) return alias;
   var kind = identifier(input.kind, 32);
