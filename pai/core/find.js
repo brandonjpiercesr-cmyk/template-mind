@@ -506,7 +506,14 @@ async function scanFcwEvidence(input, options) {
       }
     }
   }
-  return {ok:failures.length < queries.length,available:failures.length < queries.length,
+  var available=failures.length < queries.length;
+  var unavailableReason=null;
+  if(!available){
+    unavailableReason=failures.length&&failures.every(function(failure){
+      return failure.reason==='brain_unconfigured';
+    })?'memory_bank_unavailable':'agent_find_compact_scan_unavailable';
+  }
+  return {ok:available,available:available,reason:unavailableReason,
     partial:failures.length > 0 || continuations.length > 0,failures:failures,
     continuations:continuations,queries_total:queries.length,pages:totalPages,
     rows_seen:totalRows};
