@@ -141,7 +141,8 @@ async function run(url, init, fetchImpl, execute, env) {
     seats:owner.seats || []};
   var seat = owner.seat;
   var cap = usageNumber(seat.dailyCapUsd);
-  if (cap === null || cap <= 0) return {blocked:true,status:503,
+  var unlimitedDailySpend = seat.unlimitedDailySpend === true;
+  if (!unlimitedDailySpend && (cap === null || cap <= 0)) return {blocked:true,status:503,
     reason:'openrouter_seat_daily_cap_invalid',seat:seat.seat,capEnv:seat.capEnv};
 
   return queueSeat(seat.seat, async function () {
@@ -167,7 +168,7 @@ async function run(url, init, fetchImpl, execute, env) {
           accountRemainingUsd:balance.remaining,retryAt:'after_credit_top_up'};
       }
     }
-    if (usage.usageDaily >= cap) return {blocked:true,status:429,
+    if (!unlimitedDailySpend && usage.usageDaily >= cap) return {blocked:true,status:429,
       reason:'openrouter_seat_daily_dollar_cap_reached',seat:seat.seat,
       usageDailyUsd:usage.usageDaily,capUsd:cap,retryAt:'next_utc_day'};
     // This boundary has resolved the credential to the one canonical seat that owns it.
@@ -178,7 +179,7 @@ async function run(url, init, fetchImpl, execute, env) {
     var response = await require('./spend.guard.js').withAttribution(
       {seat:seat.seat}, execute);
     return {blocked:false,seat:seat.seat,usageDailyUsd:usage.usageDaily,
-      capUsd:cap,response:response};
+      capUsd:unlimitedDailySpend?null:cap,unlimitedDailySpend:unlimitedDailySpend,response:response};
   });
 }
 
