@@ -12,12 +12,14 @@ var openrouterSeatSpend = require('./openrouter.seat.spend.js');
 
 var TABLE = 'provider_spend_receipts';
 var RECONCILIATION_TABLE = 'provider_spend_reconciliations';
+var USAGE_RECONCILIATION_TABLE = 'provider_spend_usage_reconciliations';
 var BILLABLE_TABLE = 'provider_spend_receipts_billable';
 var SCHEMA = 'anew.provider-spend-receipt.v1';
 var CLAIM_RPC = 'claim_anew_provider_spend_intent';
 var TERMINAL_RPC = 'write_anew_provider_spend_terminal';
 var RECONCILE_RPC = 'reconcile_anew_provider_spend_unknown';
 var PROVIDER_FACT_RPC = 'write_anew_provider_spend_reconciliation';
+var PROVIDER_USAGE_RPC = 'write_anew_provider_spend_usage_reconciliation';
 var MAX_STORE_BYTES = 4 * 1024 * 1024;
 var MAX_RESPONSE_BYTES = 1024 * 1024;
 var SUMMARY_PAGE_SIZE = 500;
@@ -476,6 +478,28 @@ async function readReconciliation(attemptId, options) {
   } catch(error){return{ok:false,reason:'provider_spend_store_readback_invalid'};}
 }
 
+async function readUsageReconciliation(attemptId, options) {
+  var config = bankConfig(options && options.env), doFetch = fetchImpl(options);
+  if (!config.ok || !doFetch) return {ok:false,reason:'provider_spend_store_unavailable'};
+  var query = new URLSearchParams({attempt_id:'eq.' + attemptId,limit:'2'});
+  var response;
+  try {
+    response = await doFetch(config.url + '/rest/v1/' + USAGE_RECONCILIATION_TABLE + '?' +
+      query.toString(),{headers:readHeaders(config),
+        signal:brain.boundedSignal(options && options.signal,options && options.env)});
+  } catch(error) { return {ok:false,reason:'provider_spend_store_unavailable'}; }
+  if(!response || response.ok !== true)return{ok:false,reason:response &&
+    (response.status===404||response.status===400)?'provider_spend_schema_unavailable':
+      'provider_spend_readback_failed'};
+  try{
+    var rows=await boundedJson(response,MAX_STORE_BYTES);
+    if(!Array.isArray(rows)||rows.length!==1)return{ok:false,
+      reason:rows&&rows.length>1?'provider_spend_readback_ambiguous':
+        'provider_spend_readback_missing'};
+    return{ok:true,row:rows[0]};
+  }catch(error){return{ok:false,reason:'provider_spend_store_readback_invalid'};}
+}
+
 async function writeReconciliation(receipt, outcome, options) {
   var cost=decimalCost(outcome&&outcome.actual_cost_usd);
   var row={attempt_id:receipt&&receipt.attempt_id,
@@ -512,6 +536,71 @@ async function writeReconciliation(receipt, outcome, options) {
       decimalCost(actual.actual_cost_usd)!==cost||
       stableJson(actual.provider_tokens)!==stableJson(row.provider_tokens)){
     return{ok:false,reason:'provider_spend_reconciliation_readback_mismatch'};
+  }
+  return{ok:true,row:actual,replayed:payload.inserted!==true};
+}
+
+function normalizedProviderUsage(value) {
+  if(!value || typeof value!=='object' || Array.isArray(value))return null;
+  var unit=identifier(value.unit,32),quantity=strictNumber(value.quantity);
+  if(!unit||quantity===null)return null;
+  var normalized={unit:unit,quantity:quantity};
+  if(value.duration_seconds!==undefined){
+    var duration=strictNumber(value.duration_seconds);
+    if(duration===null)return null;
+    normalized.duration_seconds=duration;
+  }
+  if(value.is_sandbox!==undefined){
+    if(typeof value.is_sandbox!=='boolean')return null;
+    normalized.is_sandbox=value.is_sandbox;
+  }
+  var historyId=identifier(value.history_item_id,240);
+  if(value.history_item_id!==undefined&&!historyId)return null;
+  if(historyId)normalized.history_item_id=historyId;
+  return normalized;
+}
+function providerUsageFactDigest(facts) {
+  var normalized={provider:identifier(facts&&facts.provider,80),
+    provider_request_id:identifier(facts&&facts.provider_request_id,240),
+    provider_usage:normalizedProviderUsage(facts&&facts.provider_usage),
+    usage_source:identifier(facts&&facts.usage_source,80),
+    reconciliation_source:identifier(facts&&facts.reconciliation_source,80)};
+  if(!normalized.provider||!normalized.provider_request_id||!normalized.provider_usage||
+      !normalized.usage_source||!normalized.reconciliation_source)return null;
+  return sha(stableJson(normalized));
+}
+async function writeUsageReconciliation(receipt, facts, options) {
+  var provider=identifier(facts&&facts.provider,80),usage=normalizedProviderUsage(
+    facts&&facts.provider_usage);
+  var row={attempt_id:receipt&&receipt.attempt_id,provider:provider,
+    provider_request_id:identifier(facts&&facts.provider_request_id,240),
+    provider_usage:usage,usage_source:identifier(facts&&facts.usage_source,80),
+    provider_fact_digest:identifier(facts&&facts.provider_fact_digest,64),
+    reconciliation_source:identifier(facts&&facts.reconciliation_source,80)};
+  if(!receipt||receipt.provider!==provider||!identifier(row.attempt_id,64)||
+      !row.provider_request_id||!row.provider_usage||!row.usage_source||
+      !row.provider_fact_digest||!row.reconciliation_source){
+    return{ok:false,reason:'provider_spend_usage_reconciliation_input_invalid'};
+  }
+  var written=await rpcCall(PROVIDER_USAGE_RPC,{p_fact:row},options,
+    'provider_spend_usage_reconciliation_write_failed');
+  if(!written.ok)return written;
+  var payload=written.payload;
+  if(!payload||payload.ok!==true||payload.stored!==true||
+      clean(payload.attempt_id)!==row.attempt_id){
+    return{ok:false,reason:identifier(payload&&payload.reason,160)||
+      'provider_spend_usage_reconciliation_readback_mismatch'};
+  }
+  var readback=await readUsageReconciliation(row.attempt_id,options);
+  if(!readback.ok)return readback;
+  var actual=readback.row;
+  if(identifier(actual.provider,80)!==row.provider||
+      identifier(actual.provider_request_id,240)!==row.provider_request_id||
+      stableJson(normalizedProviderUsage(actual.provider_usage))!==stableJson(row.provider_usage)||
+      identifier(actual.usage_source,80)!==row.usage_source||
+      identifier(actual.reconciliation_source,80)!==row.reconciliation_source||
+      identifier(actual.provider_fact_digest,64)!==row.provider_fact_digest){
+    return{ok:false,reason:'provider_spend_usage_reconciliation_readback_mismatch'};
   }
   return{ok:true,row:actual,replayed:payload.inserted!==true};
 }
@@ -627,6 +716,18 @@ function providerFactDigest(facts) {
       normalized.actual_cost_usd===null||normalized.cost_source!=='provider_reported')return null;
   return sha(stableJson(normalized));
 }
+
+function inlineProviderUsage(receipt,response) {
+  if(!receipt||receipt.provider!=='elevenlabs'||!response||response.ok!==true)return null;
+  var requestId=identifier(headerValue({headers:response.headers},'request-id'),240);
+  var characters=strictNumber(headerValue({headers:response.headers},'character-cost'));
+  if(!requestId||characters===null)return null;
+  var facts={provider:'elevenlabs',provider_request_id:requestId,
+    provider_usage:{unit:'character',quantity:characters},
+    usage_source:'provider_response_header',reconciliation_source:'elevenlabs_response_header'};
+  facts.provider_fact_digest=providerUsageFactDigest(facts);
+  return facts.provider_fact_digest?facts:null;
+}
 async function recoverOpenRouterUsage(receipt, outcome, requestInit, options) {
   var result = Object.assign({},outcome || {});
   if (!receipt || receipt.provider !== 'openrouter' || result.disposition !== 'SUCCEEDED' ||
@@ -735,19 +836,152 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
   return{ok:true,attempted:1,recovered:1,reason:null,attempt_id:attemptId,
     replayed:written.replayed===true};
 }
+async function bankUsageCandidate(receipt, options) {
+  var config=bankConfig(options&&options.env),doFetch=fetchImpl(options);
+  if(!config.ok||!doFetch)return{ok:false,reason:'provider_spend_store_unavailable'};
+  var query=new URLSearchParams({select:'attempt_id,provider,provider_request_id,status_code,'+
+    'disposition,key_alias,provider_usage',provider:'eq.'+receipt.provider,
+    phase:'eq.TERMINAL',disposition:'eq.SUCCEEDED',key_alias:'eq.'+receipt.key_alias,
+    provider_request_id:'not.is.null',provider_usage:'is.null',
+    attempt_id:'neq.'+receipt.attempt_id,order:'created_at.desc,attempt_id.desc',limit:'1'});
+  var response;
+  try{response=await doFetch(config.url+'/rest/v1/'+BILLABLE_TABLE+'?'+query.toString(),{
+    headers:readHeaders(config),signal:brain.boundedSignal(options&&options.signal,
+      options&&options.env)});}
+  catch(error){return{ok:false,reason:'provider_spend_store_unavailable'};}
+  if(!response||response.ok!==true)return{ok:false,reason:response&&
+    (response.status===404||response.status===400)?'provider_spend_schema_unavailable':
+      'provider_spend_usage_reconciliation_read_failed'};
+  var rows;
+  try{rows=await boundedJson(response,MAX_STORE_BYTES);}
+  catch(error){return{ok:false,reason:'provider_spend_store_readback_invalid'};}
+  if(!Array.isArray(rows)||rows.length>1)return{ok:false,
+    reason:'provider_spend_usage_reconciliation_candidate_invalid'};
+  if(!rows.length)return{ok:true,row:null};
+  var row=rows[0],status=Number(row&&row.status_code);
+  if(!/^[a-f0-9]{64}$/.test(clean(row&&row.attempt_id))||
+      row.attempt_id===receipt.attempt_id||row.provider!==receipt.provider||
+      clean(row.key_alias)!==receipt.key_alias||row.disposition!=='SUCCEEDED'||
+      !Number.isInteger(status)||status<200||status>299||
+      !identifier(row.provider_request_id,240)||row.provider_usage!=null){
+    return{ok:false,reason:'provider_spend_usage_reconciliation_candidate_invalid'};
+  }
+  return{ok:true,row:row};
+}
+async function elevenLabsHistoryUsage(requestId, requestInit, options) {
+  var key=headerValue(requestInit,'xi-api-key')||bearer(requestInit),cursor=null,seen=new Set();
+  if(!key)return null;
+  var doFetch=fetchImpl(options);
+  while(doFetch){
+    var query=new URLSearchParams({page_size:'1000',sort_direction:'desc',source:'TTS'});
+    if(cursor)query.set('start_after_history_item_id',cursor);
+    var response;
+    try{response=await doFetch('https://api.elevenlabs.io/v1/history?'+query.toString(),{
+      method:'GET',headers:{'xi-api-key':key,Accept:'application/json'},
+      signal:brain.boundedSignal(options&&options.signal,options&&options.env)});}
+    catch(error){return null;}
+    if(!response||response.ok!==true)return null;
+    var body;
+    try{body=await boundedJson(response,MAX_STORE_BYTES);}catch(error){return null;}
+    if(!body||!Array.isArray(body.history)||typeof body.has_more!=='boolean')return null;
+    var exact=body.history.find(function(item){
+      return identifier(item&&item.request_id,240)===requestId;
+    });
+    if(exact){
+      var from=Number(exact.character_count_change_from),to=Number(exact.character_count_change_to);
+      if(!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||from<0||to<from)return null;
+      var facts={provider:'elevenlabs',provider_request_id:requestId,
+        provider_usage:{unit:'character',quantity:to-from,
+          history_item_id:identifier(exact.history_item_id,240)},
+        usage_source:'provider_history_item',reconciliation_source:'elevenlabs_history_api'};
+      facts.provider_fact_digest=providerUsageFactDigest(facts);
+      return facts.provider_fact_digest?facts:null;
+    }
+    if(body.has_more!==true)return null;
+    var next=identifier(body.last_history_item_id,240);
+    if(!next||seen.has(next))return null;
+    seen.add(next);cursor=next;
+  }
+  return null;
+}
+async function liveAvatarHistoricUsage(requestId, requestInit, options) {
+  var key=headerValue(requestInit,'x-api-key')||bearer(requestInit),page=1,seen=new Set();
+  if(!key)return null;
+  var doFetch=fetchImpl(options);
+  while(doFetch){
+    var query=new URLSearchParams({type:'historic',page:String(page),page_size:'100'});
+    var response;
+    try{response=await doFetch('https://api.liveavatar.com/v1/sessions?'+query.toString(),{
+      method:'GET',headers:{'X-API-KEY':key,Accept:'application/json'},
+      signal:brain.boundedSignal(options&&options.signal,options&&options.env)});}
+    catch(error){return null;}
+    if(!response||response.ok!==true)return null;
+    var body;
+    try{body=await boundedJson(response,MAX_STORE_BYTES);}catch(error){return null;}
+    var data=body&&body.data,rows=data&&data.results;
+    if(!data||!Array.isArray(rows))return null;
+    var exact=rows.find(function(item){return identifier(item&&item.id,240)===requestId;});
+    if(exact){
+      var credits=strictNumber(exact.credits_consumed),duration=strictNumber(exact.duration);
+      if(credits===null||duration===null||typeof exact.is_sandbox!=='boolean')return null;
+      var facts={provider:'liveavatar',provider_request_id:requestId,
+        provider_usage:{unit:'credit',quantity:credits,duration_seconds:duration,
+          is_sandbox:exact.is_sandbox},usage_source:'provider_historic_session',
+        reconciliation_source:'liveavatar_historic_sessions_api'};
+      facts.provider_fact_digest=providerUsageFactDigest(facts);
+      return facts.provider_fact_digest?facts:null;
+    }
+    var next=clean(data.next);
+    if(!next)return null;
+    if(seen.has(next))return null;
+    seen.add(next);page+=1;
+  }
+  return null;
+}
+async function recoverDelayedProviderUsage(receipt, requestInit, options) {
+  var empty={ok:true,attempted:0,recovered:0,reason:null};
+  if(!receipt||!new Set(['elevenlabs','liveavatar']).has(receipt.provider)||
+      !/^[a-f0-9]{64}$/.test(clean(receipt.attempt_id))||
+      !identifier(receipt.key_alias,160))return empty;
+  var candidate=await bankUsageCandidate(receipt,options);
+  if(!candidate.ok)return{ok:false,attempted:0,recovered:0,reason:candidate.reason};
+  if(!candidate.row)return empty;
+  var requestId=identifier(candidate.row.provider_request_id,240),facts=receipt.provider==='elevenlabs'
+    ? await elevenLabsHistoryUsage(requestId,requestInit,options)
+    : await liveAvatarHistoricUsage(requestId,requestInit,options);
+  if(!facts)return{ok:true,attempted:1,recovered:0,reason:'provider_usage_fact_not_ready'};
+  var written=await writeUsageReconciliation({attempt_id:candidate.row.attempt_id,
+    provider:receipt.provider},facts,options);
+  if(!written.ok)return{ok:false,attempted:1,recovered:0,reason:written.reason};
+  return{ok:true,attempted:1,recovered:1,reason:null,attempt_id:candidate.row.attempt_id,
+    replayed:written.replayed===true};
+}
 async function captureTerminalResponse(response, options) {
   var bytes = await responseBytes(response, Number(options && options.maxResponseBytes) || MAX_RESPONSE_BYTES);
   var body = null;
   if (bytes) { try { body = JSON.parse(bytes.toString('utf8')); } catch (error) { body = null; } }
   var usage = usageFacts(body);
-  var providerRequestId = headerValue({headers:response && response.headers}, 'x-generation-id') ||
-    headerValue({headers:response && response.headers}, 'x-request-id') ||
-    headerValue({headers:response && response.headers}, 'request-id') ||
-    identifier(body && body.id,240) || null;
+  var receiptProvider=identifier(options&&options.receipt&&options.receipt.provider,80);
+  // Provider control-plane identity outranks generic HTTP trace headers. ElevenLabs' usage
+  // fact is keyed by its documented `request-id`; LiveAvatar's historic ledger is keyed by
+  // `data.session_id`. Banking an x-request-id trace instead makes the immutable terminal
+  // impossible to reconcile to the provider fact later.
+  var providerRequestId=receiptProvider==='elevenlabs'
+    ? headerValue({headers:response&&response.headers},'request-id')||null
+    : receiptProvider==='liveavatar'
+      ? identifier(body&&body.data&&body.data.session_id,240)||null
+      : headerValue({headers:response&&response.headers},'x-generation-id')||
+        headerValue({headers:response&&response.headers},'x-request-id')||
+        headerValue({headers:response&&response.headers},'request-id')||
+        identifier(body&&body.id,240)||null;
+  var providerUsage=inlineProviderUsage(options&&options.receipt,response);
   return {outcome:{status_code:response && Number.isInteger(response.status) ? response.status : null,
     disposition:response && response.ok === true ? 'SUCCEEDED' : 'HTTP_ERROR',
     response_digest:bytes ? sha(bytes) : null,provider_request_id:identifier(providerRequestId, 240),
-    provider_tokens:usage.tokens,actual_cost_usd:usage.cost,cost_source:usage.costSource},
+    provider_tokens:usage.tokens,actual_cost_usd:usage.cost,cost_source:usage.costSource,
+    provider_usage:providerUsage&&providerUsage.provider_usage||null,
+    usage_source:providerUsage&&providerUsage.usage_source||null,
+    provider_usage_fact:providerUsage||null},
     response:replayResponse(response,bytes)};
 }
 async function terminalFromResponse(response, options) {
@@ -814,7 +1048,7 @@ async function readSummary(options) {
   query.append('created_at','gte.' + since);
   query.append('created_at','lte.' + snapshotAt);
   query.set('select','attempt_id,phase,provider,kind,key_alias,component,ham_uid,service_id,' +
-    'disposition,status_code,actual_cost_usd,cost_source,created_at');
+    'disposition,status_code,actual_cost_usd,cost_source,provider_usage,usage_source,created_at');
   query.set('order','created_at.asc,attempt_id.asc,phase.asc');
   Object.keys(scope).forEach(function(field) { query.set(field,'eq.' + scope[field]); });
   var offset = 0, pages = 0, rowsScanned = 0;
@@ -823,7 +1057,8 @@ async function readSummary(options) {
   var admissions = 0, terminal = 0, succeeded = 0, outcomeUnknown = 0, failed = 0;
   var provenEgress = 0;
   var latestOutcomeUnknownMs = null, providerReportedCostUsd = 0;
-  var costedTerminal = 0, uncostedProvenEgress = 0;
+  var costedTerminal = 0, uncostedProvenEgress = 0, usageReportedTerminal=0;
+  var usageReportedCostUnallocated=0,usageTotals=new Map();
   try {
     while (true) {
       var headers = readHeaders(config);
@@ -876,6 +1111,16 @@ async function readSummary(options) {
           var cost = strictNumber(row.actual_cost_usd);
           if (cost === null) uncostedProvenEgress += 1;
           else { providerReportedCostUsd += cost; costedTerminal += 1; }
+          var providerUsage=normalizedProviderUsage(row.provider_usage);
+          if(providerUsage){
+            usageReportedTerminal+=1;
+            if(cost===null)usageReportedCostUnallocated+=1;
+            var usageKey=clean(row.provider)+'|'+providerUsage.unit;
+            var usageState=usageTotals.get(usageKey)||{provider:clean(row.provider),
+              unit:providerUsage.unit,quantity:0,attempts:0};
+            usageState.quantity+=providerUsage.quantity;usageState.attempts+=1;
+            usageTotals.set(usageKey,usageState);
+          }
         }
         if (row.disposition === 'OUTCOME_UNKNOWN') {
           var unknownAt = Date.parse(row.created_at || '');
@@ -894,6 +1139,12 @@ async function readSummary(options) {
       outcome_unknown:outcomeUnknown,proven_egress:provenEgress,
       provider_reported_cost_usd:Number(providerReportedCostUsd.toFixed(8)),
       costed_terminal:costedTerminal,uncosted_proven_egress:uncostedProvenEgress,
+      usage_reported_terminal:usageReportedTerminal,
+      usage_reported_cost_unallocated:usageReportedCostUnallocated,
+      by_provider_usage:Array.from(usageTotals.values()).map(function(item){
+        return Object.assign({},item,{quantity:Number(item.quantity.toFixed(8))});
+      }).sort(function(a,b){return b.attempts-a.attempts||
+        a.provider.localeCompare(b.provider)||a.unit.localeCompare(b.unit);}),
       latest_outcome_unknown_at:latestOutcomeUnknownMs === null ? null :
         new Date(latestOutcomeUnknownMs).toISOString(),
       latest_unresolved_at:unresolvedTimes.length ?
@@ -919,15 +1170,22 @@ module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimInt
   captureTerminalResponse:captureTerminalResponse,
   recoverOpenRouterUsage:recoverOpenRouterUsage,
   recoverDelayedOpenRouterCost:recoverDelayedOpenRouterCost,
+  recoverDelayedProviderUsage:recoverDelayedProviderUsage,
   writeReconciliation:writeReconciliation,
+  writeUsageReconciliation:writeUsageReconciliation,
   terminalFromError:terminalFromError,reconcileUnresolved:reconcileUnresolved,
   readSummary:readSummary,cachedSummary:cachedSummary,
   _test:{providerFor:providerFor,bodyFacts:bodyFacts,providerModel:providerModel,keyAlias:keyAlias,
     bankConfig:bankConfig,phaseRow:phaseRow,readPhase:readPhase,
-    readReconciliation:readReconciliation,decimalCost:decimalCost,
+    readReconciliation:readReconciliation,readUsageReconciliation:readUsageReconciliation,
+    decimalCost:decimalCost,
     stableJson:stableJson,
     boundedJson:boundedJson,usageFacts:usageFacts,
     openRouterGenerationFacts:openRouterGenerationFacts,providerFactDigest:providerFactDigest,
+    normalizedProviderUsage:normalizedProviderUsage,
+    providerUsageFactDigest:providerUsageFactDigest,inlineProviderUsage:inlineProviderUsage,
+    bankUsageCandidate:bankUsageCandidate,elevenLabsHistoryUsage:elevenLabsHistoryUsage,
+    liveAvatarHistoricUsage:liveAvatarHistoricUsage,
     responseBytes:responseBytes,
     replayResponse:replayResponse,
     reconcileGraceSeconds:reconcileGraceSeconds,rpcCall:rpcCall,

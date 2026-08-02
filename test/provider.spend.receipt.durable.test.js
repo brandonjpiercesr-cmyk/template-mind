@@ -218,6 +218,8 @@ function fixtureEnv() {
   return {MEMORY_BANK_URL:'https://memory.fixture',MEMORY_BANK_KEY:'bank-secret-fixture',
     BRAIN_SCHEMA:'memory_bank',TOGETHER_COMPONENT_KEY:'together-secret-fixture',
     OR_KEY_MODEL_LADDER:'openrouter-secret-fixture',
+    ELEVENLABS_COMPONENT_KEY:'elevenlabs-secret-fixture',
+    HEYGEN_COMPONENT_KEY:'liveavatar-secret-fixture',
     RENDER_SERVICE_ID:'srv-anew-fixture'};
 }
 function attribution() {
@@ -305,6 +307,39 @@ test('terminal extraction preserves the original response and stores provider fa
     assert.doesNotMatch(serialized,/private prompt fixture|private answer fixture/);
     assert.match(serialized,/provider_reported/);
   });
+
+test('provider-specific identity outranks competing generic trace headers',async function(){
+  const store=require(RECEIPT_PATH);
+  const eleven=prepared(store,{url:'https://api.elevenlabs.io/v1/text-to-speech/voice-fixture',
+    init:{method:'POST',headers:{'xi-api-key':'elevenlabs-secret-fixture',
+      'Content-Type':'application/json'},body:JSON.stringify({text:'hello',
+        model_id:'eleven_turbo_v2_5'})},attribution:Object.assign({},attribution(),{
+      component:'vara.speak',owner_node_id:'station.vara',
+      target_wonder_id:'wonder.anu.voice'})});
+  assert.equal(eleven.ok,true,eleven.reason);
+  const capturedEleven=await store.captureTerminalResponse(new Response(Buffer.from('audio'),{
+    status:200,headers:{'Content-Type':'audio/mpeg','x-request-id':'generic-trace-fixture',
+      'request-id':'el-request-fixture','character-cost':'17'}}),{receipt:eleven.receipt});
+  assert.equal(capturedEleven.outcome.provider_request_id,'el-request-fixture');
+  assert.equal(capturedEleven.outcome.provider_usage_fact.provider_request_id,
+    'el-request-fixture');
+
+  const liveAvatar=prepared(store,{url:'https://api.liveavatar.com/v1/sessions/token',
+    init:{method:'POST',headers:{'X-API-KEY':'liveavatar-secret-fixture',
+      'Content-Type':'application/json'},body:JSON.stringify({mode:'LITE'})},
+    attribution:Object.assign({},attribution(),{component:'face.liveavatar',
+      owner_node_id:'station.face',target_wonder_id:'wonder.anu.face'})});
+  assert.equal(liveAvatar.ok,true,liveAvatar.reason);
+  const capturedLiveAvatar=await store.captureTerminalResponse(new Response(JSON.stringify({
+    data:{session_id:'liveavatar-session-fixture',session_token:'private'}}),{status:200,
+    headers:{'Content-Type':'application/json','x-request-id':'generic-liveavatar-trace'}}),
+  {receipt:liveAvatar.receipt});
+  assert.equal(capturedLiveAvatar.outcome.provider_request_id,'liveavatar-session-fixture');
+  const missingSession=await store.captureTerminalResponse(new Response(JSON.stringify({
+    data:{session_token:'private'}}),{status:200,headers:{'Content-Type':'application/json',
+      'x-request-id':'generic-liveavatar-trace'}}),{receipt:liveAvatar.receipt});
+  assert.equal(missingSession.outcome.provider_request_id,null);
+});
 
 // ⬡B:tests.provider_spend_receipt:911:an_unlimited_ceiling_must_not_reject_a_real_paid_call:20260801⬡
 // Mirror of the anew#1494 CATHY (Codex) review fix: core/ceiling.owner.js and
