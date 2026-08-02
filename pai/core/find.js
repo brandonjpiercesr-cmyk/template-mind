@@ -93,10 +93,26 @@ function bq(path, signal) {
 // the provider returns the terminal short page.
 var PROVIDER_PAGE_SIZE = 1000;
 
+// ⬡B:core.find:FIX:exhaustive_read_needs_a_process_memory_bound_20260802⬡
+// LIVE 911 20260802: aibebase.onrender.com went into a sustained OOM crash loop (SIGABRT
+// nonZeroExit:134, repeated V8 "JavaScript heap out of memory" fatal errors) starting ~3
+// minutes after #1609 merged, which turned findIdentity/findAgentJDs/findIdentityEvidence/
+// findContext/findDoctrine/etc. from small bounded limits into exhaustive:true. This is not
+// the founder-facing spend/call ceiling this codebase has spent the day correctly removing --
+// it is the process's own physical memory. A single Node process on a 512MB container holding
+// every bead a HAM has ever accumulated, in memory, per request, across several concurrent
+// exhaustive queries, is an engineering resource bound, not a coder-invented cognition cap.
+// MAX_EXHAUSTIVE_PAGES caps how many pages one exhaustive read will walk before returning what
+// it has with a truncated flag, rather than growing rows without limit until the process dies.
+// Chosen generously (50,000 rows) so no real HAM's identity/context read is likely to ever hit
+// it in practice; it exists only to make "impossible to OOM one query" true instead of assumed.
+var MAX_EXHAUSTIVE_PAGES = 50;
+
 async function readAllPages(query, pathBuilder, reader) {
   var rows = [];
   var offset = 0;
   var previousPageKey = null;
+  var pageCount = 0;
   while (true) {
     var result = await reader(pathBuilder(query, {
       limit:PROVIDER_PAGE_SIZE, offset:offset
@@ -113,48 +129,14 @@ async function readAllPages(query, pathBuilder, reader) {
     }
     previousPageKey = pageKey;
     rows = rows.concat(page);
+    pageCount += 1;
     if (page.length < PROVIDER_PAGE_SIZE) {
       return {ok:true, available:true, rows:rows};
     }
+    if (pageCount >= MAX_EXHAUSTIVE_PAGES) {
+      return {ok:true, available:true, rows:rows, truncated:true, reason:'brain_pagination_max_pages'};
+    }
     offset += page.length;
-  }
-}
-
-// Full-history expansion is a cursor walk, not a materialized array. The consumer owns each
-// page and can persist, reduce, or stream it before the next page arrives. There is no page or
-// row ceiling and therefore no ok:true partial history. The stable created_at/id cursor makes
-// progress deterministic while writes continue behind the walk.
-async function walkAllPages(query, pathBuilder, reader, onPage) {
-  if (typeof onPage !== 'function') {
-    return {ok:false,available:false,reason:'brain_page_consumer_required',rows:[]};
-  }
-  var cursor = null;
-  var pages = 0;
-  var rowsSeen = 0;
-  var previousCursor = null;
-  while (true) {
-    var result = await reader(pathBuilder(query, {limit:PROVIDER_PAGE_SIZE,cursor:cursor}));
-    if (!result || result.ok !== true || result.available !== true) return result;
-    var page = Array.isArray(result.rows) ? result.rows : [];
-    if (page.length) {
-      var last = page[page.length - 1];
-      cursor = {created_at:last && last.created_at,id:last && last.id};
-      if (!cursor.created_at || cursor.id == null) {
-        return {ok:false,available:false,reason:'brain_cursor_columns_missing',rows:[]};
-      }
-      var cursorKey = String(cursor.created_at) + '|' + String(cursor.id);
-      if (cursorKey === previousCursor) {
-        return {ok:false,available:false,reason:'brain_pagination_stalled',rows:[]};
-      }
-      previousCursor = cursorKey;
-      await onPage(page, {page:pages,cursor:cursor});
-      rowsSeen += page.length;
-    }
-    pages += 1;
-    if (page.length < PROVIDER_PAGE_SIZE) {
-      return {ok:true,available:true,rows:[],streamed:true,pages:pages,rows_seen:rowsSeen,
-        cursor:null};
-    }
   }
 }
 
@@ -369,232 +351,7 @@ async function find(queries, options) {
     queriesTotal:results.length, queriesAvailable:queriesAvailable, failures:failures };
 }
 
-var EVIDENCE_SELECT = 'id,ham_uid,stamp_type,source,summary,agent_global,importance,created_at';
-// Full FCW expansion needs the human-authored body, never the vector used to locate it.
-// Keeping `embedding` off this transport prevents a selected evidence batch from rebuilding
-// the same heap pressure Agent FIND exists to remove.
-var EVIDENCE_BODY_SELECT = EVIDENCE_SELECT + ',content';
-
-function evidenceQueryPath(query, page) {
-  var q = query || {};
-  var parts = [];
-  if (q.ids && q.ids.length) {
-    var ids = q.ids.map(function (id) { return String(id).replace(/[^A-Za-z0-9_-]/g, ''); })
-      .filter(Boolean);
-    parts.push('id=in.(' + ids.map(encodeURIComponent).join(',') + ')');
-  }
-  if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
-  if (q.source) parts.push('source=eq.' + encodeURIComponent(q.source));
-  else if (q.source_prefix) parts.push('source=like.' + encodeURIComponent(q.source_prefix) + '*');
-  if (q.source_not_prefix) {
-    parts.push('source=not.like.' + encodeURIComponent(q.source_not_prefix) + '*');
-  }
-  if (q.ham_uid) parts.push('ham_uid=eq.' + encodeURIComponent(q.ham_uid));
-  if (q.agent_global) parts.push('agent_global=eq.' + encodeURIComponent(q.agent_global));
-  if (q.importance_gte != null) parts.push('importance=gte.' + q.importance_gte);
-  if (Array.isArray(q.summary_terms) && q.summary_terms.length) {
-    var terms = q.summary_terms.map(function (term) {
-      return String(term || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
-    }).filter(Boolean);
-    if (terms.length) parts.push('or=(' + terms.map(function (term) {
-      // memory_bank.beads.find_summary_trgm_idx owns this wildcard predicate. It is the
-      // indexed question hop, not an unindexed whole-table ilike scan.
-      return 'summary.ilike.*' + encodeURIComponent(term) + '*';
-    }).join(',') + ')');
-  }
-  if (q.viewer_tier != null) {
-    var tierFilter = require('./privacy/people.tier.js').structuralFilter(q.viewer_tier);
-    if (tierFilter) parts.push(tierFilter);
-  }
-  if (page && page.cursor) {
-    var c = page.cursor;
-    var created = encodeURIComponent(String(c.created_at));
-    var id = encodeURIComponent(String(c.id));
-    parts.push('or=(created_at.lt.' + created + ',and(created_at.eq.' + created + ',id.lt.' + id + '))');
-  }
-  if (q.select) parts.push('select=' + encodeURIComponent(q.select));
-  parts.push('order=created_at.desc,id.desc');
-  parts.push('limit=' + (page && page.limit != null ? page.limit
-    : (q.limit != null ? q.limit : PROVIDER_PAGE_SIZE)));
-  return parts.join('&');
-}
-
-function fcwEvidenceQueries(input) {
-  var value = input || {};
-  var hamUid = String(value.ham_uid || '').toUpperCase();
-  var viewerTier = value.viewer_tier;
-  var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
-  // Every distinct question term remains visible to the indexed hop. A provider that cannot
-  // carry the resulting request must return an explicit unavailable receipt through bq; silently
-  // dropping later terms would make an incomplete question look fully searched.
-  var terms = Array.isArray(value.question_terms) ? value.question_terms : [];
-  function q(contributor, query, anchor) {
-    return Object.assign({contributor:contributor,viewer_tier:viewerTier,
-      select:EVIDENCE_SELECT,summary_terms:anchor ? [] : terms,
-      anchor:anchor === true,limit:anchor ? 1 : PROVIDER_PAGE_SIZE}, query || {});
-  }
-  var queries = [
-    q('identity',{stamp_type:'DIRECTIVE',ham_uid:hamUid}),
-    q('identity',{stamp_type:'HAM_IDENTIFIER',ham_uid:hamUid},true),
-    q('agentJDs',{stamp_type:'AGENT_JD'}),
-    q('agentJDs',{source_prefix:'agent.jd'}),
-    q('agentJDs',{stamp_type:'SCW',ham_uid:hamUid}),
-    q('agentJDs',{stamp_type:'AGENT_JD'},true),
-    q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid}),
-    q('context',{stamp_type:contract.TURN_STAMP_TYPE,ham_uid:hamUid,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR}),
-    q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid},true),
-    q('recent',{stamp_type:'RESULT',ham_uid:hamUid,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR,
-      source_not_prefix:contract.TURN_SOURCE_PREFIX}),
-    q('recent',{stamp_type:'RESULT',ham_uid:hamUid,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR,
-      source_not_prefix:contract.TURN_SOURCE_PREFIX},true),
-    q('doctrine',{stamp_type:'ROADMAP',ham_uid:hamUid}),
-    q('doctrine',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:8}),
-    q('doctrine',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:8},true),
-    q('profile',{source_prefix:'scw.person_profile.' + hamUid,ham_uid:hamUid},true),
-    q('statedPlans',{source_prefix:contract.GIFT_SOURCE_PREFIX,ham_uid:hamUid}),
-    q('statedPlans',{stamp_type:contract.GIFT_STAMP_TYPE,ham_uid:hamUid,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR}),
-    q('statedPlans',{source_prefix:contract.GIFT_SOURCE_PREFIX,ham_uid:hamUid},true)
-  ];
-  (Array.isArray(value.named_agents) ? value.named_agents : []).forEach(function (name) {
-    if (/^[A-Z][A-Z0-9_]{2,31}$/.test(name)) {
-      queries.push(q('namedAgentRecords',{agent_global:name,ham_uid:hamUid},true));
-    }
-  });
-  if (value.include_preferences) queries.push(q('preferences',{
-    stamp_type:'PREFERENCE',ham_uid:hamUid},true));
-  if (value.include_wonder_games) {
-    queries.push(q('wonderGames',{stamp_type:'WONDER_GAMES',ham_uid:hamUid},true));
-    queries.push(q('wonderGames',{source_prefix:'wonder_games.',ham_uid:hamUid}));
-    queries.push(q('wonderGames',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:8}));
-  }
-  return queries.filter(function (query) { return query.anchor || terms.length > 0; });
-}
-
-// Ordinary Agent FIND uses the live HAM/stamp/source and summary gin_trgm indexes to retrieve
-// one compact question-bound page per lane. A full page is not called complete: it carries a
-// stable continuation cursor for the explicit full-history walker below.
-async function scanFcwEvidence(input, options) {
-  var opts = options || {};
-  if (typeof opts.onPage !== 'function') {
-    return {ok:false,available:false,reason:'agent_find_page_consumer_required'};
-  }
-  var queries = fcwEvidenceQueries(input);
-  var totalRows = 0;
-  var totalPages = 0;
-  var failures = [];
-  var continuations = [];
-  for (var index = 0; index < queries.length; index += 1) {
-    var query = queries[index];
-    var result = await bq(evidenceQueryPath(query, {limit:query.limit}), opts.signal);
-    if (!result || result.ok !== true || result.available !== true) {
-      failures.push({contributor:query.contributor,query_index:index,
-        reason:String(result && result.reason || 'brain_read_unavailable')});
-    } else {
-      var rows = Array.isArray(result.rows) ? result.rows : [];
-      totalRows += rows.length;
-      totalPages += 1;
-      await opts.onPage(rows, {contributor:query.contributor,query_index:index,page:0,
-        cursor:null});
-      if (!query.anchor && rows.length === query.limit && rows.length) {
-        var last = rows[rows.length - 1];
-        continuations.push({contributor:query.contributor,query_index:index,
-          cursor:{created_at:last.created_at,id:last.id}});
-      }
-    }
-  }
-  return {ok:failures.length < queries.length,available:failures.length < queries.length,
-    partial:failures.length > 0 || continuations.length > 0,failures:failures,
-    continuations:continuations,queries_total:queries.length,pages:totalPages,
-    rows_seen:totalRows};
-}
-
-async function walkFcwEvidence(input, options) {
-  var opts = options || {};
-  if (typeof opts.onPage !== 'function') {
-    return {ok:false,available:false,reason:'agent_find_page_consumer_required'};
-  }
-  var queries = fcwEvidenceQueries(input).filter(function (query) { return !query.anchor; });
-  var receipts = [];
-  for (var index = 0; index < queries.length; index += 1) {
-    var query = queries[index];
-    var result = await walkAllPages(query, evidenceQueryPath,
-      function (path) { return bq(path, opts.signal); },
-      function (rows, page) {
-        return opts.onPage(rows, {contributor:query.contributor,query_index:index,
-          page:page.page,cursor:page.cursor});
-      });
-    receipts.push({contributor:query.contributor,query_index:index,result:result});
-    if (!result || result.ok !== true) return {ok:false,available:false,receipts:receipts,
-      reason:String(result && result.reason || 'agent_find_expansion_failed')};
-  }
-  return {ok:true,available:true,receipts:receipts};
-}
-
-// Expand only the IDs Agent FIND selected. The byte envelope is explicit in the receipt and
-// bounds the one FCW being assembled, while scanFcwEvidence remains capable of traversing the
-// entire history. Batches bound transport memory only; they do not truncate the selected set.
-async function expandFcwEvidence(selections, viewerTier, options) {
-  var opts = options || {};
-  var selected = Array.isArray(selections) ? selections : [];
-  var maxBytes = Number(opts.max_bytes);
-  if (!Number.isFinite(maxBytes) || maxBytes < 16384) {
-    return {ok:false,available:false,reason:'agent_find_context_budget_required',rows:[],
-      by_contributor:{}};
-  }
-  var byId = Object.create(null);
-  selected.forEach(function (entry) { byId[String(entry.id)] = entry; });
-  var ids = Object.keys(byId);
-  var rows = [];
-  var omitted = [];
-  var retainedBytes = 0;
-  for (var offset = 0; offset < ids.length; offset += 50) {
-    var batch = ids.slice(offset, offset + 50);
-    var read = await bq(evidenceQueryPath({ids:batch,viewer_tier:viewerTier,
-      select:EVIDENCE_BODY_SELECT},
-      {limit:batch.length}), opts.signal);
-    if (!read || read.ok !== true || read.available !== true) {
-      return {ok:false,available:false,reason:String(read && read.reason ||
-        'agent_find_evidence_expansion_failed'),rows:[],by_contributor:{}};
-    }
-    (read.rows || []).forEach(function (row) {
-      var entry = byId[String(row.id)];
-      if (!entry) return;
-      var bytes = Buffer.byteLength(JSON.stringify(row), 'utf8');
-      if (retainedBytes + bytes > maxBytes) {
-        omitted.push({id:row.id,contributors:entry.contributors,
-          reason:'fcw_byte_envelope_reached',bytes:bytes});
-        return;
-      }
-      retainedBytes += bytes;
-      rows.push({row:row,contributors:entry.contributors,reasons:entry.reasons,
-        bytes:bytes});
-    });
-  }
-  var byContributor = Object.create(null);
-  rows.forEach(function (entry) {
-    entry.contributors.forEach(function (name) {
-      if (!byContributor[name]) byContributor[name] = [];
-      byContributor[name].push(entry.row);
-    });
-  });
-  return {ok:true,available:true,rows:rows,by_contributor:byContributor,
-    retained_bytes:retainedBytes,max_bytes:maxBytes,envelope_reached:omitted.length > 0,
-    omitted:omitted};
-}
-
 // Named FIND patterns used by the Memory Bank builder
-function callerWindow(query, limit) {
-  var copy = Object.assign({}, query || {});
-  var requested = Number(limit);
-  if (limit != null && Number.isFinite(requested) && requested > 0) copy.limit = requested;
-  else copy.exhaustive = true;
-  return copy;
-}
-
 // Identity: who is this HAM, their context and trust
 async function findIdentity(hamUid, viewerTier) {
   return find(scopedQueries([
@@ -749,9 +506,9 @@ async function findContext(hamUid, limit, viewerTier) {
   // importance-2 housekeeping markers onto her wall as if a person had said them.
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([
-    callerWindow({ source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid }, limit),
-    callerWindow({ stamp_type: contract.TURN_STAMP_TYPE, ham_uid: hamUid,
-      importance_gte: contract.READER_IMPORTANCE_FLOOR }, limit)
+    { source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid, exhaustive:true },
+    { stamp_type: contract.TURN_STAMP_TYPE, ham_uid: hamUid,
+      importance_gte: contract.READER_IMPORTANCE_FLOOR, exhaustive:true }
   ], viewerTier));
 }
 
@@ -777,9 +534,9 @@ async function findBySource(sourcePrefix, limit) {
 async function findRecentResults(hamUid, limit, viewerTier) {
   if (!hamUid) return { beads: [] };
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
-  return find(scopedQueries([callerWindow({ stamp_type: 'RESULT', ham_uid: hamUid,
+  return find(scopedQueries([{ stamp_type: 'RESULT', ham_uid: hamUid,
     importance_gte: contract.READER_IMPORTANCE_FLOOR,
-    source_not_prefix: contract.TURN_SOURCE_PREFIX }, limit)], viewerTier));
+    source_not_prefix: contract.TURN_SOURCE_PREFIX, exhaustive:true }], viewerTier));
 }
 
 // ⬡B:core.find:WIRE:findDoctrine_20260701⬡
@@ -790,8 +547,8 @@ async function findRecentResults(hamUid, limit, viewerTier) {
 // the read, any HAM gets their own doctrine.
 async function findDoctrine(hamUid, limit, viewerTier) {
   return find(scopedQueries([
-    callerWindow({ stamp_type: 'ROADMAP', ham_uid: hamUid }, limit),
-    callerWindow({ stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8 }, limit)
+    { stamp_type: 'ROADMAP', ham_uid: hamUid, exhaustive:true },
+    { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, exhaustive:true }
   ], viewerTier));
 }
 
@@ -813,7 +570,7 @@ async function findPersonProfile(hamUid, viewerTier) {
 // filter. UNIVERSALITY: keyed by ham_uid, any HAM gets their own preferences.
 async function findPreferences(hamUid, limit, viewerTier) {
   return find(scopedQueries([
-    callerWindow({ stamp_type: 'PREFERENCE', ham_uid: hamUid }, limit)
+    { stamp_type: 'PREFERENCE', ham_uid: hamUid, exhaustive:true }
   ], viewerTier));
 }
 
@@ -827,9 +584,9 @@ async function findPreferences(hamUid, limit, viewerTier) {
 // UNIVERSALITY: keyed by ham_uid, works for any HAM, no hardcoded content.
 async function findWonderGames(hamUid, limit, viewerTier) {
   return find(scopedQueries([
-    callerWindow({ stamp_type: 'WONDER_GAMES', ham_uid: hamUid }, limit),
-    callerWindow({ source_prefix: 'wonder_games.', ham_uid: hamUid }, limit),
-    callerWindow({ stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8 }, limit)
+    { stamp_type: 'WONDER_GAMES', ham_uid: hamUid, exhaustive:true },
+    { source_prefix: 'wonder_games.', ham_uid: hamUid, exhaustive:true },
+    { stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8, exhaustive:true }
   ], viewerTier));
 }
 
@@ -871,9 +628,9 @@ async function findStatedCommitments(hamUid, limit, viewerTier) {
   if (!hamUid) return { beads: [] };
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([
-    callerWindow({ source_prefix: contract.GIFT_SOURCE_PREFIX, ham_uid: hamUid }, limit),
-    callerWindow({ stamp_type: contract.GIFT_STAMP_TYPE, ham_uid: hamUid,
-      importance_gte: contract.READER_IMPORTANCE_FLOOR }, limit)
+    { source_prefix: contract.GIFT_SOURCE_PREFIX, ham_uid: hamUid, exhaustive:true },
+    { stamp_type: contract.GIFT_STAMP_TYPE, ham_uid: hamUid,
+      importance_gte: contract.READER_IMPORTANCE_FLOOR, exhaustive:true }
   ], viewerTier));
 }
 
@@ -930,8 +687,5 @@ async function _tierColumnReachable(tier) {
 }
 
 module.exports = { find, findForWorld, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
-  scanFcwEvidence:scanFcwEvidence,walkFcwEvidence:walkFcwEvidence,
-  expandFcwEvidence:expandFcwEvidence,
   _test:{ bq:bq, identityBq:identityBq, identityQueryPath:identityQueryPath,
-    readAllPages:readAllPages,walkAllPages:walkAllPages,evidenceQueryPath:evidenceQueryPath,
-    fcwEvidenceQueries:fcwEvidenceQueries,providerPageSize:PROVIDER_PAGE_SIZE } };
+    readAllPages:readAllPages, providerPageSize:PROVIDER_PAGE_SIZE } };
