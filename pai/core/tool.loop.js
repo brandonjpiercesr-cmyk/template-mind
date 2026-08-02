@@ -4253,7 +4253,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // model never mistakes its pre-commit vantage point for a failed cycle.
   var _proofQuestion = _exactUserMessage;
   if (!_structuredReachPolicy && !_reachIncidentIntake) {
-    systemPrompt += currentTurnProofGuard.systemInstruction(_proofQuestion);
+    systemPrompt += currentTurnProofGuard.systemInstruction(_proofQuestion, {
+      // CODA's own machine-internal deliberation uses phrases such as "this cycle",
+      // "proof", and "closure receipts" as fields in its operating contract. It is
+      // not a person asking whether the current public reply committed, so the public
+      // proof guard must not reinterpret those bytes or later replace CODA's complete
+      // typed decision with the generic release invariant.
+      internalDeliberation:codaInternalDeliberation(identity)
+    });
   }
   var _currentPreferenceQuestion = !_structuredReachPolicy && !_reachIncidentIntake &&
     currentAssistantPreferenceRequest(_exactUserMessage);
@@ -6389,7 +6396,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // The repaired bytes still traverse screen extraction, formatting, PAM, SHADOW,
   // the full council, STAMP, and readback below.
   var _proofDraft = _structuredReachPolicy?{repaired:false,answer:finalAns}:
-    currentTurnProofGuard.repairDraft(_proofQuestion, finalAns);
+    currentTurnProofGuard.repairDraft(_proofQuestion, finalAns, {
+      internalDeliberation:_isCodaInternalCycle
+    });
   if (_proofDraft.repaired) {
     finalAns = _proofDraft.answer;
     _stampStep('current_turn_proof_claim_repaired', _proofDraft.reason);
@@ -6446,7 +6455,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       finalAns = require('./persona.js').applyPersona(finalAns,
         { hamUid:hamUid,persona:_personaChoice,contributions:{} });
     } catch (ePrepPersona) {}
-    if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns)) {
+    if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns, {
+      internalDeliberation:_isCodaInternalCycle
+    })) {
       return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
         reason:'false_current_turn_failure_claim_after_preparation'};
     }
