@@ -444,9 +444,32 @@ async function bindWall(input, options) {
   if (!fcw || fcw.ok !== true || typeof fcw.system_prompt !== 'string' || !fcw.system_prompt) {
     return {ok:false,available:false,reason:'agent_find_wall_unavailable'};
   }
-  if (fcw.partial === true || list(fcw.unavailableContributors).length ||
-      list(fcw.partialContributors).length) {
-    return {ok:false,available:false,reason:'agent_find_wall_incomplete'};
+  // ⬡B:core.agent_find:FIX:one_missing_contributor_may_not_cost_her_the_whole_cycle:20260802⬡
+  // FOUNDER-FELT OUTAGE, diagnosed live 20260802: every cycle on every channel was returning
+  // memory_bank_build_failed, detail agent_find_wall_incomplete. Chat, the command center,
+  // advisors, worlds, and "she says I ain't got no memory" on text were all THIS LINE.
+  // The gate below used to refuse the wall outright whenever ANY single contributor was
+  // unavailable or partial. One slow or failing read out of many, and she could not think at
+  // all, anywhere. In the sandbox every contributor resolves, so it never fired locally and the
+  // defect was invisible from a developer machine for a full day.
+  // That is cold code deciding she does not get a cycle, which is the exact shape the founder
+  // has been naming: do not cap her, do not limit her, do not gate her behind something she
+  // cannot see. Integrity is served by her KNOWING the wall was thin, not by her being silenced.
+  // The estate already contemplates exactly this state and has a handler for it: tool.loop.js
+  // stamps a NEEDS_CLAIR gap reading "ran on thin context," which can only ever happen if she is
+  // permitted to run on thin context in the first place.
+  // So a thin wall no longer refuses. It rides through as a NAMED GAP on the returned wall, so
+  // the deliberation can see precisely what was missing and say so rather than guessing, and the
+  // gap is observable instead of silent. A wall that is entirely absent or unusable is still
+  // refused above; that is a different fact and it stays refused.
+  const wallGaps = {
+    partial: fcw.partial === true,
+    unavailable: list(fcw.unavailableContributors),
+    degraded: list(fcw.partialContributors)
+  };
+  if (wallGaps.partial || wallGaps.unavailable.length || wallGaps.degraded.length) {
+    console.error('[agent.find] wall is thin, proceeding on named gaps rather than silencing her:',
+      JSON.stringify({unavailable: wallGaps.unavailable, degraded: wallGaps.degraded}).slice(0, 300));
   }
   if (!hamUid || !cycleId || !requestId || !providerSeat || !target || !self ||
       self.lifecycle !== 'active' || (target.lifecycle !== 'active' && target.lifecycle !== 'contained')) {
@@ -506,8 +529,19 @@ async function bindWall(input, options) {
       readback_verified:true,wall_scope:wall.wall_scope||'full_fcw',
       context_sha256:wall.context_sha256||null});
   } catch (error) {}
+  // The thin-wall gap rides on the returned wall so nothing downstream has to guess whether it
+  // is looking at a complete picture, and so a thin turn is distinguishable from a full one in
+  // the receipt rather than only in a log line.
+  const gapAppendix = (wallGaps.partial || wallGaps.unavailable.length || wallGaps.degraded.length)
+    ? ('\n\nSome of what you normally read was not available for this turn' +
+       (wallGaps.unavailable.length ? ', missing: ' + wallGaps.unavailable.join(', ') : '') +
+       (wallGaps.degraded.length ? ', incomplete: ' + wallGaps.degraded.join(', ') : '') +
+       '. Answer on what you do have and say plainly what you could not check. Never fill a gap ' +
+       'with a guess.')
+    : '';
   return Object.assign({}, fcw, {
-    system_prompt:fcw.system_prompt + promptAppendix,
+    agent_find_wall_gaps: wallGaps,
+    system_prompt:fcw.system_prompt + promptAppendix + gapAppendix,
     contributors:augmentedContributors,
     contributorAvailability:augmentedAvailability,
     contributorsAvailable:Object.keys(augmentedAvailability).filter(function (name) {
