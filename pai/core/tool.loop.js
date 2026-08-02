@@ -1216,6 +1216,23 @@ var TOOLS = [
       initiator:{type:'string',description:'who is convening this meeting; defaults to PAI'}},
       required:['agenda']}}},
 
+  // ⬡B:tool.loop:TOOL:911_escalation_a_real_judged_pass_never_a_cold_bypass:20260802⬡
+  // New World Order pt1 doctrine, founder direct. GRANDDADDY 911 law and core/outreach.js's
+  // own standing comments both hold: cold code never decides to reach a human, and a force
+  // hint never bypasses a real model judgment. This tool's only path to the desk is a
+  // genuine judged urgent:true verdict from core/escalation.911.js; every claim, genuine or
+  // false, is durably recorded so a pattern of false alarms becomes queryable (the naughty
+  // list). Never call this for a routine failure, a normal bug, or anything that can wait
+  // for the usual reporting cycle -- most claims judged this way are refused, by design.
+  {type:'function',function:{name:'raise_911_escalation',description:'RAISE A GENUINE 911-GRADE EMERGENCY toward the founder\'s desk. '
+    +'A real, honest, skeptical judge call decides whether this actually qualifies (a live secret exposed, irreversible data loss in progress, a security breach, a production outage) -- most claims do NOT qualify and are refused, never silently forced through. '
+    +'Every claim you raise here, genuine or refused, is durably recorded under your own seat name, so a pattern of false alarms becomes visible later. '
+    +'Only a genuine urgent verdict actually surfaces to the desk. Never use this for a routine bug, a normal failure, or anything that can wait.',
+    parameters:{type:'object',properties:{
+      claim:{type:'string',description:'the real, specific emergency claim, in your own words'},
+      evidence:{type:'array',items:{type:'string'},description:'short evidence lines backing the claim, e.g. log lines or specifics'}},
+      required:['claim']}}},
+
   // ⬡B:tool.loop:TOOL:nash_sports_wonder:20260711⬡ NASH, the sports agent, made
   // a real wonder: cold ESPN public scoreboard, no key, no cost, finite-formula.
   {type:'function',function:{name:'read_lane_board',description:'READ THE LANE BOARD. Returns every active build chat/lane working on your system right now, each with its ACL name and the roadmap it is currently on. Use this whenever the founder asks what chats or lanes are working on your build, who is building what, or whether two lanes might collide. The lanes cannot talk to each other, they coordinate by stamping this board, so this is how you know the whole picture. Takes no arguments.',
@@ -1523,7 +1540,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   reminders:['read_reminders','create_reminder','stop_mentioning'],
   budget:['get_budget_summary','get_budget_upcoming'],
   memory:['find_in_brain','find_identity_evidence','write_to_brain'],
-  code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','find_in_brain',
+  code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','raise_911_escalation','find_in_brain',
     'read_lane_board','read_wonder_departments','read_render_logs','get_recent_builds','read_own_code','consult_coda',
     'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
   screen:['update_screen','save_layout','edit_layout','set_background'],
@@ -1846,6 +1863,23 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       return JSON.stringify({ok:true,reached:_meet.reached,minutes:_meet.minutes,rounds:_meet.rounds,
         participants:_meet.participants,absent:_meet.absent||[],
         note:'Real meeting. Every named seat spoke in its own voice and a real judge call decided consensus.'});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
+  }
+
+  if (name === 'raise_911_escalation') {
+    var _claim = String(args.claim || '').trim();
+    if (!_claim) return JSON.stringify({ok:false,note:'no claim given'});
+    var _evidence = Array.isArray(args.evidence)
+      ? args.evidence.map(function (e) { return String(e || '').trim(); }).filter(Boolean) : [];
+    var _seat = String(args.seat || '').trim() || 'PAI';
+    try {
+      // core/escalation.911.js's own dependencies (advisors/advisor.exit.js,
+      // core/model.ladder.js, core/brain.client.js) are all generic, no anew-specific
+      // roster, and ship in every inherited world -- unlike consult_wonder_meeting's
+      // require above, this one is safe to load eagerly. Lazy anyway, matching this
+      // block's own house style and keeping tool.loop.js's own load-time cost flat.
+      var _raised = await require('./escalation.911.js').raise911(hamUid, _seat, _claim, _evidence);
+      return JSON.stringify(_raised || {ok:false,reason:'escalation_911_no_result'});
     } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
   }
 
