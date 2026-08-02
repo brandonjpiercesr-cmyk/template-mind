@@ -3779,6 +3779,7 @@ function agentFindClosedWorldReason(flags) {
   if(state.structuredReachPolicy===true)return'structured_reach_policy';
   if(state.reachIncidentIntake===true)return'reach_incident_intake';
   if(state.roomSafeVoice===true)return'room_safe_voice';
+  if(state.internalCodaTurn===true)return'coda_internal_operational_wall';
   return null;
 }
 
@@ -4174,6 +4175,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     verifiedVoiceFarewellAnswer(channel, hamUid, message, identity));
   var _signedVoiceSystemPrompt =
     'INTERNAL SIGNED VOICE ACKNOWLEDGEMENT. Use only the exact provider-bound call fact already verified for this turn. Do not load ambient memory, tools, fused context, or a drafting model.';
+  // ⬡B:core.tool_loop:FIX:codas_exact_wall_does_not_depend_on_an_unrelated_ambient_wall:20260802⬡
+  // CODA's internal operational cycle arrives with a server-minted, digest-bound evidence
+  // grant from advisors/coding.js. The council consumes that grant below only after this loop
+  // owns the exact request and cycle ids. Running buildMemoryBank before that consumption made
+  // an unrelated ambient FCW read a hard prerequisite for CODA to judge her own already-built
+  // wall. Live receipts at 20260802T153119Z and 20260802T153930Z showed the consequence:
+  // no_deliberation:memory_bank_build_failed on every otherwise admitted dispatch in this
+  // population. Keep this one internal lane closed-world over its exact granted wall. Human
+  // coding turns do not carry internal_deliberation and still require the ordinary FCW.
+  var _internalCodaTurn = codaInternalDeliberation(identity);
+  var _internalCodaSystemPrompt =
+    'INTERNAL CODA OPERATIONAL DELIBERATION. Judge only the server-built CODA wall and exact evidence packet supplied in this turn. Do not infer ambient Memory Bank facts, recent activity, prior conversation, or human intent outside that packet. Return the requested typed operational decision.';
   // ⬡B:core.tool.loop:GUARD:the_reader_is_known_before_the_wall_is_opened:20260730⬡
   // Resolve the effective people tier before FCW or any ambient read. Closed-world REACH lanes
   // intentionally perform no ambient read, so they keep the strict default without touching
@@ -4183,7 +4196,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _peopleTiers = require('./privacy/people.tier.js');
   var _readAuthority = {tier:_peopleTiers.STRICTEST,source:'closed_world'};
   if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn &&
-      !_roomSafeVoice) {
+      !_roomSafeVoice && !_internalCodaTurn) {
     try { _readAuthority = await _peopleTiers.resolveReadTier(identity, hamUid); }
     catch (eReadTier) { _readAuthority = {tier:_peopleTiers.STRICTEST,source:'unresolved'}; }
   }
@@ -4198,10 +4211,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     (identity.trust_level != null ? identity.trust_level : identity.tier));
   if (!Number.isFinite(_isolatedHamTier)) _isolatedHamTier = 0;
   var fcw = (_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
-      _roomSafeVoice) ? {
+      _roomSafeVoice || _internalCodaTurn) ? {
     ok:true, system_prompt:_reachIncidentIntake ? _reachIncidentSystemPrompt
       : (_signedVoiceClosedTurn ? _signedVoiceSystemPrompt
-        : (_roomSafeVoice ? _roomSafeSystemPrompt : _structuredReachSystemPrompt)),
+        : (_roomSafeVoice ? _roomSafeSystemPrompt
+          : (_internalCodaTurn ? _internalCodaSystemPrompt : _structuredReachSystemPrompt))),
     ham:{ uid:hamUid, name:String(identity&&identity.name||'Unknown').slice(0,160),
       tier:_isolatedHamTier, world:String(identity&&identity.world||'unknown').slice(0) },
     context:[], named_agent_records:[], identity_record:null,
@@ -5301,12 +5315,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // before the loop and therefore buy no model call.
     var _closedWorldReason=agentFindClosedWorldReason({
       structuredReachPolicy:_structuredReachPolicy,
-      reachIncidentIntake:_reachIncidentIntake,roomSafeVoice:_roomSafeVoice});
+      reachIncidentIntake:_reachIncidentIntake,roomSafeVoice:_roomSafeVoice,
+      internalCodaTurn:_internalCodaTurn});
     if(_closedWorldReason){
+      var _closedSeatNodeId=_agentFindSeatNodeId();
+      var _closedSeat=require('./wonders/registry.js').resolve(_closedSeatNodeId);
       var _closedBound=await require('./agent.find.js').bindClosedWorld({
         messages:_providerBody.messages,ham_uid:hamUid,cycle_id:_cycleId,
         request_id:_requestId,channel:channel,seat_name:_providerSeat,
-        seat_node_id:_agentFindSeatNodeId(),context_policy:'context.pai.full.v1',
+        seat_node_id:_closedSeatNodeId,context_policy:_closedSeat&&_closedSeat.context_policy,
         closed_world_reason:_closedWorldReason,
         evidence_refs:[_closedWorldReason,_cycleId,_requestId],
         observed_at:new Date().toISOString()
@@ -5366,7 +5383,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         var _usr=_hist.filter(function(m){return m.role!=='system';})
           .map(function(m){return String(m.role||'user').toUpperCase()+': '+_flattenTurnText(m.content);})
           .join('\n\n');
-        var _lr=await _lad.deliberate(_sys,_usr,{temperature:_structuredReachPolicy?0:0.3,timeout:60000,
+        var _lr=await _lad.deliberate(_sys,_usr,{seat:_providerSeat,
+          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
           json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
         if(_lr&&_lr.content){
           r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
@@ -5450,7 +5468,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try {
         var _englishRewrite = await require('./model.ladder.js').deliberate(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
-          String(msg.content || ''), { temperature:0.2, timeout:12000, noGuard:true });
+          String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
+            timeout:12000, noGuard:true });
         msg.content = _englishRewrite && _englishRewrite.content || '';
         _stampStep('cjk_output_regenerated', msg.content ? 'english' : 'failed_closed');
       } catch (_eEnglish) {
@@ -6040,7 +6059,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         return String(entry.role || 'user').toUpperCase() + ': ' + _flattenTurnText(entry.content);
       }).join('\n\n');
       var _repairResult = await _repairLadder.deliberate(_repairSystem, _repairUser,
-        {temperature:temperature == null ? 0.1 : temperature,
+        {seat:_providerSeat || _paiSeatName(),
+          temperature:temperature == null ? 0.1 : temperature,
           timeout:60000,json:jsonMode === true,signal:_modelRequestSignal()});
       if (await _turnCancelled(true)) return '';
       return _repairResult && (_repairResult.content || _repairResult.answer ||

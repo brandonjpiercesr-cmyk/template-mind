@@ -40,6 +40,17 @@ function digest(value) {
   return crypto.createHash('sha256').update(stableStringify(value)).digest('hex');
 }
 
+// The paid boundary hashes the provider message array exactly as it crosses fetch. Closed-world
+// seats add Agent FIND's employment appendix before that boundary, so admission must name the
+// digest of those final bytes, not the normalized evidence digest stored in the truth beacon.
+// Raw messages are never persisted. Only this opaque digest crosses the asynchronous scope.
+function providerMessageDigest(messages) {
+  if (!Array.isArray(messages) || !messages.length) return null;
+  try {
+    return crypto.createHash('sha256').update(JSON.stringify(messages)).digest('hex');
+  } catch (error) { return null; }
+}
+
 function list(value) {
   return Array.isArray(value) ? value.map(function (item) { return clean(item); })
     .filter(Boolean) : [];
@@ -609,7 +620,20 @@ async function bindClosedWorld(input, options) {
     channel:value.channel,seat_name:value.seat_name,seat_node_id:value.seat_node_id,
     observed_at:value.observed_at},{registry:registry,brain:opts.brain||defaultBrain});
   if(!bound.ok)return bound;
-  return Object.assign({},bound,{bound:true,context_sha256:facts.context_sha256});
+  const appendix=clean(bound.agent_find&&bound.agent_find.prompt_appendix);
+  const providerContextSha=providerMessageDigest([
+    {role:'system',content:appendix}
+  ].concat(messages));
+  if(!appendix||!providerContextSha)return{ok:false,available:false,
+    reason:'agent_find_closed_world_provider_digest_invalid'};
+  try {
+    require('./spend.guard.js').rememberAgentFindBinding({ham_uid:value.ham_uid,
+      cycle_id:value.cycle_id,request_id:value.request_id,seat:value.seat_name,
+      owner_node_id:value.seat_node_id,source:bound.agent_find.truth_beacon.source,
+      readback_verified:true,wall_scope:'closed_world',context_sha256:providerContextSha});
+  } catch (error) {}
+  return Object.assign({},bound,{bound:true,context_sha256:facts.context_sha256,
+    provider_context_sha256:providerContextSha});
 }
 
 // The provider boundary is the universal last door shared by the active model estate. A seat
@@ -713,6 +737,7 @@ async function recordExternalClosureVerification(input, original, options) {
 module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
   readRecentCycleTruth:readRecentCycleTruth,planWallEvidence:planWallEvidence,bindWall:bindWall,
   bindClosedWorld:bindClosedWorld,bindProviderRequest:bindProviderRequest,
+  providerMessageDigest:providerMessageDigest,
   recordExternalClosureVerification:recordExternalClosureVerification,
   _test:{recentTruthQueries:recentTruthQueries,employmentRecord:employmentRecord,
     recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt,

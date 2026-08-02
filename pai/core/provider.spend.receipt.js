@@ -1210,6 +1210,10 @@ async function readProviderStatementInterval(options) {
   try{
     while(true){
       var headers=readHeaders(config);
+      // PostgREST does not include the exact relation total unless the caller asks for it.
+      // Pagination closure is a billing fact, so request the exact count instead of trying
+      // to infer end-of-ledger from an empty transport page.
+      headers.Prefer='count=exact';
       headers.Range=offset+'-'+(offset+SUMMARY_PAGE_SIZE-1);
       response=await doFetch(config.url+'/rest/v1/'+BILLABLE_TABLE+'?'+
         activityQuery.toString(),{headers:headers,signal:brain.boundedSignal(
@@ -1222,7 +1226,10 @@ async function readProviderStatementInterval(options) {
       if(!Array.isArray(rows))throw new Error('provider_statement_activity_invalid');
       var range=responseRange(response);
       if(!rows.length){
-        if(!range||range.empty!==true||range.total!==null&&offset<range.total){
+        // `*/*` says only that this transport returned no rows. It does not prove that
+        // the ordered provider interval ended. Require an exact total and require the
+        // requested offset to be at or beyond it before publishing a reconciled delta.
+        if(!range||range.empty!==true||range.total===null||offset<range.total){
           throw new Error('provider_statement_activity_pagination_unverified');
         }
         break;
@@ -1315,6 +1322,10 @@ async function readSummary(options) {
   try {
     while (true) {
       var headers = readHeaders(config);
+      // The spend wall may publish a complete total only when PostgREST returns the exact
+      // relation count. Without this preference a valid final page is followed by `*/*`,
+      // which cannot prove whether more billable rows exist.
+      headers.Prefer = 'count=exact';
       headers.Range = offset + '-' + (offset + SUMMARY_PAGE_SIZE - 1);
       // The append-only TERMINAL is transport truth. Provider metadata recovered after the
       // response lives in the immutable reconciliation table. The canonical billable view is
@@ -1334,7 +1345,10 @@ async function readSummary(options) {
       // known remainder. A provider returning */4000 at offset 500 has not delivered a
       // complete ledger, so the spend wall must fail closed instead of publishing 500 rows.
       if (!rows.length) {
-        if (!range || range.empty !== true || range.total !== null && offset < range.total) {
+        // An unknown total (`*/*`) is not end-of-ledger proof. Accept only an exact total
+        // whose value is already exhausted by this offset, otherwise a proxy that drops
+        // count metadata can make a truncated page look complete again.
+        if (!range || range.empty !== true || range.total === null || offset < range.total) {
           throw new Error('provider_spend_summary_pagination_unverified');
         }
         break;
