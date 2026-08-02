@@ -637,6 +637,7 @@ function install(options) {
       var wantsJson = !!(parsed && parsed.response_format &&
         parsed.response_format.type === 'json_object');
       var out = await ladder.deliberate(system, user, {
+        seat: 'deliberation',
         max_tokens: (parsed && parsed.max_tokens) || 1000,
         temperature: (parsed && typeof parsed.temperature === 'number') ? parsed.temperature : 0.4,
         json: wantsJson,
