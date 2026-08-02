@@ -281,7 +281,9 @@ var SEATS = {
   // seat's own vision flag is corrected from false to true to match, the same rule this
   // file already states for GLM-5.2 vs. the models that replace it here.
   canon:       { role: 'CANON grader',         envModel: 'SEAT_CANON_MODEL',   model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_CANON',       via: 'openrouter', capEnv:'SEAT_CANON_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
-  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', capEnv:'SEAT_ADVISORS_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  // Founder correction 20260802: an attributable bill is required; a coder ceiling is not.
+  // No stale environment alias may silently turn the independent advisor estate into a hold.
+  advisors:    { role: 'board advisors',       envModel: 'SEAT_ADVISOR_MODEL', model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_ADVISORS',    via: 'openrouter', capEnv:null, dailyCapUsd:null, unlimitedDailySpend:true, vision:true, tools:true },
   // ⬡B:core.seat_map:WIRE:the_ladders_second_rung_is_a_declared_failover_not_a_literal:20260728⬡
   // core/model.ladder.js walks two OpenRouter rungs on this one seat. Its second rung used to
   // carry a model slug hardcoded in that file (`qwen/qwen3-235b-a22b`, $0.455/$1.82 per M),
