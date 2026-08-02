@@ -93,10 +93,25 @@ function bq(path, signal) {
 // the provider returns the terminal short page.
 var PROVIDER_PAGE_SIZE = 1000;
 
+// ⬡B:core.find:FIX:exhaustive_read_needs_a_process_memory_bound_20260802⬡
+// LIVE 911 20260802, SECOND OCCURRENCE: this exact cap was added and merged as anew#1611 to
+// stop a real production OOM crash loop (SIGABRT, V8 heap-out-of-memory, confirmed live on
+// Render). #1620 ("Repair FCW OOM with question-bound Agent FIND") rewrote readAllPages to add
+// walkAllPages beside it and silently dropped this cap in the process, restoring the exact
+// unbounded-growth shape that caused the original crash. walkAllPages is a true streaming
+// primitive (the caller's onPage consumer owns each page, nothing accumulates), so it does not
+// need this bound. readAllPages still materializes every page into one `rows` array before
+// returning, so a HAM with a large accumulated bead history can still exhaust the process heap
+// across several concurrent exhaustive callers (findIdentity, findAgentJDs, etc). Restoring the
+// same bound, same headroom (50 pages, 50,000 rows), so no real HAM's identity/context read
+// should ever hit it in practice.
+var MAX_EXHAUSTIVE_PAGES = 50;
+
 async function readAllPages(query, pathBuilder, reader) {
   var rows = [];
   var offset = 0;
   var previousPageKey = null;
+  var pageCount = 0;
   while (true) {
     var result = await reader(pathBuilder(query, {
       limit:PROVIDER_PAGE_SIZE, offset:offset
@@ -113,8 +128,12 @@ async function readAllPages(query, pathBuilder, reader) {
     }
     previousPageKey = pageKey;
     rows = rows.concat(page);
+    pageCount += 1;
     if (page.length < PROVIDER_PAGE_SIZE) {
       return {ok:true, available:true, rows:rows};
+    }
+    if (pageCount >= MAX_EXHAUSTIVE_PAGES) {
+      return {ok:true, available:true, rows:rows, truncated:true, reason:'brain_pagination_max_pages'};
     }
     offset += page.length;
   }
