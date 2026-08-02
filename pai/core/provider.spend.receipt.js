@@ -784,9 +784,10 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
   if(!config.ok||!doFetch)return{ok:false,attempted:0,recovered:0,
     reason:'provider_spend_store_unavailable'};
   // A later organic request for this exact seat drains one earlier durable terminal. There is
-  // no timer, paid generation, estimate, mutable terminal, or process-local cursor. A crash
-  // leaves the terminal eligible for the next request, and the immutable reconciliation RPC
-  // makes concurrent recovery idempotent.
+  // no timer, paid generation, estimate, mutable terminal, or process-local cursor. Candidate
+  // selection is distributed by the current immutable attempt id across the exact outstanding
+  // count. One provider fact that is permanently unavailable therefore cannot sit at the head
+  // of the queue and prevent every other exact generation fact from healing.
   var query=new URLSearchParams({select:'attempt_id,provider_request_id,status_code,'+
     'disposition,key_alias,provider_tokens,actual_cost_usd,cost_source',
     provider:'eq.openrouter',phase:'eq.TERMINAL',disposition:'eq.SUCCEEDED',
@@ -796,7 +797,7 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
   var response;
   try{
     response=await doFetch(config.url+'/rest/v1/'+BILLABLE_TABLE+'?'+query.toString(),{
-      headers:readHeaders(config),
+      headers:Object.assign({},readHeaders(config),{Prefer:'count=exact',Range:'0-0'}),
       signal:brain.boundedSignal(options&&options.signal,runtime)});
   }catch(error){return{ok:false,attempted:0,recovered:0,
     reason:'provider_spend_store_unavailable'};}
@@ -809,7 +810,30 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
     reason:'provider_spend_store_readback_invalid'};}
   if(!Array.isArray(rows)||rows.length>1)return{ok:false,attempted:0,recovered:0,
     reason:'provider_spend_reconciliation_candidate_invalid'};
-  if(!rows.length)return empty;
+  var contentRange=String(response.headers&&response.headers.get&&
+    response.headers.get('content-range')||'');
+  var totalMatch=contentRange.match(/\/(\d+)$/),total=totalMatch?Number(totalMatch[1]):null;
+  if(!Number.isSafeInteger(total)||total<0||total===0&&rows.length!==0||
+      total>0&&rows.length!==1)return{ok:false,attempted:0,recovered:0,
+    reason:'provider_spend_reconciliation_count_invalid'};
+  if(total===0)return empty;
+  var candidateIndex=parseInt(receipt.attempt_id.slice(0,12),16)%total;
+  if(candidateIndex>0){
+    try{
+      response=await doFetch(config.url+'/rest/v1/'+BILLABLE_TABLE+'?'+query.toString(),{
+        headers:Object.assign({},readHeaders(config),{Range:candidateIndex+'-'+candidateIndex}),
+        signal:brain.boundedSignal(options&&options.signal,runtime)});
+    }catch(error){return{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_store_unavailable'};}
+    if(!response||response.ok!==true)return{ok:false,attempted:0,recovered:0,
+      reason:response&&(response.status===404||response.status===400)
+        ?'provider_spend_schema_unavailable':'provider_spend_reconciliation_read_failed'};
+    try{rows=await boundedJson(response,MAX_STORE_BYTES);}
+    catch(error){return{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_store_readback_invalid'};}
+    if(!Array.isArray(rows)||rows.length!==1)return{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_reconciliation_candidate_raced'};
+  }
   var candidate=rows[0],attemptId=clean(candidate&&candidate.attempt_id);
   var providerRequestId=identifier(candidate&&candidate.provider_request_id,240);
   var statusCode=Number(candidate&&candidate.status_code);
@@ -834,7 +858,7 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
   if(!written||written.ok!==true)return{ok:false,attempted:1,recovered:0,
     reason:written&&written.reason||'provider_spend_reconciliation_write_failed'};
   return{ok:true,attempted:1,recovered:1,reason:null,attempt_id:attemptId,
-    replayed:written.replayed===true};
+    candidate_index:candidateIndex,candidate_count:total,replayed:written.replayed===true};
 }
 async function bankUsageCandidate(receipt, options) {
   var config=bankConfig(options&&options.env),doFetch=fetchImpl(options);
