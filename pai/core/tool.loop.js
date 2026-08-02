@@ -5383,7 +5383,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         var _usr=_hist.filter(function(m){return m.role!=='system';})
           .map(function(m){return String(m.role||'user').toUpperCase()+': '+_flattenTurnText(m.content);})
           .join('\n\n');
-        var _lr=await _lad.deliberate(_sys,_usr,{temperature:_structuredReachPolicy?0:0.3,timeout:60000,
+        var _lr=await _lad.deliberate(_sys,_usr,{seat:_providerSeat,
+          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
           json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
         if(_lr&&_lr.content){
           r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
@@ -5467,7 +5468,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try {
         var _englishRewrite = await require('./model.ladder.js').deliberate(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
-          String(msg.content || ''), { temperature:0.2, timeout:12000, noGuard:true });
+          String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
+            timeout:12000, noGuard:true });
         msg.content = _englishRewrite && _englishRewrite.content || '';
         _stampStep('cjk_output_regenerated', msg.content ? 'english' : 'failed_closed');
       } catch (_eEnglish) {
@@ -6057,7 +6059,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         return String(entry.role || 'user').toUpperCase() + ': ' + _flattenTurnText(entry.content);
       }).join('\n\n');
       var _repairResult = await _repairLadder.deliberate(_repairSystem, _repairUser,
-        {temperature:temperature == null ? 0.1 : temperature,
+        {seat:_providerSeat || _paiSeatName(),
+          temperature:temperature == null ? 0.1 : temperature,
           timeout:60000,json:jsonMode === true,signal:_modelRequestSignal()});
       if (await _turnCancelled(true)) return '';
       return _repairResult && (_repairResult.content || _repairResult.answer ||
