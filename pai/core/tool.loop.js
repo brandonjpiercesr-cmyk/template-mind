@@ -62,7 +62,6 @@ var realNameBoundary = require('./real.name.boundary.js');
 var CANONICAL_ASSISTANT_NAME = "A'NU";
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
-var wonderConsult = require('./wonder.consult.js');
 // ⬡B:core.tool.loop:FIX:channel_scoped_token_cap:20260710⬡ CLAIR wiring fix.
 // Real incident: GUIDE pass 2 (strict JSON, 12 fields per destination) was
 // truncated mid-JSON by the one global 700 cap and died as
@@ -1833,7 +1832,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       ? args.participants.map(function (p) { return String(p || '').trim(); }).filter(Boolean) : null;
     var _initiator = String(args.initiator || '').trim() || 'PAI';
     try {
-      var _meet = await wonderConsult.convene(hamUid, _initiator, _participants, _agenda, {deadlineMs:60000});
+      // ⬡B:core.tool_loop:WIRE:lazy_require_never_a_load_time_crash_for_a_world_without_the_roster:20260802⬡
+      // core/wonder.consult.js itself pulls in advisors/registry.js and advisors/state.position.js,
+      // this founder's org-chart-specific roster; template-mind ships without either, on purpose
+      // (identity by env only, no world's roster hardcoded into the shared template). A top-level
+      // require here would fail the whole module for every inherited world at load time. Required
+      // lazily, inside the one branch that ever calls it, so a world without a seated roster gets
+      // an honest ok:false the first time this tool is actually invoked, never a crash on boot.
+      var _meet = await require('./wonder.consult.js').convene(hamUid, _initiator, _participants, _agenda, {deadlineMs:60000});
       if (!_meet || _meet.ok !== true) {
         return JSON.stringify({ok:false,reason:(_meet && _meet.reason) || 'wonder_consult_no_result'});
       }
