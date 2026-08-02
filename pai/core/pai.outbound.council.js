@@ -384,6 +384,29 @@ function isBareShadowModelHold(reason) {
   return String(reason == null ? '' : reason).trim().toLowerCase() === 'shadow_model_hold';
 }
 
+// A bare model-only SHADOW hold may be carried only after the canonical stage itself
+// proves that the deterministic board was clean and names the exact quoted claim the
+// model disliked. This is deliberately stricter than reading the reason string alone:
+// a custom stage, forged result, unavailable signed relay, or deterministic finding
+// cannot manufacture the founder's model-only exception by returning one magic word.
+// The caller lives inside runOutboundCouncil's existing heal-and-resubmit seam, so the
+// candidate stays on the same request and cycle and never buys a second runPAI turn.
+function mayCarryBareShadowModelHold(result) {
+  if (!result || result.ok === true || !isBareShadowModelHold(result.reason) ||
+      !isHumanFacingAnswer(result.answer)) return false;
+  var evidence = result.evidence && typeof result.evidence === 'object'
+    ? result.evidence : {};
+  var deterministic = evidence.deterministic &&
+    typeof evidence.deterministic === 'object' ? evidence.deterministic : null;
+  var judgment = evidence.judgment && typeof evidence.judgment === 'object'
+    ? evidence.judgment : null;
+  var claim = judgment && judgment.approved === false
+    ? String(judgment.claim || '').trim() : '';
+  return !!(deterministic && deterministic.verdict === 'PASS' &&
+    Array.isArray(deterministic.flags) && deterministic.flags.length === 0 &&
+    claim.length >= 12 && String(result.answer).indexOf(claim) !== -1);
+}
+
 var HOLLOW_HEAL_GUIDANCE = 'The held attempt returned tool or function call protocol, ' +
   'or returned no words at all, instead of an answer for the person. Do not call a tool. ' +
   'Do not emit a tool_call or function_call block, a JSON envelope, or any protocol ' +
@@ -3477,6 +3500,8 @@ async function runOutboundCouncil(input, injected) {
       // per stage. If the stage still holds the healed answer, only THEN does the turn
       // fail -- a genuine, twice-confirmed integrity problem, not one probabilistic no.
       var _healReason = receipt.reason || 'stage_held';
+      var _initialModelOnlyCarry = stage === 'SHADOW' && humanStageAnswer &&
+        mayCarryBareShadowModelHold(normalized);
       // ⬡B:core.pai_outbound_council:FIX:the_expression_stage_gets_a_repair_too:20260725⬡
       // ANU_EXPRESSION was the one TRANSFORMING stage with no heal attempt at all, so
       // an emptied or hollow expression killed the turn on the very first no while
@@ -3521,14 +3546,18 @@ async function runOutboundCouncil(input, injected) {
             }
             var _reEnded = nowMs(deps);
             var _reHuman = isHumanFacingAnswer(_reNorm.answer);
-            var _rePassed = _reNorm.ok && _reHuman;
+            var _reModelOnlyCarry = stage === 'SHADOW' && _reHuman &&
+              mayCarryBareShadowModelHold(_reNorm);
+            var _rePassed = (_reNorm.ok || _reModelOnlyCarry) && _reHuman;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
             // Replace the held receipt in place and span the original stage input
             // to the retry output so the seven-stage digest chain stays continuous.
             stages[stages.length - 1] = makeStageReceipt(stage, i, true, true,
               _rePassed, before, _reNorm.answer, started, _reEnded,
-              _rePassed ? 'STAGE_HEALED_PASS' :
+              _rePassed ? (_reModelOnlyCarry
+                ? 'SHADOW_PASS_MODEL_ONLY_HOLD_CARRIED'
+                : 'STAGE_HEALED_PASS') :
                 (_reHuman ? (_reNorm.reason || 'stage_held')
                   : hollowStageReason(_reNorm.answer, _reNorm.reason)),
               {
@@ -3552,21 +3581,48 @@ async function runOutboundCouncil(input, injected) {
                   ended_at: new Date(_reEnded).toISOString(),
                   ms: Math.max(0, _reEnded - _reStarted),
                   evidence: _reNorm.evidence || {}
-                }
+                },
+                model_only_hold_carried: _reModelOnlyCarry,
+                carried_candidate_digest: _reModelOnlyCarry
+                  ? digestText(_reNorm.answer) : null
               });
-            if (_reNorm.ok && typeof _reNorm.answer === 'string' &&
+            if ((_reNorm.ok || _reModelOnlyCarry) && typeof _reNorm.answer === 'string' &&
                 _reNorm.answer.trim() !== '' && _reHuman) {
               currentAnswer = _reNorm.answer;
               continue; // healed and passed; move to the next stage
             }
-            return failureResult(!_reHuman
-              ? hollowStageReason(_reNorm.answer, _reNorm.reason)
-              : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
+            if (!_initialModelOnlyCarry) {
+              return failureResult(!_reHuman
+                ? hollowStageReason(_reNorm.answer, _reNorm.reason)
+                : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
+            }
+            _healOutcome = !_reHuman
+              ? 'heal_resubmission_hollow'
+              : 'heal_resubmission_still_held';
           }
         } catch (_healErr) {
           // heal is best-effort; fall through to the honest failure, but say it threw
           _healOutcome = 'heal_threw:' + errorReason(_healErr).slice(0, 60);
         }
+      }
+      // ⬡B:core.pai_outbound_council:FIX:model_only_shadow_never_buys_a_second_cycle:20260802⬡
+      // The one canonical same-cycle repair above got first refusal. If it could not
+      // produce a better committed candidate, carry the original only when SHADOW's own
+      // typed evidence proves this was the exact bare model-only hold on a clean
+      // deterministic board. No route retries runPAI, no new cycle id is minted, and no
+      // deterministic, WRIT, signed-relay, or other hold can enter this branch.
+      if (_initialModelOnlyCarry) {
+        stages[stages.length - 1] = makeStageReceipt(stage, i, true, true, true,
+          before, normalized.answer, started, ended,
+          'SHADOW_PASS_MODEL_ONLY_HOLD_CARRIED',
+          Object.assign({}, normalized.evidence || {}, {
+            heal_attempted: _healableStage && isHumanFacingAnswer(before),
+            heal_outcome: _healOutcome || 'heal_missed',
+            model_only_hold_carried: true,
+            carried_candidate_digest: digestText(normalized.answer)
+          }));
+        currentAnswer = normalized.answer;
+        continue;
       }
       // Re-stamp the held receipt with the heal outcome. Same stage, same ordinal, same
       // input and output digests and the same held reason; only the diagnostic evidence
