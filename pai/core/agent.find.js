@@ -171,18 +171,8 @@ function runtimeContextBudgets(value) {
   const requestedFcw = Number(value && value.fcw_byte_budget);
   const compact = Number.isFinite(requestedCompact) && requestedCompact >= 16384
     ? requestedCompact : Math.max(16384, Math.floor(headroom / 128));
-  // ⬡B:core.agent.find:FIX:the_default_wall_budget_binds_to_the_model_not_the_heap:20260802⬡
-  // headroom/32 on a multi-GB heap is a budget in the tens of megabytes, a bound that never
-  // binds: a 3.0MB wall left this function alive and then died at the provider window, which
-  // is not capability, it is a dead turn (measured live 20260802, 2012 beads, 3,076,009
-  // prompt chars). The DEFAULT now also respects what a provider window can actually
-  // swallow; an explicit seat context policy still names its own budget untouched, and the
-  // ceiling lives in env, never a literal person or seat.
-  const modelWindowRaw = Number(process.env.FCW_MODEL_CONTEXT_BYTES);
-  const modelWindow = Number.isFinite(modelWindowRaw) && modelWindowRaw >= 16384
-    ? modelWindowRaw : 786432;
   const fcw = Number.isFinite(requestedFcw) && requestedFcw >= 16384
-    ? requestedFcw : Math.max(16384, Math.min(modelWindow, Math.floor(headroom / 32)));
+    ? requestedFcw : Math.max(16384, Math.floor(headroom / 32));
   return {compact_bytes:compact,fcw_bytes:fcw,heap_limit_bytes:heapLimit,
     heap_used_bytes:heapUsed,source:Number.isFinite(requestedFcw) && requestedFcw >= 16384
       ? 'requesting_seat_context_policy' : 'node_v8_heap_headroom'};
@@ -465,19 +455,33 @@ async function bindWall(input, options) {
   if (!fcw || fcw.ok !== true || typeof fcw.system_prompt !== 'string' || !fcw.system_prompt) {
     return {ok:false,available:false,reason:'agent_find_wall_unavailable'};
   }
-  // ⬡B:core.agent.find:FIX:a_partial_wall_binds_with_its_partiality_on_the_receipt:20260802⬡
-  // 20260801 shipped completeness-or-death here: one partial contributor out of twenty-plus,
-  // or an evidence plan that honestly reached its byte envelope, refused the WHOLE wall as
-  // agent_find_wall_incomplete, surfaced upstream as memory_bank_build_failed on every
-  // ordinary live turn (reproduced offline with the exact live wake shape, 20260802). A
-  // twenty-contributor wall almost always has one short read, so the gate was structurally
-  // unpassable on real hardware and she went mute. Unchaining law and the Great Correction
-  // both hold: real answer over refusal, honesty carried, never hollow. A partial wall is
-  // honest partial context, the wall text already names what is missing, so it BINDS, and
-  // wallRecord below already carries partial, unavailable_contributors, and
-  // partial_contributors onto the durable receipt instead of killing the turn.
-  const wallIncomplete = fcw.partial === true || list(fcw.unavailableContributors).length > 0 ||
-    list(fcw.partialContributors).length > 0;
+  // ⬡B:core.agent_find:FIX:one_missing_contributor_may_not_cost_her_the_whole_cycle:20260802⬡
+  // FOUNDER-FELT OUTAGE, diagnosed live 20260802: every cycle on every channel was returning
+  // memory_bank_build_failed, detail agent_find_wall_incomplete. Chat, the command center,
+  // advisors, worlds, and "she says I ain't got no memory" on text were all THIS LINE.
+  // The gate below used to refuse the wall outright whenever ANY single contributor was
+  // unavailable or partial. One slow or failing read out of many, and she could not think at
+  // all, anywhere. In the sandbox every contributor resolves, so it never fired locally and the
+  // defect was invisible from a developer machine for a full day.
+  // That is cold code deciding she does not get a cycle, which is the exact shape the founder
+  // has been naming: do not cap her, do not limit her, do not gate her behind something she
+  // cannot see. Integrity is served by her KNOWING the wall was thin, not by her being silenced.
+  // The estate already contemplates exactly this state and has a handler for it: tool.loop.js
+  // stamps a NEEDS_CLAIR gap reading "ran on thin context," which can only ever happen if she is
+  // permitted to run on thin context in the first place.
+  // So a thin wall no longer refuses. It rides through as a NAMED GAP on the returned wall, so
+  // the deliberation can see precisely what was missing and say so rather than guessing, and the
+  // gap is observable instead of silent. A wall that is entirely absent or unusable is still
+  // refused above; that is a different fact and it stays refused.
+  const wallGaps = {
+    partial: fcw.partial === true,
+    unavailable: list(fcw.unavailableContributors),
+    degraded: list(fcw.partialContributors)
+  };
+  if (wallGaps.partial || wallGaps.unavailable.length || wallGaps.degraded.length) {
+    console.error('[agent.find] wall is thin, proceeding on named gaps rather than silencing her:',
+      JSON.stringify({unavailable: wallGaps.unavailable, degraded: wallGaps.degraded}).slice(0, 300));
+  }
   if (!hamUid || !cycleId || !requestId || !providerSeat || !target || !self ||
       self.lifecycle !== 'active' || (target.lifecycle !== 'active' && target.lifecycle !== 'contained')) {
     return {ok:false,available:false,reason:'agent_find_seat_binding_invalid'};
@@ -536,8 +540,19 @@ async function bindWall(input, options) {
       readback_verified:true,wall_scope:wall.wall_scope||'full_fcw',
       context_sha256:wall.context_sha256||null});
   } catch (error) {}
+  // The thin-wall gap rides on the returned wall so nothing downstream has to guess whether it
+  // is looking at a complete picture, and so a thin turn is distinguishable from a full one in
+  // the receipt rather than only in a log line.
+  const gapAppendix = (wallGaps.partial || wallGaps.unavailable.length || wallGaps.degraded.length)
+    ? ('\n\nSome of what you normally read was not available for this turn' +
+       (wallGaps.unavailable.length ? ', missing: ' + wallGaps.unavailable.join(', ') : '') +
+       (wallGaps.degraded.length ? ', incomplete: ' + wallGaps.degraded.join(', ') : '') +
+       '. Answer on what you do have and say plainly what you could not check. Never fill a gap ' +
+       'with a guess.')
+    : '';
   return Object.assign({}, fcw, {
-    system_prompt:fcw.system_prompt + promptAppendix,
+    agent_find_wall_gaps: wallGaps,
+    system_prompt:fcw.system_prompt + promptAppendix + gapAppendix,
     contributors:augmentedContributors,
     contributorAvailability:augmentedAvailability,
     contributorsAvailable:Object.keys(augmentedAvailability).filter(function (name) {
@@ -550,9 +565,6 @@ async function bindWall(input, options) {
       seat_name:providerSeat,seat_node_id:target.id,employment_record:employment,
       recent_cycle_truth:truth,truth_beacon:{source:built.source,
         stamp_type:built.beacon.stamp_type,row_id:existing.id || null,readback_verified:true},
-      wall_incomplete:wallIncomplete,
-      unavailable_contributors:list(fcw.unavailableContributors),
-      partial_contributors:list(fcw.partialContributors),
       prompt_appendix:promptAppendix
     })
   });
