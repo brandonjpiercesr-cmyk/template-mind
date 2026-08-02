@@ -176,6 +176,20 @@ function externalClosureEdges(value) {
   ];
 }
 
+function externalClosureSource(value) {
+  return 'agent.find.closure.' + ham(value.ham_uid) + '.' + digest({
+    original_incident_source:value.original_incident_source,
+    original_finding_source:value.original_finding_source,
+    classification_id:value.classification_id,repository:value.repository,path:value.path,
+    target_wonder:value.target_wonder,pr_number:value.pr_number,head_sha:value.head_sha,
+    merge_sha:value.merge_sha,protected_main_sha:value.protected_main_sha,
+    focused_checkout_source:value.focused_checkout_source,
+    focused_checkout_sha256:value.focused_checkout_sha256,
+    focused_test_token:value.focused_test_token,live_service_ids:value.live_service_ids,
+    live_sha:value.live_sha,live_deployments:value.live_deployments
+  });
+}
+
 function buildExternalClosureReceipt(input) {
   const beacon=resolve('agent.find.external-closure'),value=input||{},exactHam=ham(value.ham_uid),
     serviceIds=Array.isArray(value.live_service_ids)?value.live_service_ids.map(function (id) {
@@ -217,15 +231,7 @@ function buildExternalClosureReceipt(input) {
     live_sha:text(value.live_sha,40).toLowerCase(),live_deployments:deployments,
     verified_at:text(value.verified_at,40)||new Date().toISOString()};
   const content=Object.assign({},core,{receipt_sha256:digest(core)}),edges=externalClosureEdges(core),
-    source='agent.find.closure.'+exactHam+'.'+digest({original_incident_source:
-      core.original_incident_source,original_finding_source:core.original_finding_source,
-      classification_id:core.classification_id,repository:core.repository,path:core.path,
-      target_wonder:core.target_wonder,pr_number:core.pr_number,head_sha:core.head_sha,
-      merge_sha:core.merge_sha,protected_main_sha:core.protected_main_sha,
-      focused_checkout_source:core.focused_checkout_source,
-      focused_checkout_sha256:core.focused_checkout_sha256,
-      focused_test_token:core.focused_test_token,live_service_ids:core.live_service_ids,
-      live_sha:core.live_sha,live_deployments:core.live_deployments});
+    source=externalClosureSource(core);
   return {ok:true,beacon:beacon,source:source,content:content,edges:edges,spec:{hamUid:exactHam,
     agentGlobal:'AGENT_FIND',source:source,type:beacon.stamp_type,
     summary:'[AGENT FIND] verified external repair closure for '+core.classification_id,
@@ -249,7 +255,16 @@ function validateExternalClosureRow(row, expected) {
   if(fields.some(function (field) { return want[field]!=null&&content[field]!==want[field]; })||
       want.pr_number!=null&&Number(content.pr_number)!==Number(want.pr_number)||
       want.live_service_ids&&stableStringify(content.live_service_ids)!==
-        stableStringify(want.live_service_ids.slice().sort()))return{ok:false,
+        stableStringify(want.live_service_ids.slice().sort())||
+      want.live_deployments&&stableStringify(content.live_deployments)!==
+        stableStringify(want.live_deployments)||
+      externalClosureSource(content)!==row.source||
+      !Number.isFinite(Date.parse(content.verified_at||''))||
+      !Array.isArray(content.live_deployments)||content.live_deployments.length!==2||
+      content.live_deployments.some(function (deployment) {
+        return !deployment||!content.live_service_ids.includes(deployment.service_id)||
+          !deployment.deploy_id||deployment.commit_sha!==content.live_sha||deployment.status!=='live';
+      }))return{ok:false,
           reason:'agent_find_external_closure_binding_mismatch'};
   const required=externalClosureEdges(content),column=exactEdges(row.edges),embedded=exactEdges(content.edges),
     wanted=exactEdges(required);
@@ -276,4 +291,4 @@ module.exports = {BEACONS:BEACONS,resolve:resolve,buildAgentFindReceipt:buildAge
   validateAgentFindRow:validateAgentFindRow,buildExternalClosureReceipt:buildExternalClosureReceipt,
   validateExternalClosureRow:validateExternalClosureRow,validateRegistry:validateRegistry,
   _test:{parseContent:parseContent,validId:validId,externalClosureEdges:externalClosureEdges,
-    exactEdges:exactEdges}};
+    externalClosureSource:externalClosureSource,exactEdges:exactEdges}};

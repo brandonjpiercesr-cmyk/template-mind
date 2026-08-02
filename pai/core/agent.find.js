@@ -482,7 +482,11 @@ async function recordExternalClosureVerification(input, original, options) {
     focused_checkout_source:candidate.result.focused_row.source,
     focused_checkout_sha256:candidate.focused_checkout_sha256,
     focused_test_token:candidate.focused_test_token,
-    live_service_ids:external.live_service_ids.slice().sort(),live_sha:external.live_sha};
+    live_service_ids:external.live_service_ids.slice().sort(),live_sha:external.live_sha,
+    live_deployments:candidate.live.deployments.map(function (row) {
+      return {service_id:clean(row&&row.service_id,160),deploy_id:clean(row&&row.deploy_id,220),
+        commit_sha:clean(row&&row.commit_sha,40).toLowerCase(),status:clean(row&&row.status,40)};
+    }).sort(function (a,b) { return a.service_id.localeCompare(b.service_id); })};
   const checked=truthBeacons.validateExternalClosureRow(row,expected);
   if(!checked.ok)return{ok:false,reason:'agent_find_external_closure_readback_mismatch',
     detail:checked.reason};
