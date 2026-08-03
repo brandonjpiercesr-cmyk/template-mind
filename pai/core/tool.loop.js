@@ -4211,8 +4211,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         importance:3})
     }).catch(function(){});
   }
+  // ⬡B:core.tool_loop:FIX:a_cancelled_turn_may_not_read_back_as_kept:20260803⬡
+  // FOUNDER_ACTIONS_OUTSTANDING item 12. The memory keeper (core/memory.keeper.js keepTurn)
+  // is started right after the committed council, before this function's own cancellation
+  // and post-council-effect-failure exits, so its durable turn record can already be read
+  // back by the time one of those exits fires. Every _turnCancelledResult(stage) call site
+  // in this file (there is exactly one function; every cancellation exit already funnels
+  // through it) now demotes that same row via _abandonMemoryKeeperTurn below, instead of
+  // leaving a turn nobody actually received readable as an ordinary completed conversation.
+  // See _abandonMemoryKeeperTurn just below _memoryKeeperRun for the other exit this reaches:
+  // post_council_effect_failed, the one abandonment path that does not go through here.
   function _turnCancelledResult(stage) {
     _stampStep('cycle_end_silent', 'voice_turn_cancelled');
+    _abandonMemoryKeeperTurn('cancelled:' + String(stage || 'unknown').slice(0, 60));
     return { ok:false, reason:'voice_turn_cancelled', blocked_by:'CANCELLED',
       cancel_stage:String(stage || 'unknown').slice(0, 60),
       ham:typeof hamObj === 'undefined' ? { uid:hamUid } : hamObj,
@@ -4220,6 +4231,22 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       tools_used:Array.isArray(tools) ? tools : [],
       iterations:Number.isInteger(iter) ? iter : 0,
       ms:Date.now()-t0 };
+  }
+  // ⬡B:core.tool_loop:FIX:the_one_place_that_asks_the_keeper_to_demote_its_own_row:20260803⬡
+  // A no-op until _memoryKeeperRun exists (every call before the council commits below sees
+  // it undefined and returns immediately). Fire-and-forget by design, the same shape
+  // _stampStep already uses for its own durable write: a cancellation or an effect failure
+  // must return to the caller immediately, never block on a second network round trip. The
+  // keeper's own promise never rejects (core/tool.loop.js already wraps it in a .catch that
+  // returns an ok:false receipt), so only a turn_record that actually verified ok:true is
+  // ever handed to abandonTurn; nothing else exists yet to demote.
+  function _abandonMemoryKeeperTurn(outcome) {
+    if (!_memoryKeeperRun) return;
+    _memoryKeeperRun.then(function (receipt) {
+      if (!receipt || !receipt.turn_record || receipt.turn_record.ok !== true) return;
+      return require('./memory.keeper.js').abandonTurn(receipt.turn_record, outcome,
+        _turnAbortSignal || null);
+    }).catch(function () {});
   }
   _stampStep('cycle_start', String(message||'').slice(0,80));
   // \u2b21B:core.tool.loop:FIX:real_two_pass_verifier_per_research:20260710\u2b21
@@ -7221,6 +7248,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       + (_failedEffect.reason || _failedEffect.result && (_failedEffect.result.reason
         || _failedEffect.result.error) || 'unknown')
       + (_failedEffect.attempts ? ' [attempts:' + _failedEffect.attempts + ']' : ''));
+    // FOUNDER_ACTIONS_OUTSTANDING item 12, the one abandonment exit that does not run
+    // through _turnCancelledResult: the keeper's turn record already verified before this
+    // effect ran, so it must be demoted the same way a cancellation is, see
+    // _abandonMemoryKeeperTurn above _turnCancelledResult.
+    _abandonMemoryKeeperTurn('effect_failed:' + _failedEffect.name);
     return { ok:false, reason:'post_council_effect_failed', blocked_by:_failedEffect.name,
       ham:hamObj, cycleId:_cycleId, requestId:_requestId,
       councilProof:compactCouncilProof(_council), side_effects:_effectResults.map(function (effectResult) {
