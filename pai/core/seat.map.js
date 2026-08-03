@@ -226,6 +226,19 @@ var SEATS = {
   c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.5',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
                  fallbackModel: 'qwen/qwen3-235b-a22b-2507', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK', fallbackTools:true },
   c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
+  // W3-L4 OVERSEER (docs/roadmaps/THE_COMPANY_ROADMAP_20260731.md, census B-109/B-82/B-143),
+  // the exit decider: which pass-off channel a high-importance finding gets. Before this seat,
+  // core/reach.WONDER.decision_organ.20260722.js#judgeExit (the mind behind
+  // core/overseer/exit.tool.js#runExitPass) rode the shared `deliberation` ladder seat by
+  // default, the same general-purpose pool that already starved SEATED once (the 20260728
+  // no_rung_answered 503, this file's own deliberation entry above). An exit judgment competing
+  // with advisor and story-generation traffic for the same daily dollar ceiling is exactly that
+  // failure shape again, and its spend was unattributable besides. Same proven cheap pick already
+  // carrying C1/C4/voice (tools:true, vision:true, confirmed live against MODEL_CAPABILITY
+  // above), its own named key so an exit-decision bleed traces to this seat alone. No fallback
+  // declared: judgeExit already floors to the cold LOGFUL pick when no mind answers (never
+  // undecided), so a second paid rung here would only be a second bill for the same safety net.
+  overseer:    { role: 'OVERSEER exit decider',envModel: 'SEAT_OVERSEER_MODEL', model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_OVERSEER',    via: 'openrouter', capEnv:'SEAT_OVERSEER_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
   // AUDRA is contained by CODA, but contained does not mean anonymous. These two
   // seats used to live only in coding-department/audra/seats.js, outside this one
   // ownership map. The global OpenRouter dollar brake therefore refused both exact
