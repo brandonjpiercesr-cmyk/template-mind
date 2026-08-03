@@ -1294,6 +1294,24 @@ var TOOLS = [
   {type:'function',function:{name:'get_budget_summary',description:'Get the HAM\'s real income vs expenses for the current or a specific budget cycle, spending by category, and active BNPL plan count. '
     +'Use for any question about being on track, how much has come in or gone out, or spending by category.',
     parameters:{type:'object',properties:{ham_uid:{type:'string'},cycle_start:{type:'string'},cycle_end:{type:'string'}}}}},
+  // ⬡B:tool.loop:TOOL:wired_budget_fit_and_scenario_compare_20260803⬡ NWO-9/NWO-70. Both
+  // core/procurement/budget.fit.js and core/scenario.compare.js were built-but-dead: real
+  // exports, zero callers, because each AWAITS a real judged model call and can run long, so
+  // neither belongs in the per-cycle block every turn pays for. Wired here as ON-DEMAND tools
+  // instead, the same shape consult_wonder_meeting and raise_911_escalation already use: she
+  // decides to call them, the handler dispatches to the real module, and the module's own
+  // judged verdict comes back into the cycle untouched. Cold code never computes affordability
+  // or a scenario's cost here, exactly as both modules' own headers require.
+  {type:'function',function:{name:'read_budget_fit',description:'CHECK WHETHER THE HAM\'S OPEN SHOPPING/PROCUREMENT WANTS FIT THIS MONTH\'S REAL BUDGET, JUDGED. '
+    +'Weighs every item still open on their list against what is already available to pay with and their real live income/bills/spend for this month, one judged call so every item is scored consistently against the same real numbers. Returns a verdict per item (fits, tight, does_not_fit, or unclear) with the real reason, plus an overall note on the shape of the month. '
+    +'Use this when the HAM asks how they can squeeze something in, whether they can afford something on their list, or to figure out with their real budget what fits. Never invents a verdict: if nothing is open or the judge could not run, it says so honestly. Takes up to 30 seconds.',
+    parameters:{type:'object',properties:{}}}},
+  {type:'function',function:{name:'compare_scenario',description:'COMPARE A REAL LIFE SCENARIO, COSTED, JUDGED. Convenes the HAM\'s real registered cost seats (finance, jobs, real estate -- whichever actually exist) through a real, same-turn, judged meeting to weigh named options against real income and reach an honest, minuted comparison. Cold code never does the arithmetic or picks a winner; the costs and the verdict are the convened seats\' own minutes, carried back verbatim. '
+    +'Use this when the HAM describes a real decision with a real cost tradeoff -- a move, a job change, a big purchase -- and wants to know what it would actually cost or which option makes more sense. Pass the scenario in their own words; if they named specific choices, list them as options. Returns an honest ok:false, never a fabricated comparison, if the seats could not reach a minuted verdict. Takes up to 60 seconds.',
+    parameters:{type:'object',properties:{
+      question:{type:'string',description:'the real scenario or decision, in the HAM\'s own words'},
+      options:{type:'array',items:{type:'string'},description:'optional real choice labels to weigh, e.g. ["stay in Buffalo","move to New York"]'}},
+      required:['question']}}},
   // ⬡B:core.tool_loop:BUILD:the_mind_can_now_SAVE_budget_facts_from_conversation:20260722⬡ Until
   // now the mind could only READ the budget, so when the founder TOLD her his income or a bill in
   // conversation she had no organ to save it and it was silently dropped. These are the write
@@ -1532,7 +1550,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   weather:['weather_check'],
   sports:['nash_sports'],
   reminders:['read_reminders','create_reminder','stop_mentioning'],
-  budget:['get_budget_summary','get_budget_upcoming'],
+  budget:['get_budget_summary','get_budget_upcoming','read_budget_fit','compare_scenario'],
   memory:['find_in_brain','find_identity_evidence','write_to_brain'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','raise_911_escalation','find_in_brain',
     'read_lane_board','read_wonder_departments','read_render_logs','get_recent_builds','read_own_code','consult_coda',
@@ -2857,6 +2875,29 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       return JSON.stringify(Object.assign(_leadOut, sum));
     }
     return JSON.stringify(sum);
+  }
+  // ⬡B:tool.loop:WIRE:budget_fit_and_scenario_compare_dispatch_20260803⬡ NWO-9/NWO-70. Both
+  // handlers are read-only judged dispatches, never queued in POST_COUNCIL_TOOLS: neither one
+  // writes, sends, or spends, each only hands a real module's own judged verdict back into the
+  // cycle, exactly the same shape consult_wonder_meeting and raise_911_escalation already use
+  // just above. Lazy require, matching this file's own house style for a module that is not
+  // needed on every load.
+  if (name === 'read_budget_fit') {
+    try {
+      var _fit = await require('./procurement/budget.fit.js').readBudgetFit(hamUid, {});
+      return JSON.stringify(_fit || {ok:false,reason:'procurement_budget_fit_no_result'});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
+  }
+  if (name === 'compare_scenario') {
+    var _scenarioQuestion = String(args.question || '').trim();
+    if (!_scenarioQuestion) return JSON.stringify({ok:false,note:'no scenario question given'});
+    var _scenarioOptions = Array.isArray(args.options)
+      ? args.options.map(function (o) { return String(o || '').trim(); }).filter(Boolean) : [];
+    try {
+      var _cmp = await require('./scenario.compare.js').compareScenario(hamUid,
+        {question:_scenarioQuestion, options:_scenarioOptions}, {});
+      return JSON.stringify(_cmp || {ok:false,reason:'scenario_compare_no_result'});
+    } catch (e) { return JSON.stringify({ok:false,reason:String(e.message||e)}); }
   }
   // ⬡COLD:act:tag:BUDGET_LEDGER_EFFECT_COMMIT:20260723⬡
   // COLD-ANEW-TOOL-LOOP-0005 contained via COLD-0003: record_income, set_recurring_bill, and
