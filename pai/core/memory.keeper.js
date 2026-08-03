@@ -84,6 +84,16 @@ var MEMORY_CONTRACT = Object.freeze({
   GIFT_IMPORTANCE: 9,
   // The floor every wall reader applies. Raise a writer to clear it; never lower it.
   READER_IMPORTANCE_FLOOR: 7,
+  // ⬡B:core.memory.keeper:LAW:an_abandoned_turn_falls_below_the_floor_it_never_earned:20260803⬡
+  // FOUNDER_ACTIONS_OUTSTANDING item 12. The turn record above is written unconditionally,
+  // before core/tool.loop.js knows whether the turn it belongs to actually reached the
+  // person: a cancellation or a failed post-council effect can still end the cycle after
+  // this row is durably read back. abandonTurn demotes exactly that row to this importance,
+  // the same value the comment above already names as beneath every wall reader's floor, so
+  // a turn nobody actually received is excluded by the READER_IMPORTANCE_FLOOR check every
+  // reader already runs. No reader needed a new field to trust; one existing gate now also
+  // carries this honesty.
+  ABANDONED_IMPORTANCE: 2,
   AGENT_GLOBAL: 'PAI'
 });
 
@@ -501,9 +511,46 @@ async function keepTurn(entrance) {
   return receipt;
 }
 
+// ⬡B:core.memory.keeper:FIX:an_abandoned_turn_must_not_read_back_as_kept:20260803⬡
+// FOUNDER_ACTIONS_OUTSTANDING item 12: "the memory keeper can persist a turn that was
+// cancelled or whose effect failed." keepTurn's own turn record write above is unconditional
+// and already durable by the time core/tool.loop.js can even ask this question, so the
+// honest fix is not pretending the row was never written. abandonTurn is called from
+// tool.loop.js's own cancellation and post-council-effect-failure exits, the ones that run
+// AFTER keepTurn already started. It demotes the exact row this turn wrote to
+// MEMORY_CONTRACT.ABANDONED_IMPORTANCE, below every reader's existing floor, so a turn that
+// never reached the person, or whose committed effect failed, is excluded by the same
+// importance >= READER_IMPORTANCE_FLOOR check core/find.js already runs on every read. It
+// never throws and it never touches a row this turn did not itself durably write.
+async function abandonTurn(turnRecord, outcome, signal) {
+  if (!turnRecord || turnRecord.ok !== true || !turnRecord.id || !turnRecord.source) {
+    return { ok: false, reason: 'nothing_to_abandon' };
+  }
+  if (!_bu() || !_bk()) return { ok: false, reason: 'memory_bank_unconfigured' };
+  try {
+    var response = await fetch(_bu() + '/rest/v1/' + _tbl()
+        + '?id=eq.' + encodeURIComponent(turnRecord.id),
+      { method: 'PATCH', headers: writeHeaders(true),
+        body: JSON.stringify({ importance: MEMORY_CONTRACT.ABANDONED_IMPORTANCE }),
+        signal: freshRequestSignal(signal || null) });
+    var rows = response.ok ? await response.json().catch(function () { return null; }) : null;
+    if (!response.ok || !Array.isArray(rows) || rows.length !== 1) {
+      return { ok: false, reason: 'memory_abandon_unverified',
+        status: response && response.status || null };
+    }
+    return { ok: true, id: turnRecord.id, source: turnRecord.source,
+      outcome: String(outcome || 'abandoned').slice(0, 60),
+      importance: MEMORY_CONTRACT.ABANDONED_IMPORTANCE };
+  } catch (error) {
+    return { ok: false, reason: 'memory_abandon_threw',
+      error: String(error && error.message || error || 'unknown').slice(0, 160) };
+  }
+}
+
 module.exports = {
   MEMORY_CONTRACT: MEMORY_CONTRACT,
   keepTurn: keepTurn,
+  abandonTurn: abandonTurn,
   // ⬡B:core.memory.keeper:BUILD:the_one_cold_store_is_not_a_test_only_name:20260728⬡
   // storeBead is the ONE verified cold write in this estate (one POST, one readback of the
   // exact source asked for, plus the 20260727 spawned_by fix the new bank requires). It was
