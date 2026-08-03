@@ -2366,9 +2366,21 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       // every real coding operator checks in and out through the CCWA door as CCWA_CHECKIN /
       // CCWA_CHECKOUT rows. So the founder asked who is working on the build, this tool read
       // an empty registry, and she truthfully had nothing. The CCWA ledger is the live board.
+      // ⬡B:core.tool_loop:FIX:the_ccwa_half_was_still_scoped_to_an_identity_no_coder_checks_in_under:20260803⬡
+      // The fix above added this query but kept the same ham_uid=eq.<asker> filter the
+      // LANE_CLAIM query above it uses. CCWA_CHECKIN/CCWA_CHECKOUT is not per-world data: it
+      // is the one estate-wide coordination board every coding lane stamps, exactly the same
+      // rows GET /ccwa/harness renders (core/ccwa.js#_readRecent, proven by
+      // tests/ccwa.a.recap.never.hides.a.live.lane.test.js's own header to filter on SOURCE
+      // NAMESPACE only, source.ilike.ccwa.cc.*, never on ham_uid). Coding lanes check in under
+      // whatever path a session used (SYSTEM, GLOBAL, a track name), never the founder's own
+      // resolved phone identity, so scoping this read to the asker's own hamUid meant it could
+      // only ever match by coincidence: the founder asking "who's working on the build" on any
+      // channel, text included, got a truthfully empty read even while the board was full,
+      // which reads to a person as "I don't have access." Dropped the scope on this query only;
+      // the LANE_CLAIM query above is untouched.
       var _ccUrl = _bu().replace(/\/+$/, '') + '/rest/v1/' + _tbl()
-        + '?ham_uid=eq.' + encodeURIComponent(_boundLaneHam)
-        + '&stamp_type=in.(CCWA_CHECKIN,CCWA_CHECKOUT)&source=ilike.ccwa.cc.*'
+        + '?stamp_type=in.(CCWA_CHECKIN,CCWA_CHECKOUT)&source=ilike.ccwa.cc.*'
         + '&select=source,agent_global,summary,stamp_type,created_at&order=created_at.desc&limit=40';
       var _lbBoth = await Promise.all([
         fetch(_lbUrl, { headers: _lbHeaders, signal: (runtime && runtime.abortSignal) })
