@@ -1357,7 +1357,8 @@ var TOOLS = [
       reply_to_message_id:{type:'string',description:'the id of the email being replied to, from inbox_read, so it threads'},
       to:{type:'string',description:'the exact recipient email address, required for both new mail and replies'},
       subject:{type:'string',description:'the exact one-line subject'},
-      body:{type:'string',description:'the full real email body to send'}}}}},
+      body:{type:'string',description:'the full real email body to send'},
+      attachment_id:{type:'string',description:'optional: the id of a file already shelved in the artifact vault (from an upload or a produced artifact) to attach. Leave unset for a plain email. A file that cannot be fetched fails the send instead of going out without it.'}}}}},
   {type:'function',function:{name:'read_reminders',description:'Read the HAM real reminders: things they told you to remind them about, and things you flagged for them. Also returns field_followups, due follow-ups a wonder set for itself or for the HAM (forWhom self or ham); judge those the same honest way, never invent one, never treat a due one as already handled. Use whenever they ask what reminders or to-dos they have, or what they need to remember. Returns real reminder items only, never invented. If there are none it says so.',
     parameters:{type:'object',required:['ham_uid'],properties:{ham_uid:{type:'string'}}}}},
   {type:'function',function:{name:'inbox_read',description:'Read the HAM real email inbox: their actual unread and recent messages, with sender and subject. Use whenever the HAM asks about their email, inbox, unread mail, or to show their inbox on the glass. Returns real messages only, never invented; each carries the id needed to draft a reply. If the inbox is clear it says so.',
@@ -3225,7 +3226,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       var _esBody = {
         grant: (args && args.grant) || '', body: (args && args.body) || '',
         subject: (args && args.subject) || '', to: (args && args.to) || undefined,
-        reply_to_message_id: (args && args.reply_to_message_id) || ''
+        reply_to_message_id: (args && args.reply_to_message_id) || '',
+        attachment_id: (args && args.attachment_id) || ''
       };
       var _esIdentity = 'os.email.' + require('node:crypto').createHash('sha256')
         .update(JSON.stringify({ham_uid:_esUid,parent_request_id:_esParentRequest,
