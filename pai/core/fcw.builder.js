@@ -769,6 +769,19 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     })(),
     'Trust tier: ' + hamTier,
     'Channel: ' + (channel || 'unknown'),
+    // ⬡B:core.fcw_builder:BUILD:the_wall_carries_the_mediums_physics_not_just_its_name:20260803⬡
+    // Founder direct 20260803: "If she knows what AIR code she has to play with, won't she
+    // be better?" The wall said 'Channel: voice' and nothing else, so she spoke into a live
+    // interruptible phone line with the same posture as an email. Cold facts about the
+    // medium, from the one table in core/channel.physics.js; how to speak into it stays her
+    // judgment (Governors Doctrine: intensity is decided by the LLM told what channel it
+    // lives on). Guarded and degrade-to-absent like the capability line above it.
+    (function () {
+      try {
+        var _phys = require('./channel.physics.js').channelPhysicsLine(channel);
+        return _phys ? ('WHERE YOUR WORDS LAND, THE PHYSICS OF THIS CHANNEL: ' + _phys) : '';
+      } catch (ePhys) { return ''; }
+    })(),
     (_capLine ? ('YOUR CAPABILITIES RIGHT NOW: ' + _capLine) : ''),
     (_lensBlock || ''),
     (_keyLine || ''),
