@@ -725,6 +725,33 @@ function _flattenTurnText(content) {
   return '';
 }
 
+// ⬡B:core.tool_loop:FIX:an_empty_turn_never_reaches_a_fallback_model_as_a_bare_role_label:20260803⬡
+// Founder-felt, from his own live text thread: he sent "U decide all" and she answered
+// "It looks like your message came through as just 'Tool:' with nothing after it". Both
+// provider-fallback sites flatten the history to "ROLE: text" lines, and a tool turn whose
+// content is structured (no text parts) flattens to '', so the ladder received a bare
+// "TOOL:" line and the backup model answered about that instead of what he said. A turn
+// with no words is carried context on the main path, but on a flattened text prompt it is
+// pure noise wearing a speaker label. It is DROPPED here, never relabeled and never given
+// invented content. One helper for both sites, because the two hand-maintained copies of
+// this map were themselves the two-copies shape the one-source law forbids; system turns
+// join as the repair site always joined them (the voice site previously read only the
+// first system entry, which silently dropped any later one).
+function _flattenHistoryForFallback(hist) {
+  var rows = Array.isArray(hist) ? hist : [];
+  var sys = rows.filter(function (m) { return m && m.role === 'system'; })
+    .map(function (m) { return _flattenTurnText(m.content); })
+    .filter(function (t) { return String(t).trim() !== ''; }).join('\n\n');
+  var usr = rows.filter(function (m) { return m && m.role !== 'system'; })
+    .map(function (m) {
+      return { role: String((m && m.role) || 'user').toUpperCase(),
+        text: _flattenTurnText(m && m.content) };
+    })
+    .filter(function (t) { return String(t.text).trim() !== ''; })
+    .map(function (t) { return t.role + ': ' + t.text; }).join('\n\n');
+  return { system: sys, user: usr };
+}
+
 // ⬡B:core.tool_loop:911:the_seat_failover_rule_itself_where_a_test_can_reach_it:20260728⬡
 // The ORDER-AND-CHOICE half of the seat failover, deliberately at module scope and taking
 // its attempt function as an argument, so the rule can be proven by a test without standing
@@ -5395,10 +5422,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try{
         var _lad=require('./model.ladder.js');
         var _hist=openAiCompatibleHistory(msgs);
-        var _sys=(_hist[0]&&_hist[0].role==='system')?_flattenTurnText(_hist[0].content):'';
-        var _usr=_hist.filter(function(m){return m.role!=='system';})
-          .map(function(m){return String(m.role||'user').toUpperCase()+': '+_flattenTurnText(m.content);})
-          .join('\n\n');
+        var _flat=_flattenHistoryForFallback(_hist);
+        var _sys=_flat.system;
+        var _usr=_flat.user;
         var _lr=await _lad.deliberate(_sys,_usr,{seat:_providerSeat,
           temperature:_structuredReachPolicy?0:0.3,timeout:60000,
           json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
@@ -6066,14 +6092,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     try {
       var _repairLadder = require('./model.ladder.js');
       var _repairHistory = openAiCompatibleHistory(history);
-      var _repairSystem = _repairHistory.filter(function (entry) {
-        return entry && entry.role === 'system';
-      }).map(function (entry) { return _flattenTurnText(entry.content); }).join('\n\n');
-      var _repairUser = _repairHistory.filter(function (entry) {
-        return entry && entry.role !== 'system';
-      }).map(function (entry) {
-        return String(entry.role || 'user').toUpperCase() + ': ' + _flattenTurnText(entry.content);
-      }).join('\n\n');
+      var _repairFlat = _flattenHistoryForFallback(_repairHistory);
+      var _repairSystem = _repairFlat.system;
+      var _repairUser = _repairFlat.user;
       var _repairResult = await _repairLadder.deliberate(_repairSystem, _repairUser,
         {seat:_providerSeat || _paiSeatName(),
           temperature:temperature == null ? 0.1 : temperature,
@@ -7415,7 +7436,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
 function _ghHoldResetForTests() { _ghHold = { until: 0, reason: null, status: 0 }; }
 function _ghHoldStateForTests() { return { until:_ghHold.until, reason:_ghHold.reason, status:_ghHold.status }; }
 
-module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,
+module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
