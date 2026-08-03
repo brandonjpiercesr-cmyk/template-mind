@@ -554,6 +554,39 @@ function exactIso(value) {
   if(!Number.isFinite(parsed))return null;
   return new Date(parsed).toISOString();
 }
+// ⬡B:core.provider_spend_receipt:ADD:nwo47_subscription_facts_extend_the_statement:20260803⬡
+// NWO-47 (doctrine-audit/NEW_WORLD_ORDER_PT1_CODING_AUDIT_20260802.md, row NWO-47): "a real
+// provider_account_statements store already exists in core/provider.spend.receipt.js. Extend
+// it; do not birth a parallel bead type." These three facts (renewal date, spend limit, payer)
+// ride the SAME immutable statement as the usage facts, through the SAME digest-verified RPC
+// (migrations/0012). All three are OPTIONAL and independently optional from one another: a
+// caller that supplies none of them gets the exact original 7-key authority object and the
+// exact original digest a statement without subscription facts always got, so every statement
+// this store has ever written, and every future usage-only observation, is untouched. Only a
+// caller that actually supplies a subscription fact changes the digest, and only for the
+// fields it supplied. This function is reached only from writeProviderAccountStatement (the
+// statements store) and from readProviderStatementInterval's own readback verification below;
+// neither call site nor this function touches prepare(), claimIntent, writeTerminal, or
+// reconcileUnresolved, the paid spend admission path.
+function normalizedSubscriptionFacts(fact) {
+  var any=false, out={};
+  if(fact.subscription_renewal_at!=null){
+    var renewalAt=exactIso(fact.subscription_renewal_at);
+    if(!renewalAt)return undefined;
+    out.subscription_renewal_at=renewalAt;any=true;
+  }
+  if(fact.subscription_spend_limit_usd!=null){
+    var limit=decimalCost(fact.subscription_spend_limit_usd);
+    if(limit===null)return undefined;
+    out.subscription_spend_limit_usd=limit;any=true;
+  }
+  if(fact.subscription_payer!=null){
+    var payer=identifier(fact.subscription_payer,160);
+    if(!payer)return undefined;
+    out.subscription_payer=payer;any=true;
+  }
+  return any?out:null;
+}
 function normalizedProviderStatement(fact) {
   var observedAt=exactIso(fact&&fact.observed_at);
   var credits=decimalCost(fact&&fact.total_credits_usd);
@@ -562,11 +595,21 @@ function normalizedProviderStatement(fact) {
       fact.source!=='openrouter_credits_control_plane'||fact.read_by_seat!=='account_monitor'){
     return null;
   }
+  // undefined means a subscription field was SUPPLIED but malformed: reject the whole
+  // statement rather than silently drop a bad fact. null means none were supplied at all,
+  // the exact prior shape. An object means at least one valid subscription fact was supplied.
+  var subscription=normalizedSubscriptionFacts(fact);
+  if(subscription===undefined)return null;
   var authority={schema:'anew.provider-account-statement.v1',provider:'openrouter',
     observed_at:observedAt,total_credits_usd:credits,total_usage_usd:usage,
     source:'openrouter_credits_control_plane',read_by_seat:'account_monitor'};
+  if(subscription)Object.assign(authority,subscription);
   var digest=sha(stableJson(authority));
-  return Object.assign({statement_id:digest,provider_fact_digest:digest},authority);
+  var row=Object.assign({statement_id:digest,provider_fact_digest:digest},authority);
+  row.subscription_renewal_at=(subscription&&subscription.subscription_renewal_at)||null;
+  row.subscription_spend_limit_usd=(subscription&&subscription.subscription_spend_limit_usd)||null;
+  row.subscription_payer=(subscription&&subscription.subscription_payer)||null;
+  return row;
 }
 function sameProviderStatement(actual, expected) {
   return clean(actual&&actual.statement_id)===expected.statement_id&&
@@ -576,7 +619,10 @@ function sameProviderStatement(actual, expected) {
     decimalCost(actual&&actual.total_credits_usd)===expected.total_credits_usd&&
     decimalCost(actual&&actual.total_usage_usd)===expected.total_usage_usd&&
     clean(actual&&actual.source)===expected.source&&
-    clean(actual&&actual.read_by_seat)===expected.read_by_seat;
+    clean(actual&&actual.read_by_seat)===expected.read_by_seat&&
+    exactIso(actual&&actual.subscription_renewal_at)===expected.subscription_renewal_at&&
+    decimalCost(actual&&actual.subscription_spend_limit_usd)===expected.subscription_spend_limit_usd&&
+    identifier(actual&&actual.subscription_payer,160)===expected.subscription_payer;
 }
 async function readProviderStatement(statementId, options) {
   var config=statementBankConfig(options&&options.env),doFetch=fetchImpl(options);
