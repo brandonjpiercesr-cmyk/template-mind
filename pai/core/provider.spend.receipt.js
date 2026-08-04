@@ -9,6 +9,7 @@
 var crypto = require('node:crypto');
 var brain = require('./brain.client.js');
 var openrouterSeatSpend = require('./openrouter.seat.spend.js');
+var deploymentRegistry = require('./model.deployment.registry.js');
 
 var TABLE = 'provider_spend_receipts';
 var RECONCILIATION_TABLE = 'provider_spend_reconciliations';
@@ -135,6 +136,7 @@ function providerFor(url) {
   if (host === 'openrouter.ai') return 'openrouter';
   if (host === 'api.anthropic.com') return 'anthropic';
   if (host === 'api.runpod.ai' || host === 'api.runpod.io') return 'runpod';
+  if (/\.modal\.run$/.test(host)) return 'modal';
   if (host === 'api.elevenlabs.io') return 'elevenlabs';
   if (host === 'api.deepgram.com') return 'deepgram';
   if (host === 'fal.run' || host === 'queue.fal.run') return 'fal';
@@ -204,6 +206,25 @@ function requestCredential(provider, init, parsed) {
 
 function keyAlias(provider, init, parsed, attribution, env) {
   var runtime = env || process.env;
+  if (provider === 'modal') {
+    var modalKey=headerValue(init,'modal-key'),modalSecret=headerValue(init,'modal-secret');
+    if(!modalKey||!modalSecret||!parsed)return{ok:false,reason:'provider_spend_key_alias_missing'};
+    var matches=Object.keys(deploymentRegistry.DEPLOYMENTS).filter(function(alias){
+      var declared=deploymentRegistry.DEPLOYMENTS[alias];
+      if(!declared||declared.provider!=='modal'||
+          !sameSecret(modalKey,runtime[declared.key_env])||
+          !sameSecret(modalSecret,runtime[declared.secret_env]))return false;
+      var base=deploymentRegistry._test.modalBaseUrl(runtime[declared.base_url_env]);
+      if(!base)return false;
+      var expected=new URL(base);
+      var prefix=expected.pathname.replace(/\/+$/,'');
+      return parsed.hostname.toLowerCase()===expected.hostname.toLowerCase()&&
+        (!prefix||prefix==='/'||parsed.pathname.indexOf(prefix+'/')===0);
+    });
+    if(matches.length!==1)return{ok:false,reason:matches.length>1
+      ?'provider_spend_key_alias_ambiguous':'provider_spend_key_alias_missing'};
+    return{ok:true,value:'deployment.'+matches[0]};
+  }
   var secret = requestCredential(provider, init, parsed);
   if (!secret) return {ok:false,reason:'provider_spend_key_alias_missing'};
   if (provider === 'openrouter') {
