@@ -64,6 +64,8 @@ test('every provider ladder call crosses the common World Builder budget fence',
   assert.match(door,/paiVoiceDeadlineExhausted/);
   assert.match(door,/_worldBuilderProviderFence/);
   assert.match(door,/_worldBuilderProviderCalls >= _worldBuilderMaxProviderCalls/);
+  assert.match(door,/Object\.assign\(\{seat:_providerSeat \|\| _paiSeatName\(\)\}/,
+    'the common ladder door owns the exact paid seat when a caller omits it');
   assert.equal((code.match(/\.deliberate\(/g)||[]).length,1,
     'branch local ladder calls must not bypass the shared fence');
 });

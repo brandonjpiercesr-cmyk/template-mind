@@ -4230,7 +4230,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       throw new Error('ham_world_builder_provider_budget_exhausted');
     }
     if (_worldBuilderMachine) _worldBuilderProviderCalls++;
-    return require('./model.ladder.js').deliberate(system, user, options);
+    return require('./model.ladder.js').deliberate(system, user,
+      Object.assign({seat:_providerSeat || _paiSeatName()}, options || {}));
   }
   async function callPAIPlain(sys, user, maxTokens) {
     var messages = sys ? [{role:'system',content:sys},{role:'user',content:user}] : user;
