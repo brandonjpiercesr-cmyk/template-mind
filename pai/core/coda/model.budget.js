@@ -307,7 +307,7 @@ async function runProviderScope(ticket, metadata, fn, env) {
   const attribution={ham_uid:meta.ham_uid,cycle_id:meta.cycle_id,
     request_id:meta.request_id,component:scopeValue.component,seat:meta.seat,
     owner_node_id:meta.owner_node_id,target_wonder_id:meta.target_wonder_id,
-    service_id:meta.service_id};
+    service_id:meta.service_id,context_seat:meta.context_seat};
   return require('../spend.guard.js').withAttribution(attribution,function(){
     return providerScope.run(scopeValue,fn);
   });

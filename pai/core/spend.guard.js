@@ -196,7 +196,7 @@ function cleanAttribution(value) {
   var input = value && typeof value === 'object' ? value : {};
   var out = {};
   ['ham_uid', 'cycle_id', 'request_id', 'seat', 'component', 'owner_node_id',
-    'target_wonder_id', 'service_id'].forEach(function (key) {
+    'target_wonder_id', 'service_id','context_seat'].forEach(function (key) {
     var item = String(input[key] == null ? '' : input[key]).trim();
     if (!item || item.length > 220 || !/^[A-Za-z0-9._:-]+$/.test(item)) return;
     out[key] = key === 'ham_uid' ? item.toUpperCase() : item;

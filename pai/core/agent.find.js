@@ -413,8 +413,7 @@ function employmentPrompt(record, truth) {
   return [
     '',
     'AGENT FIND WAKE RECORD, verified before this deliberation:',
-    'REQUESTING SEAT: ' + record.node_id + ' (' + record.display_name + ') on provider seat ' +
-      record.capabilities.provider_seat + '.',
+    'REQUESTING SEAT: ' + record.node_id + ' (' + record.display_name + ').',
     'OWNER: ' + record.owner_wonder_id + '. REPORTS TO: ' + record.reports_to +
       '. RETURN GATE: ' + record.rules.return_gate + '.',
     'SHARED MISSION: ' + record.shared_mission,
