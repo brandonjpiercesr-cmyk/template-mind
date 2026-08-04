@@ -61,11 +61,27 @@ function resolve(alias, env) {
 }
 
 function publicState(alias, env) {
+  const runtime=env || process.env;
+  const declared=DEPLOYMENTS[clean(alias,180)];
   const out = resolve(alias, env);
+  const stages=declared ? [
+    {stage:'endpoint',ready:!!modalBaseUrl(runtime[declared.base_url_env]),
+      missing:[declared.base_url_env]},
+    {stage:'model_identity',ready:!!clean(runtime[declared.model_env] || declared.default_model,180),
+      missing:[declared.model_env]},
+    {stage:'deployment_proof',ready:/^sha256:[a-f0-9]{64}$/i.test(
+      clean(runtime[declared.revision_env],240)),missing:[declared.revision_env]},
+    {stage:'private_access',ready:!!(clean(runtime[declared.key_env],500) &&
+      clean(runtime[declared.secret_env],500)),missing:[declared.key_env,declared.secret_env]}
+  ].map(function(row){return {stage:row.stage,ready:row.ready,
+    missing:row.ready ? [] : row.missing};}) : [];
   return {alias:out.alias || clean(alias, 180),provider:out.provider || null,
     model:out.ok ? out.model : null,revision:out.ok ? out.revision : null,
     state:out.state || 'unavailable',configured:out.ok === true,ready:false,
-    reason:out.ok ? null : out.reason};
+    reason:out.ok ? null : out.reason,stages:stages,
+    missing_configuration:stages.reduce(function(all,row){
+      return all.concat(row.missing);
+    },[])};
 }
 
 module.exports = {DEPLOYMENTS,resolve,publicState,
