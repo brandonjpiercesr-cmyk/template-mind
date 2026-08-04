@@ -1714,6 +1714,81 @@ function verifiedCurrentCapabilityEvidenceCount(evidence, expected) {
   return verifiedCurrentCapabilityRows(evidence,expected).length;
 }
 
+function _currentCapabilityProjectionSafe(projection) {
+  if (!projection || !Array.isArray(projection.verified_capabilities) ||
+      Object.keys(projection).length!==1) return false;
+  var allowedSubjects={'World Builder':true,'Always On':true,
+    'Mission Board':true,'Come Code':true};
+  return projection.verified_capabilities.every(function (row) {
+    if (!row || !allowedSubjects[row.subject] || !Array.isArray(row.verified) ||
+        !row.verified.length || Object.keys(row).length!==2) return false;
+    return row.verified.every(function (detail) {
+      var value=String(detail || '').trim();
+      return !!value && !/(?:meta[ _-]?commentary|\bwrit\b|\boutbound\b|source_refs?|capability_id|\bcore\/|\b(?:GET|POST)\s+\/|#[A-Z_]+|\b[a-z]+_[a-z_]+\b)/i
+        .test(value);
+    });
+  });
+}
+
+// The signed receipt is the verifier's complete record, including internal council seats and
+// canonical source addresses. A model drafting words for a person needs a narrower view: only
+// live external subjects the person actually asked about, expressed through the workspace's own
+// action descriptions. This projection is derived only after receipt verification, never from
+// the unsigned tool bytes, and it cannot replace or weaken the evidence the guard consumes.
+function currentCapabilityHumanProjection(question, evidence, expected) {
+  var text=String(question || '').toLowerCase().replace(/[\u2018\u2019]/g,"'");
+  var namedExternal=/\b(?:come code|world builder|always on|mission board)\b/.test(text);
+  var namedInternal=/\b(?:meta[ _-]?commentary|writ)\b/.test(text);
+  function requested(row) {
+    var id=String(row && row.capability_id || '');
+    if (/^outbound\./.test(id)) return false;
+    if (!namedExternal && !namedInternal) return true;
+    if (/^come_code\./.test(id)) return /\bcome code\b/.test(text);
+    if (id==='world_builder.seat') return /\bworld builder\b/.test(text);
+    if (id==='world_builder.always_on') {
+      return /\b(?:world builder|always on)\b/.test(text);
+    }
+    if (id==='world_builder.mission_board') {
+      return /\b(?:world builder|mission board)\b/.test(text);
+    }
+    return false;
+  }
+  var rows=verifiedCurrentCapabilityRows(evidence,expected).filter(requested);
+  var visible=[];
+  var world=rows.find(function (row) { return row.capability_id==='world_builder.seat'; });
+  if (world&&world.facts&&world.facts.active===true) {
+    visible.push({subject:'World Builder',verified:['Live']});
+  }
+  var always=rows.find(function (row) {
+    return row.capability_id==='world_builder.always_on';
+  });
+  if (always&&always.facts) {
+    var alwaysStates=[];
+    if (always.facts.running===true) alwaysStates.push('Running');
+    if (always.facts.enabled===true) alwaysStates.push('Enabled');
+    if (alwaysStates.length) visible.push({subject:'Always On',verified:alwaysStates});
+  }
+  var mission=rows.find(function (row) {
+    return row.capability_id==='world_builder.mission_board';
+  });
+  if (mission&&mission.facts&&mission.facts.connected===true) {
+    visible.push({subject:'Mission Board',verified:['Connected']});
+  }
+  var descriptions=[];
+  rows.filter(function (row) { return /^come_code\./.test(row.capability_id); })
+    .forEach(function (row) {
+      var actions=row&&row.facts&&Array.isArray(row.facts.actions)?row.facts.actions:[];
+      actions.forEach(function (action) {
+        var description=Array.isArray(action)?String(action[1] || '').trim():'';
+        if (description&&descriptions.indexOf(description)<0) descriptions.push(description);
+      });
+    });
+  if (descriptions.length) visible.push({subject:'Come Code',verified:descriptions});
+  var projection={verified_capabilities:visible};
+  return _currentCapabilityProjectionSafe(projection)
+    ? projection : {verified_capabilities:[]};
+}
+
 function _capabilityClaimTokens(value) {
   var ignored = {a:true,an:true,and:true,are:true,as:true,at:true,based:true,be:true,
     can:true,current:true,currently:true,do:true,for:true,from:true,in:true,is:true,
@@ -5792,12 +5867,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       msgs.push({role:'assistant',content:null,tool_calls:[{id:_prefetchedCapabilityId,
         type:'function',function:{name:'read_current_capabilities',
           arguments:JSON.stringify(_prefetchedCapabilityArgs)}}]});
-      msgs.push({role:'tool',tool_call_id:_prefetchedCapabilityId,
-        content:_prefetchedCapabilityResult});
       paiToolEvidence.append(_verifiedToolEvidence,{tool:'read_current_capabilities',
         args:_prefetchedCapabilityArgs,result:_prefetchedCapabilityResult,hamUid:hamUid,
         requestId:_requestId,cycleId:_cycleId,toolCallId:_prefetchedCapabilityId,
         provenance:'pai.current_turn.policy_read'});
+      var _prefetchedCapabilityProjection=currentCapabilityHumanProjection(
+        _exactUserMessage,_verifiedToolEvidence,{hamUid:hamUid,requestId:_requestId,
+          cycleId:_cycleId,question:_exactUserMessage});
+      msgs.push({role:'tool',tool_call_id:_prefetchedCapabilityId,
+        content:JSON.stringify(_prefetchedCapabilityProjection)});
       msgs.push({role:'system',content:
         'Answer only from the live capability rows above. Each positive capability sentence must be supported by one live row. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
       _currentCapabilityReadPrefetched=true;
@@ -6401,7 +6479,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
             }
           } catch (eTrParse) {}
         }
-        msgs.push({role:'tool',tool_call_id:tc.id,content:tr});
+        var _toolResultForModel=tr;
+        if (tc.function.name === 'read_current_capabilities') {
+          _toolResultForModel=JSON.stringify(currentCapabilityHumanProjection(
+            _exactUserMessage,_verifiedToolEvidence,{hamUid:hamUid,requestId:_requestId,
+              cycleId:_cycleId,question:_exactUserMessage}));
+        }
+        msgs.push({role:'tool',tool_call_id:tc.id,content:_toolResultForModel});
         if (tc.function.name === 'read_current_capabilities') {
           msgs.push({role:'system',content:
             'Answer the capability question itself in concise, plain language. Each positive capability sentence must be supported by one live capability row above. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
@@ -8027,6 +8111,7 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   isPureConversationalContinuation,
   currentCapabilityQuestion,currentCapabilityEvidence,categoricalCurrentCapabilityClaim,
   verifiedCurrentCapabilityRows,verifiedCurrentCapabilityEvidenceCount,
+  currentCapabilityHumanProjection,_currentCapabilityProjectionSafe,
   currentCapabilityClaimFindings,guardCurrentCapabilityClaim,
   agentFindClosedWorldReason,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
