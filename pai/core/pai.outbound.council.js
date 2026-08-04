@@ -14,6 +14,7 @@ var codingRelay = require('./coding.relay.contract.js');
 var identityProvenance = require('./identity.provenance.js');
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
+var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
 
 var STAGE_ORDER = Object.freeze([
   'PAM',
@@ -2489,6 +2490,27 @@ function structuredReachPolicyContext(ctx) {
       'action,channel,importance,message,reach,reason,recheck_at');
 }
 
+function hamWorldBuilderDecisionContext(ctx) {
+  if (!ctx || String(ctx.channel || '').toLowerCase() !== 'ham_world_builder' ||
+      !ctx.context || ctx.context.mode !== 'ham_world_builder' ||
+      ctx.context.internal_deliberation !== true || typeof ctx.answer !== 'string') return false;
+  return hamWorldBuilderContract.canonicalize(ctx.answer).ok === true;
+}
+
+function hamWorldBuilderFields(ctx) {
+  if (!hamWorldBuilderDecisionContext(ctx)) return null;
+  var canonical = hamWorldBuilderContract.canonicalize(ctx.answer);
+  var decision = canonical.decision;
+  var human=decision.human_decision;
+  var humanFields=human?[human.prompt,human.action,human.scope]
+    .concat(human.evidence_refs||[])
+    .concat((human.options||[]).reduce(function(all,option){
+      return all.concat([option.id,option.label]);
+    },[])):[];
+  return [decision.summary,decision.next_action].concat(humanFields)
+    .filter(function (value) { return typeof value === 'string' && value; }).join('\n');
+}
+
 // ⬡B:core.pai_outbound_council:FIX:internal_coding_deliberation_is_not_user_facing:20260722⬡
 // The machinery-privacy gate exists to protect what a HUMAN reads: no leaking tools,
 // systems, prompts, or internal steps into an outbound turn. CODA's operational
@@ -2504,6 +2526,32 @@ function internalCodingDeliberation(ctx) {
     && ctx.context.internal_deliberation === true && typeof ctx.answer === 'string');
 }
 async function defaultMetaCommentaryStage(ctx) {
+  var worldBuilderFields = hamWorldBuilderFields(ctx);
+  if (worldBuilderFields !== null) {
+    var worldMeta = require('../agents/meta_commentary.js');
+    var worldState = {pendingOutbound:worldBuilderFields};
+    var worldMetaResult = await worldMeta.handle({intent:String(ctx.question||''),
+      channel:'ham_world_builder',hamUid:ctx.hamUid,forceModel:true},worldState);
+    var worldMetaOutput = worldMetaResult &&
+      typeof worldMetaResult.pendingOutbound === 'string'
+      ? worldMetaResult.pendingOutbound : '';
+    var worldMetaFlags = worldMetaResult&&worldMetaResult.metaCommentaryFlag||[];
+    var worldMetaFailedOpen = !!(worldMetaResult&&worldMetaResult.metaCommentary&&
+      worldMetaResult.metaCommentary.failed_open);
+    var worldMetaModel = worldMetaResult&&worldMetaResult.metaCommentary&&
+      worldMetaResult.metaCommentary.organ_decider==='model';
+    var worldMetaExact = worldMetaOutput === worldBuilderFields &&
+      !worldMetaFailedOpen&&worldMetaModel;
+    return {ok:worldMetaExact,answer:ctx.answer,
+      reason:worldMetaExact?'META_COMMENTARY_HAM_WORLD_BUILDER_PASS'
+        :'ham_world_builder_meta_commentary_hold',
+      evidence:{flags:worldMetaFlags,
+        decider:worldMetaResult&&worldMetaResult.metaCommentary&&
+          worldMetaResult.metaCommentary.decider||null,
+        organ_decider:worldMetaModel?'model':null,
+        failed_open:worldMetaFailedOpen,
+        internal_deliberation:true,exact_machine_contract:worldMetaExact}};
+  }
   if (internalCodingDeliberation(ctx)) return { ok:true, answer:ctx.answer,
     reason:'META_COMMENTARY_INTERNAL_CODING_PASS', evidence:{ flags:[], internal_deliberation:true } };
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
@@ -2548,6 +2596,22 @@ async function defaultMetaCommentaryStage(ctx) {
 }
 
 async function defaultQuillStage(ctx) {
+  var worldBuilderFields = hamWorldBuilderFields(ctx);
+  if (worldBuilderFields !== null) {
+    var worldQuill = require('../board/quill.js');
+    var worldQuillResult = await worldQuill.quill(worldBuilderFields,
+      Object.assign({},ctx.context||{},{mode:'ham_world_builder_internal'}));
+    var worldQuillPassed = !!(worldQuillResult&&worldQuillResult.ok===true&&
+      worldQuillResult.verdict==='PASS');
+    return {ok:worldQuillPassed,answer:ctx.answer,
+      reason:worldQuillPassed?'QUILL_HAM_WORLD_BUILDER_PASS':
+        (worldQuillResult&&(worldQuillResult.reason||worldQuillResult.verdict)||
+          'ham_world_builder_quill_hold'),
+      evidence:{verdict:worldQuillResult&&worldQuillResult.verdict,
+        score:worldQuillResult&&worldQuillResult.score,
+        issues:worldQuillResult&&worldQuillResult.issues||[],
+        exact_machine_contract:worldQuillPassed}};
+  }
   var quill = require('../board/quill.js');
   var result = await quill.quill(ctx.answer, ctx.context || {});
   return {
@@ -2647,6 +2711,29 @@ async function healAnswer(answer, reason, stage, input, deps) {
       : (hollowHoldReason(reason) ? HOLLOW_HEAL_GUIDANCE
         : (boundarySpeechGuidance ? boundarySpeechGuidance.instruction
           : (guidance[stage] || guidance.PAM))));
+  var worldBuilderRepairContext = {channel:input&&input.channel,
+    context:input&&input.context,answer:answer};
+  if (hamWorldBuilderDecisionContext(worldBuilderRepairContext)) {
+    var worldRepairSystem = 'Repair one internal World Builder decision after a named judge hold. '
+      + reasonGuidance + ' Return strict JSON only with exactly disposition, summary, '
+      + 'next_action, human_decision. Keep the disposition enum and conditional null rule. '
+      + 'When present, keep human_decision typed with prompt, action, scope, evidence_refs, and options containing id and label. '
+      + 'Do not recap the assignment, narrate the process, name internal machinery, or add facts.';
+    var worldRepairUser = JSON.stringify({decision:JSON.parse(answer),
+      why_held:String(reason||'').slice(0,400)});
+    for (var worldRepairAttempt=0;worldRepairAttempt<2;worldRepairAttempt++) {
+      try {
+        var worldRepair = await modelLadder.deliberate(worldRepairSystem,worldRepairUser,
+          {max_tokens:900,temperature:0,timeout:12000,tightTimeout:true,json:true,
+            signal:input&&input.signal});
+        var canonicalWorldRepair = hamWorldBuilderContract.canonicalize(
+          worldRepair&&worldRepair.content?String(worldRepair.content).trim():'');
+        if (canonicalWorldRepair.ok) return canonicalWorldRepair.text;
+      } catch (worldRepairError) {}
+      if (input&&input.signal&&input.signal.aborted) return null;
+    }
+    return null;
+  }
   // ⬡B:core.pai_outbound_council:FIX:a_healed_answer_is_still_her:20260726⬡
   // THE PERSONA HOLE, closed. This system prompt carried no persona at all, so the
   // healer rebuilt her words as a model that had never been told who she is, and the
@@ -2724,6 +2811,29 @@ async function healAnswer(answer, reason, stage, input, deps) {
 }
 
 async function defaultWritStage(ctx) {
+  var worldBuilderFields = hamWorldBuilderFields(ctx);
+  if (worldBuilderFields !== null) {
+    var worldWrit = require('../board/writ.js');
+    var worldWritResult = await worldWrit.writCheck(worldBuilderFields,
+      {channel:'ham_world_builder',mode:'ham_world_builder_verdict',hamUid:ctx.hamUid,
+        internal:false});
+    var worldWritPassed = !!(worldWritResult&&worldWritResult.ok===true&&
+      worldWritResult.cleaned===worldBuilderFields&&
+      worldWritResult.organ_decider==='model'&&worldWritResult.failed_open!==true);
+    return {ok:worldWritPassed,answer:ctx.answer,
+      reason:worldWritPassed?'WRIT_HAM_WORLD_BUILDER_PASS':
+        (worldWritResult&&(worldWritResult.reason||worldWritResult.verdict)||
+          'ham_world_builder_writ_hold'),evidence:{
+        verdict:worldWritResult&&worldWritResult.verdict,
+        hard_fails:worldWritResult&&worldWritResult.hardFails||[],
+        advisory_flags:worldWritResult&&worldWritResult.advisoryFlags||[],
+        emojis_removed:worldWritResult&&worldWritResult.emojis_removed||0,
+        em_dashes_removed:worldWritResult&&worldWritResult.em_dashes_removed||0,
+        meta_removed:worldWritResult&&worldWritResult.meta_removed||0,
+        decider:worldWritResult&&worldWritResult.organ_decider||null,
+        failed_open:!!(worldWritResult&&worldWritResult.failed_open),
+        internal_deliberation:true,exact_machine_contract:worldWritPassed}};
+  }
   // WRIT is the human-facing voice/format organ. CODA's internal operational
   // answer is a typed machine contract whose exact evidence references are
   // validated again by advisors/coding.js after this council returns. Letting
@@ -2806,6 +2916,19 @@ async function defaultWritStage(ctx) {
 }
 
 async function defaultAnuExpressionStage(ctx) {
+  if (hamWorldBuilderDecisionContext(ctx)) {
+    var worldAnu = require('./anu.js');
+    var worldAnuResult = worldAnu.speak({result:{pendingOutbound:ctx.answer}},
+      'ham_world_builder',ctx.context||{});
+    var worldAnuExact = !!(worldAnuResult&&worldAnuResult.blocked===false&&
+      worldAnuResult.output===ctx.answer);
+    return {ok:worldAnuExact,answer:ctx.answer,
+      reason:worldAnuExact?'ANU_EXPRESSION_HAM_WORLD_BUILDER_PASS':
+        'ham_world_builder_anu_expression_hold',
+      evidence:{channel:worldAnuResult&&worldAnuResult.channel,
+        blocked:!!(worldAnuResult&&worldAnuResult.blocked),
+        exact_machine_contract:worldAnuExact}};
+  }
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
     reason:'ANU_EXPRESSION_STRUCTURED_REACH_POLICY_PASS',
     evidence:{ channel:'reach',blocked:false,exact_structured_policy:true } };
@@ -4269,16 +4392,19 @@ function compactCouncilProof(result) {
 // committed STAMP row; read_back_at is observational and is rebound to the
 // committed STAMP end time. This is intentionally restricted to ordinary PAI
 // cycles carrying the explicit reach_handoff marker and no external target.
-function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
+function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
+  var opts = options || {};
   var finalContent = parseContent(finalStoredRow && finalStoredRow.content);
   var receipt = finalContent && finalContent.receipt;
-  if (!receipt || !validReachHandoffBinding(receipt.reach_handoff) ||
-      receipt.reach_handoff.eligible !== true) {
+  if (!receipt) return { ok:false, reason:'committed_council_receipt_missing' };
+  if (opts.requireReach === true && (!validReachHandoffBinding(receipt.reach_handoff) ||
+      receipt.reach_handoff.eligible !== true)) {
     return { ok:false, reason:'reach_handoff_receipt_ineligible' };
   }
   var target = readDeliveryTargetBinding(receipt);
   if (!target.ok || target.present) {
-    return { ok:false, reason:'reach_handoff_external_receipt_rejected' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_external_receipt_rejected' : 'committed_council_external_receipt_rejected' };
   }
   var input = { hamUid:receipt.ham_uid, requestId:receipt.request_id,
     cycleId:receipt.cycle_id, question:receipt.question,
@@ -4287,7 +4413,8 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
   var preparedAt = Date.parse(receipt.prepared_at);
   if (!Number.isFinite(preparedAt) || !sameFinalReadback(finalStoredRow,
       finalRow(receipt, input, sources, preparedAt))) {
-    return { ok:false, reason:'reach_handoff_final_receipt_invalid' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_final_receipt_invalid' : 'committed_council_final_receipt_invalid' };
   }
   var stampContent = parseContent(stampStoredRow && stampStoredRow.content);
   var stampAt = stampContent && stampContent.stage &&
@@ -4295,10 +4422,12 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
   if (!stampContent || !Number.isFinite(stampAt) ||
       !sameStageReadback(stampStoredRow, stageRow(stampContent.stage, input,
         sources, receipt.answer_digest, stampAt, stampContent.commit))) {
-    return { ok:false, reason:'reach_handoff_stamp_invalid' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_stamp_invalid' : 'committed_council_stamp_invalid' };
   }
   if (!finalStoredRow.id || !stampStoredRow.id) {
-    return { ok:false, reason:'reach_handoff_row_identity_missing' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_row_identity_missing' : 'committed_council_row_identity_missing' };
   }
   var proofCore = {
     schema:STAMP_PROOF_SCHEMA, ok:true, ham_uid:receipt.ham_uid,
@@ -4321,10 +4450,55 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
   };
   var proof = Object.assign({}, proofCore, { proof_digest:digestObject(proofCore) });
   if (!verifyCommittedCouncil(receipt, proof, input)) {
-    return { ok:false, reason:'reach_handoff_committed_pair_invalid' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_committed_pair_invalid' : 'committed_council_pair_invalid' };
   }
   return { ok:true, answer:receipt.answer, council_receipt:receipt,
     stamp_proof:proof, reachHandoff:receipt.reach_handoff };
+}
+
+function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
+  return reconstructCommittedCouncil(finalStoredRow,stampStoredRow,{requireReach:true});
+}
+
+// The request source is deterministic from request_id, so a worker that died after the
+// council commit can recover the server-generated cycle coordinate without buying another
+// model turn. The request row is fully re-derived before its cycle_id is trusted, then the
+// final and STAMP pair cross the same canonical verifier used by the live return path.
+function reconstructCommittedCouncilFromRequest(requestStoredRow, finalStoredRow,
+  stampStoredRow, expected) {
+  var requestContent = parseContent(requestStoredRow && requestStoredRow.content);
+  var binding = requestContent && requestContent.binding;
+  var required = expected || {};
+  if (!binding || requestContent.schema !== REQUEST_SCHEMA ||
+      binding.ham_uid !== required.hamUid || binding.request_id !== required.requestId ||
+      binding.request_source !== 'pai.request.' + required.requestId ||
+      requestStoredRow.source !== binding.request_source ||
+      requestContent.question !== required.question ||
+      requestContent.deliberation_input !== required.deliberationInput ||
+      !readDeliveryTargetBinding(binding).ok || readDeliveryTargetBinding(binding).present) {
+    return {ok:false,reason:'committed_council_request_invalid'};
+  }
+  var aclDate = String(requestStoredRow.acl_stamp || '').match(/:(\d{8})\u2b21$/);
+  if (!aclDate) return {ok:false,reason:'committed_council_request_acl_invalid'};
+  var stampMs = Date.UTC(Number(aclDate[1].slice(0,4)),Number(aclDate[1].slice(4,6))-1,
+    Number(aclDate[1].slice(6,8)));
+  var input = {hamUid:binding.ham_uid,requestId:binding.request_id,
+    cycleId:binding.cycle_id,question:requestContent.question,
+    deliberationInput:requestContent.deliberation_input};
+  var sources = buildSources(input.cycleId,input.requestId);
+  if (!sameRequestReadback(requestStoredRow,requestRow(input,sources,stampMs))) {
+    return {ok:false,reason:'committed_council_request_readback_invalid'};
+  }
+  var recovered = reconstructCommittedCouncil(finalStoredRow,stampStoredRow);
+  if (!recovered.ok || recovered.council_receipt.ham_uid !== input.hamUid ||
+      recovered.council_receipt.request_id !== input.requestId ||
+      recovered.council_receipt.cycle_id !== input.cycleId ||
+      recovered.council_receipt.question !== input.question ||
+      recovered.council_receipt.deliberation_input !== input.deliberationInput) {
+    return recovered.ok ? {ok:false,reason:'committed_council_request_pair_mismatch'} : recovered;
+  }
+  return recovered;
 }
 
 module.exports = {
@@ -4343,6 +4517,9 @@ module.exports = {
   requireVerifiedCouncilResult: requireVerifiedCouncilResult,
   requireVerifiedCouncilDelivery: requireVerifiedCouncilDelivery,
   compactCouncilProof: compactCouncilProof,
+  councilSources:buildSources,
+  reconstructCommittedCouncil:reconstructCommittedCouncil,
+  reconstructCommittedCouncilFromRequest:reconstructCommittedCouncilFromRequest,
   reconstructReachHandoffCouncil:reconstructReachHandoffCouncil,
   canonicalizeDeliveryTarget: canonicalizeDeliveryTarget,
   createDeliveryTargetBinding: createDeliveryTargetBinding,

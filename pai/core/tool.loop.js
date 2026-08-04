@@ -43,6 +43,7 @@ var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
 var voiceRoomSafe = require('./voice.room.safe.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
+var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
 var outputGuard = require('./model.output.guard.js');
 // ⬡B:core.tool.loop:WIRE:the_env_only_identity_law_reaches_model_output_too:20260729⬡
 // The founder law "identity is env only, never a literal" was enforced over source code and
@@ -3756,6 +3757,14 @@ function reachIncidentIntakeMode(channel,identity){
     identity.delivery.external===false);
 }
 
+function hamWorldBuilderMachineMode(channel,identity){
+  return String(channel||'').toLowerCase()==='ham_world_builder'&&!!(identity&&
+    identity._worldBuilderRestricted===true&&identity.council_context&&
+    identity.council_context.mode==='ham_world_builder'&&
+    identity.council_context.internal_deliberation===true&&identity.delivery&&
+    identity.delivery.external===false);
+}
+
 async function reachIncidentFence(identity,stage){
   if(!identity||identity._reachIncidentIntake!==true||
       typeof identity._reachIncidentFence!=='function')return false;
@@ -3821,10 +3830,19 @@ function memoryTurnRequired(channel, identity, state) {
 // shared public finalizer so its answer still crosses the full council and durable readback.
 // Keep the exact two-field identity in one predicate. A coding-mode human door does not carry
 // internal_deliberation and must retain the ordinary human-facing composition path.
-function codaInternalDeliberation(identity) {
+function internalDeliberation(identity) {
   return !!(identity && identity.council_context &&
-    identity.council_context.mode === 'coding' &&
     identity.council_context.internal_deliberation === true);
+}
+function codaInternalDeliberation(identity) {
+  return internalDeliberation(identity) && identity.council_context.mode === 'coding';
+}
+function reachHandoffEligible(channel,identity) {
+  var autonomous = /^(anew_action|autonomous)$/.test(String(channel||'').toLowerCase());
+  var mode = String(identity&&identity.council_context&&identity.council_context.mode||'');
+  return !autonomous && !internalDeliberation(identity) && !(identity&&(
+    identity.outbound_finalize || identity.delivery&&identity.delivery.external ||
+    /^(outbound|outreach)/.test(mode) || mode==='proposed_action_dispatch'));
 }
 
 // The reader and voice briefs exist to prepare words for a human. Buying them for CODA's own
@@ -3842,17 +3860,22 @@ function preWriteCouncilEligible(answerSelected, structuredReachPolicy, reachInc
   var liveVoice = String(channel || '').toLowerCase() === 'voice' &&
     !!verifiedVoiceCallContext(identity, hamUid);
   return !answerSelected && !structuredReachPolicy && !reachIncidentIntake &&
-    !codaInternalDeliberation(identity) && !liveVoice;
+    !internalDeliberation(identity) && !liveVoice;
 }
 
 function toolDefinitionsForTurn(tools, readOnlyNames, identity, flags) {
   var state = flags || {};
   if (state.reachIncidentIntake === true || state.roomSafeVoice === true) return [];
   var readOnly = !!(identity && (identity.outbound_finalize === true ||
-    identity._conversationOnly === true));
+    identity._conversationOnly === true || identity._worldBuilderRestricted === true));
   if (!readOnly) return tools;
+  var passiveWorldBuilder = ['find_identity_evidence','find_in_brain','read_render_logs',
+    'get_budget_upcoming','get_budget_summary','calendar_read','inbox_read','read_reminders',
+    'find_contact','get_pending_drafts','get_recent_builds','read_own_code','look_at_page'];
   return tools.filter(function (tool) {
-    return tool && tool.function && readOnlyNames.indexOf(tool.function.name) >= 0;
+    var allowed = identity && identity._worldBuilderRestricted === true
+      ? passiveWorldBuilder : readOnlyNames;
+    return tool && tool.function && allowed.indexOf(tool.function.name) >= 0;
   });
 }
 
@@ -3874,6 +3897,23 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // a tool or contributor inside this cycle, but it must never replace this choke point.
   var t0=Date.now();
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
+  var _worldBuilderMachine=hamWorldBuilderMachineMode(channel,identity);
+  var _worldBuilderBudget=_worldBuilderMachine&&identity&&identity._worldBuilderBudget;
+  var _worldBuilderMaxIterations=_worldBuilderBudget&&
+    Number.isInteger(_worldBuilderBudget.maxIterations)?_worldBuilderBudget.maxIterations:8;
+  var _worldBuilderMaxProviderCalls=_worldBuilderBudget&&
+    Number.isInteger(_worldBuilderBudget.maxProviderCalls)?_worldBuilderBudget.maxProviderCalls:12;
+  var _worldBuilderProviderCalls=0;
+  var _worldBuilderProviderFenceReady=false;
+  async function _worldBuilderProviderFence(){
+    if(!_worldBuilderMachine)return true;
+    if(_worldBuilderProviderFenceReady)return true;
+    if(!identity||typeof identity._worldBuilderBeforeProvider!=='function')return false;
+    try{
+      _worldBuilderProviderFenceReady=await identity._worldBuilderBeforeProvider()===true;
+      return _worldBuilderProviderFenceReady;
+    }catch(eWorldBuilderFence){return false;}
+  }
   // The verified voice route authorizes this object through a process-owned
   // WeakSet. A JSON field named room_safe is never sufficient to close a world.
   var _roomSafeVoice=String(channel||'').toLowerCase()==='voice' &&
@@ -3901,15 +3941,30 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   function _validStructuredReachPolicy(value){
     return _canonicalStructuredReachPolicy(value).ok===true;
   }
+  function _worldBuilderResponseFormat(){
+    try{return JSON.parse(JSON.stringify(hamWorldBuilderContract.responseFormat()));}
+    catch(eWorldBuilderFormat){return null;}
+  }
   function _structuredProviderResult(result){
-    if(!_structuredReachPolicy||!result||result.error)return result;
+    if((!_structuredReachPolicy&&!_worldBuilderMachine)||!result||result.error)return result;
     if(!Array.isArray(result.choices)||!result.choices.length)
       return{error:{code:'reach_policy_provider_contract'}};
     var choice=result.choices[0]||{};
     var modelMessage=choice.message||{};
     if(choice.finish_reason==='length'||choice.finish_reason==='content_filter'||
-        modelMessage.refusal||(Array.isArray(modelMessage.tool_calls)&&
-          modelMessage.tool_calls.length))return{error:{code:'reach_policy_provider_contract'}};
+        modelMessage.refusal)return{error:{code:_worldBuilderMachine
+          ?'ham_world_builder_provider_contract':'reach_policy_provider_contract'}};
+    if(Array.isArray(modelMessage.tool_calls)&&modelMessage.tool_calls.length){
+      return _worldBuilderMachine?result:{error:{code:'reach_policy_provider_contract'}};
+    }
+    if(_worldBuilderMachine){
+      var worldDecision=hamWorldBuilderContract.canonicalize(modelMessage.content);
+      if(!worldDecision.ok)return{error:{code:'ham_world_builder_provider_contract'}};
+      modelMessage.content=worldDecision.text;
+      choice.message=modelMessage;
+      result.choices[0]=choice;
+      return result;
+    }
     var canonical=_canonicalStructuredReachPolicy(modelMessage.content);
     if(!canonical.ok)return{error:{code:'reach_policy_provider_contract'}};
     modelMessage.content=canonical.text;
@@ -4115,6 +4170,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // the exact provider boundary so a Qwen primary cannot hand Qwen-only
     // template fields to a non-Qwen rescue (or vice versa).
     applyProviderThinkingPolicy(providerBody, candidate.seat.model);
+    if(_worldBuilderMachine&&_worldBuilderProviderCalls>=_worldBuilderMaxProviderCalls){
+      return{error:{code:'ham_world_builder_provider_budget_exhausted',
+        seat:candidate.seat&&candidate.seat.seat}};
+    }
+    if(!await _worldBuilderProviderFence()){
+      return{error:{code:'ham_world_builder_attempt_receipt_unavailable',
+        seat:candidate.seat&&candidate.seat.seat}};
+    }
+    if(_worldBuilderMachine)_worldBuilderProviderCalls++;
     try {
       var response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method:'POST',
@@ -4153,6 +4217,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
     return paiSeatFailover(function (c) { return _attemptPaiSeat(requestBody, c); },
       candidate, _paiFallbackCandidate(seatName));
+  }
+  async function _callPaiLadder(system, user, options) {
+    if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
+      if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
+      return null;
+    }
+    if (!await _worldBuilderProviderFence()) {
+      throw new Error('ham_world_builder_attempt_receipt_unavailable');
+    }
+    if (_worldBuilderMachine && _worldBuilderProviderCalls >= _worldBuilderMaxProviderCalls) {
+      throw new Error('ham_world_builder_provider_budget_exhausted');
+    }
+    if (_worldBuilderMachine) _worldBuilderProviderCalls++;
+    return require('./model.ladder.js').deliberate(system, user, options);
   }
   async function callPAIPlain(sys, user, maxTokens) {
     var messages = sys ? [{role:'system',content:sys},{role:'user',content:user}] : user;
@@ -4393,7 +4471,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     require('./freestyle.chatter.js').emitInterim({hamUid:hamUid, channel:channel,
       cycleId:_cycleId, fcw:fcw, prompted:!!String(message||'').trim(),
       closedWorld:!!(_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
-        _roomSafeVoice || _internalCodaTurn)});
+        _roomSafeVoice || _internalCodaTurn || _worldBuilderMachine)});
   } catch (eFreestyleRide) {}
   // A structured REACH policy is a closed-world decision over one exact
   // candidate packet. Ambient recent rows, contributors, prior turns, screen
@@ -4454,7 +4532,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // not a person asking whether the current public reply committed, so the public
       // proof guard must not reinterpret those bytes or later replace CODA's complete
       // typed decision with the generic release invariant.
-      internalDeliberation:codaInternalDeliberation(identity)
+      internalDeliberation:internalDeliberation(identity)
     });
   }
   var _currentPreferenceQuestion = !_structuredReachPolicy && !_reachIncidentIntake &&
@@ -4968,6 +5046,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _explicitRequiredActionTool = requiredActionToolForMessage(
     _exactRoutedWords, routeToolIntent(_exactRoutedWords));
   while (!ans) {
+    if(_worldBuilderMachine&&iter>=_worldBuilderMaxIterations){
+      return{ok:false,reason:'ham_world_builder_iteration_budget_exhausted',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+        provider_calls:_worldBuilderProviderCalls,ms:Date.now()-t0};
+    }
     // COLD CODE MAY END THE TURN. IT MAY NOT ANSWER IT. When either backstop fires she
     // gets one more pass, tools removed, with an explicit instruction to answer the whole
     // ask from what she already gathered. So hitting a ceiling is never the first time she
@@ -5001,7 +5084,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // This is a real improvement, not a guarantee -- instruction-following on
     // a growing system prompt stays worth watching, not a closed case.
     var body={model:model,messages:msgs,
-      temperature:_structuredReachPolicy?0:_reachIncidentIntake?0.1:0.3};
+      temperature:(_structuredReachPolicy||_worldBuilderMachine)?0:_reachIncidentIntake?0.1:0.3};
     // ⬡B:core.tool_loop:FOUNDER_LAW:she_holds_her_tools_for_the_whole_run:20260726⬡
     // WAS `if (iter<=3)`. From iteration four on she held nothing, so she could not ask
     // for evidence, and the loop went on paying for passes from a disarmed mind. Default
@@ -5010,6 +5093,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // on the table to reach for.
     if (!_closingPassRan) {
       body.tools=_turnToolDefinitions;
+    }
+    if(_worldBuilderMachine){
+      var _worldBuilderFormat=_worldBuilderResponseFormat();
+      if(_worldBuilderFormat)body.response_format=_worldBuilderFormat;
     }
     // Once the exact explicit action has produced its durable pending effect, the next
     // model pass is for A'NU to speak from that committed plan. Leaving all forty-one tools
@@ -5436,6 +5523,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       if(_policyFormat)_providerBody.response_format=_policyFormat;
       _providerBody.provider={require_parameters:true};
     }
+    if(_worldBuilderMachine){
+      var _worldBuilderProviderFormat=_worldBuilderResponseFormat();
+      if(_worldBuilderProviderFormat)_providerBody.response_format=_worldBuilderProviderFormat;
+      _providerBody.provider={require_parameters:true};
+    }
     // Closed-world PAI modes deliberately skip ambient Memory Bank assembly. They still need
     // a real FCW before paid deliberation, not the former provider-boundary fiction that called
     // an arbitrary messages array a complete wall. Bind the exact server-owned evidence here,
@@ -5499,21 +5591,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // exactly as the 20260718 law says, and this changes nothing for it.
     if (paiRequestBlocksLadder(_providerBody, r)) {
       if (!_cycleFailure) _noteCycleFailure('pai_seat_tool_turn_unserved');
-    } else if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
-      // The rung shares _modelRequestSignal(), so on an expired voice deadline it would take
-      // the same one-millisecond signal and abort before a byte left, then report `ladder:`
-      // and send the next reader to the ladder. Named for what it is instead.
-      if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
     } else if (!r||r.error||!r.choices){
       try{
-        var _lad=require('./model.ladder.js');
         var _hist=openAiCompatibleHistory(msgs);
         var _flat=_flattenHistoryForFallback(_hist);
         var _sys=_flat.system;
         var _usr=_flat.user;
-        var _lr=await _lad.deliberate(_sys,_usr,{seat:_providerSeat,
-          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
-          json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
+        var _lr=await _callPaiLadder(_sys,_usr,{seat:_providerSeat,
+          temperature:(_structuredReachPolicy||_worldBuilderMachine)?0:0.3,timeout:60000,
+          json:(_structuredReachPolicy||_worldBuilderMachine)?true:false,
+          signal:_modelRequestSignal()});
         if(_lr&&_lr.content){
           r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
           _noteCycleFailure(null);
@@ -5544,7 +5631,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         ' preview='+JSON.stringify(String(((_rc&&_rc.message&&_rc.message.content)||'')).slice(0)));
     }catch(_eRR){}
     if (!r||r.error||!r.choices){
-      ans=_structuredReachPolicy?'{}':'';
+      ans=(_structuredReachPolicy||_worldBuilderMachine)?'{}':'';
       break;
     }
     var ch=r.choices[0],msg=ch.message;
@@ -5591,10 +5678,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       ans=_structuredDraft.ok?_structuredDraft.text:'{}';
       break;
     }
+    if(_worldBuilderMachine&&!((msg&&msg.tool_calls||[]).length)){
+      var _worldDecision=hamWorldBuilderContract.canonicalize(msg&&msg.content);
+      if(!_worldDecision.ok){
+        return{ok:false,reason:_worldDecision.reason,ham:hamObj,cycleId:_cycleId,
+          requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      }
+      ans=_worldDecision.text;
+      break;
+    }
     if (msg && !((msg.tool_calls || []).length) && outputGuard.containsCjk(msg.content) &&
         !outputGuard.explicitNonEnglishRequest(_exactUserMessage || message)) {
       try {
-        var _englishRewrite = await require('./model.ladder.js').deliberate(
+        var _englishRewrite = await _callPaiLadder(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
           String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
             timeout:12000, noGuard:true });
@@ -6176,12 +6272,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   async function _completeBoundHistoryOnLadder(history, maxTokens, temperature, jsonMode) {
     if (await _turnCancelled(true)) return '';
     try {
-      var _repairLadder = require('./model.ladder.js');
       var _repairHistory = openAiCompatibleHistory(history);
       var _repairFlat = _flattenHistoryForFallback(_repairHistory);
       var _repairSystem = _repairFlat.system;
       var _repairUser = _repairFlat.user;
-      var _repairResult = await _repairLadder.deliberate(_repairSystem, _repairUser,
+      var _repairResult = await _callPaiLadder(_repairSystem, _repairUser,
         {seat:_providerSeat || _paiSeatName(),
           temperature:temperature == null ? 0.1 : temperature,
           timeout:60000,json:jsonMode === true,signal:_modelRequestSignal()});
@@ -6217,7 +6312,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // ⬡B:core.tool_loop:WIRE:loop_exit_receipt:20260718⬡ bisection instrument:
   // names whether the kill is inside the loop or in the post-loop passes.
   try{_stampStep('loop_exit_answer', 'len='+finalAns.length+' tools='+tools.length+' iter='+iter);}catch(_eLX){}
-  var _repositoryDraftRepair = _structuredReachPolicy
+  var _repositoryDraftRepair = (_structuredReachPolicy||_worldBuilderMachine)
     ? { repaired:false, answer:finalAns, reason:null }
     : repairCodaRepositoryDraft(
       finalAns, _codaRepositoryAnswer, !!_codaRepositoryAnswer);
@@ -6229,7 +6324,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // CODA may deterministically select the exact bytes of one explicitly named
   // BCW section. Preserve those bytes so SHADOW can verify the same question-
   // bound digest. Nothing is released here; the complete council still follows.
-  if (!_structuredReachPolicy && _codaDirectNamedEvidenceAnswer) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine && _codaDirectNamedEvidenceAnswer) {
     finalAns = _codaDirectNamedEvidenceAnswer;
     _stampStep('direct_named_evidence_selected', 'verified_coda_decision');
   }
@@ -6244,7 +6339,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     cycleId:_cycleId, question:_exactUserMessage,
     context:{ verified_evidence:_identityVerifiedEvidence
       .concat(_namedAgentVerifiedEvidence, _verifiedToolEvidence) } };
-  var _preferenceDraftFlags = _structuredReachPolicy ? [] : preferenceJudgmentFindings(
+  var _preferenceDraftFlags = (_structuredReachPolicy||_worldBuilderMachine) ? [] : preferenceJudgmentFindings(
     _exactUserMessage, finalAns, _preferenceEvidenceContext);
   if (_preferenceDraftFlags.length) {
     _preCouncilHumanRepairUsed = true;
@@ -6277,7 +6372,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // CODA may already have produced a deterministically valid two-bucket answer.
   // If the conversational draft collapses those origins, repair with CODA's
   // verified candidate; every outbound gate still runs below.
-  if (!_structuredReachPolicy && _identityProvenanceLedger.required && _codaProvenanceAnswer) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine &&
+      _identityProvenanceLedger.required && _codaProvenanceAnswer) {
     var _provenanceDraftCheck = identityProvenance.validateDraft(finalAns,
       _identityProvenanceLedger);
     if (!_provenanceDraftCheck.ok) {
@@ -6291,7 +6387,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // use CODA's verified live bytes as the candidate. Those bytes do not bypass
   // anything: every preparation stage, the full outbound council, STAMP commit,
   // and readback still run below.
-  if (!_structuredReachPolicy && _codaEvidenceRelayAnswer) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine && _codaEvidenceRelayAnswer) {
     var _finalNamedFlags = finalAns
       ? namedContextContradictions(finalAns, _namedContextEvidence) : [{ reason:'empty_answer' }];
     if (!finalAns || _finalNamedFlags.length) {
@@ -6304,7 +6400,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // verification, screen extraction, protocol scrub, destination formatting,
   // SHADOW preparation, PAM, and persona. Repaired bytes therefore traverse
   // the same deterministic preparation once; no retry lane can skip a gate.
-  if (!_structuredReachPolicy && finalAns && !isHumanFacingAnswer(finalAns)) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine && finalAns && !isHumanFacingAnswer(finalAns)) {
     _stampStep('hollow_protocol_answer_caught', String(finalAns || '').slice(0, 80));
     var _repairedHuman = await _repairHumanOnce(finalAns, 'hollow_protocol_answer');
     if (await _turnCancelled(true)) return _turnCancelledResult('after_hollow_repair');
@@ -6354,7 +6450,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // through the canonical mind under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Removing the
   // guard would ship raw JSON to the human; rerouting to re-synthesis cannot be verified here, so it
   // is contained by stamp only.
-  if (!_structuredReachPolicy) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine) {
     var _rawRepair = repairRawJsonAnswer(finalAns, identity && identity.council_context);
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
@@ -6372,7 +6468,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // exists. Claiming an action you did not take is the worst failure. Guard: if the
   // reply claims a reminder/calendar action but the matching tool did not run this
   // turn, strip the false claim and tell the truth. Cold detection, no LLM.
-  if (!_structuredReachPolicy&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
+  if (!_structuredReachPolicy&&!_worldBuilderMachine&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
     _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
     finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
   }
@@ -6383,7 +6479,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // transcript. One plain completion over the SAME bound transcript -- no new
   // tools, no new facts -- and the recovered text still crosses SHADOW, the full
   // council, STAMP, and readback. Empty again = silent, unchanged law.
-  if (!finalAns && tools.length) {
+  if (!_worldBuilderMachine && !finalAns && tools.length) {
     _preCouncilHumanRepairUsed = true;
     try {
       var _evTail = msgs.slice(-14).map(function(m){
@@ -6408,7 +6504,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // Provider fallbacks may all return empty even when the bound request itself is
   // answerable. Give the exact transcript one final, single human-answer repair;
   // its bytes still traverse every preparation, council, STAMP, and readback gate.
-  if (!finalAns && !_preCouncilHumanRepairUsed) {
+  if (!_worldBuilderMachine && !finalAns && !_preCouncilHumanRepairUsed) {
     var _emptyRepair = await _repairHumanOnce('', 'no_answer');
     if (await _turnCancelled(true)) return _turnCancelledResult('after_empty_repair');
     if (_emptyRepair && _emptyRepair.answer) {
@@ -6546,7 +6642,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   }
   // THE REAL SECOND PASS. Deterministic, not another LLM guess trusting itself.
-  if (!_structuredReachPolicy&&_verifiedRealNumbers.length && /\d/.test(finalAns)) {
+  if (!_structuredReachPolicy&&!_worldBuilderMachine&&_verifiedRealNumbers.length && /\d/.test(finalAns)) {
     var _answerNumbers = (finalAns.match(/\b\d+\b/g) || []);
     var _unverified = _answerNumbers.filter(function(n){ return _verifiedRealNumbers.indexOf(n) === -1; });
     if (_unverified.length) {
@@ -6590,9 +6686,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // this turn did not run/complete, replace it with the true release invariant.
   // The repaired bytes still traverse screen extraction, formatting, PAM, SHADOW,
   // the full council, STAMP, and readback below.
-  var _proofDraft = _structuredReachPolicy?{repaired:false,answer:finalAns}:
+  var _proofDraft = (_structuredReachPolicy||_worldBuilderMachine)
+    ?{repaired:false,answer:finalAns}:
     currentTurnProofGuard.repairDraft(_proofQuestion, finalAns, {
-      internalDeliberation:_isCodaInternalCycle
+      internalDeliberation:internalDeliberation(identity)
     });
   if (_proofDraft.repaired) {
     finalAns = _proofDraft.answer;
@@ -6651,7 +6748,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         { hamUid:hamUid,persona:_personaChoice,contributions:{} });
     } catch (ePrepPersona) {}
     if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns, {
-      internalDeliberation:_isCodaInternalCycle
+      internalDeliberation:internalDeliberation(identity)
     })) {
       return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
         reason:'false_current_turn_failure_claim_after_preparation'};
@@ -6693,6 +6790,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
         ms:Date.now()-t0};
     }
+  } else if (_worldBuilderMachine) {
+    var _preparedWorldDecision=hamWorldBuilderContract.canonicalize(finalAns);
+    if(!_preparedWorldDecision.ok){
+      return{ok:false,reason:_preparedWorldDecision.reason,blocked_by:'A\'NU',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+        ms:Date.now()-t0};
+    }
+    finalAns=_preparedWorldDecision.text;
   } else {
     var _preparedHuman = _prepareHumanAnswerOnce(finalAns);
     if (!_preparedHuman.ok && !_preCouncilHumanRepairUsed) {
@@ -6853,11 +6958,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // council/killswitch/presence gauntlet) is the ONLY thing that wakes him. So an
   // autonomous/action turn is no longer reach-eligible. Real inbound/user turns keep
   // full reach; the action itself (a reminder/calendar) is its own effect.
-  var _autonomousChannel = /^(anew_action|autonomous)$/.test(String(channel||'').toLowerCase());
-  var _reachHandoffEligible = !_autonomousChannel && !(identity && (identity.outbound_finalize ||
-    identity.delivery&&identity.delivery.external ||
-    /^(outbound|outreach)/.test(_reachHandoffMode) ||
-    _reachHandoffMode==='proposed_action_dispatch'));
+  var _reachHandoffEligible = reachHandoffEligible(channel,identity);
   // This flag is committed inside the canonical CYCLE_RECEIPT/STAMP pair. If
   // the later candidate append loses its response or fails, the queue scanner
   // can reconstruct exactly this ordinary cycle. Finalizer/external cycles are
@@ -6875,6 +6976,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     });
   _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
+  var _worldBuilderDraftBytes=_worldBuilderMachine?finalAns:null;
   if (await _turnCancelled(true)) return _turnCancelledResult('before_council');
   if (_reachIncidentIntake&&
       !await reachIncidentFence(identity,'before_council'))return{ok:false,
@@ -6937,7 +7039,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
       ms:Date.now()-t0};
   }
-  if (!_structuredReachPolicy&&!isHumanFacingAnswer(finalAns)) {
+  if(_worldBuilderMachine&&(finalAns!==_worldBuilderDraftBytes||
+      !hamWorldBuilderContract.canonicalize(finalAns).ok)){
+    _stampStep('outbound_council_blocked','ham_world_builder_json_mutated');
+    return{ok:false,reason:'ham_world_builder_json_mutated',blocked_by:'A\'NU',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+      ms:Date.now()-t0};
+  }
+  if (!_structuredReachPolicy&&!_worldBuilderMachine&&!isHumanFacingAnswer(finalAns)) {
     _stampStep('outbound_council_blocked', 'council_answer_hollow_protocol');
     return {ok:false,reason:'council_answer_hollow_protocol',blocked_by:'STAMP',ham:hamObj,
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
@@ -6955,7 +7064,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // the whole cycle again. Silence is the floor this estate already chose for a held answer,
   // and a leaked human is exactly what the floor is for. The reason is named, not anonymous,
   // so the receipt says which boundary stopped it.
-  if (!_structuredReachPolicy) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine) {
     var _postCouncilNameLeak = null;
     // ⬡B:core.tool_loop:FIX:a_leak_guard_that_fails_open_is_not_a_guard:20260729⬡
     // Same correction as the pre council seam above, applied here: an exception from the
@@ -7552,5 +7661,6 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   _noNewEvidenceLimit,_repeatQuestionLimit,
   paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
-  memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,
+  memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
+  reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn}};
