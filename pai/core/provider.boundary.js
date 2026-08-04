@@ -205,6 +205,7 @@ function seatSpendRefusal(result, url) {
 function validProviderBudgetAuthority(value) {
   return !!(value && typeof value.currentProviderScope === 'function' &&
     typeof value.reserveProviderAttempt === 'function' &&
+    typeof value.commitProviderEgress === 'function' &&
     typeof value.settleProviderAttempt === 'function');
 }
 
@@ -352,7 +353,7 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
   if (providerScope) {
     try {
       reservation = providerBudgetAuthority.reserveProviderAttempt({
-        url:requestUrl(url),purpose:'provider.boundary.egress'
+        url:requestUrl(url),purpose:'provider.boundary.egress',defer_model_commit:true
       });
     } catch (eReserve) {
       return codaAttemptRefusal('paid_provider_attempt_budget_invalid', url);
@@ -433,6 +434,18 @@ async function performPaidEgress(fetchThis, fetchArgs, url, paidKind, realFetch,
     if (typeof spendGuard.recordAttemptTelemetry === 'function')
       spendGuard.recordAttemptTelemetry(paidKind);
   } catch (eRecord) {}
+
+  if (reservation) {
+    var modelCommit;
+    try { modelCommit = providerBudgetAuthority.commitProviderEgress(reservation); }
+    catch (eModelCommit) { modelCommit = null; }
+    if (!modelCommit || modelCommit.ok !== true) {
+      try { providerBudgetAuthority.settleProviderAttempt(reservation,
+        {ok:false,error:modelCommit && modelCommit.reason || 'provider_egress_commit_failed'}); }
+      catch (eModelCommitSettle) {}
+      return codaAttemptRefusal('paid_provider_attempt_budget_invalid',url);
+    }
+  }
 
   var response;
   try { response = await realFetch.apply(fetchThis, fetchArgs); }

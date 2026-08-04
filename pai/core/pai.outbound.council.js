@@ -2825,14 +2825,40 @@ async function defaultAnuExpressionStage(ctx) {
 async function defaultStampPreflight(ctx) {
   var plan = ctx.receiptPlan;
   var sources = plan && Array.isArray(plan.stageSources) ? plan.stageSources : [];
-  var ok = !!(plan && isNonEmpty(plan.finalSource) && sources.length === STAGE_ORDER.length);
+  var planReady = !!(plan && isNonEmpty(plan.finalSource) &&
+    sources.length === STAGE_ORDER.length);
+  if (!planReady) {
+    return {
+      ok:false,
+      answer:ctx.answer,
+      reason:'stamp_plan_invalid',
+      evidence:{ stage_receipt_count:sources.length,
+        final_source:plan && plan.finalSource }
+    };
+  }
+  var pam = require('../board/pam/pam.js');
+  var normalizedWorld = typeof ctx.activeWorld === 'string'
+    ? ctx.activeWorld.trim().toLowerCase() : '';
+  var scopedWorld = normalizedWorld && Object.prototype.hasOwnProperty.call(
+    pam.WORLD_PATTERNS, normalizedWorld) ? normalizedWorld : null;
+  var verdict;
+  try { verdict = await pam.pamCheck(ctx.answer, scopedWorld); }
+  catch (e) { verdict = null; }
+  var privacyReady = !!(verdict && verdict.ok === true);
+  var privacyFlags = verdict && Array.isArray(verdict.flags)
+    ? verdict.flags.map(function (flag) {
+      return flag && typeof flag.reason === 'string' ? flag.reason : null;
+    }).filter(Boolean).slice(0, 12) : [];
   return {
-    ok: ok,
+    ok: privacyReady,
     answer: ctx.answer,
-    reason: ok ? 'STAMP_READY' : 'stamp_plan_invalid',
+    reason: privacyReady ? 'STAMP_READY' :
+      (verdict && verdict.ok === false ? 'stamp_final_pam_hold' : 'stamp_final_pam_uncertain'),
     evidence: {
       stage_receipt_count: sources.length,
-      final_source: plan && plan.finalSource
+      final_source: plan.finalSource,
+      privacy:{ verdict:verdict && verdict.verdict || null,
+        flags:privacyFlags, failed_closed:!verdict }
     }
   };
 }

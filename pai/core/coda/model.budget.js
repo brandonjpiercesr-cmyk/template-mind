@@ -18,6 +18,20 @@ const providerScope = new AsyncLocalStorage();
 const MODEL_TELEMETRY_ROWS = 20;
 const PROVIDER_TELEMETRY_ROWS = 24;
 
+function optionalHttpStatus(value) {
+  if (value === null || value === undefined ||
+      (typeof value === 'string' && value.trim() === '')) return null;
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 100 && number <= 599 ? number : null;
+}
+
+function reservedModelCalls(scope) {
+  if (!scope || !scope.ticket || !Array.isArray(scope.ticket.provider_attempts)) return 0;
+  return scope.ticket.provider_attempts.reduce(function (count, attempt) {
+    return count + (attempt && attempt._model_call_state === 'reserved' ? 1 : 0);
+  }, 0);
+}
+
 // ⬡B:core.coda.model_budget:LAW:the_thought_budget_he_set_is_the_budget:20260731⬡
 // THE TRAP THAT LIVED HERE UNTIL 20260731, and it was eating a real edit while it was found.
 // This file used to read the two per cycle budgets like this:
@@ -189,7 +203,7 @@ function consume(budget, purpose, now) {
     const pending = Array.isArray(scope.pending_model_purposes)
       ? scope.pending_model_purposes : [];
     if (budget.unlimited_llm_calls !== true &&
-        Number(budget.remaining_llm_calls) - pending.length <= 0) {
+        Number(budget.remaining_llm_calls) - pending.length - reservedModelCalls(scope) <= 0) {
       return {ok:false,reason:'model_call_budget_exhausted'};
     }
     pending.push({purpose:String(purpose || 'coda.deliberation').slice(0,120),
@@ -267,8 +281,10 @@ function receipt(budget) {
         provider_host:String(attempt.provider_host || '').slice(0, 160),
         path:String(attempt.path || '').slice(0, 240),purpose:String(attempt.purpose || '').slice(0, 120),
         started_at:attempt.started_at || null,completed_at:attempt.completed_at || null,
-        status_code:Number.isFinite(Number(attempt.status_code)) ? Number(attempt.status_code) : null,
-        ok:attempt.ok === true,error:attempt.error || null};
+        status_code:optionalHttpStatus(attempt.status_code),
+        ok:attempt.ok === true,error:attempt.error || null,
+        model_call_committed:attempt._model_call_state
+          ? attempt._model_call_state === 'committed' : null};
     }).slice(0,PROVIDER_TELEMETRY_ROWS);
     if (Number(value.used_paid_provider_attempts) > out.provider_attempts.length) {
       out.provider_attempts_total = Number(value.used_paid_provider_attempts);
@@ -334,19 +350,28 @@ function reserveProviderAttempt(spec, now) {
   if (!Number.isSafeInteger(providerUsed) || providerUsed >= Number.MAX_SAFE_INTEGER) {
     return {ok:false,scoped:true,reason:'paid_provider_attempt_counter_precision_exhausted'};
   }
+  var deferredModelCall = null;
   if (scope.count_model_calls === true) {
     const pending = Array.isArray(scope.pending_model_purposes)
       ? scope.pending_model_purposes.shift() : null;
-    const counted = commitModelCall(scope.ticket,
-      pending && pending.purpose || spec && spec.purpose || 'paid_provider.fetch',
-      pending && pending.at || now);
-    if (!counted.ok) {
-      return {ok:false,scoped:true,reason:
-        counted.reason === 'model_call_budget_exhausted'
-          ? 'paid_provider_attempt_budget_exhausted'
-          : counted.reason === 'model_call_counter_precision_exhausted'
-            ? 'model_call_counter_precision_exhausted'
-            : 'paid_provider_attempt_budget_invalid'};
+    const purpose = pending && pending.purpose || spec && spec.purpose || 'paid_provider.fetch';
+    const at = pending && pending.at || now;
+    if (spec && spec.defer_model_commit === true) {
+      if (scope.ticket.unlimited_llm_calls !== true &&
+          Number(scope.ticket.remaining_llm_calls) - reservedModelCalls(scope) <= 0) {
+        return {ok:false,scoped:true,reason:'paid_provider_attempt_budget_exhausted'};
+      }
+      deferredModelCall = {purpose:purpose,at:at};
+    } else {
+      const counted = commitModelCall(scope.ticket,purpose,at);
+      if (!counted.ok) {
+        return {ok:false,scoped:true,reason:
+          counted.reason === 'model_call_budget_exhausted'
+            ? 'paid_provider_attempt_budget_exhausted'
+            : counted.reason === 'model_call_counter_precision_exhausted'
+              ? 'model_call_counter_precision_exhausted'
+              : 'paid_provider_attempt_budget_invalid'};
+      }
     }
   }
   const target = providerTarget(spec && spec.url);
@@ -359,9 +384,36 @@ function reserveProviderAttempt(spec, now) {
     provider_host:target.provider_host,path:target.path,
     purpose:String(spec && spec.purpose || 'paid_provider.fetch').slice(0, 120),
     started_at:now || new Date().toISOString(),completed_at:null,status_code:null,
-    ok:false,error:null};
+    ok:false,error:null,
+    _model_call_state:deferredModelCall ? 'reserved' : null,
+    _model_call_purpose:deferredModelCall ? String(deferredModelCall.purpose).slice(0,120) : null,
+    _model_call_at:deferredModelCall && deferredModelCall.at || null};
   scope.ticket.provider_attempts.push(attempt);
   return {ok:true,scoped:true,attempt:attempt.attempt};
+}
+
+function commitProviderEgress(reservation, now) {
+  if (!reservation || reservation.scoped !== true || !reservation.ok) {
+    return {ok:false,reason:'provider_egress_reservation_invalid'};
+  }
+  const scope = currentProviderScope();
+  if (!scope || !providerAllowanceValid(scope.ticket, scope.cap)) {
+    return {ok:false,reason:'paid_provider_attempt_budget_invalid'};
+  }
+  const attempt = scope.ticket.provider_attempts.find(function(row) {
+    return Number(row.attempt) === Number(reservation.attempt);
+  });
+  if (!attempt) return {ok:false,reason:'provider_egress_reservation_invalid'};
+  if (attempt._model_call_state === 'committed') return {ok:true,counted:true,idempotent:true};
+  if (attempt._model_call_state === null) return {ok:true,counted:false,idempotent:true};
+  if (attempt._model_call_state !== 'reserved') {
+    return {ok:false,reason:'provider_egress_reservation_invalid'};
+  }
+  const counted = commitModelCall(scope.ticket,attempt._model_call_purpose,
+    attempt._model_call_at || now);
+  if (!counted.ok) return counted;
+  attempt._model_call_state = 'committed';
+  return {ok:true,counted:true,idempotent:false};
 }
 
 function settleProviderAttempt(reservation, outcome, now) {
@@ -374,9 +426,10 @@ function settleProviderAttempt(reservation, outcome, now) {
   if (!attempt) return;
   const value = outcome || {};
   attempt.completed_at = now || new Date().toISOString();
-  attempt.status_code = Number.isFinite(Number(value.status_code)) ? Number(value.status_code) : null;
+  attempt.status_code = optionalHttpStatus(value.status_code);
   attempt.ok = value.ok === true;
   attempt.error = value.error ? String(value.error).slice(0, 120) : null;
+  if (attempt._model_call_state === 'reserved') attempt._model_call_state = 'released';
   let completed=scope.ticket.provider_attempts.reduce(function(count,row){
     return count+(row&&row.completed_at ? 1 : 0);
   },0);
@@ -393,6 +446,7 @@ function settleProviderAttempt(reservation, outcome, now) {
 module.exports = {SCHEMA:SCHEMA,ensure:ensure,consume:consume,receipt:receipt,
   ensureProviderAllowance:ensureProviderAllowance,runProviderScope:runProviderScope,
   currentProviderScope:currentProviderScope,reserveProviderAttempt:reserveProviderAttempt,
+  commitProviderEgress:commitProviderEgress,
   settleProviderAttempt:settleProviderAttempt,
   _test:{readBudgetCeiling:readBudgetCeiling,validTicket:validTicket,
     invalidTicket:invalidTicket,providerAllowanceValid:providerAllowanceValid,
