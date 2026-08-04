@@ -3990,11 +3990,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   // ⬡B:core.tool_loop:WIRE:agent_find_binds_the_model_seat_to_its_registry_seat:20260801⬡
   // Provider seats name the wallet/model boundary; registry seats name the job being done.
-  // CODA's coding channel wakes with CODA's employment record. Voice and ordinary turns are
-  // PAI-cycle work. Agent FIND receives both names and proves that binding before any provider
-  // bytes can leave this loop.
+  // CODA's coding channel wakes with CODA's employment record. A per-HAM World Builder turn
+  // wakes with that station's record while retaining the existing c2_organ wallet. Voice and
+  // ordinary turns are PAI-cycle work. Agent FIND receives both names and proves that binding
+  // before any provider bytes can leave this loop.
   function _agentFindSeatNodeId() {
-    return _paiSeatName() === 'coda' ? 'station.coda' : 'station.pai';
+    var normalizedChannel = String(channel || '').toLowerCase();
+    if (_paiSeatName() === 'coda') return 'station.coda';
+    if (normalizedChannel === 'ham_world_builder') return 'station.ham_world_builder';
+    return 'station.pai';
   }
   function _paiSeatCandidate(name) {
     var seat = seatMap.seat(name || _paiSeatName());
@@ -7483,8 +7487,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // CODA's own named seat, not the shared c2_organ wallet. See the fix note on
   // _paiSeatName() for the full finding.
   var _channelLower = String(channel || '').toLowerCase();
+  var _worldBuilderTurn = _channelLower === 'ham_world_builder';
   var seat = _channelLower === 'voice' ? 'voice_fast' : _channelLower === 'coding' ? 'coda' : 'c2_organ';
-  var ownerNodeId = _channelLower === 'coding' ? 'station.coda' : 'station.pai';
+  var ownerNodeId = _channelLower === 'coding' ? 'station.coda'
+    : _worldBuilderTurn ? 'station.ham_world_builder' : 'station.pai';
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
   var result;
   try {
