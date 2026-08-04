@@ -23,6 +23,7 @@ var READ_TOOLS = Object.freeze({
   inbox_read:true,
   nash_sports:true,
   read_lane_board:true,
+  read_current_capabilities:true,
   read_own_code:true,
   read_reminders:true,
   read_render_logs:true,
@@ -37,6 +38,13 @@ function boundedInteger(raw, fallback, min, max) {
 
 function itemMaxBytes() {
   return boundedInteger(process.env.TOOL_EVIDENCE_ONE_MAX, 2000, 256, 12000);
+}
+
+function resultMaxBytes(tool) {
+  if (String(tool || '') === 'read_current_capabilities') {
+    return boundedInteger(process.env.TOOL_CAPABILITY_EVIDENCE_MAX, 4096, 2000, 12000);
+  }
+  return itemMaxBytes();
 }
 
 function countMax() {
@@ -119,7 +127,8 @@ function mint(input) {
   var publicArgs = stableStringify(input.semanticArgs && typeof input.semanticArgs === 'object'
     ? input.semanticArgs : (input.args && typeof input.args === 'object' ? input.args : {}));
   var fullResult = success.text;
-  var max = itemMaxBytes();
+  var argsMax = itemMaxBytes();
+  var max = resultMaxBytes(tool);
   var item = {
     schema:'anew.pai.executed-tool-evidence.v1',
     tool:tool,
@@ -132,7 +141,7 @@ function mint(input) {
     successful_read:READ_TOOLS[tool] === true,
     args_digest:digest(fullArgs),
     source_result_digest:digest(fullResult),
-    args:truncateUtf8(publicArgs, max),
+    args:truncateUtf8(publicArgs, argsMax),
     result:truncateUtf8(fullResult, max),
     result_truncated:Buffer.byteLength(fullResult, 'utf8') > max
   };
@@ -284,8 +293,8 @@ function verify(item, expected, options) {
         item.tool !== 'specialist_internal_evidence')) ||
       !item.tool_call_id || !item.tool ||
       (options.requireRead === true && item.successful_read !== true)) return false;
-  var max = itemMaxBytes();
-  if (Buffer.byteLength(String(item.args || ''), 'utf8') > max ||
+  var max = resultMaxBytes(item.tool);
+  if (Buffer.byteLength(String(item.args || ''), 'utf8') > itemMaxBytes() ||
       Buffer.byteLength(String(item.result || ''), 'utf8') > max ||
       !/^[a-f0-9]{64}$/.test(String(item.args_digest || '')) ||
       !/^[a-f0-9]{64}$/.test(String(item.source_result_digest || '')) ||
@@ -394,6 +403,7 @@ module.exports = {
   countMax:countMax,
   digest:digest,
   itemMaxBytes:itemMaxBytes,
+  resultMaxBytes:resultMaxBytes,
   stableStringify:stableStringify,
   truncateUtf8:truncateUtf8,
   _test:{ parsedSuccess:parsedSuccess, bindingFrom:bindingFrom,

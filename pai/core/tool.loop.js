@@ -387,7 +387,8 @@ var DATA_READER_TOOLS = {
   // Same shape and same reason as read_lane_board directly above: a pure deterministic
   // reader over the in-repo wonder registry, force-executed when the model will not call
   // it, so "talk to your team" is answered from the real org, never from nothing.
-  read_wonder_departments: function(m){ return {}; }
+  read_wonder_departments: function(m){ return {}; },
+  read_current_capabilities: function(m){ return { question:String(m || '') }; }
 };
 // ⬡B:core.tool_loop:FOUNDER_LAW:her_thinking_is_not_capped_at_a_literal:20260726⬡
 // FOUNDER DIRECT, 20260726, verbatim: "FIX ALL GAPS! AND STOP CAPPING SHIT LIKE 20 = max!!"
@@ -1234,6 +1235,8 @@ var TOOLS = [
     parameters:{type:'object',properties:{}}}},
   {type:'function',function:{name:'read_wonder_departments',description:'READ YOUR OWN WONDER NETWORK. Returns every department in your system with each wonder in it: its name, what it does for the person, and whether it is live, contained, or not yet born. Use this whenever someone asks about your team, your wonders, your departments, who works for you, or what parts of you exist. This is your real org, derived from the registry, so you answer from what is actually built and never invent a member. Takes no arguments.',
     parameters:{type:'object',properties:{}}}},
+  {type:'function',function:{name:'read_current_capabilities',description:'READ WHAT YOU CAN ACTUALLY DO RIGHT NOW. Returns current, canonical capability facts from the live Wonder registry and the mounted Come Code workspace exports. Use this before answering what you can do, whether a capability is built or available, or which build surfaces are working. Never infer a capability from memory or an older conversation.',
+    parameters:{type:'object',properties:{question:{type:'string',description:'The person\'s exact capability question.'}},required:['question']}}},
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
     +'Use for ANY question about a game, score, or whether a team won (Lakers, NBA, NFL, MLB, NHL, WNBA). '
     +'Pass league as one of: nba, nfl, mlb, nhl, wnba. Returns the latest scoreboard lines.',
@@ -1519,6 +1522,7 @@ function toolSelectionBoundary(name) {
     consult_mace: 'USE WHEN: a coding request requires reading an exact repository file or directory before deciding or building. DO NOT USE WHEN: the person asks general knowledge, calendar, personal-memory, or non-code questions, or when no repository read is needed.',
     read_lane_board: 'USE WHEN: the person asks which coding lanes or chats are active, who owns work, or whether lanes may collide. DO NOT USE WHEN: they ask about their calendar, general project advice, repository contents, or ordinary conversation.',
     read_wonder_departments: 'USE WHEN: the person asks about your team, your wonders, your departments, who works for you, or what parts of your system exist and whether they are alive. DO NOT USE WHEN: they ask about human coding chats (that is read_lane_board), their own calendar, or ordinary conversation.',
+    read_current_capabilities: 'USE WHEN: the person asks what you can do now, whether a named capability is built or available, or which coding and build surfaces currently work. DO NOT USE WHEN: they are directly asking you to perform an already understood action, asking general knowledge, or making ordinary conversation.',
     update_screen: 'USE WHEN: the person explicitly asks to change or show something on the live glass. DO NOT USE WHEN: they ask for a spoken answer, general advice, stored memory, or a real-world action outside the screen.',
     email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
     contact_send: 'USE WHEN: the person explicitly authorizes this exact text to this exact resolved third party. DO NOT USE WHEN: they mention a person, ask for contact details, brainstorm wording, or have not authorized the exact send.',
@@ -1545,6 +1549,304 @@ TOOLS.forEach(function (tool) {
     '\n\n' + toolSelectionBoundary(tool.function.name);
 });
 
+// ⬡B:core.tool_loop:FIX:current_capability_truth_before_claim:20260804⬡
+// Capability claims describe the running product, so an old transcript or a model's memory
+// cannot establish them. Route those questions through the two canonical owners already in
+// production: the active Wonder registry and the exported Come Code workspace contract.
+function currentCapabilityQuestion(message) {
+  var text = String(message || '').trim().toLowerCase().replace(/[\u2018\u2019]/g, "'");
+  if (!text) return false;
+  if (/\b(?:coding lanes?|lane board|which chats?|what chats?|next to fix|left to fix|who(?:'s| is) working|who(?:'s| is) building)\b/.test(text)) return false;
+  if (/\b(?:capabilit(?:y|ies)|what can you do|what are you able to do|which (?:build |coding )?surfaces?)\b/.test(text)) return true;
+  if (/\b(?:what|which)\b[^?.!]{0,60}\b(?:built|live|working|available|wired)\b/.test(text)) return true;
+  if (/\b(?:do you have|have you got)\b.{0,70}\b(?:access|ability|support|workspace|tool|hand|surface)\b/.test(text)) return true;
+  if (/\bcan you\b.{0,45}\b(?:send|receive|email|text|call|research|browse|code|deploy|build|test|read|write|open a pull request|work across files)\b/.test(text) &&
+      /\b(?:currently|actually|right now|ability|capability)\b/.test(text)) return true;
+  return /\b(?:can|are) you\b.{0,50}\b(?:currently|actually|right now)\b/.test(text);
+}
+
+async function _currentCapabilityRuntime(env, dependencies) {
+  var runtime = env || process.env;
+  var deps = dependencies || {};
+  if (typeof deps.runtimeProbe === 'function') return deps.runtimeProbe(runtime);
+  var base = String(runtime.SELF_BASE_URL || runtime.AIBEBASE_URL ||
+    'https://aibebase.onrender.com').replace(/\/+$/, '');
+  var read = deps.fetch || (typeof fetch === 'function' ? fetch : null);
+  if (!read) return {ok:false,reason:'current_capability_probe_unavailable'};
+  var signal = (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function')
+    ? AbortSignal.timeout(8000) : undefined;
+  async function json(path) {
+    try {
+      var response = await read(base + path,{headers:{Accept:'application/json'},signal:signal});
+      var body = await response.json().catch(function () { return null; });
+      return {ok:response.ok === true,status:response.status,body:body};
+    } catch (error) { return {ok:false,status:0,body:null}; }
+  }
+  var reads = await Promise.all([json('/mcp/brain/health'),json('/__routes')]);
+  return {ok:reads[0].ok && reads[1].ok,brain_health:reads[0],routes:reads[1]};
+}
+
+function _routeIsMounted(routeRead, route) {
+  var owners = routeRead && routeRead.body && routeRead.body.owners;
+  return !!(routeRead && routeRead.ok === true && owners && owners[route]);
+}
+
+function _capabilityRow(id, state, sources, facts) {
+  return {capability_id:id,state:state,source_refs:sources.filter(Boolean),facts:facts};
+}
+
+function _workspaceActionFacts(names, definitions) {
+  var byName={};
+  (Array.isArray(definitions)?definitions:[]).forEach(function (tool) {
+    if (tool && typeof tool.name === 'string') byName[tool.name]=tool;
+  });
+  return (Array.isArray(names)?names:[]).map(function (name) {
+    var definition=byName[name];
+    return [name,String(definition && definition.description || '')];
+  });
+}
+
+async function currentCapabilityEvidence(question, env, dependencies) {
+  var registry = require('./wonders/registry.js');
+  var workspace = dependencies && dependencies.workspace ||
+    require('./mcp/coding.workspace.js');
+  var runtime = env || process.env;
+  var validation = registry.validateRegistry();
+  if (!validation || validation.ok !== true) {
+    return {ok:false,schema:'anew.current-capabilities.v1',evidence_count:0,
+      reason:'wonder_registry_invalid'};
+  }
+  var probe = await _currentCapabilityRuntime(runtime,dependencies);
+  var health = probe && probe.brain_health && probe.brain_health.body || {};
+  var routes = probe && probe.routes;
+  var mcpMounted = _routeIsMounted(routes,'POST /mcp/brain');
+  var missionMounted = _routeIsMounted(routes,'GET /mission/board');
+  var readActions=_workspaceActionFacts(workspace.READ_TOOLS,workspace.TOOLS);
+  var coderActions=_workspaceActionFacts(workspace.CODER_TOOLS,workspace.TOOLS);
+  var workspaceContractComplete=readActions.concat(coderActions).every(function (action) {
+    return action[0] && action[1];
+  });
+  var workspaceLive = probe && probe.brain_health && probe.brain_health.ok === true &&
+    mcpMounted &&
+    health.codingWorkspaceConfigured === true && workspaceContractComplete;
+  var wb = registry.resolve('station.ham_world_builder');
+  var meta = registry.resolve('station.meta_commentary');
+  var writ = registry.resolve('station.writ');
+  var wbLive = !!(wb && wb.lifecycle === 'active' && health.hamWorldBuilder &&
+    health.hamWorldBuilder.ok === true);
+  var always = health.alwaysOnConductor || {};
+  var alwaysLive = !!(always.ok === true && always.enabled === true &&
+    (always.expected_running !== true || always.running === true));
+  var wbWiring = (wb && wb.metadata && wb.metadata.wiring || []).map(function (wire) {
+    return wire.target;
+  });
+  var metaWiring = (meta && meta.metadata && meta.metadata.wiring || []).map(function (wire) {
+    return wire.target;
+  });
+  var writWiring = (writ && writ.metadata && writ.metadata.wiring || []).map(function (wire) {
+    return wire.target;
+  });
+  var rows = [
+    _capabilityRow('come_code.read',workspaceLive?'live':'unverified',
+      ['core/mcp/coding.workspace.js#READ_TOOLS','GET /mcp/brain/health','POST /mcp/brain'],
+      {actions:readActions}),
+    _capabilityRow('come_code.coder',workspaceLive?'live':'unverified',
+      ['core/mcp/coding.workspace.js#CODER_TOOLS','GET /mcp/brain/health','POST /mcp/brain'],
+      {actions:coderActions}),
+    _capabilityRow('world_builder.seat',wbLive?'live':'unverified',
+      ['core/wonders/registry.js#station.ham_world_builder','GET /mcp/brain/health'],
+      {active:!!(wb&&wb.lifecycle==='active'),
+        pending:health.hamWorldBuilder&&health.hamWorldBuilder.pending,
+        claimed:health.hamWorldBuilder&&health.hamWorldBuilder.claimed,
+        dead:health.hamWorldBuilder&&health.hamWorldBuilder.dead}),
+    _capabilityRow('world_builder.always_on',alwaysLive?'live':'unverified',
+      ['core/always.on.clock.js#status','GET /mcp/brain/health'],
+      {running:always.running===true,enabled:always.enabled===true}),
+    _capabilityRow('world_builder.mission_board',wbLive&&missionMounted&&
+      wbWiring.indexOf('core/mission.board.js#composeBoard')>=0?'live':'unverified',
+      ['core/mission.board.js#composeBoard','GET /mission/board','GET /__routes'],
+      {connected:!!(missionMounted&&wbWiring.indexOf('core/mission.board.js#composeBoard')>=0)}),
+    _capabilityRow('outbound.meta_commentary',meta&&meta.lifecycle==='active'&&
+      metaWiring.some(function (target) { return /#META_COMMENTARY$/.test(target); })?'live':'unverified',
+      ['core/wonders/registry.js#station.meta_commentary',
+        'core/pai.outbound.council.js#META_COMMENTARY'],
+      {active:!!(meta&&meta.lifecycle==='active'),internal:true}),
+    _capabilityRow('outbound.writ',writ&&writ.lifecycle==='active'&&
+      writWiring.some(function (target) { return /#WRIT$/.test(target); })?'live':'unverified',
+      ['core/wonders/registry.js#station.writ','core/pai.outbound.council.js#WRIT'],
+      {active:!!(writ&&writ.lifecycle==='active'),internal:true})
+  ];
+  return {ok:true,schema:'anew.current-capabilities.v2',
+    question_digest:paiToolEvidence.digest(String(question || '')),
+    evidence_count:rows.filter(function (row) {
+      return row.state === 'live';
+    }).length,capabilities:rows};
+}
+
+function categoricalCurrentCapabilityClaim(answer) {
+  if (/\b(?:do not know|don't know|not sure|unclear|could not verify|can't verify|cannot confirm|not confirmed)\b/i
+      .test(String(answer || ''))) return false;
+  return /\b(?:yes|no|active|can|cannot|can't|able|unable|available|unavailable|built|connected|enabled|live|working|works|support|supports|access|limited|only)\b/i
+    .test(String(answer || ''));
+}
+
+function verifiedCurrentCapabilityRows(evidence, expected) {
+  var rows = [];
+  (Array.isArray(evidence) ? evidence : []).forEach(function (item) {
+    if (!item || item.tool !== 'read_current_capabilities' ||
+        !paiToolEvidence.verify(item, expected || {}, {requireRead:true})) return;
+    var parsed;
+    try { parsed = JSON.parse(item.result); } catch (error) { return; }
+    if (!parsed || parsed.schema !== 'anew.current-capabilities.v2' || parsed.ok !== true ||
+        !Array.isArray(parsed.capabilities) ||
+        parsed.question_digest !== paiToolEvidence.digest(String(expected && expected.question || ''))) return;
+    var live = parsed.capabilities.filter(function (row) {
+      return row && row.state === 'live' && typeof row.capability_id === 'string' &&
+        Array.isArray(row.source_refs) && row.source_refs.length > 0;
+    });
+    if (live.length !== parsed.evidence_count) return;
+    rows = rows.concat(live);
+  });
+  return rows;
+}
+
+function verifiedCurrentCapabilityEvidenceCount(evidence, expected) {
+  return verifiedCurrentCapabilityRows(evidence,expected).length;
+}
+
+function _capabilityClaimTokens(value) {
+  var ignored = {a:true,an:true,and:true,are:true,as:true,at:true,based:true,be:true,
+    can:true,current:true,currently:true,do:true,for:true,from:true,in:true,is:true,
+    it:true,now:true,of:true,on:true,only:true,or:true,that:true,the:true,
+    these:true,things:true,to:true,verified:true,with:true,you:true,your:true};
+  var seen = {};
+  return String(value || '').toLowerCase().split(/[^a-z0-9_]+/).map(function (word) {
+    if (word==='always') return word;
+    if (word.length>4&&/ies$/.test(word)) return word.slice(0,-3)+'y';
+    if (word.length>4&&/s$/.test(word)&&!/(?:ss|us)$/.test(word)) return word.slice(0,-1);
+    return word;
+  }).filter(function (word) {
+    if (word.length < 3 || ignored[word] || seen[word]) return false;
+    seen[word] = true;
+    return true;
+  });
+}
+
+function _capabilityActionTokens(value) {
+  var subjects = {always:true,board:true,builder:true,code:true,come:true,foundation:true,
+    mission:true,world:true};
+  return _capabilityClaimTokens(value).filter(function (token) { return !subjects[token]; });
+}
+
+function _capabilitySubjectGroups(value) {
+  var text=String(value || '').toLowerCase();
+  var groups=[];
+  if (/\bcome code\b/.test(text)) groups.push(['come_code.read','come_code.coder']);
+  if (/\bworld builder\b/.test(text)) groups.push(['world_builder.seat']);
+  if (/\balways on\b/.test(text)) groups.push(['world_builder.always_on']);
+  if (/\bmission board\b/.test(text)) groups.push(['world_builder.mission_board']);
+  if (/\bmeta[ _-]?commentary\b/.test(text)) groups.push(['outbound.meta_commentary']);
+  if (/\bwrit\b/.test(text)) groups.push(['outbound.writ']);
+  return groups;
+}
+
+function _rowCapabilityActionPhrases(row) {
+  if (!row || !row.facts || typeof row.facts !== 'object') return [];
+  if (/^come_code\./.test(String(row.capability_id || ''))) {
+    var actions=Array.isArray(row.facts.actions)?row.facts.actions:[];
+    return actions.filter(function (action) {
+      return Array.isArray(action)&&action[0]&&action[1];
+    }).map(function (action) {
+      var nameVerb=String(action[0]).split('_')[0];
+      var descriptionVerb=String(action[1]).trim().split(/\s+/)[0];
+      return {verbs:_capabilityActionTokens([nameVerb,descriptionVerb]),
+        tokens:_capabilityActionTokens(String(action[0]).replace(/_/g,' ')+' '+action[1])};
+    });
+  }
+  if (row.capability_id==='world_builder.seat'&&row.facts.active===true) {
+    return [{verbs:['active'],tokens:['active']},{verbs:['live'],tokens:['live']}];
+  }
+  if (row.capability_id==='world_builder.always_on') {
+    return ['running','enabled'].filter(function (term) { return row.facts[term]===true; })
+      .map(function (term) { return {verbs:[term],tokens:[term]}; });
+  }
+  if (row.capability_id==='world_builder.mission_board'&&row.facts.connected===true) {
+    return [{verbs:['connected'],tokens:['connected']}];
+  }
+  return [];
+}
+
+function _rowHasWorkspaceAction(row, name) {
+  return !!(row&&row.facts&&Array.isArray(row.facts.actions)&&
+    row.facts.actions.some(function (action) {
+      return Array.isArray(action)&&action[0]===name&&typeof action[1]==='string'&&!!action[1];
+    }));
+}
+
+function currentCapabilityClaimFindings(question, answer, evidence, expected) {
+  if (!currentCapabilityQuestion(question) || !categoricalCurrentCapabilityClaim(answer)) return [];
+  var rows = verifiedCurrentCapabilityRows(evidence,expected);
+  if (!rows.length) return ['current_capability_evidence_missing'];
+  var text = String(answer || '');
+  var findings = [];
+  if (/\bsingle[ -]?file\b/i.test(text) && rows.some(function (row) {
+    return row.capability_id === 'come_code.coder' &&
+      _rowHasWorkspaceAction(row,'open_change_set_pr');
+  })) findings.push('stale_single_file_claim');
+  if (/\b(?:these are|that is|those are) the only\b|\bonly (?:things|capabilities)\b/i.test(text)) {
+    findings.push('unsupported_exhaustive_claim');
+  }
+  if (/\b(?:meta[ _-]?commentary|writ|council|tool calls?|internal (?:reasoning|stages?|instructions?))\b/i.test(text)) {
+    findings.push('internal_capability_surface_exposed');
+  }
+  var supportedClauses=0;
+  var activeSubjectGroups=[];
+  text.split(/[.;:\n]|,\s+(?:and\s+)?/).forEach(function (clause) {
+    if (!/\b(?:active|available|can(?:not|'t)?|connected|enabled|live|lets?|allows?|supports?|working|running|read|find|run|inspect|open|create|work)\b/i.test(clause)) return;
+    var explicitSubjectGroups=_capabilitySubjectGroups(clause);
+    if (explicitSubjectGroups.length) activeSubjectGroups=explicitSubjectGroups;
+    else if (!activeSubjectGroups.length || /^\s*(?:it|this|that|they)\b/i.test(clause)) {
+      findings.push('ambiguous_capability_subject');
+      return;
+    }
+    if (/\b(?:can(?:not|'t)|unable|unavailable|not\s+(?:active|available|connected|enabled|live|running|working))\b/i.test(clause)) {
+      findings.push('unsupported_negative_capability_claim');
+      return;
+    }
+    var parts=activeSubjectGroups.length===1?String(clause).split(/\s+and\s+/i):[clause];
+    var actionParts=parts.map(function (part) { return _capabilityActionTokens(part); })
+      .filter(function (tokens) { return tokens.length; });
+    if (!actionParts.length) {
+      findings.push('unsupported_capability_clause');
+      return;
+    }
+    var covered = activeSubjectGroups.every(function (group) {
+      var phrases=[];
+      rows.forEach(function (row) {
+        if (group.indexOf(row.capability_id) < 0) return;
+        phrases=phrases.concat(_rowCapabilityActionPhrases(row));
+      });
+      return actionParts.every(function (tokens) {
+        return phrases.some(function (phrase) {
+          return phrase.verbs.indexOf(tokens[0])>=0&&tokens.every(function (token) {
+            return phrase.tokens.indexOf(token)>=0;
+          });
+        });
+      });
+    });
+    if (!covered) findings.push('unsupported_capability_clause');
+    else supportedClauses++;
+  });
+  if (!supportedClauses) findings.push('supported_capability_clause_missing');
+  return Array.from(new Set(findings));
+}
+
+function guardCurrentCapabilityClaim(question, answer, evidence, expected) {
+  var findings = currentCapabilityClaimFindings(question,answer,evidence,expected);
+  return findings.length ? {held:true,answer:answer,reason:findings.join(',')} :
+    {held:false,answer:answer,reason:null};
+}
+
 var TOOL_INTENT_NAMES = Object.freeze({
   schedule:['calendar_read','calendar_book','propose_working_session','find_in_brain'],
   email:['inbox_read','email_send','get_pending_drafts'],
@@ -1555,7 +1857,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   budget:['get_budget_summary','get_budget_upcoming','read_budget_fit','compare_scenario'],
   memory:['find_in_brain','find_identity_evidence','write_to_brain'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','raise_911_escalation','find_in_brain',
-    'read_lane_board','read_wonder_departments','read_render_logs','get_recent_builds','read_own_code','consult_coda',
+    'read_lane_board','read_wonder_departments','read_current_capabilities','read_render_logs','get_recent_builds','read_own_code','consult_coda',
     'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
   screen:['update_screen','save_layout','edit_layout','set_background'],
   general:[]
@@ -1601,6 +1903,7 @@ function routeToolIntent(message) {
       || (/\b(skyscrapers?|fireworks?|beach|mountains?|lake|future[ _]?city|aurora)\b/.test(text)
         && /\b(behind everything|behind (all|my|the)|up behind|as (my|the) (background|wallpaper|backdrop|scene|screen)|on (my|the) screen)\b/.test(text)))
     return 'screen';
+  if (currentCapabilityQuestion(text)) return 'code';
   // ⬡B:core.tool_loop:WIRE:a_turn_that_names_a_page_puts_the_eyes_on_the_table:20260727⬡
   // AVAILABILITY, never a decision. The eyes live in the 'code' bucket beside read_own_code,
   // and without this line a turn like "look at my arrival page" routes to 'general', which
@@ -1679,6 +1982,7 @@ function requiredReadToolForMessage(message, intent) {
   if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track|income|expenses?|paychecks?|salary|take[- ]?home|bills?|net (income|pay)|cash ?flow|afford|savings?|money|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'get_budget_summary';
   if (intent === 'memory' && /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text)) return null;
   if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
+  if (intent === 'code' && currentCapabilityQuestion(text)) return 'read_current_capabilities';
   if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat|next to fix|left to fix|who(?:'s| is) working|who(?:'s| is) building|working on (?:it|this|that|the build|the system))\b/.test(text)) return 'read_lane_board';
   if (intent === 'code' && /\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team|talk to your (?:whole |entire )?team)\b/.test(text)) return 'read_wonder_departments';
   return null;
@@ -2442,6 +2746,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       });
       return 'Your wonder network right now, from the registry:\n' + _wdBlocks.join('\n');
     } catch (eWd) { return JSON.stringify({ ok:false, reason:'wonder_registry_error', detail:eWd.message }); }
+  }
+  if (name === 'read_current_capabilities') {
+    try {
+      return JSON.stringify(await currentCapabilityEvidence(origMessage,process.env));
+    } catch (eCapability) {
+      return JSON.stringify({ok:false,schema:'anew.current-capabilities.v2',
+        evidence_count:0,reason:'current_capability_read_failed'});
+    }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
@@ -4932,6 +5244,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var iter=0,tools=_codaLeadNeeded?['consult_coda']:[],
     ans=_signedVoicePurposeAnswer || _signedVoiceHearingAnswer ||
       _signedVoiceFarewellAnswer || null;
+  var _currentCapabilityReadPrefetched=false;
   if (_signedVoicePurposeAnswer) {
     _stampStep('signed_voice_call_purpose_selected', 'exact_handoff_bytes');
   }
@@ -5464,6 +5777,37 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         content:'This exact request asks for owned or current data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
       _stampStep('tool_intent_live_read_required', _routedToolIntent);
     }
+    // A current-capability question has one exact, read-only owner and no model judgment is
+    // needed to decide whether to consult it. Read once before the first composition so the
+    // affordable path is one grounded draft, with the ordinary single repair still available
+    // if that draft overreaches. The provider never receives a duplicate capability tool after
+    // the verified result is already in its context.
+    if (_routedRequiredReadTool === 'read_current_capabilities' &&
+        !_currentCapabilityReadPrefetched) {
+      var _prefetchedCapabilityId='prefetched_current_capability_'+_cycleId;
+      var _prefetchedCapabilityArgs={question:_exactUserMessage};
+      var _prefetchedCapabilityResult=await executeTool('read_current_capabilities',
+        _prefetchedCapabilityArgs,hamUid,_exactUserMessage,_effectRuntime,false);
+      tools.push('read_current_capabilities');
+      msgs.push({role:'assistant',content:null,tool_calls:[{id:_prefetchedCapabilityId,
+        type:'function',function:{name:'read_current_capabilities',
+          arguments:JSON.stringify(_prefetchedCapabilityArgs)}}]});
+      msgs.push({role:'tool',tool_call_id:_prefetchedCapabilityId,
+        content:_prefetchedCapabilityResult});
+      paiToolEvidence.append(_verifiedToolEvidence,{tool:'read_current_capabilities',
+        args:_prefetchedCapabilityArgs,result:_prefetchedCapabilityResult,hamUid:hamUid,
+        requestId:_requestId,cycleId:_cycleId,toolCallId:_prefetchedCapabilityId,
+        provenance:'pai.current_turn.policy_read'});
+      msgs.push({role:'system',content:
+        'Answer only from the live capability rows above. Each positive capability sentence must be supported by one live row. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
+      _currentCapabilityReadPrefetched=true;
+      _routedRequiresLiveTool=false;
+      body.messages=msgs;
+      delete body.tools;
+      delete body.tool_choice;
+      delete body._dataReaderNudge;
+      _stampStep('required_capability_read_prefetched','bound_exact_user_message');
+    }
     if (_routedRequiredActionTool && Array.isArray(body.tools) && body.tools.length) {
       body.tool_choice = 'required';
       body._requiredActionTool = _routedRequiredActionTool;
@@ -5976,6 +6320,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // a signed call. Bind read arguments at the execution/evidence boundary;
         // non-voice unresolved-inbox behavior remains unchanged.
         targs = bindExactHamToolArgs(tc.function.name, targs, hamUid, _effectRuntime);
+        if (tc.function.name === 'read_current_capabilities') {
+          targs.question = _exactUserMessage;
+        }
         tc.function.arguments = JSON.stringify(targs);
         _stampStep('tool_call', tc.function.name);
         var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime,true);
@@ -6055,6 +6402,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           } catch (eTrParse) {}
         }
         msgs.push({role:'tool',tool_call_id:tc.id,content:tr});
+        if (tc.function.name === 'read_current_capabilities') {
+          msgs.push({role:'system',content:
+            'Answer the capability question itself in concise, plain language. Each positive capability sentence must be supported by one live capability row above. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
+        }
         // ⬡B:core.tool_loop:EVIDENCE:bound_bcw_refocused_after_generic_find:20260715⬡
         // Information questions force a live FIND after CODA's preload. A generic
         // or empty bank result is useful evidence, but it cannot become the last
@@ -6292,13 +6643,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _oneRepairCap;
     var _nameBoundaryRepair = /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
       String(failureCode || ''));
+    var _capabilityBoundaryRepair = /(?:current_capability_evidence_missing|stale_single_file_claim|unsupported_exhaustive_claim|unsupported_capability_clause|unsupported_negative_capability_claim|internal_capability_surface_exposed|ambiguous_capability_subject|supported_capability_clause_missing)/
+      .test(String(failureCode || ''));
     // A privacy-held attribution is evidence of what must NOT be repeated. Feeding
     // it back as the assistant's last sentence anchored the healer on the exact
     // name/creator claim it was asked to remove. Name-boundary repairs therefore
     // start from the original bound context and completed tool results only.
-    var _repairCandidate = _nameBoundaryRepair ? '' : candidate;
+    var _repairCandidate = (_nameBoundaryRepair || _capabilityBoundaryRepair) ? '' : candidate;
     var _nameRepairInstruction = _nameBoundaryRepair
       ? ' Remove every creator, owner, founder, builder, employer, or author attribution and every real-person name from the answer, including the name of the person on this call. Answer who you are, why you are here, or who authorized the call only in terms of what you do, the signed call purpose, and non-human system or Wonder roles already established in the bound context. Do not repeat or paraphrase the rejected attribution.'
+      : '';
+    var _capabilityRepairInstruction = _capabilityBoundaryRepair
+      ? (String(failureCode || '').indexOf('current_capability_evidence_missing') >= 0
+        ? ' The current capability read supplied zero live rows. Answer without claiming the capability is present or absent. State the uncertainty directly in natural human language, with no process narration, tool names, system vocabulary, or invented replacement capability.'
+        : ' Rewrite from the live capability rows already in the completed context. Every positive capability sentence must be covered by one row. Remove unsupported, exhaustive, and old limitation claims. Use natural human language with no process narration, tool names, system vocabulary, or invented replacement capability.')
       : '';
     var _repairedHuman = await regenerateHollowAnswer(_repairCandidate, msgs, [async function (repairMessages) {
       return (await _completeBoundHistoryOnLadder(repairMessages, _oneRepairCap, 0.1, false)) || '';
@@ -6307,7 +6665,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       + 'Repair it once as a direct human-facing answer to the original request, using only facts in '
       + 'the bound system context and completed tool results already present. Fix only that named '
       + 'failure. Do not add facts, claim an unexecuted action, emit tool syntax or JSON, mention the '
-      + 'repair, or describe yourself as an AI/model.' + _nameRepairInstruction });
+      + 'repair, or describe yourself as an AI/model.' + _nameRepairInstruction
+      + _capabilityRepairInstruction });
     return _repairedHuman;
   }
   // ⬡B:core.tool_loop:WIRE:loop_exit_receipt:20260718⬡ bisection instrument:
@@ -6695,6 +7054,28 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (_proofDraft.repaired) {
     finalAns = _proofDraft.answer;
     _stampStep('current_turn_proof_claim_repaired', _proofDraft.reason);
+  }
+  var _capabilityDraft = (_structuredReachPolicy||_worldBuilderMachine)
+    ? {held:false,answer:finalAns,reason:null}
+    : guardCurrentCapabilityClaim(_proofQuestion, finalAns, _verifiedToolEvidence, {
+      hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
+    });
+  if (_capabilityDraft.held) {
+    _stampStep('current_capability_claim_held', _capabilityDraft.reason);
+    var _capabilityRepair = await _repairHumanOnce('', _capabilityDraft.reason);
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_capability_repair');
+    var _capabilityRepairCheck = guardCurrentCapabilityClaim(_proofQuestion,
+      _capabilityRepair.answer, _verifiedToolEvidence, {
+        hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
+      });
+    if (!_capabilityRepair.answer || _capabilityRepairCheck.held) {
+      _stampStep('cycle_end_silent', 'current_capability_unverified');
+      return {ok:false,reason:'current_capability_unverified',blocked_by:'A\'NU',
+        ham:hamObj,cycleId:_cycleId,requestId:_requestId,tools_used:tools,
+        iterations:iter,ms:Date.now()-t0};
+    }
+    finalAns = _capabilityRepair.answer;
+    _stampStep('current_capability_claim_repaired', _capabilityDraft.reason);
   }
   // ⬡B:core.tool.loop:WIRE:screen_awareness_act:20260709⬡
   // ⬡B:core.tool_loop:REPAIR:one_full_preparation_resubmission:20260719⬡
@@ -7644,6 +8025,9 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   isPureConversationalContinuation,
+  currentCapabilityQuestion,currentCapabilityEvidence,categoricalCurrentCapabilityClaim,
+  verifiedCurrentCapabilityRows,verifiedCurrentCapabilityEvidenceCount,
+  currentCapabilityClaimFindings,guardCurrentCapabilityClaim,
   agentFindClosedWorldReason,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
   requiredActionToolForMessage,
