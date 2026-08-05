@@ -7382,10 +7382,26 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           content: JSON.stringify({ codes:_blockedCouncilCodes || null,
             hold_evidence:_holdEv || null }) }) }).catch(function () {});
     } catch (_eHold) {}
+    var _unavailableDecisionEscalation = null;
+    if (_council && _council.reason === 'shadow_decision_judgment_unavailable') {
+      _unavailableDecisionEscalation = await shadowDecisionDialogue.escalate({hamUid:hamUid,
+        requestId:_requestId,cycleId:_cycleId,
+        reason:'shadow_decision_judgment_unavailable',recommendedHand:null});
+      _stampStep('shadow_decision_review_unavailable',
+        _unavailableDecisionEscalation && _unavailableDecisionEscalation.ok
+          ? 'guardian_clair_flagged' : 'guardian_clair_flag_failed');
+    }
     return {ok:false,reason:(_council&&_council.reason)
         || (_committedCouncil&&_committedCouncil.reason) || 'pai_council_receipt_unverified',
-      blocked_by:(_council&&_council.blocked_by)||'STAMP',ham:hamObj,cycleId:_cycleId,
+      blocked_by:_unavailableDecisionEscalation?'guardian.clair':
+        ((_council&&_council.blocked_by)||'STAMP'),ham:hamObj,cycleId:_cycleId,
       requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
+      escalation:_unavailableDecisionEscalation && _unavailableDecisionEscalation.ok===true
+        ? {ok:true,source:_unavailableDecisionEscalation.source||null,
+          superior_node_id:'guardian.clair'}
+        : (_unavailableDecisionEscalation
+          ? {ok:false,reason:_unavailableDecisionEscalation.reason||
+            'shadow_decision_escalation_unavailable'} : null),
       council_stages:(_council&&_council.stages)||[]};
   }
   finalAns = _council.answer;
