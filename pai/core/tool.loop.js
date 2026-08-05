@@ -5443,12 +5443,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         !(identity && identity.outbound_finalize === true)) {
       _routedToolIntent = routeToolIntent(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      _routedRequiredReadTool = null;
+      // A question about this deployment's current live capabilities receives a signed
+      // state snapshot before A'NU deliberates. This is context hydration, not semantic
+      // routing: it does not choose a hand, remove a hand, or require a tool call from
+      // the model. A'NU still sees the complete armory and decides how to answer.
+      _routedRequiredReadTool = currentCapabilityQuestion(
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message)
+        ? 'read_current_capabilities' : null;
       _routedRequiredActionTool = null;
       _routedRequiresLiveTool = false;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
       var _pureVoiceContinuation = false;
-      if (_routedRequiredReadTool || _routedRequiredActionTool) {
+      if ((_routedRequiredReadTool &&
+          _routedRequiredReadTool !== 'read_current_capabilities') ||
+          _routedRequiredActionTool) {
         var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
         body.tools = body.tools.filter(function (tool) {
           return tool && tool.function && tool.function.name === _routedExactTool;
@@ -5708,7 +5716,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _currentCapabilityReadPrefetched=true;
       _routedRequiresLiveTool=false;
       body.messages=msgs;
-      delete body.tools;
+      // Keep every authorized hand visible after the state snapshot. The snapshot
+      // prevents unsupported claims; it does not replace A'NU's judgment about what
+      // the whole conversation calls for.
+      body.tools=_turnToolDefinitions;
       delete body.tool_choice;
       delete body._dataReaderNudge;
       _stampStep('required_capability_read_prefetched','bound_exact_user_message');
