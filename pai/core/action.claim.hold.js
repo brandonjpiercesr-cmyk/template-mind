@@ -101,6 +101,16 @@ var CLAIM_GROUPS = [
 // storage claims. They require their own typed proof and never inherit support
 // from a tool name or free-form memory text.
 var STATE_CLAIMS = [
+  { supportKind:'mission_submission', verb:'creating a job',
+    pattern:/\bI(?:\s+am|[’']m)\s+(?:creating|setting\s+up|saving|persisting|queuing)\s+(?:(?:the|this|that|your)\s+)?(?:real\s+|small\s+)*(?:job|task|mission)\b/gi },
+  { supportKind:'reminder_create', verb:'created the reminder',
+    pattern:/(?:^|\n)\s*(?:[-*•]\s*)?Created\s+(?:(?:the|this|that|your)\s+)?reminder\b/gim },
+  { supportKind:'reminder_create', verb:'reminder stored in command center',
+    pattern:/\b(?:it|the\s+reminder|this\s+reminder|that\s+reminder|your\s+reminder)\s+will\s+live\s+in\s+your\s+Command\s+Center\s+as\s+a\s+reminder\b/gi },
+  { supportKind:'reminder_delivery', verb:'set reminder to surface',
+    pattern:/\bI(?:\s+have|[’']ve)\s+set\s+(?:it|the\s+reminder|this\s+reminder|your\s+reminder)\s+to\s+(?:surface|appear|return|reach|notify|alert|nudge)\b/gi },
+  { supportKind:'reminder_delivery', verb:'set reminder to appear',
+    pattern:/(?:^|\n)\s*(?:[-*•]\s*)?Set\s+(?:it|the\s+reminder|this\s+reminder|your\s+reminder)\s+to\s+(?:surface|appear|return|reach|notify|alert|nudge)\b/gim },
   { supportKind:'mission_running', verb:'mission running',
     pattern:/\b(?:the mission|the job|this mission|that mission)\s+is\s+(?:already\s+)?(?:running|live|active)\b/gi },
   { supportKind:'mission_running', verb:'mission running',
