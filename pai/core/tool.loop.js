@@ -8203,25 +8203,37 @@ function receiptReconsiderationFeedback(result, trace) {
 // Preserve the model-authored words and repair only that transport shape before the pending
 // effect reaches council. Validation still owns subject, detail, item count, and urgency.
 function normalizeSubmitJobArgs(input) {
-  var args=input&&typeof input==='object'?Object.assign({},input):{};
+  if (!input || typeof input!=='object' || Array.isArray(input)) {
+    return {ok:false,reason:'world_job_description_invalid',args:null};
+  }
+  var args=Object.assign({},input);
   var rawAcceptance=args.acceptance;
-  var acceptance=Array.isArray(rawAcceptance)?rawAcceptance.slice()
+  var acceptanceIsArray=Array.isArray(rawAcceptance);
+  if (acceptanceIsArray && rawAcceptance.some(function (check) { return typeof check!=='string'; })) {
+    return {ok:false,reason:'world_job_description_invalid',args:null};
+  }
+  var acceptance=acceptanceIsArray?rawAcceptance.slice()
     :(typeof rawAcceptance==='string'?rawAcceptance.split(/\r?\n/):[]);
   acceptance=acceptance.map(function (check) {
-    return String(check == null ? '' : check).replace(/^\s*(?:[-*•]|[0-9]+[.)])\s*/,'')
+    var value=check;
+    if (!acceptanceIsArray) value=value.replace(/^\s*(?:[-*•]\s+|[0-9]+[.)]\s+)/,'');
+    return value
       .replace(/\s+/g,' ').trim();
   }).filter(Boolean);
-  var subject=String(args.subject || '').replace(/\s+/g,' ').trim();
-  var detail=String(args.detail || '').replace(/\s+/g,' ').trim();
-  var level=args.level===undefined?0:Number(args.level);
+  var subject=typeof args.subject==='string'?args.subject.replace(/\s+/g,' ').trim():'';
+  var detail=typeof args.detail==='string'?args.detail.replace(/\s+/g,' ').trim():'';
+  var level=args.level===undefined?0:args.level;
+  var owner=args.requested_owner;
   if (!subject || !detail || acceptance.length<1 || acceptance.length>12 ||
-      !Number.isInteger(level) || level<0 || level>4) {
+      !Number.isInteger(level) || level<0 || level>4 ||
+      (owner!==undefined && owner!==null && typeof owner!=='string')) {
     return {ok:false,reason:'world_job_description_invalid',args:null};
   }
   args.subject=subject;
   args.detail=detail;
   args.acceptance=acceptance;
   args.level=level;
+  if (typeof owner==='string') args.requested_owner=owner.replace(/\s+/g,' ').trim();
   return {ok:true,args:args};
 }
 
