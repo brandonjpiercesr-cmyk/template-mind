@@ -2615,6 +2615,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       var updateScreenCancellation = effectCancellation(runtime);
       var r = await sa.push(hamUid, args, updateScreenCancellation || {});
       if (r && r.reason === 'voice_turn_cancelled') return cancelledToolResult(name);
+      if (r && (r.reason === 'kill_switch_active' || r.reason === 'kill_switch_unverified' ||
+          r.reason === 'screen_push_uncertain')) {
+        return JSON.stringify({ok:false,reason:r.reason,pushed:r.pushed||0,
+          applied:r.applied||[],mutation_executed:Object.prototype.hasOwnProperty.call(r,
+            'mutation_executed')?r.mutation_executed:false,
+          provider_mutation_attempted:r.provider_mutation_attempted===true,
+          partial_state:r.partial_state||null});
+      }
       // \u2b21B:core.tool_loop:FIX:tool_result_names_what_rendered_20260710\u2b21 founder gate
       // failure, real trace: she put a drafted email into a plain text card, the tool
       // said Screen updated, and she believed a success that did not render as a draft.
@@ -2660,17 +2668,25 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       };
       if (args && args.app) _bgBody.app = args.app;
       var _bgHdrs = require('./ham.session.authorization.js').internalSessionHeaders(_bgHam) || {};
-      var _bgRes = await fetch(_bgSelf.replace(/\/+$/, '') + '/os/background/' + encodeURIComponent(_bgHam), {
-        method:'POST', headers:Object.assign({'Content-Type':'application/json'}, _bgHdrs), body:JSON.stringify(_bgBody),
-        signal:(runtime && runtime.abortSignal)
-      }).then(function(x){return x.ok?x.json():null;}).catch(function(){return null;});
+      var _bgRes;
+      try {
+        var _bgResponse=await fetch(_bgSelf.replace(/\/+$/,'')+'/os/background/'+
+          encodeURIComponent(_bgHam),{method:'POST',
+          headers:Object.assign({'Content-Type':'application/json'},_bgHdrs),
+          body:JSON.stringify(_bgBody),signal:(runtime&&runtime.abortSignal)});
+        _bgRes=await _bgResponse.json().catch(function(){return null;});
+      } catch (_) {
+        return JSON.stringify({ok:false,reason:'background_write_uncertain',
+          provider_mutation_attempted:true,mutation_executed:null});
+      }
       if (_bgRes && _bgRes.ok) {
         var _bgWhere = _bgBody.app ? ('the ' + _bgBody.app + ' surface') : 'all their surfaces';
         var _bgScene = (_bgRes.background && _bgRes.background.scene) || _bgBody.scene;
         var _bgWhat = _bgBody.mode === 'video' ? 'a looping video' : ('the ' + _bgScene + ' scene');
         return JSON.stringify({ok:true,set:_bgWhat,where:_bgWhere,background:_bgRes.background||null});
       }
-      return JSON.stringify({ok:false,reason:(_bgRes && _bgRes.error) || 'background_set_failed'});
+      return JSON.stringify({ok:false,reason:(_bgRes && (_bgRes.reason||_bgRes.error)) ||
+        'background_set_failed'});
     } catch (eBg) { return JSON.stringify({ok:false,reason:eBg.message}); }
   }
   if (name === 'read_lane_board') {
@@ -4047,12 +4063,13 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     _lastFixAttempt[path] = now;
     var fixFileCancellation = effectCancellation(runtime);
     return JSON.stringify(await fixFileInGithub(args.repo, args.path, args.content, args.reason,
-      fixFileCancellation || {}));
+      Object.assign({},fixFileCancellation || {},{hamUid:hamUid})));
   }
   if (name === 'trigger_deploy') {
     var deployCancelled = await cancelBeforeEffect(name, runtime);
     if (deployCancelled) return deployCancelled;
-    return JSON.stringify(await triggerDeploy(args.service_id, effectCancellation(runtime) || {}));
+    return JSON.stringify(await triggerDeploy(args.service_id,
+      Object.assign({},effectCancellation(runtime) || {},{hamUid:hamUid})));
   }
   if (name === 'activate_roadmap_task') {
     var activationSpec = Object.assign({}, args || {}, { ham_uid: hamUid });
@@ -7902,8 +7919,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _effectResults.push({ name:_effect.name, ok:false, reason:eEffect.message });
     }
   }
+  function _isQueuedScreenHold(effectResult) {
+    return !!(effectResult&&effectResult.name==='update_screen'&&effectResult.ok!==true&&
+      effectResult.result&&(effectResult.result.reason==='kill_switch_active'||
+        effectResult.result.reason==='kill_switch_unverified'||
+        effectResult.result.reason==='screen_push_uncertain'));
+  }
+  var _queuedScreenHolds = _effectResults.filter(_isQueuedScreenHold);
   var _failedEffect = _effectResults.find(function (effectResult) {
-    return !effectResult || effectResult.ok !== true;
+    return (!effectResult || effectResult.ok !== true) && !_isQueuedScreenHold(effectResult);
   });
   if (_failedEffect) {
     _stampStep('post_council_effect_failed', _failedEffect.name + ': '
@@ -7929,15 +7953,26 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // No visible screen move and no completion record may precede the committed
   // council. A failed council therefore leaves no successful side-effect trail.
   if (await _turnCancelled()) return _turnCancelledResult('before_post_commit');
+  var _screenCommitFailure = null;
   try {
     if (_screenBlock) {
       var _screenCommit = require('./stream/screen.awareness.js');
       if (_screenCommit.hasLiveScreen(hamUid)) {
         var _screenResult = await _screenCommit.push(hamUid, _screenBlock);
         _screenPushed = (_screenResult && _screenResult.pushed) || 0;
+        if (_screenResult && (_screenResult.reason === 'kill_switch_active' ||
+            _screenResult.reason === 'kill_switch_unverified' ||
+            _screenResult.reason === 'screen_push_uncertain')) {
+          _screenCommitFailure = {name:'update_screen',ok:false,result:_screenResult};
+        }
       }
     }
   } catch (eScreenCommit) {}
+  if (_screenCommitFailure) {
+    _stampStep('post_council_optional_effect_held','update_screen: '+
+      _screenCommitFailure.result.reason);
+    _effectResults.push(_screenCommitFailure);
+  }
   // ⬡B:core.tool_loop:WIRE:the_ride_ends_when_her_committed_answer_lands:20260802⬡
   // The paired half of the freestyle seam above. Her committed answer is on its way through
   // the door, so the interim surface collapses. Placed here, after the committed council and
@@ -7988,7 +8023,23 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     try { _memoryKeeper = await _memoryKeeperRun; }
     catch (eKeeperSettle) { _memoryKeeper = { ok:false, reason:'memory_keeper_settle_failed' }; }
   }
-  var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,ham:hamObj,cycleId:_cycleId,
+  var _heldScreenEffect = _screenCommitFailure || _queuedScreenHolds[0] || null;
+  var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,
+    screen_effect:_heldScreenEffect ? {
+      ok:false,reason:_heldScreenEffect.result.reason,
+      pushed:_heldScreenEffect.result.pushed||0,
+      applied:_heldScreenEffect.result.applied||[],
+      mutation_executed:Object.prototype.hasOwnProperty.call(_heldScreenEffect.result,
+        'mutation_executed')?_heldScreenEffect.result.mutation_executed:false,
+      partial_state:_heldScreenEffect.result.partial_state||null
+    } : null,
+    screen_effects:_queuedScreenHolds.map(function(effectResult){return {
+      ok:false,reason:effectResult.result.reason,pushed:effectResult.result.pushed||0,
+      applied:effectResult.result.applied||[],
+      mutation_executed:Object.prototype.hasOwnProperty.call(effectResult.result,
+        'mutation_executed')?effectResult.result.mutation_executed:false,
+      partial_state:effectResult.result.partial_state||null};}),
+    ham:hamObj,cycleId:_cycleId,
     requestId:_requestId,request_id:_requestId,councilReceipt:_councilReceipt,council_receipt:_councilReceipt,
     stampProof:_stampProof,stamp_proof:_stampProof,
     tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,
