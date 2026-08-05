@@ -429,6 +429,23 @@ test('ROUND 4: an employment claim needs her in the SAME sentence', function () 
   'and the claim about her still holds');
 });
 
+test('a named job working for the person is not a claim about who employs A\'NU', function () {
+  const answer = "I don't have the means yet to set a lasting job in motion that brings me "
+    + "back to you tomorrow morning on my own. I'd need a way to hold that thread across our "
+    + 'talks and actually schedule the return before I can stand behind putting Calmer Tomorrow '
+    + 'to work for you.';
+  assert.strictEqual(boundary.violation(
+    'Create the real small job Calmer Tomorrow, persist it, and arrange to return tomorrow morning.',
+    answer, { personName: READER, env: {}, assistantName: "A'NU" }), null,
+  'the job name is the thing being put to work; it is not a person named as A\'NU\'s employer');
+  assert.ok(boundary.violation('who do you answer to?', 'I work for Harriet Vole.',
+    { personName: READER, env: {}, assistantName: "A'NU" }),
+  'a person actually named after A\'NU\'s employment claim must remain blocked');
+  assert.ok(boundary.violation('who works for you?', 'Harriet Vole works for me.',
+    { personName: READER, env: {}, assistantName: "A'NU" }),
+  'a person actually named before an employment claim about A\'NU must remain blocked');
+});
+
 // ⬡B:tests.no_real_name_in_a_chat_answer:FIX:a_guard_that_fails_open_on_exception_is_not_a_guard:20260729⬡
 // FOUNDER, live, screenshotted 20260729, second occurrence of the exact leak this file exists
 // to stop: two turns failed blind, a third produced a real answer that named him as this

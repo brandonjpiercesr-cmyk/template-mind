@@ -529,6 +529,36 @@ function phraseIsAPerson(phrase, assistantPattern) {
   return meaningful.length >= 2;
 }
 
+function selfReferenceIn(value, assistantPattern) {
+  var input = String(value || '');
+  return SELF_REFERENCE.test(input) || !!(assistantPattern && assistantPattern.test(input));
+}
+
+// Employment language is only private identity evidence when the named person participates
+// in the claim about her. Looking for a self reference and a title-cased phrase anywhere in
+// the same sentence made an ordinary named job such as "Calmer Tomorrow ... to work for you"
+// look like a disclosure about who employs A'NU. Read both sides of the exact employment
+// phrase instead: a person after it must have her on the subject side, or a person before it
+// must have her on the object side. If both sides name other people, this remains their fact,
+// not her identity claim.
+function employmentClaimNamesPerson(sentence, ownForms, assistantPattern) {
+  var input = String(sentence || '');
+  var pattern = new RegExp(EMPLOYMENT_CLAIM.source, 'gi');
+  var match;
+  while ((match = pattern.exec(input))) {
+    if (match.index === pattern.lastIndex) pattern.lastIndex++;
+    var before = input.slice(0, match.index);
+    var after = input.slice(pattern.lastIndex);
+    var peopleBefore = personNamesAnywhere(before, ownForms, assistantPattern);
+    var peopleAfter = personNamesAnywhere(after, ownForms, assistantPattern);
+    if (peopleAfter.length && !peopleBefore.length && selfReferenceIn(before, assistantPattern)) {
+      return true;
+    }
+    if (peopleBefore.length && selfReferenceIn(after, assistantPattern)) return true;
+  }
+  return false;
+}
+
 // The lower case catch: every "<making verb> by <phrase>" in the answer, judged as a phrase.
 function byPhraseNamesAPerson(text, assistantPattern) {
   var pattern = new RegExp('\\b' + MAKING_VERB + '\\s+by\\s+([^.!?;:,]{2,60})', 'gi');
@@ -602,8 +632,7 @@ function violation(question, answer, options) {
     var sentences = splitSentences(text);
     for (var e = 0; e < sentences.length; e++) {
       if (!EMPLOYMENT_CLAIM.test(sentences[e])) continue;
-      if (!SELF_REFERENCE.test(sentences[e])) continue;
-      if (personNamesAnywhere(sentences[e], ownForms, assistantPattern).length ||
+      if (employmentClaimNamesPerson(sentences[e], ownForms, assistantPattern) ||
           byPhraseNamesAPerson(sentences[e], assistantPattern)) {
         return 'named_a_real_person_as_the_creator_or_owner_say_what_you_do_not_who_made_you';
       }
