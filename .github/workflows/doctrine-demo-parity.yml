@@ -42,6 +42,7 @@ jobs:
           test/doctrine.memory.keeper.readback.test.js
           test/doctrine.memory.effect.release.gate.test.js
           test/doctrine.blocked.fallback.continuity.test.js
+          test/doctrine.world.builder.machine.contract.test.js
           test/doctrine.openrouter.seat.spend.test.js
           test/doctrine.spend.guard.fail.closed.test.js
           test/doctrine.no.coder.may.pick.a.ceiling.test.js
