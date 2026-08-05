@@ -1,0 +1,166 @@
+// ⬡B:core.shadow_decision_dialogue:WONDER:anu_retains_judgment_shadow_gets_a_real_reply:20260804⬡
+'use strict';
+var crypto = require('node:crypto');
+
+function text(value, limit) {
+  return String(value == null ? '' : value).trim().slice(0, limit || 1200);
+}
+
+function parseObject(value) {
+  try {
+    var parsed = JSON.parse(text(value, 12000));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch (error) { return null; }
+}
+
+function shadowReceipt(council) {
+  var stages = council && Array.isArray(council.stages) ? council.stages : [];
+  for (var index = stages.length - 1; index >= 0; index--) {
+    var stage = stages[index];
+    if (!stage || String(stage.stage || '').toUpperCase() !== 'SHADOW') continue;
+    var evidence = stage.evidence && typeof stage.evidence === 'object' ? stage.evidence : {};
+    if (evidence.resubmission && evidence.resubmission.evidence) {
+      evidence = evidence.resubmission.evidence;
+    }
+    var judgment = evidence.judgment && typeof evidence.judgment === 'object'
+      ? evidence.judgment : null;
+    if (!judgment || judgment.decision_approved !== false) return null;
+    return {
+      decision_approved:false,
+      reason:text(judgment.decision_reason || judgment.reason, 1200),
+      recommended_hand:text(judgment.recommended_hand, 160),
+      escalate:judgment.escalate === true,
+      stage_reason:text(stage.reason, 240)
+    };
+  }
+  return null;
+}
+
+function reconsiderationContext(review, response) {
+  return [
+    'SHADOW DECISION COUNSEL FOR THIS EXACT REQUEST.',
+    'SHADOW independently disagreed with your earlier choice of hand or no hand.',
+    'This is counsel, not a command. You retain the decision.',
+    'Reason from the whole request, the complete armory, the evidence, authority, and consequences.',
+    'Choose any available hand, choose no hand, or explain why the original choice remains right.',
+    'Do not classify the request from keywords and do not defer merely because SHADOW disagreed.',
+    'SHADOW concern: ' + text(review && review.reason, 1200),
+    'SHADOW suggested hand: ' + (text(review && review.recommended_hand, 160) || 'none named'),
+    'Your prior reply to SHADOW: ' + text(response && response.reason, 1200)
+  ].join('\n');
+}
+
+async function run(input, options) {
+  input = input || {};
+  options = options || {};
+  var review = input.review;
+  if (!review || review.decision_approved !== false) {
+    return {ok:true,outcome:'PROCEED',dialogue:false};
+  }
+  if (typeof options.deliberate !== 'function') {
+    return {ok:false,outcome:'ESCALATE',reason:'anu_decision_dialogue_unavailable'};
+  }
+  var common = {
+    binding:{ham_uid:text(input.hamUid,160),request_id:text(input.requestId,180),
+      cycle_id:text(input.cycleId,180)},
+    request:text(input.request,8000),
+    proposed_answer:text(input.answer,12000),
+    available_hands:Array.isArray(input.availableHands) ? input.availableHands.slice(0,80) : [],
+    hands_chosen:Array.isArray(input.handsChosen) ? input.handsChosen.slice(0,80) : [],
+    pending_effects:Array.isArray(input.pendingEffects) ? input.pendingEffects.slice(0,40) : [],
+    verified_evidence:Array.isArray(input.verifiedEvidence) ? input.verifiedEvidence.slice(0,80) : [],
+    shadow_review:review
+  };
+  var anuJudgment;
+  try {
+    anuJudgment = await options.deliberate(
+      'You are A\'NU reconsidering one exact decision after independent SHADOW counsel. '
+      + 'You remain the decision maker. Think through the complete request and evidence. '
+      + 'Do not obey keywords, categories, or SHADOW by default. Return only JSON with this exact shape: '
+      + '{"position":"STAND"|"RECONSIDER","reason":"one evidence-bound explanation"}.',
+      JSON.stringify(common), {temperature:0,max_tokens:260,json:true});
+  } catch (error) {
+    return {ok:false,outcome:'ESCALATE',reason:'anu_decision_dialogue_threw'};
+  }
+  var anu = parseObject(anuJudgment && anuJudgment.content);
+  if (!anu || (anu.position !== 'STAND' && anu.position !== 'RECONSIDER') ||
+      !text(anu.reason,1200)) {
+    return {ok:false,outcome:'ESCALATE',reason:'anu_decision_dialogue_invalid'};
+  }
+  var response = {position:anu.position,reason:text(anu.reason,1200)};
+  if (anu.position === 'RECONSIDER') {
+    return {ok:true,outcome:'RECONSIDER',dialogue:true,response:response,
+      context:reconsiderationContext(review,response)};
+  }
+  var shadowJudgment;
+  try {
+    shadowJudgment = await options.deliberate(
+      'You are SHADOW completing an evidence-bound conversation with A\'NU. '
+      + 'A\'NU owns the decision. Decide whether her explanation resolves your concern. '
+      + 'Do not classify from keywords. Recommend escalation only when a consequential disagreement remains. '
+      + 'Return only JSON with this exact shape: '
+      + '{"satisfied":true|false,"reason":"one concise explanation","escalate":true|false}.',
+      JSON.stringify({case:common,anu_response:response}),
+      {temperature:0,max_tokens:240,json:true});
+  } catch (error) {
+    return {ok:false,outcome:'ESCALATE',dialogue:true,response:response,
+      reason:'shadow_decision_reply_threw'};
+  }
+  var shadow = parseObject(shadowJudgment && shadowJudgment.content);
+  if (!shadow || typeof shadow.satisfied !== 'boolean' || !text(shadow.reason,1200)) {
+    return {ok:false,outcome:'ESCALATE',dialogue:true,response:response,
+      reason:'shadow_decision_reply_invalid'};
+  }
+  if (shadow.satisfied === true) {
+    return {ok:true,outcome:'PROCEED',dialogue:true,response:response,
+      shadow:{satisfied:true,reason:text(shadow.reason,1200),escalate:false}};
+  }
+  return {ok:false,outcome:'ESCALATE',dialogue:true,response:response,
+    shadow:{satisfied:false,reason:text(shadow.reason,1200),escalate:true},
+    reason:'shadow_decision_disagreement_unresolved'};
+}
+
+async function escalate(input, options) {
+  input = input || {};
+  options = options || {};
+  var hamUid = text(input.hamUid,160).toUpperCase();
+  var requestId = text(input.requestId,180);
+  var cycleId = text(input.cycleId,180);
+  if (!hamUid || !requestId || !cycleId) {
+    return {ok:false,reason:'shadow_decision_escalation_binding_required'};
+  }
+  var brain = options.brain || require('./brain.client.js');
+  var suffix = crypto.createHash('sha256').update(hamUid+'\n'+requestId+'\n'+cycleId,'utf8')
+    .digest('hex');
+  var source = 'ANU.'+hamUid+'.shadow_decision.'+suffix;
+  var content = {schema:'anew.shadow.decision.escalation.v1',ham_uid:hamUid,
+    request_id:requestId,cycle_id:cycleId,
+    reason:text(input.reason,1200),recommended_hand:text(input.recommendedHand,160)||null,
+    pending_effects_committed:false,superior_node_id:'guardian.clair'};
+  try {
+    await brain.writeBead({hamUid:hamUid,agentGlobal:'CLAIR',source:source,
+      type:'GAP_FLAGS',summary:'A\'NU and SHADOW still disagree. No pending effect ran.',
+      content:content,importance:9,edges:[
+        {type:'CAUSED_BY',target:'pai.cycle.'+cycleId},
+        {type:'PRODUCED_BY',target:'guardian.clair'},
+        {type:'RELATES_TO',target:'pai.request.'+requestId}]});
+    var row = await brain.findBySource(source,hamUid);
+    var stored = row && row.content;
+    if (typeof stored === 'string') {
+      try { stored=JSON.parse(stored); } catch (error) { stored=null; }
+    }
+    if (!row || String(row.ham_uid||'').toUpperCase() !== hamUid ||
+        String(row.source||'') !== source || String(row.stamp_type||'') !== 'GAP_FLAGS' ||
+        !stored || stored.schema !== content.schema || stored.request_id !== requestId ||
+        stored.cycle_id !== cycleId || stored.pending_effects_committed !== false ||
+        stored.superior_node_id !== 'guardian.clair') {
+      return {ok:false,reason:'shadow_decision_escalation_readback_unverified'};
+    }
+    return {ok:true,source:source,superior_node_id:'guardian.clair'};
+  } catch (error) {
+    return {ok:false,reason:'shadow_decision_escalation_unavailable'};
+  }
+}
+
+module.exports = {run:run,escalate:escalate,shadowReceipt:shadowReceipt,
+  reconsiderationContext:reconsiderationContext,_test:{parseObject:parseObject}};

@@ -821,6 +821,75 @@ async function findDoctrine(hamUid, limit, viewerTier) {
   ], viewerTier));
 }
 
+function normalizeDoctrineQuery(value) {
+  return String(value||'').replace(/[\\%*_(),]/g,' ').replace(/\s+/g,' ').trim().slice(0,160);
+}
+
+function encodeDoctrineCursor(row) {
+  if(!row||row.id===undefined||!row.source)return null;
+  return Buffer.from(JSON.stringify({source:String(row.source),id:String(row.id)}),'utf8')
+    .toString('base64url');
+}
+
+function decodeDoctrineCursor(value) {
+  if(value===undefined||value===null||value==='')return null;
+  var token=String(value);
+  if(token.length>1000||!/^[A-Za-z0-9_-]+$/.test(token))return false;
+  try{
+    var decoded=JSON.parse(Buffer.from(token,'base64url').toString('utf8'));
+    var source=decoded&&String(decoded.source||''),id=decoded&&String(decoded.id||'');
+    if(!/^[A-Za-z0-9._:/-]{1,500}$/.test(source)||
+        !/^[A-Za-z0-9._:-]{1,180}$/.test(id))return false;
+    var canonical=Buffer.from(JSON.stringify({source:source,id:id}),'utf8').toString('base64url');
+    return canonical===token?{source:source,id:id}:false;
+  }catch(error){return false;}
+}
+
+function doctrinePagePath(hamUid, input, viewerTier) {
+  var request=input||{};
+  var parts=['select=id,source,stamp_type,summary,importance,created_at,content,edges,ham_uid,acl_tier',
+    'ham_uid=eq.'+encodeURIComponent(hamUid)];
+  if(request.stamp_type)parts.push('stamp_type=eq.'+encodeURIComponent(request.stamp_type));
+  else parts.push('stamp_type=in.(ROADMAP,DOCTRINE)');
+  if(request.source)parts.push('source=eq.'+encodeURIComponent(request.source));
+  if(request.query){
+    var literal=normalizeDoctrineQuery(request.query);
+    parts.push('or=(source.ilike.*'+encodeURIComponent(literal)+
+      '*,summary.ilike.*'+encodeURIComponent(literal)+'*)');
+  }
+  if(request.after)parts.push('or=(source.gt.'+encodeURIComponent(request.after.source)+
+    ',and(source.eq.'+encodeURIComponent(request.after.source)+
+    ',id.gt.'+encodeURIComponent(request.after.id)+'))');
+  var tier=require('./privacy/people.tier.js').effectiveTier(viewerTier);
+  var filter=require('./privacy/people.tier.js').structuralFilter(tier);
+  if(filter)parts.push(filter);
+  parts.push('order=source.asc,id.asc');
+  parts.push('limit='+(Number(request.limit)+1));
+  return parts.join('&');
+}
+
+async function findDoctrinePage(hamUid, input, viewerTier) {
+  var request=Object.assign({},input||{});
+  var after=decodeDoctrineCursor(request.cursor);
+  if(after===false)return {ok:false,available:true,reason:'doctrine_cursor_invalid',rows:[]};
+  request.after=after;
+  var read=await bq(doctrinePagePath(hamUid,request,viewerTier));
+  if(!read||read.ok!==true||read.available!==true)return read;
+  var rows=Array.isArray(read.rows)?read.rows:[];
+  if(request.source){
+    if(rows.length!==1||rows[0].ham_uid!==hamUid||rows[0].source!==request.source){
+      return {ok:false,available:true,reason:rows.length?'doctrine_source_ambiguous':
+        'doctrine_source_not_found',rows:[]};
+    }
+    return {ok:true,available:true,mode:'read',rows:[rows[0]],cursor:null,next_cursor:null,
+      complete:true,readback_verified:true};
+  }
+  var page=rows.slice(0,request.limit),hasMore=rows.length>request.limit;
+  return {ok:true,available:true,mode:request.query?'search':'inventory',rows:page,
+    cursor:request.cursor||null,next_cursor:hasMore?encodeDoctrineCursor(page[page.length-1]):null,
+    complete:!hasMore,readback_verified:true};
+}
+
 // ⬡B:core.find:WIRE:findPersonProfile:20260702⬡
 // Rich identity: who this person actually IS, from their scw.person_profile bead.
 // Founder said, verbatim: "she should know me bro". Name + tier is not knowing
@@ -955,9 +1024,12 @@ async function _tierColumnReachable(tier) {
   }
 }
 
-module.exports = { find, findForWorld, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
+module.exports = { find, findForWorld, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findDoctrinePage, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
   scanFcwEvidence:scanFcwEvidence,walkFcwEvidence:walkFcwEvidence,
   expandFcwEvidence:expandFcwEvidence,
   _test:{ bq:bq, identityBq:identityBq, identityQueryPath:identityQueryPath,
     readAllPages:readAllPages,walkAllPages:walkAllPages,evidenceQueryPath:evidenceQueryPath,
-    fcwEvidenceQueries:fcwEvidenceQueries,providerPageSize:PROVIDER_PAGE_SIZE } };
+    fcwEvidenceQueries:fcwEvidenceQueries,doctrinePagePath:doctrinePagePath,
+    normalizeDoctrineQuery:normalizeDoctrineQuery,encodeDoctrineCursor:encodeDoctrineCursor,
+    decodeDoctrineCursor:decodeDoctrineCursor,
+    providerPageSize:PROVIDER_PAGE_SIZE } };

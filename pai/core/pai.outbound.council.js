@@ -9,11 +9,13 @@
 
 var crypto = require('crypto');
 var paiToolEvidence = require('./pai.tool.evidence.js');
+var currentCapabilityGrounding = require('./current.capability.grounding.js');
 // ⬡B:core.pai_outbound_council:WIRE:shadow_checks_canonical_coding_relay:20260715⬡
 var codingRelay = require('./coding.relay.contract.js');
 var identityProvenance = require('./identity.provenance.js');
 var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
+var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
 
 var STAGE_ORDER = Object.freeze([
   'PAM',
@@ -56,6 +58,8 @@ var REQUEST_SCHEMA = 'anew.pai.outbound.request.claim.v1';
 var STAMP_PROOF_SCHEMA = 'anew.pai.outbound.stamp.proof.v1';
 var DELIVERY_TARGET_SCHEMA = 'anew.pai.delivery.target.v1';
 var REACH_HANDOFF_SCHEMA = 'anew.pai.reach-handoff.v1';
+var CURRENT_CAPABILITY_BINDING_SCHEMA = 'anew.pai.current-capability-answer-binding.v1';
+var currentCapabilityBindings = new WeakSet();
 
 function digestText(value) {
   return crypto.createHash('sha256').update(Buffer.from(String(value), 'utf8')).digest('hex');
@@ -81,6 +85,90 @@ function stableStringify(value) {
 
 function digestObject(value) {
   return digestText(stableStringify(value));
+}
+
+function currentCapabilityEvidenceBinding(item) {
+  return {
+    tool:item.tool,
+    provenance:item.provenance,
+    ham_uid:item.ham_uid,
+    request_id:item.request_id,
+    cycle_id:item.cycle_id,
+    tool_call_id:item.tool_call_id,
+    args_digest:item.args_digest,
+    source_result_digest:item.source_result_digest,
+    result_digest:item.result_digest
+  };
+}
+
+// This factory mints only after the canonical exact guard accepts one authentic
+// capability read for these request coordinates. Object identity is retained in
+// a WeakSet, so JSON copies and caller context cannot activate the contract.
+function mintCurrentCapabilityAnswerBinding(input) {
+  input = input || {};
+  var expected = { hamUid:input.hamUid, requestId:input.requestId,
+    cycleId:input.cycleId, question:input.question };
+  var acceptance = currentCapabilityGrounding.accepted(input.question,input.answer,
+    input.evidence,expected);
+  if (!acceptance.ok || !isNonEmpty(input.hamUid) || !isNonEmpty(input.requestId) ||
+      !isNonEmpty(input.cycleId) || !isNonEmpty(input.question) ||
+      !isHumanFacingAnswer(input.answer)) return null;
+  var evidenceBindings = [currentCapabilityEvidenceBinding(acceptance.evidence_item)];
+  var binding = Object.freeze({
+    schema:CURRENT_CAPABILITY_BINDING_SCHEMA,
+    ham_uid:String(input.hamUid),
+    request_id:String(input.requestId),
+    cycle_id:String(input.cycleId),
+    question_digest:digestText(input.question),
+    answer_digest:digestText(input.answer),
+    answer_bytes:Buffer.byteLength(input.answer, 'utf8'),
+    evidence_digest:digestObject(evidenceBindings),
+    evidence_count:evidenceBindings.length
+  });
+  currentCapabilityBindings.add(binding);
+  return binding;
+}
+
+function currentCapabilityAnswerBindingReceipt(binding) {
+  if (!binding || typeof binding !== 'object' ||
+      binding.schema !== CURRENT_CAPABILITY_BINDING_SCHEMA) return null;
+  return { schema:binding.schema, ham_uid:binding.ham_uid,
+    request_id:binding.request_id, cycle_id:binding.cycle_id,
+    question_digest:binding.question_digest, answer_digest:binding.answer_digest,
+    answer_bytes:binding.answer_bytes, evidence_digest:binding.evidence_digest,
+    evidence_count:binding.evidence_count, exact_contract_preserved:true };
+}
+
+function readCurrentCapabilityAnswerBinding(binding, input) {
+  if (!binding) return { present:false, ok:true, receipt:null };
+  var authentic = typeof binding === 'object' && currentCapabilityBindings.has(binding);
+  if (authentic) currentCapabilityBindings.delete(binding);
+  var ok = authentic &&
+    Object.isFrozen(binding) === true && binding.schema === CURRENT_CAPABILITY_BINDING_SCHEMA &&
+    binding.ham_uid === String(input.hamUid) && binding.request_id === String(input.requestId) &&
+    binding.cycle_id === String(input.cycleId) &&
+    binding.question_digest === digestText(input.question) &&
+    binding.answer_digest === digestText(input.answer) &&
+    binding.answer_bytes === Buffer.byteLength(input.answer, 'utf8') &&
+    /^[a-f0-9]{64}$/.test(String(binding.evidence_digest || '')) &&
+    Number.isInteger(binding.evidence_count) && binding.evidence_count > 0;
+  if (!ok) return { present:true, ok:false, receipt:null };
+  return { present:true, ok:true, answer:input.answer,
+    receipt:currentCapabilityAnswerBindingReceipt(binding) };
+}
+
+function validCurrentCapabilityBindingReceipt(receipt, expected) {
+  return !!(receipt && typeof receipt === 'object' && !Array.isArray(receipt) &&
+    receipt.schema === CURRENT_CAPABILITY_BINDING_SCHEMA &&
+    receipt.ham_uid === String(expected.hamUid) &&
+    receipt.request_id === String(expected.requestId) &&
+    receipt.cycle_id === String(expected.cycleId) &&
+    receipt.question_digest === digestText(expected.question) &&
+    receipt.answer_digest === digestText(expected.answer) &&
+    receipt.answer_bytes === Buffer.byteLength(expected.answer, 'utf8') &&
+    /^[a-f0-9]{64}$/.test(String(receipt.evidence_digest || '')) &&
+    Number.isInteger(receipt.evidence_count) && receipt.evidence_count === 1 &&
+    receipt.exact_contract_preserved === true);
 }
 
 function ymd(atMs) {
@@ -1944,6 +2032,17 @@ function canonicalShadowContext(value) {
     })) return { ok:false, reason:'shadow_tools_used_invalid' };
     context.tools_used = source.tools_used.slice();
   }
+  if (Array.isArray(source.available_hands)) {
+    if (source.available_hands.length > 80 || source.available_hands.some(function (item) {
+      return !item || typeof item !== 'object' || Array.isArray(item) ||
+        typeof item.name !== 'string' || Buffer.byteLength(item.name, 'utf8') > 160 ||
+        typeof item.description !== 'string' ||
+        Buffer.byteLength(item.description, 'utf8') > 1000;
+    })) return {ok:false,reason:'shadow_available_hands_invalid'};
+    context.available_hands = source.available_hands.map(function (item) {
+      return {name:item.name,description:item.description};
+    });
+  }
   if (Array.isArray(source.pending_effects)) {
     if (source.pending_effects.length > 20) {
       return { ok:false, reason:'shadow_pending_effects_too_many' };
@@ -2201,9 +2300,11 @@ async function defaultShadowStage(ctx, injected) {
         (voiceFarewellAcknowledgement ? 'SHADOW_PASS_VERIFIED_VOICE_FAREWELL' :
           'SHADOW_PASS_TRIVIAL_VOICE_GREETING'))) : null;
 
-  var system = 'You are SHADOW, the required factual-integrity judgment in an outbound council. ' +
+  var system = 'You are SHADOW, A\'NU\'s independent decision and factual-integrity reviewer in the outbound council. ' +
     'Judge whether the proposed answer invents facts, attributes claims without evidence, or states uncertainty as certainty. ' +
-    'Judge factual integrity only; do not reject for style, brevity, completeness, or helpfulness because other council stages own those concerns. ' +
+    'Separately review whether A\'NU\'s chosen hands or choice to use no hand make sense for the person\'s whole request. Read the available hand descriptions as an employment blueprint. Reason from the situation; never infer meaning from a keyword category or prescribe one hand merely because a verb appeared. ' +
+    'When you would choose differently, state the disagreement and the better hand or no-hand approach. That disagreement is counsel to A\'NU, not a cold veto. Recommend escalation only when a consequential disagreement remains unresolved. ' +
+    'Only factual integrity can hold this outbound answer; do not reject for style, brevity, completeness, or helpfulness because other council stages own those concerns. ' +
     // ⬡B:core.pai_outbound_council:REPAIR:paraphrase_is_not_contradiction:20260716⬡
     // The judge was holding faithful paraphrases of bound evidence as
     // contradictions and warm greeting language as invention, which held the
@@ -2230,7 +2331,7 @@ async function defaultShadowStage(ctx, injected) {
     'Named context evidence was deterministically extracted from the bound deliberation input; reject any answer that denies or contradicts it. ' +
     'Identity provenance is deterministic: stored memory and current bound role context may not be collapsed into one identity claim. ' +
     'A current self-preference must name a choice and state whether it is a fresh judgment or stored preference. ' +
-    'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise sentence","claim":"when approved is false, the exact contiguous text copied verbatim from the proposed answer that the bound evidence contradicts or cannot support; empty string when approved is true"}.';
+    'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise factual-integrity sentence","claim":"when approved is false, the exact contiguous text copied verbatim from the proposed answer that the bound evidence contradicts or cannot support; empty string when approved is true","decision_approved":true|false,"decision_reason":"one concise explanation of whether the chosen hand or no-hand decision fits the whole request","recommended_hand":"a named available hand, no_hand, or empty string","escalate":true|false}.';
   if (structuredPolicy) {
     system += ' STRUCTURED REACH POLICY RULE: the exact deliberation_evidence is the complete closed-world authority for this candidate. Every factual claim in reason and message, and the selected action and channel, must be supported by and relevant to that same candidate evidence. Treat policy copied from an older or different event as unsupported even if it would be plausible or operationally available.';
   }
@@ -2239,6 +2340,8 @@ async function defaultShadowStage(ctx, injected) {
     question: ctx.question || '',
     proposed_answer: ctx.answer,
     channel: ctx.channel || 'unknown',
+    available_hands: boundedEvidence(ctx.context && ctx.context.available_hands || []),
+    hands_chosen: boundedEvidence(ctx.context && ctx.context.tools_used || []),
     deterministic_findings: deterministicFindings,
     named_context_evidence: boundedEvidence(namedContextEvidence),
     categorical_memory_absence: boundedEvidence(memoryAbsenceFlag),
@@ -2439,6 +2542,13 @@ async function defaultShadowStage(ctx, injected) {
         approved: parsed && parsed.approved === true,
         reason: parsed && parsed.reason,
         claim: _verbatimClaimFound(parsed) ? String(parsed.claim) : null,
+        decision_approved: parsed && typeof parsed.decision_approved === 'boolean'
+          ? parsed.decision_approved : null,
+        decision_reason: parsed && typeof parsed.decision_reason === 'string'
+          ? parsed.decision_reason : null,
+        recommended_hand: parsed && typeof parsed.recommended_hand === 'string'
+          ? parsed.recommended_hand : null,
+        escalate: parsed && parsed.escalate === true,
         model: judgment.model,
         via: judgment.via,
         response_digest: digestText(judgment.content || ''),
@@ -2489,6 +2599,27 @@ function structuredReachPolicyContext(ctx) {
       'action,channel,importance,message,reach,reason,recheck_at');
 }
 
+function hamWorldBuilderDecisionContext(ctx) {
+  if (!ctx || String(ctx.channel || '').toLowerCase() !== 'ham_world_builder' ||
+      !ctx.context || ctx.context.mode !== 'ham_world_builder' ||
+      ctx.context.internal_deliberation !== true || typeof ctx.answer !== 'string') return false;
+  return hamWorldBuilderContract.canonicalize(ctx.answer).ok === true;
+}
+
+function hamWorldBuilderFields(ctx) {
+  if (!hamWorldBuilderDecisionContext(ctx)) return null;
+  var canonical = hamWorldBuilderContract.canonicalize(ctx.answer);
+  var decision = canonical.decision;
+  var human=decision.human_decision;
+  var humanFields=human?[human.prompt,human.action,human.scope]
+    .concat(human.evidence_refs||[])
+    .concat((human.options||[]).reduce(function(all,option){
+      return all.concat([option.id,option.label]);
+    },[])):[];
+  return [decision.summary,decision.next_action].concat(humanFields)
+    .filter(function (value) { return typeof value === 'string' && value; }).join('\n');
+}
+
 // ⬡B:core.pai_outbound_council:FIX:internal_coding_deliberation_is_not_user_facing:20260722⬡
 // The machinery-privacy gate exists to protect what a HUMAN reads: no leaking tools,
 // systems, prompts, or internal steps into an outbound turn. CODA's operational
@@ -2504,6 +2635,32 @@ function internalCodingDeliberation(ctx) {
     && ctx.context.internal_deliberation === true && typeof ctx.answer === 'string');
 }
 async function defaultMetaCommentaryStage(ctx) {
+  var worldBuilderFields = hamWorldBuilderFields(ctx);
+  if (worldBuilderFields !== null) {
+    var worldMeta = require('../agents/meta_commentary.js');
+    var worldState = {pendingOutbound:worldBuilderFields};
+    var worldMetaResult = await worldMeta.handle({intent:String(ctx.question||''),
+      channel:'ham_world_builder',hamUid:ctx.hamUid,forceModel:true},worldState);
+    var worldMetaOutput = worldMetaResult &&
+      typeof worldMetaResult.pendingOutbound === 'string'
+      ? worldMetaResult.pendingOutbound : '';
+    var worldMetaFlags = worldMetaResult&&worldMetaResult.metaCommentaryFlag||[];
+    var worldMetaFailedOpen = !!(worldMetaResult&&worldMetaResult.metaCommentary&&
+      worldMetaResult.metaCommentary.failed_open);
+    var worldMetaModel = worldMetaResult&&worldMetaResult.metaCommentary&&
+      worldMetaResult.metaCommentary.organ_decider==='model';
+    var worldMetaExact = worldMetaOutput === worldBuilderFields &&
+      !worldMetaFailedOpen&&worldMetaModel;
+    return {ok:worldMetaExact,answer:ctx.answer,
+      reason:worldMetaExact?'META_COMMENTARY_HAM_WORLD_BUILDER_PASS'
+        :'ham_world_builder_meta_commentary_hold',
+      evidence:{flags:worldMetaFlags,
+        decider:worldMetaResult&&worldMetaResult.metaCommentary&&
+          worldMetaResult.metaCommentary.decider||null,
+        organ_decider:worldMetaModel?'model':null,
+        failed_open:worldMetaFailedOpen,
+        internal_deliberation:true,exact_machine_contract:worldMetaExact}};
+  }
   if (internalCodingDeliberation(ctx)) return { ok:true, answer:ctx.answer,
     reason:'META_COMMENTARY_INTERNAL_CODING_PASS', evidence:{ flags:[], internal_deliberation:true } };
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
@@ -2548,6 +2705,22 @@ async function defaultMetaCommentaryStage(ctx) {
 }
 
 async function defaultQuillStage(ctx) {
+  var worldBuilderFields = hamWorldBuilderFields(ctx);
+  if (worldBuilderFields !== null) {
+    var worldQuill = require('../board/quill.js');
+    var worldQuillResult = await worldQuill.quill(worldBuilderFields,
+      Object.assign({},ctx.context||{},{mode:'ham_world_builder_internal'}));
+    var worldQuillPassed = !!(worldQuillResult&&worldQuillResult.ok===true&&
+      worldQuillResult.verdict==='PASS');
+    return {ok:worldQuillPassed,answer:ctx.answer,
+      reason:worldQuillPassed?'QUILL_HAM_WORLD_BUILDER_PASS':
+        (worldQuillResult&&(worldQuillResult.reason||worldQuillResult.verdict)||
+          'ham_world_builder_quill_hold'),
+      evidence:{verdict:worldQuillResult&&worldQuillResult.verdict,
+        score:worldQuillResult&&worldQuillResult.score,
+        issues:worldQuillResult&&worldQuillResult.issues||[],
+        exact_machine_contract:worldQuillPassed}};
+  }
   var quill = require('../board/quill.js');
   var result = await quill.quill(ctx.answer, ctx.context || {});
   return {
@@ -2647,6 +2820,29 @@ async function healAnswer(answer, reason, stage, input, deps) {
       : (hollowHoldReason(reason) ? HOLLOW_HEAL_GUIDANCE
         : (boundarySpeechGuidance ? boundarySpeechGuidance.instruction
           : (guidance[stage] || guidance.PAM))));
+  var worldBuilderRepairContext = {channel:input&&input.channel,
+    context:input&&input.context,answer:answer};
+  if (hamWorldBuilderDecisionContext(worldBuilderRepairContext)) {
+    var worldRepairSystem = 'Repair one internal World Builder decision after a named judge hold. '
+      + reasonGuidance + ' Return strict JSON only with exactly disposition, summary, '
+      + 'next_action, human_decision. Keep the disposition enum and conditional null rule. '
+      + 'When present, keep human_decision typed with prompt, action, scope, evidence_refs, and options containing id and label. '
+      + 'Do not recap the assignment, narrate the process, name internal machinery, or add facts.';
+    var worldRepairUser = JSON.stringify({decision:JSON.parse(answer),
+      why_held:String(reason||'').slice(0,400)});
+    for (var worldRepairAttempt=0;worldRepairAttempt<2;worldRepairAttempt++) {
+      try {
+        var worldRepair = await modelLadder.deliberate(worldRepairSystem,worldRepairUser,
+          {max_tokens:900,temperature:0,timeout:12000,tightTimeout:true,json:true,
+            signal:input&&input.signal});
+        var canonicalWorldRepair = hamWorldBuilderContract.canonicalize(
+          worldRepair&&worldRepair.content?String(worldRepair.content).trim():'');
+        if (canonicalWorldRepair.ok) return canonicalWorldRepair.text;
+      } catch (worldRepairError) {}
+      if (input&&input.signal&&input.signal.aborted) return null;
+    }
+    return null;
+  }
   // ⬡B:core.pai_outbound_council:FIX:a_healed_answer_is_still_her:20260726⬡
   // THE PERSONA HOLE, closed. This system prompt carried no persona at all, so the
   // healer rebuilt her words as a model that had never been told who she is, and the
@@ -2724,6 +2920,29 @@ async function healAnswer(answer, reason, stage, input, deps) {
 }
 
 async function defaultWritStage(ctx) {
+  var worldBuilderFields = hamWorldBuilderFields(ctx);
+  if (worldBuilderFields !== null) {
+    var worldWrit = require('../board/writ.js');
+    var worldWritResult = await worldWrit.writCheck(worldBuilderFields,
+      {channel:'ham_world_builder',mode:'ham_world_builder_verdict',hamUid:ctx.hamUid,
+        internal:false});
+    var worldWritPassed = !!(worldWritResult&&worldWritResult.ok===true&&
+      worldWritResult.cleaned===worldBuilderFields&&
+      worldWritResult.organ_decider==='model'&&worldWritResult.failed_open!==true);
+    return {ok:worldWritPassed,answer:ctx.answer,
+      reason:worldWritPassed?'WRIT_HAM_WORLD_BUILDER_PASS':
+        (worldWritResult&&(worldWritResult.reason||worldWritResult.verdict)||
+          'ham_world_builder_writ_hold'),evidence:{
+        verdict:worldWritResult&&worldWritResult.verdict,
+        hard_fails:worldWritResult&&worldWritResult.hardFails||[],
+        advisory_flags:worldWritResult&&worldWritResult.advisoryFlags||[],
+        emojis_removed:worldWritResult&&worldWritResult.emojis_removed||0,
+        em_dashes_removed:worldWritResult&&worldWritResult.em_dashes_removed||0,
+        meta_removed:worldWritResult&&worldWritResult.meta_removed||0,
+        decider:worldWritResult&&worldWritResult.organ_decider||null,
+        failed_open:!!(worldWritResult&&worldWritResult.failed_open),
+        internal_deliberation:true,exact_machine_contract:worldWritPassed}};
+  }
   // WRIT is the human-facing voice/format organ. CODA's internal operational
   // answer is a typed machine contract whose exact evidence references are
   // validated again by advisors/coding.js after this council returns. Letting
@@ -2800,12 +3019,27 @@ async function defaultWritStage(ctx) {
       // LLM decided, the regex did not" a provable claim on the receipt instead
       // of an assertion in a comment. Bounded phrases only, never answer bytes.
       law_source: (result && result.law_source) || null,
-      overruled_hints: (result && result.overruled_hints) || []
+      overruled_hints: (result && result.overruled_hints) || [],
+      organ_decider:(result && result.organ_decider) || null,
+      failed_open:!!(result && result.failed_open)
     }
   };
 }
 
 async function defaultAnuExpressionStage(ctx) {
+  if (hamWorldBuilderDecisionContext(ctx)) {
+    var worldAnu = require('./anu.js');
+    var worldAnuResult = worldAnu.speak({result:{pendingOutbound:ctx.answer}},
+      'ham_world_builder',ctx.context||{});
+    var worldAnuExact = !!(worldAnuResult&&worldAnuResult.blocked===false&&
+      worldAnuResult.output===ctx.answer);
+    return {ok:worldAnuExact,answer:ctx.answer,
+      reason:worldAnuExact?'ANU_EXPRESSION_HAM_WORLD_BUILDER_PASS':
+        'ham_world_builder_anu_expression_hold',
+      evidence:{channel:worldAnuResult&&worldAnuResult.channel,
+        blocked:!!(worldAnuResult&&worldAnuResult.blocked),
+        exact_machine_contract:worldAnuExact}};
+  }
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
     reason:'ANU_EXPRESSION_STRUCTURED_REACH_POLICY_PASS',
     evidence:{ channel:'reach',blocked:false,exact_structured_policy:true } };
@@ -2989,6 +3223,12 @@ function createDefaultDependencies(overrides) {
   return {
     now: overrides.now || defaults.now,
     stages: Object.assign({}, defaults.stages, overrides.stages || {}),
+    stageOrigins:STAGE_ORDER.reduce(function (origins, stage) {
+      origins[stage]=overrides.stages &&
+        Object.prototype.hasOwnProperty.call(overrides.stages,stage)
+        ? 'injected' : 'default';
+      return origins;
+    },{}),
     persistReceipt: overrides.persistReceipt || defaults.persistReceipt,
     readReceipt: overrides.readReceipt || defaults.readReceipt,
     // The heal path (healAnswer) reads deps.modelLadder and deps.env, but this
@@ -3462,6 +3702,13 @@ async function runOutboundCouncil(input, injected) {
   input = Object.assign({}, input);
   if (suppliedTarget !== undefined) input.deliveryTarget = canonicalizeDeliveryTarget(suppliedTarget);
   delete input.delivery_target;
+  var capabilityBinding = readCurrentCapabilityAnswerBinding(
+    input.currentCapabilityAnswerBinding, input);
+  delete input.currentCapabilityAnswerBinding;
+  if (!capabilityBinding.ok) {
+    return { ok:false, reason:'current_capability_answer_binding_unverified',
+      blocked_by:'INPUT', stages:[] };
+  }
   if (councilCancellationRequested(input)) {
     return { ok:false, reason:'council_cancelled', blocked_by:'CANCELLED', stages:[] };
   }
@@ -3506,6 +3753,10 @@ async function runOutboundCouncil(input, injected) {
       return failureResult('stage_handler_missing', stage, stages, input, currentAnswer);
     }
     var before = currentAnswer;
+    if (capabilityBinding.present && before !== capabilityBinding.answer) {
+      return failureResult('current_capability_bound_input_mutated', stage,
+        stages, input, currentAnswer);
+    }
     var started = nowMs(deps);
     var normalized;
     try {
@@ -3525,6 +3776,59 @@ async function runOutboundCouncil(input, injected) {
     }
     var ended = nowMs(deps);
     var humanStageAnswer = isHumanFacingAnswer(normalized.answer);
+    if (capabilityBinding.present) {
+      var proposedAnswer = normalized.answer;
+      var capabilityContractEvidence = {
+        grounding_mode:'current_capability_exact',
+        grounded_input_digest:capabilityBinding.receipt.answer_digest,
+        grounded_input_bytes:capabilityBinding.receipt.answer_bytes,
+        grounding_evidence_digest:capabilityBinding.receipt.evidence_digest,
+        observed_output_digest:typeof proposedAnswer === 'string'
+          ? digestText(proposedAnswer) : null,
+        observed_output_bytes:typeof proposedAnswer === 'string'
+          ? Buffer.byteLength(proposedAnswer, 'utf8') : null,
+        grounded_input_preserved:false,
+        hold_reason:normalized.ok ? null : String(normalized.reason || 'stage_held').slice(0,120)
+      };
+      var nativeWritPass = stage === 'WRIT' && normalized.ok && humanStageAnswer &&
+        deps.stageOrigins.WRIT === 'default' &&
+        normalized.evidence && normalized.evidence.verdict === 'WRIT_PASS' &&
+        Array.isArray(normalized.evidence.hard_fails) &&
+        normalized.evidence.hard_fails.length === 0 &&
+        normalized.evidence.organ_decider === 'model' &&
+        normalized.evidence.failed_open === false;
+      if (stage === 'WRIT' && nativeWritPass) {
+        normalized.answer = capabilityBinding.answer;
+        capabilityContractEvidence.grounded_input_preserved=true;
+        capabilityContractEvidence.observed_output_transformed=
+          proposedAnswer !== capabilityBinding.answer;
+        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
+          current_capability_contract:capabilityContractEvidence
+        });
+        humanStageAnswer = true;
+      } else if (stage === 'WRIT' && normalized.ok && humanStageAnswer) {
+        normalized.ok = false;
+        normalized.reason = 'writ_native_pass_unverified';
+        capabilityContractEvidence.hold_reason=normalized.reason;
+        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
+          current_capability_contract:capabilityContractEvidence
+        });
+      } else if (normalized.ok && humanStageAnswer &&
+          proposedAnswer !== capabilityBinding.answer) {
+        normalized.ok = false;
+        normalized.reason = stage.toLowerCase() + '_bound_answer_mutated';
+        capabilityContractEvidence.hold_reason=normalized.reason;
+        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
+          current_capability_contract:capabilityContractEvidence
+        });
+      } else {
+        capabilityContractEvidence.grounded_input_preserved=normalized.ok &&
+          humanStageAnswer && proposedAnswer === capabilityBinding.answer;
+        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
+          current_capability_contract:capabilityContractEvidence
+        });
+      }
+    }
     var receipt = makeStageReceipt(stage, i, true, true, normalized.ok && humanStageAnswer,
       before, normalized.answer, started, ended,
       humanStageAnswer ? normalized.reason
@@ -3552,7 +3856,7 @@ async function runOutboundCouncil(input, injected) {
       // this fail-closed catches. Re-running a pure formatter on repaired input decides
       // nothing and changes no verdict, so it belongs in the healable set. STAMP stays
       // out: it is the durable commit preflight and must never be re-run on other bytes.
-      var _healableStage = (stage === 'WRIT' || stage === 'SHADOW' ||
+      var _healableStage = !capabilityBinding.present && (stage === 'WRIT' || stage === 'SHADOW' ||
         stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL' ||
         stage === 'ANU_EXPRESSION');
       // ⬡B:core.pai_outbound_council:FIX:the_receipt_says_why_the_heal_did_not_save_it:20260725⬡
@@ -3855,6 +4159,8 @@ async function runOutboundCouncil(input, injected) {
     answer: currentAnswer,
     answer_bytes: Buffer.byteLength(currentAnswer, 'utf8'),
     answer_digest: finalDigest,
+    current_capability_answer_binding:capabilityBinding.present
+      ? capabilityBinding.receipt : null,
     reach_handoff:reachHandoffBinding(input),
     identity_provenance_required:identityProvenanceRequired,
     identity_evidence_receipt:identityEvidenceReceipt,
@@ -3893,6 +4199,7 @@ async function runOutboundCouncil(input, injected) {
       deliberationInput: input.deliberationInput,
       answer: currentAnswer,
       identityEvidenceReceipt:identityEvidenceReceipt,
+      currentCapabilityAnswerBinding:capabilityBinding.receipt,
       deliveryTarget: input.deliveryTarget
     })) {
     return failureResult('stored_receipt_verification_failed', 'STAMP', stages, input, currentAnswer);
@@ -3985,6 +4292,7 @@ async function runOutboundCouncil(input, injected) {
     deliberationInput: input.deliberationInput,
     answer: currentAnswer,
     identityEvidenceReceipt:identityEvidenceReceipt,
+    currentCapabilityAnswerBinding:capabilityBinding.receipt,
     deliveryTarget: input.deliveryTarget
   })) {
     return failureResult('committed_council_self_verification_failed', 'STAMP', stages, input, currentAnswer);
@@ -4030,6 +4338,30 @@ function verifyCouncilReceipt(receipt, expected) {
     receipt.deliberation_input_bytes !== Buffer.byteLength(expected.deliberationInput, 'utf8')) return false;
   if (receipt.answer !== expected.answer || receipt.answer_digest !== digestText(expected.answer)) return false;
   if (receipt.answer_bytes !== Buffer.byteLength(expected.answer, 'utf8')) return false;
+  var capabilityReceipt = receipt.current_capability_answer_binding;
+  var camelCapabilityExpected = hasOwn(expected,'currentCapabilityAnswerBinding');
+  var snakeCapabilityExpected = hasOwn(expected,'current_capability_answer_binding');
+  if (camelCapabilityExpected && snakeCapabilityExpected &&
+      digestObject(expected.currentCapabilityAnswerBinding) !==
+        digestObject(expected.current_capability_answer_binding)) return false;
+  var capabilityExpectationSupplied = camelCapabilityExpected || snakeCapabilityExpected;
+  var expectedCapabilityReceipt = camelCapabilityExpected
+    ? expected.currentCapabilityAnswerBinding
+    : snakeCapabilityExpected ? expected.current_capability_answer_binding : null;
+  // Omitted means unspecified; explicit null means strict absence.
+  if (!capabilityExpectationSupplied && capabilityReceipt) {
+    if (!validCurrentCapabilityBindingReceipt(capabilityReceipt, {
+      hamUid:hamUid,requestId:requestId,cycleId:cycleId,
+      question:expected.question,answer:expected.answer
+    })) return false;
+    expectedCapabilityReceipt = capabilityReceipt;
+  }
+  if (!!capabilityReceipt !== !!expectedCapabilityReceipt) return false;
+  if (capabilityReceipt &&
+      (!validCurrentCapabilityBindingReceipt(capabilityReceipt, {
+        hamUid:hamUid,requestId:requestId,cycleId:cycleId,
+        question:expected.question,answer:expected.answer
+      }) || digestObject(capabilityReceipt) !== digestObject(expectedCapabilityReceipt))) return false;
   // Receipts committed before the REACH handoff marker remain valid council
   // history, but only new receipts with an explicit eligible marker can be
   // reconstructed into a missing candidate.
@@ -4068,6 +4400,36 @@ function verifyCouncilReceipt(receipt, expected) {
     if (receipt.stages[j - 1].output_digest !== receipt.stages[j].input_digest) return false;
   }
   if (receipt.stages[receipt.stages.length - 1].output_digest !== receipt.answer_digest) return false;
+  if (capabilityReceipt) {
+    var writStage = receipt.stages[STAGE_ORDER.indexOf('WRIT')];
+    var writContract = writStage.evidence &&
+      writStage.evidence.current_capability_contract;
+    for (var contractIndex = 0; contractIndex < STAGE_ORDER.length - 1; contractIndex++) {
+      var contractStage = receipt.stages[contractIndex];
+      if (contractStage.executed !== true) continue;
+      var contract = contractStage.evidence &&
+        contractStage.evidence.current_capability_contract;
+      if (!contract || contract.grounding_mode !== 'current_capability_exact' ||
+          contract.grounded_input_preserved !== true || contract.hold_reason !== null ||
+          contract.grounded_input_digest !== capabilityReceipt.answer_digest ||
+          contract.grounded_input_bytes !== capabilityReceipt.answer_bytes ||
+          contract.grounding_evidence_digest !== capabilityReceipt.evidence_digest ||
+          !/^[a-f0-9]{64}$/.test(String(contract.observed_output_digest || '')) ||
+          !Number.isInteger(contract.observed_output_bytes) ||
+          (contractStage.stage !== 'WRIT' &&
+            (contract.observed_output_digest !== capabilityReceipt.answer_digest ||
+             contract.observed_output_bytes !== capabilityReceipt.answer_bytes))) return false;
+    }
+    if (!writContract || writContract.grounded_input_preserved !== true ||
+        writContract.grounded_input_digest !== capabilityReceipt.answer_digest ||
+        !/^[a-f0-9]{64}$/.test(String(writContract.observed_output_digest || '')) ||
+        !Number.isInteger(writContract.observed_output_bytes) ||
+        writStage.evidence.verdict !== 'WRIT_PASS' ||
+        !Array.isArray(writStage.evidence.hard_fails) ||
+        writStage.evidence.hard_fails.length !== 0 ||
+        writStage.evidence.organ_decider !== 'model' ||
+        writStage.evidence.failed_open !== false) return false;
+  }
 
   var unsignedReceipt = Object.assign({}, receipt);
   delete unsignedReceipt.receipt_digest;
@@ -4224,6 +4586,7 @@ function requireVerifiedCouncilDelivery(result, deliveryTarget, expectedAnswer) 
     question: receipt.question,
     deliberationInput: receipt.deliberation_input,
     answer: expectedAnswer,
+    currentCapabilityAnswerBinding:receipt.current_capability_answer_binding || null,
     deliveryTarget: deliveryTarget
   });
 }
@@ -4239,7 +4602,8 @@ function compactCouncilProof(result) {
     cycleId: receipt.cycle_id,
     question: receipt.question,
     deliberationInput: receipt.deliberation_input,
-    answer: result.answer
+    answer: result.answer,
+    currentCapabilityAnswerBinding:receipt.current_capability_answer_binding || null
   };
   if (!verifyCommittedCouncil(receipt, proof, expected)) return null;
   var compact = {
@@ -4269,25 +4633,30 @@ function compactCouncilProof(result) {
 // committed STAMP row; read_back_at is observational and is rebound to the
 // committed STAMP end time. This is intentionally restricted to ordinary PAI
 // cycles carrying the explicit reach_handoff marker and no external target.
-function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
+function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
+  var opts = options || {};
   var finalContent = parseContent(finalStoredRow && finalStoredRow.content);
   var receipt = finalContent && finalContent.receipt;
-  if (!receipt || !validReachHandoffBinding(receipt.reach_handoff) ||
-      receipt.reach_handoff.eligible !== true) {
+  if (!receipt) return { ok:false, reason:'committed_council_receipt_missing' };
+  if (opts.requireReach === true && (!validReachHandoffBinding(receipt.reach_handoff) ||
+      receipt.reach_handoff.eligible !== true)) {
     return { ok:false, reason:'reach_handoff_receipt_ineligible' };
   }
   var target = readDeliveryTargetBinding(receipt);
   if (!target.ok || target.present) {
-    return { ok:false, reason:'reach_handoff_external_receipt_rejected' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_external_receipt_rejected' : 'committed_council_external_receipt_rejected' };
   }
   var input = { hamUid:receipt.ham_uid, requestId:receipt.request_id,
     cycleId:receipt.cycle_id, question:receipt.question,
-    deliberationInput:receipt.deliberation_input, answer:receipt.answer };
+    deliberationInput:receipt.deliberation_input, answer:receipt.answer,
+    currentCapabilityAnswerBinding:receipt.current_capability_answer_binding || null };
   var sources = buildSources(input.cycleId, input.requestId);
   var preparedAt = Date.parse(receipt.prepared_at);
   if (!Number.isFinite(preparedAt) || !sameFinalReadback(finalStoredRow,
       finalRow(receipt, input, sources, preparedAt))) {
-    return { ok:false, reason:'reach_handoff_final_receipt_invalid' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_final_receipt_invalid' : 'committed_council_final_receipt_invalid' };
   }
   var stampContent = parseContent(stampStoredRow && stampStoredRow.content);
   var stampAt = stampContent && stampContent.stage &&
@@ -4295,10 +4664,12 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
   if (!stampContent || !Number.isFinite(stampAt) ||
       !sameStageReadback(stampStoredRow, stageRow(stampContent.stage, input,
         sources, receipt.answer_digest, stampAt, stampContent.commit))) {
-    return { ok:false, reason:'reach_handoff_stamp_invalid' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_stamp_invalid' : 'committed_council_stamp_invalid' };
   }
   if (!finalStoredRow.id || !stampStoredRow.id) {
-    return { ok:false, reason:'reach_handoff_row_identity_missing' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_row_identity_missing' : 'committed_council_row_identity_missing' };
   }
   var proofCore = {
     schema:STAMP_PROOF_SCHEMA, ok:true, ham_uid:receipt.ham_uid,
@@ -4321,10 +4692,55 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
   };
   var proof = Object.assign({}, proofCore, { proof_digest:digestObject(proofCore) });
   if (!verifyCommittedCouncil(receipt, proof, input)) {
-    return { ok:false, reason:'reach_handoff_committed_pair_invalid' };
+    return { ok:false, reason:opts.requireReach === true
+      ? 'reach_handoff_committed_pair_invalid' : 'committed_council_pair_invalid' };
   }
   return { ok:true, answer:receipt.answer, council_receipt:receipt,
     stamp_proof:proof, reachHandoff:receipt.reach_handoff };
+}
+
+function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
+  return reconstructCommittedCouncil(finalStoredRow,stampStoredRow,{requireReach:true});
+}
+
+// The request source is deterministic from request_id, so a worker that died after the
+// council commit can recover the server-generated cycle coordinate without buying another
+// model turn. The request row is fully re-derived before its cycle_id is trusted, then the
+// final and STAMP pair cross the same canonical verifier used by the live return path.
+function reconstructCommittedCouncilFromRequest(requestStoredRow, finalStoredRow,
+  stampStoredRow, expected) {
+  var requestContent = parseContent(requestStoredRow && requestStoredRow.content);
+  var binding = requestContent && requestContent.binding;
+  var required = expected || {};
+  if (!binding || requestContent.schema !== REQUEST_SCHEMA ||
+      binding.ham_uid !== required.hamUid || binding.request_id !== required.requestId ||
+      binding.request_source !== 'pai.request.' + required.requestId ||
+      requestStoredRow.source !== binding.request_source ||
+      requestContent.question !== required.question ||
+      requestContent.deliberation_input !== required.deliberationInput ||
+      !readDeliveryTargetBinding(binding).ok || readDeliveryTargetBinding(binding).present) {
+    return {ok:false,reason:'committed_council_request_invalid'};
+  }
+  var aclDate = String(requestStoredRow.acl_stamp || '').match(/:(\d{8})\u2b21$/);
+  if (!aclDate) return {ok:false,reason:'committed_council_request_acl_invalid'};
+  var stampMs = Date.UTC(Number(aclDate[1].slice(0,4)),Number(aclDate[1].slice(4,6))-1,
+    Number(aclDate[1].slice(6,8)));
+  var input = {hamUid:binding.ham_uid,requestId:binding.request_id,
+    cycleId:binding.cycle_id,question:requestContent.question,
+    deliberationInput:requestContent.deliberation_input};
+  var sources = buildSources(input.cycleId,input.requestId);
+  if (!sameRequestReadback(requestStoredRow,requestRow(input,sources,stampMs))) {
+    return {ok:false,reason:'committed_council_request_readback_invalid'};
+  }
+  var recovered = reconstructCommittedCouncil(finalStoredRow,stampStoredRow);
+  if (!recovered.ok || recovered.council_receipt.ham_uid !== input.hamUid ||
+      recovered.council_receipt.request_id !== input.requestId ||
+      recovered.council_receipt.cycle_id !== input.cycleId ||
+      recovered.council_receipt.question !== input.question ||
+      recovered.council_receipt.deliberation_input !== input.deliberationInput) {
+    return recovered.ok ? {ok:false,reason:'committed_council_request_pair_mismatch'} : recovered;
+  }
+  return recovered;
 }
 
 module.exports = {
@@ -4335,14 +4751,20 @@ module.exports = {
   REQUEST_SCHEMA: REQUEST_SCHEMA,
   STAMP_PROOF_SCHEMA: STAMP_PROOF_SCHEMA,
   DELIVERY_TARGET_SCHEMA: DELIVERY_TARGET_SCHEMA,
+  CURRENT_CAPABILITY_BINDING_SCHEMA: CURRENT_CAPABILITY_BINDING_SCHEMA,
   REQUIRED_EDGE_TYPES: REQUIRED_EDGE_TYPES,
   runOutboundCouncil: runOutboundCouncil,
+  mintCurrentCapabilityAnswerBinding: mintCurrentCapabilityAnswerBinding,
+  currentCapabilityAnswerBindingReceipt: currentCapabilityAnswerBindingReceipt,
   verifyCouncilReceipt: verifyCouncilReceipt,
   validateCouncilReceipt: verifyCouncilReceipt,
   verifyCommittedCouncil: verifyCommittedCouncil,
   requireVerifiedCouncilResult: requireVerifiedCouncilResult,
   requireVerifiedCouncilDelivery: requireVerifiedCouncilDelivery,
   compactCouncilProof: compactCouncilProof,
+  councilSources:buildSources,
+  reconstructCommittedCouncil:reconstructCommittedCouncil,
+  reconstructCommittedCouncilFromRequest:reconstructCommittedCouncilFromRequest,
   reconstructReachHandoffCouncil:reconstructReachHandoffCouncil,
   canonicalizeDeliveryTarget: canonicalizeDeliveryTarget,
   createDeliveryTargetBinding: createDeliveryTargetBinding,

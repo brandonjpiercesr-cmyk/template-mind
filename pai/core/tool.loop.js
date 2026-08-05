@@ -43,6 +43,8 @@ var voiceConversationPolicy = require('./voice.conversation.policy.js');
 var voiceCallBinding = require('./voice.call.binding.js');
 var voiceRoomSafe = require('./voice.room.safe.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
+var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
+var shadowDecisionDialogue = require('./shadow.decision.dialogue.js');
 var outputGuard = require('./model.output.guard.js');
 // ⬡B:core.tool.loop:WIRE:the_env_only_identity_law_reaches_model_output_too:20260729⬡
 // The founder law "identity is env only, never a literal" was enforced over source code and
@@ -214,6 +216,7 @@ function bindExactHamToolArgs(name, args, hamUid, runtime) {
 // happens, so no future burst can land regardless of what triggers the retry.
 'use strict';
 var paiToolEvidence = require('./pai.tool.evidence.js');
+var currentCapabilityGrounding = require('./current.capability.grounding.js');
 // ⬡B:core.tool.loop:WIRE:funneled_20260713⬡
 // ⬡COLD:remember:remove:ONE_BRAIN_IO:20260723⬡
 // COLD-ANEW-BRAIN-0011 contained: the retired-brain fallback is removed. Per founder law
@@ -264,7 +267,7 @@ function parseRoadmapActivationSpec(message) {
   var spec;
   try { spec = JSON.parse(tail.slice(start, end + 1)); }
   catch (error) { return { error:'roadmap_activation_spec_json_invalid' }; }
-  var requiredStrings = ['roadmap_source','repository','task'];
+  var requiredStrings = ['roadmap_source','repository','task','test_profile'];
   if (requiredStrings.some(function (key) {
     return typeof spec[key] !== 'string' || !spec[key].trim();
   })) return { error:'roadmap_activation_spec_fields_required' };
@@ -286,6 +289,8 @@ const codingRelay = require('./coding.relay.contract.js');
 const { notifyHam, resolvePhone:resolveNotifyPhone } = require('./tools/notify.ham.js');
 const { runOutboundCouncil, runPreWriteCouncil, requireVerifiedCouncilResult,
   requireVerifiedCouncilDelivery,
+  mintCurrentCapabilityAnswerBinding,
+  currentCapabilityAnswerBindingReceipt,
   compactCouncilProof, canonicalizeDeliveryTarget,
   extractNamedContextEvidence, namedContextContradictions,
   currentAssistantPreferenceRequest, preferenceJudgmentFindings,
@@ -386,7 +391,8 @@ var DATA_READER_TOOLS = {
   // Same shape and same reason as read_lane_board directly above: a pure deterministic
   // reader over the in-repo wonder registry, force-executed when the model will not call
   // it, so "talk to your team" is answered from the real org, never from nothing.
-  read_wonder_departments: function(m){ return {}; }
+  read_wonder_departments: function(m){ return {}; },
+  read_current_capabilities: function(m){ return { question:String(m || '') }; }
 };
 // ⬡B:core.tool_loop:FOUNDER_LAW:her_thinking_is_not_capped_at_a_literal:20260726⬡
 // FOUNDER DIRECT, 20260726, verbatim: "FIX ALL GAPS! AND STOP CAPPING SHIT LIKE 20 = max!!"
@@ -1233,6 +1239,8 @@ var TOOLS = [
     parameters:{type:'object',properties:{}}}},
   {type:'function',function:{name:'read_wonder_departments',description:'READ YOUR OWN WONDER NETWORK. Returns every department in your system with each wonder in it: its name, what it does for the person, and whether it is live, contained, or not yet born. Use this whenever someone asks about your team, your wonders, your departments, who works for you, or what parts of you exist. This is your real org, derived from the registry, so you answer from what is actually built and never invent a member. Takes no arguments.',
     parameters:{type:'object',properties:{}}}},
+  {type:'function',function:{name:'read_current_capabilities',description:'READ WHAT YOU CAN ACTUALLY DO RIGHT NOW. Returns current, canonical capability facts from the live Wonder registry and the mounted Come Code workspace exports. Use this before answering what you can do, whether a capability is built or available, or which build surfaces are working. Never infer a capability from memory or an older conversation.',
+    parameters:{type:'object',properties:{question:{type:'string',description:'The person\'s exact capability question.'}},required:['question']}}},
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
     +'Use for ANY question about a game, score, or whether a team won (Lakers, NBA, NFL, MLB, NHL, WNBA). '
     +'Pass league as one of: nba, nfl, mlb, nhl, wnba. Returns the latest scoreboard lines.',
@@ -1494,13 +1502,22 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','question'],properties:{
       ham_uid:{type:'string'},question:{type:'string',description:'The founder coding request only, without repeating the server-built BCW.'}
     }}}},
-  {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, and acceptance checks so PAI cannot create orphan or out-of-scope code.',
-    parameters:{type:'object',required:['roadmap_source','repository','task','allowed_paths','acceptance'],properties:{
+  {type:'function',function:{name:'submit_job',description:'Carry work from this ordinary conversation into the person\'s durable World Builder. Use this for any kind of work that should continue beyond the current answer, including life, work, learning, play, advisors, reaching someone, making an artifact, or coding. Describe the purpose and observable signs of success. Do not prescribe implementation steps or force a department. Do not use it for casual conversation, a question fully answered now, or an immediate action already completed by another tool.',
+    parameters:{type:'object',required:['subject','detail','acceptance'],properties:{
+      subject:{type:'string',description:'A short human description of what should become true.'},
+      detail:{type:'string',description:'The context and purpose in the person\'s words, without internal system narration.'},
+      acceptance:{type:'array',minItems:1,maxItems:12,items:{type:'string'},description:'Observable signs that the work is genuinely complete.'},
+      requested_owner:{type:'string',description:'Optional Wonder or seat preference. The World Builder verifies authority and may choose a better owner.'},
+      level:{type:'number',description:'Optional urgency from 0 through 4.'}
+    }}}},
+  {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, acceptance checks, and a named test profile so PAI cannot create orphan, untested, or out-of-scope code.',
+    parameters:{type:'object',required:['roadmap_source','repository','task','allowed_paths','acceptance','test_profile'],properties:{
       roadmap_source:{type:'string',description:'Exact source of an existing ROADMAP bead.'},
       repository:{type:'string',description:'Exact owner/repository that owns the roadmap work.'},
       task:{type:'string',description:'One bounded implementation task selected by CODA.'},
       allowed_paths:{type:'array',items:{type:'string'},description:'Exact repository paths PAI may author.'},
       acceptance:{type:'array',items:{type:'string'},description:'Concrete checks Cathy and CANON will audit.'},
+      test_profile:{type:'string',enum:['syntax','world_builder','come_code','guard'],description:'The canonical supervised test family this bounded task must run.'},
       importance:{type:'number'},max_iterations:{type:'number'},max_llm_calls:{type:'number'}
     }}}}
 ];
@@ -1518,6 +1535,7 @@ function toolSelectionBoundary(name) {
     consult_mace: 'USE WHEN: a coding request requires reading an exact repository file or directory before deciding or building. DO NOT USE WHEN: the person asks general knowledge, calendar, personal-memory, or non-code questions, or when no repository read is needed.',
     read_lane_board: 'USE WHEN: the person asks which coding lanes or chats are active, who owns work, or whether lanes may collide. DO NOT USE WHEN: they ask about their calendar, general project advice, repository contents, or ordinary conversation.',
     read_wonder_departments: 'USE WHEN: the person asks about your team, your wonders, your departments, who works for you, or what parts of your system exist and whether they are alive. DO NOT USE WHEN: they ask about human coding chats (that is read_lane_board), their own calendar, or ordinary conversation.',
+    read_current_capabilities: 'USE WHEN: the person asks what you can do now, whether a named capability is built or available, or which coding and build surfaces currently work. DO NOT USE WHEN: they are directly asking you to perform an already understood action, asking general knowledge, or making ordinary conversation.',
     update_screen: 'USE WHEN: the person explicitly asks to change or show something on the live glass. DO NOT USE WHEN: they ask for a spoken answer, general advice, stored memory, or a real-world action outside the screen.',
     email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
     contact_send: 'USE WHEN: the person explicitly authorizes this exact text to this exact resolved third party. DO NOT USE WHEN: they mention a person, ask for contact details, brainstorm wording, or have not authorized the exact send.',
@@ -1544,6 +1562,230 @@ TOOLS.forEach(function (tool) {
     '\n\n' + toolSelectionBoundary(tool.function.name);
 });
 
+// ⬡B:core.tool_loop:FIX:current_capability_truth_before_claim:20260804⬡
+// Capability claims describe the running product, so an old transcript or a model's memory
+// cannot establish them. Route those questions through the two canonical owners already in
+// production: the active Wonder registry and the exported Come Code workspace contract.
+function currentCapabilityQuestion(message) {
+  return currentCapabilityGrounding.currentCapabilityQuestion(message);
+}
+
+async function _currentCapabilityRuntime(env, dependencies) {
+  var runtime = env || process.env;
+  var deps = dependencies || {};
+  if (typeof deps.runtimeProbe === 'function') return deps.runtimeProbe(runtime);
+  var base = String(runtime.SELF_BASE_URL || runtime.AIBEBASE_URL ||
+    'https://aibebase.onrender.com').replace(/\/+$/, '');
+  var read = deps.fetch || (typeof fetch === 'function' ? fetch : null);
+  if (!read) return {ok:false,reason:'current_capability_probe_unavailable'};
+  var signal = (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function')
+    ? AbortSignal.timeout(8000) : undefined;
+  async function json(path) {
+    try {
+      var response = await read(base + path,{headers:{Accept:'application/json'},signal:signal});
+      var body = await response.json().catch(function () { return null; });
+      return {ok:response.ok === true,status:response.status,body:body};
+    } catch (error) { return {ok:false,status:0,body:null}; }
+  }
+  var reads = await Promise.all([json('/mcp/brain/health'),json('/__routes')]);
+  return {ok:reads[0].ok && reads[1].ok,brain_health:reads[0],routes:reads[1]};
+}
+
+function _routeIsMounted(routeRead, route) {
+  var owners = routeRead && routeRead.body && routeRead.body.owners;
+  return !!(routeRead && routeRead.ok === true && owners && owners[route]);
+}
+
+function _capabilityRow(id, state, sources, facts) {
+  return {capability_id:id,state:state,source_refs:sources.filter(Boolean),facts:facts};
+}
+
+function _workspaceActionFacts(names, definitions) {
+  var byName={};
+  (Array.isArray(definitions)?definitions:[]).forEach(function (tool) {
+    if (tool && typeof tool.name === 'string') byName[tool.name]=tool;
+  });
+  return (Array.isArray(names)?names:[]).map(function (name) {
+    var definition=byName[name];
+    return [name,String(definition && definition.description || '')];
+  });
+}
+
+async function currentCapabilityEvidence(question, env, dependencies) {
+  var registry = require('./wonders/registry.js');
+  var workspace = dependencies && dependencies.workspace ||
+    require('./mcp/coding.workspace.js');
+  var runtime = env || process.env;
+  var validation = registry.validateRegistry();
+  if (!validation || validation.ok !== true) {
+    return {ok:false,schema:'anew.current-capabilities.v1',evidence_count:0,
+      reason:'wonder_registry_invalid'};
+  }
+  var probe = await _currentCapabilityRuntime(runtime,dependencies);
+  var health = probe && probe.brain_health && probe.brain_health.body || {};
+  var routes = probe && probe.routes;
+  var mcpMounted = _routeIsMounted(routes,'POST /mcp/brain');
+  var missionMounted = _routeIsMounted(routes,'GET /mission/board');
+  var readActions=_workspaceActionFacts(workspace.READ_TOOLS,workspace.TOOLS);
+  var coderActions=_workspaceActionFacts(workspace.CODER_TOOLS,workspace.TOOLS);
+  var workspaceContractComplete=readActions.concat(coderActions).every(function (action) {
+    return action[0] && action[1];
+  });
+  var workspaceLive = probe && probe.brain_health && probe.brain_health.ok === true &&
+    mcpMounted &&
+    health.codingWorkspaceConfigured === true && workspaceContractComplete;
+  var wb = registry.resolve('station.ham_world_builder');
+  var meta = registry.resolve('station.meta_commentary');
+  var writ = registry.resolve('station.writ');
+  var wbLive = !!(wb && wb.lifecycle === 'active' && health.hamWorldBuilder &&
+    health.hamWorldBuilder.ok === true);
+  var always = health.alwaysOnConductor || {};
+  var alwaysLive = !!(always.ok === true && always.enabled === true &&
+    (always.expected_running !== true || always.running === true));
+  var wbWiring = (wb && wb.metadata && wb.metadata.wiring || []).map(function (wire) {
+    return wire.target;
+  });
+  var metaWiring = (meta && meta.metadata && meta.metadata.wiring || []).map(function (wire) {
+    return wire.target;
+  });
+  var writWiring = (writ && writ.metadata && writ.metadata.wiring || []).map(function (wire) {
+    return wire.target;
+  });
+  var rows = [
+    _capabilityRow('come_code.read',workspaceLive?'live':'unverified',
+      ['core/mcp/coding.workspace.js#READ_TOOLS','GET /mcp/brain/health','POST /mcp/brain'],
+      {actions:readActions}),
+    _capabilityRow('come_code.coder',workspaceLive?'live':'unverified',
+      ['core/mcp/coding.workspace.js#CODER_TOOLS','GET /mcp/brain/health','POST /mcp/brain'],
+      {actions:coderActions}),
+    _capabilityRow('world_builder.seat',wbLive?'live':'unverified',
+      ['core/wonders/registry.js#station.ham_world_builder','GET /mcp/brain/health'],
+      {active:!!(wb&&wb.lifecycle==='active'),
+        pending:health.hamWorldBuilder&&health.hamWorldBuilder.pending,
+        claimed:health.hamWorldBuilder&&health.hamWorldBuilder.claimed,
+        dead:health.hamWorldBuilder&&health.hamWorldBuilder.dead}),
+    _capabilityRow('world_builder.always_on',alwaysLive?'live':'unverified',
+      ['core/always.on.clock.js#status','GET /mcp/brain/health'],
+      {running:always.running===true,enabled:always.enabled===true}),
+    _capabilityRow('world_builder.mission_board',wbLive&&missionMounted&&
+      wbWiring.indexOf('core/mission.board.js#composeBoard')>=0?'live':'unverified',
+      ['core/mission.board.js#composeBoard','GET /mission/board','GET /__routes'],
+      {connected:!!(missionMounted&&wbWiring.indexOf('core/mission.board.js#composeBoard')>=0)}),
+    _capabilityRow('outbound.meta_commentary',meta&&meta.lifecycle==='active'&&
+      metaWiring.some(function (target) { return /#META_COMMENTARY$/.test(target); })?'live':'unverified',
+      ['core/wonders/registry.js#station.meta_commentary',
+        'core/pai.outbound.council.js#META_COMMENTARY'],
+      {active:!!(meta&&meta.lifecycle==='active'),internal:true}),
+    _capabilityRow('outbound.writ',writ&&writ.lifecycle==='active'&&
+      writWiring.some(function (target) { return /#WRIT$/.test(target); })?'live':'unverified',
+      ['core/wonders/registry.js#station.writ','core/pai.outbound.council.js#WRIT'],
+      {active:!!(writ&&writ.lifecycle==='active'),internal:true})
+  ];
+  return {ok:true,schema:'anew.current-capabilities.v2',
+    question_digest:paiToolEvidence.digest(String(question || '')),
+    evidence_count:rows.filter(function (row) {
+      return row.state === 'live';
+    }).length,capabilities:rows};
+}
+
+function categoricalCurrentCapabilityClaim(answer) {
+  return currentCapabilityGrounding.categoricalClaim(answer);
+}
+
+function verifiedCurrentCapabilityRows(evidence, expected) {
+  var verified=currentCapabilityGrounding.verifiedRows(evidence,expected);
+  return verified.length===1?verified[0].rows:[];
+}
+
+function verifiedCurrentCapabilityEvidenceCount(evidence, expected) {
+  return verifiedCurrentCapabilityRows(evidence,expected).length;
+}
+
+function _currentCapabilityProjectionSafe(projection) {
+  if (!projection || !Array.isArray(projection.verified_capabilities) ||
+      Object.keys(projection).length!==1) return false;
+  var allowedSubjects={'World Builder':true,'Always On':true,
+    'Mission Board':true,'Come Code':true};
+  return projection.verified_capabilities.every(function (row) {
+    if (!row || !allowedSubjects[row.subject] || !Array.isArray(row.verified) ||
+        !row.verified.length || Object.keys(row).length!==2) return false;
+    return row.verified.every(function (detail) {
+      var value=String(detail || '').trim();
+      return !!value && !/(?:meta[ _-]?commentary|\bwrit\b|\boutbound\b|source_refs?|capability_id|\bcore\/|\b(?:GET|POST)\s+\/|#[A-Z_]+|\b[a-z]+_[a-z_]+\b)/i
+        .test(value);
+    });
+  });
+}
+
+// The signed receipt is the verifier's complete record, including internal council seats and
+// canonical source addresses. A model drafting words for a person needs a narrower view: only
+// live external subjects the person actually asked about, expressed through the workspace's own
+// action descriptions. This projection is derived only after receipt verification, never from
+// the unsigned tool bytes, and it cannot replace or weaken the evidence the guard consumes.
+function currentCapabilityHumanProjection(question, evidence, expected) {
+  var text=String(question || '').toLowerCase().replace(/[\u2018\u2019]/g,"'");
+  var namedExternal=/\b(?:come code|world builder|always on|mission board)\b/.test(text);
+  var namedInternal=/\b(?:meta[ _-]?commentary|writ)\b/.test(text);
+  function requested(row) {
+    var id=String(row && row.capability_id || '');
+    if (/^outbound\./.test(id)) return false;
+    if (!namedExternal && !namedInternal) return true;
+    if (/^come_code\./.test(id)) return /\bcome code\b/.test(text);
+    if (id==='world_builder.seat') return /\bworld builder\b/.test(text);
+    if (id==='world_builder.always_on') {
+      return /\b(?:world builder|always on)\b/.test(text);
+    }
+    if (id==='world_builder.mission_board') {
+      return /\b(?:world builder|mission board)\b/.test(text);
+    }
+    return false;
+  }
+  var rows=verifiedCurrentCapabilityRows(evidence,expected).filter(requested);
+  var visible=[];
+  var world=rows.find(function (row) { return row.capability_id==='world_builder.seat'; });
+  if (world&&world.facts&&world.facts.active===true) {
+    visible.push({subject:'World Builder',verified:['Live']});
+  }
+  var always=rows.find(function (row) {
+    return row.capability_id==='world_builder.always_on';
+  });
+  if (always&&always.facts) {
+    var alwaysStates=[];
+    if (always.facts.running===true) alwaysStates.push('Running');
+    if (always.facts.enabled===true) alwaysStates.push('Enabled');
+    if (alwaysStates.length) visible.push({subject:'Always On',verified:alwaysStates});
+  }
+  var mission=rows.find(function (row) {
+    return row.capability_id==='world_builder.mission_board';
+  });
+  if (mission&&mission.facts&&mission.facts.connected===true) {
+    visible.push({subject:'Mission Board',verified:['Connected']});
+  }
+  var descriptions=[];
+  rows.filter(function (row) { return /^come_code\./.test(row.capability_id); })
+    .forEach(function (row) {
+      var actions=row&&row.facts&&Array.isArray(row.facts.actions)?row.facts.actions:[];
+      actions.forEach(function (action) {
+        var description=Array.isArray(action)?String(action[1] || '').trim():'';
+        if (description&&descriptions.indexOf(description)<0) descriptions.push(description);
+      });
+    });
+  if (descriptions.length) visible.push({subject:'Come Code',verified:descriptions});
+  var projection={verified_capabilities:visible};
+  return _currentCapabilityProjectionSafe(projection)
+    ? projection : {verified_capabilities:[]};
+}
+
+function currentCapabilityClaimFindings(question, answer, evidence, expected) {
+  return currentCapabilityGrounding.findings(question,answer,evidence,expected);
+}
+
+function guardCurrentCapabilityClaim(question, answer, evidence, expected) {
+  var findings = currentCapabilityClaimFindings(question,answer,evidence,expected);
+  return findings.length ? {held:true,answer:answer,reason:findings.join(',')} :
+    {held:false,answer:answer,reason:null};
+}
+
 var TOOL_INTENT_NAMES = Object.freeze({
   schedule:['calendar_read','calendar_book','propose_working_session','find_in_brain'],
   email:['inbox_read','email_send','get_pending_drafts'],
@@ -1554,7 +1796,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   budget:['get_budget_summary','get_budget_upcoming','read_budget_fit','compare_scenario'],
   memory:['find_in_brain','find_identity_evidence','write_to_brain'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','raise_911_escalation','find_in_brain',
-    'read_lane_board','read_wonder_departments','read_render_logs','get_recent_builds','read_own_code','consult_coda',
+    'read_lane_board','read_wonder_departments','read_current_capabilities','read_render_logs','get_recent_builds','read_own_code','consult_coda',
     'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
   screen:['update_screen','save_layout','edit_layout','set_background'],
   general:[]
@@ -1571,6 +1813,7 @@ function routeToolIntent(message) {
   if (/^(?:please\s+)?remind\s+me\s+(?:why|how|what|who|where|when)\b/.test(text)) {
     return 'general';
   }
+  if (/\bcode of conduct\b/.test(text)) return 'general';
   // An explicit station command owns the turn even when its task text names a
   // calendar, inbox, or other live-data scenario to grade. The founder caught
   // two R4 acceptance asks being hijacked into calendar_read before Wonder
@@ -1600,6 +1843,7 @@ function routeToolIntent(message) {
       || (/\b(skyscrapers?|fireworks?|beach|mountains?|lake|future[ _]?city|aurora)\b/.test(text)
         && /\b(behind everything|behind (all|my|the)|up behind|as (my|the) (background|wallpaper|backdrop|scene|screen)|on (my|the) screen)\b/.test(text)))
     return 'screen';
+  if (currentCapabilityQuestion(text)) return 'code';
   // ⬡B:core.tool_loop:WIRE:a_turn_that_names_a_page_puts_the_eyes_on_the_table:20260727⬡
   // AVAILABILITY, never a decision. The eyes live in the 'code' bucket beside read_own_code,
   // and without this line a turn like "look at my arrival page" routes to 'general', which
@@ -1621,19 +1865,17 @@ function routeToolIntent(message) {
   // entire team and let me know what you said" and the turn had no route to any org at all.
   if (/\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team)\b/.test(text)) return 'code';
   if (/\b(my|our|stored|brain|memory|bead|previous|recent|most recent|most recently|recently|last)\b/.test(text) &&
-      /\b(decision|preference|history|result|failure|flagged|built|build|did we|identity|who is)\b/.test(text)) return 'memory';
-  if (/\b(code|repo|repository|deploy|builds?|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
+      /\b(decision|preference|history|result|failure|flagged|built|build status|the build|did we|identity|who is)\b/.test(text)) return 'memory';
+  if (/\b(code|repo|repository|deploy|software build|build status|the build|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
   return 'general';
 }
 
 function toolsForIntent(tools, intent) {
-  var allowed = (TOOL_INTENT_NAMES[intent] || TOOL_INTENT_NAMES.general).slice();
-  // The advisor department is A'NU's cross-domain council. It must remain on
-  // the table for ordinary language, not only for turns a regex calls "code".
-  if (allowed.indexOf('consult_advisor') === -1) allowed.push('consult_advisor');
-  return (tools || []).filter(function (tool) {
-    return tool && tool.function && allowed.indexOf(tool.function.name) !== -1;
-  });
+  // Intent labels are diagnostic observations only. They never decide which hands the
+  // mind is allowed to see. Identity, signed read-only modes, and consequence gates still
+  // narrow the armory at their own mechanical boundaries in toolDefinitionsForTurn().
+  // Meaning belongs to the seated mind after it has read the whole employment blueprint.
+  return (tools || []).slice();
 }
 
 // This is a transport boundary, not a meaning judgment. A short whole-utterance
@@ -1678,6 +1920,7 @@ function requiredReadToolForMessage(message, intent) {
   if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track|income|expenses?|paychecks?|salary|take[- ]?home|bills?|net (income|pay)|cash ?flow|afford|savings?|money|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'get_budget_summary';
   if (intent === 'memory' && /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text)) return null;
   if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
+  if (intent === 'code' && currentCapabilityQuestion(text)) return 'read_current_capabilities';
   if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat|next to fix|left to fix|who(?:'s| is) working|who(?:'s| is) building|working on (?:it|this|that|the build|the system))\b/.test(text)) return 'read_lane_board';
   if (intent === 'code' && /\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team|talk to your (?:whole |entire )?team)\b/.test(text)) return 'read_wonder_departments';
   return null;
@@ -1739,7 +1982,8 @@ var POST_COUNCIL_TOOLS = Object.freeze({
   edit_layout:true,
   update_screen:true,
   set_background:true,
-  activate_roadmap_task:true
+  activate_roadmap_task:true,
+  submit_job:true
 });
 
 async function runtimeCancellationRequested(runtime) {
@@ -1918,6 +2162,10 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       runtime.codaActivationApproved !== true) {
     return JSON.stringify({ok:false,reason:'coda_activation_approval_required',tool:name});
   }
+  if (name === 'activate_roadmap_task' && runtime && runtime.approvedActivationSpec &&
+      !require('./coda/build.spec.js').same(args,runtime.approvedActivationSpec)) {
+    return JSON.stringify({ok:false,reason:'coda_build_spec_mismatch',tool:name});
+  }
   var shouldQueueMutation = POST_COUNCIL_TOOLS[name]
     && !(name === 'propose_working_session' && args && args.autobook !== true);
   if (shouldQueueMutation && (!runtime || runtime.phase !== 'commit')) {
@@ -2001,6 +2249,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       });
       return JSON.stringify(await require('../advisors/coding.js').runLead(q, cHam,
         { repositoryEvidence:JSON.stringify({ queries:terms, reads:reads }),
+          buildSpecRequested:runtime && runtime.buildSpecRequested === true,
           storedIdentityEvidence:args._identity_evidence,
           identityEvidenceResult:args._identity_evidence_result,
           identityEvidenceReceipt:args._identity_evidence_receipt }));
@@ -2441,6 +2690,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       });
       return 'Your wonder network right now, from the registry:\n' + _wdBlocks.join('\n');
     } catch (eWd) { return JSON.stringify({ ok:false, reason:'wonder_registry_error', detail:eWd.message }); }
+  }
+  if (name === 'read_current_capabilities') {
+    try {
+      return JSON.stringify(await currentCapabilityEvidence(origMessage,process.env));
+    } catch (eCapability) {
+      return JSON.stringify({ok:false,schema:'anew.current-capabilities.v2',
+        evidence_count:0,reason:'current_capability_read_failed'});
+    }
   }
   if (name === 'nash_sports') {
     // ⬡B:tool.loop:WIRE:nash_is_now_a_wonder:20260711⬡ detection+deliberation+dedup,
@@ -3724,7 +3981,39 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     var activationCancelled = await cancelBeforeEffect(name, runtime);
     if (activationCancelled) return activationCancelled;
     return JSON.stringify(await require('./roadmap.activation.js').activate(activationSpec,
-      { cancellation:effectCancellation(runtime) || null }));
+      { cancellation:effectCancellation(runtime) || null,requireCodaApproval:true,
+        codaApproval:{decision:runtime && runtime.codaActivationDecision,
+          decision_source:runtime && runtime.codaDecisionSource,
+          build_spec:runtime && runtime.approvedActivationSpec} }));
+  }
+  if (name === 'submit_job') {
+    var jobSubject = String(args.subject || '').trim();
+    var jobDetail = String(args.detail || '').trim();
+    var jobAcceptance = Array.isArray(args.acceptance) ? args.acceptance.map(function (check) {
+      return String(check == null ? '' : check).replace(/\s+/g,' ').trim();
+    }).filter(Boolean) : [];
+    var jobLevel = args.level === undefined ? 0 : Number(args.level);
+    if (!jobSubject || !jobDetail || jobAcceptance.length < 1 || jobAcceptance.length > 12 ||
+        !Number.isInteger(jobLevel) || jobLevel < 0 || jobLevel > 4) {
+      return JSON.stringify({ok:false,reason:'world_job_description_invalid'});
+    }
+    var jobProof = runtime && runtime.councilResult
+      ? compactCouncilProof(runtime.councilResult) : null;
+    if (!jobProof || jobProof.committed !== true || jobProof.readback_verified !== true ||
+        jobProof.row_count !== 9 || !jobProof.final_source) {
+      return JSON.stringify({ok:false,reason:'world_job_council_unverified'});
+    }
+    var jobRequestId = String(runtime && runtime.parentRequestId || '').trim();
+    if (!jobRequestId) return JSON.stringify({ok:false,reason:'world_job_request_id_required'});
+    var jobCancelled = await cancelBeforeEffect(name,runtime);
+    if (jobCancelled) return jobCancelled;
+    var jobOutcome = await require('./ham.world.builder.intake.js').enqueue({
+      hamUid:hamUid,kind:'mission',trigger:'mission.intervention.changed',
+      evidenceRefs:[jobProof.final_source],subject:jobSubject,detail:jobDetail,
+      acceptance:jobAcceptance,requestedOwner:args.requested_owner || null,
+      originRequestId:jobRequestId,level:jobLevel,submittedBy:'anu_conversation'
+    });
+    return JSON.stringify(jobOutcome);
   }
   if (name === 'notify_ham') {
     var notifyCancelled = await cancelBeforeEffect(name, runtime);
@@ -3753,6 +4042,14 @@ function reachIncidentIntakeMode(channel,identity){
     typeof identity._reachIncidentFence==='function'&&
     identity.council_context&&
     identity.council_context.mode==='reach_incident_intake'&&identity.delivery&&
+    identity.delivery.external===false);
+}
+
+function hamWorldBuilderMachineMode(channel,identity){
+  return String(channel||'').toLowerCase()==='ham_world_builder'&&!!(identity&&
+    identity._worldBuilderRestricted===true&&identity.council_context&&
+    identity.council_context.mode==='ham_world_builder'&&
+    identity.council_context.internal_deliberation===true&&identity.delivery&&
     identity.delivery.external===false);
 }
 
@@ -3821,10 +4118,19 @@ function memoryTurnRequired(channel, identity, state) {
 // shared public finalizer so its answer still crosses the full council and durable readback.
 // Keep the exact two-field identity in one predicate. A coding-mode human door does not carry
 // internal_deliberation and must retain the ordinary human-facing composition path.
-function codaInternalDeliberation(identity) {
+function internalDeliberation(identity) {
   return !!(identity && identity.council_context &&
-    identity.council_context.mode === 'coding' &&
     identity.council_context.internal_deliberation === true);
+}
+function codaInternalDeliberation(identity) {
+  return internalDeliberation(identity) && identity.council_context.mode === 'coding';
+}
+function reachHandoffEligible(channel,identity) {
+  var autonomous = /^(anew_action|autonomous)$/.test(String(channel||'').toLowerCase());
+  var mode = String(identity&&identity.council_context&&identity.council_context.mode||'');
+  return !autonomous && !internalDeliberation(identity) && !(identity&&(
+    identity.outbound_finalize || identity.delivery&&identity.delivery.external ||
+    /^(outbound|outreach)/.test(mode) || mode==='proposed_action_dispatch'));
 }
 
 // The reader and voice briefs exist to prepare words for a human. Buying them for CODA's own
@@ -3842,17 +4148,22 @@ function preWriteCouncilEligible(answerSelected, structuredReachPolicy, reachInc
   var liveVoice = String(channel || '').toLowerCase() === 'voice' &&
     !!verifiedVoiceCallContext(identity, hamUid);
   return !answerSelected && !structuredReachPolicy && !reachIncidentIntake &&
-    !codaInternalDeliberation(identity) && !liveVoice;
+    !internalDeliberation(identity) && !liveVoice;
 }
 
 function toolDefinitionsForTurn(tools, readOnlyNames, identity, flags) {
   var state = flags || {};
   if (state.reachIncidentIntake === true || state.roomSafeVoice === true) return [];
   var readOnly = !!(identity && (identity.outbound_finalize === true ||
-    identity._conversationOnly === true));
+    identity._conversationOnly === true || identity._worldBuilderRestricted === true));
   if (!readOnly) return tools;
+  var passiveWorldBuilder = ['find_identity_evidence','find_in_brain','read_render_logs',
+    'get_budget_upcoming','get_budget_summary','calendar_read','inbox_read','read_reminders',
+    'find_contact','get_pending_drafts','get_recent_builds','read_own_code','look_at_page'];
   return tools.filter(function (tool) {
-    return tool && tool.function && readOnlyNames.indexOf(tool.function.name) >= 0;
+    var allowed = identity && identity._worldBuilderRestricted === true
+      ? passiveWorldBuilder : readOnlyNames;
+    return tool && tool.function && allowed.indexOf(tool.function.name) >= 0;
   });
 }
 
@@ -3874,6 +4185,23 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // a tool or contributor inside this cycle, but it must never replace this choke point.
   var t0=Date.now();
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
+  var _worldBuilderMachine=hamWorldBuilderMachineMode(channel,identity);
+  var _worldBuilderBudget=_worldBuilderMachine&&identity&&identity._worldBuilderBudget;
+  var _worldBuilderMaxIterations=_worldBuilderBudget&&
+    Number.isInteger(_worldBuilderBudget.maxIterations)?_worldBuilderBudget.maxIterations:8;
+  var _worldBuilderMaxProviderCalls=_worldBuilderBudget&&
+    Number.isInteger(_worldBuilderBudget.maxProviderCalls)?_worldBuilderBudget.maxProviderCalls:12;
+  var _worldBuilderProviderCalls=0;
+  var _worldBuilderProviderFenceReady=false;
+  async function _worldBuilderProviderFence(){
+    if(!_worldBuilderMachine)return true;
+    if(_worldBuilderProviderFenceReady)return true;
+    if(!identity||typeof identity._worldBuilderBeforeProvider!=='function')return false;
+    try{
+      _worldBuilderProviderFenceReady=await identity._worldBuilderBeforeProvider()===true;
+      return _worldBuilderProviderFenceReady;
+    }catch(eWorldBuilderFence){return false;}
+  }
   // The verified voice route authorizes this object through a process-owned
   // WeakSet. A JSON field named room_safe is never sufficient to close a world.
   var _roomSafeVoice=String(channel||'').toLowerCase()==='voice' &&
@@ -3901,15 +4229,30 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   function _validStructuredReachPolicy(value){
     return _canonicalStructuredReachPolicy(value).ok===true;
   }
+  function _worldBuilderResponseFormat(){
+    try{return JSON.parse(JSON.stringify(hamWorldBuilderContract.responseFormat()));}
+    catch(eWorldBuilderFormat){return null;}
+  }
   function _structuredProviderResult(result){
-    if(!_structuredReachPolicy||!result||result.error)return result;
+    if((!_structuredReachPolicy&&!_worldBuilderMachine)||!result||result.error)return result;
     if(!Array.isArray(result.choices)||!result.choices.length)
       return{error:{code:'reach_policy_provider_contract'}};
     var choice=result.choices[0]||{};
     var modelMessage=choice.message||{};
     if(choice.finish_reason==='length'||choice.finish_reason==='content_filter'||
-        modelMessage.refusal||(Array.isArray(modelMessage.tool_calls)&&
-          modelMessage.tool_calls.length))return{error:{code:'reach_policy_provider_contract'}};
+        modelMessage.refusal)return{error:{code:_worldBuilderMachine
+          ?'ham_world_builder_provider_contract':'reach_policy_provider_contract'}};
+    if(Array.isArray(modelMessage.tool_calls)&&modelMessage.tool_calls.length){
+      return _worldBuilderMachine?result:{error:{code:'reach_policy_provider_contract'}};
+    }
+    if(_worldBuilderMachine){
+      var worldDecision=hamWorldBuilderContract.canonicalize(modelMessage.content);
+      if(!worldDecision.ok)return{error:{code:'ham_world_builder_provider_contract'}};
+      modelMessage.content=worldDecision.text;
+      choice.message=modelMessage;
+      result.choices[0]=choice;
+      return result;
+    }
     var canonical=_canonicalStructuredReachPolicy(modelMessage.content);
     if(!canonical.ok)return{error:{code:'reach_policy_provider_contract'}};
     modelMessage.content=canonical.text;
@@ -3998,6 +4341,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var normalizedChannel = String(channel || '').toLowerCase();
     if (_paiSeatName() === 'coda') return 'station.coda';
     if (normalizedChannel === 'ham_world_builder') return 'station.ham_world_builder';
+    if (normalizedChannel === 'wonder_ask' && identity && identity.wonder_ask &&
+        typeof identity.wonder_ask.seat === 'string') {
+      var summonedSeat = null;
+      try { summonedSeat=require('./wonders/registry.js').resolve(identity.wonder_ask.seat); }
+      catch (eSummonedSeat) { summonedSeat=null; }
+      if (summonedSeat && summonedSeat.lifecycle === 'active') return summonedSeat.id;
+    }
     return 'station.pai';
   }
   function _paiSeatCandidate(name) {
@@ -4115,6 +4465,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // the exact provider boundary so a Qwen primary cannot hand Qwen-only
     // template fields to a non-Qwen rescue (or vice versa).
     applyProviderThinkingPolicy(providerBody, candidate.seat.model);
+    if(_worldBuilderMachine&&_worldBuilderProviderCalls>=_worldBuilderMaxProviderCalls){
+      return{error:{code:'ham_world_builder_provider_budget_exhausted',
+        seat:candidate.seat&&candidate.seat.seat}};
+    }
+    if(!await _worldBuilderProviderFence()){
+      return{error:{code:'ham_world_builder_attempt_receipt_unavailable',
+        seat:candidate.seat&&candidate.seat.seat}};
+    }
+    if(_worldBuilderMachine)_worldBuilderProviderCalls++;
     try {
       var response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method:'POST',
@@ -4153,6 +4512,21 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (!candidate) return {error:{code:'pai_seat_key_missing',seat:seatName||_paiSeatName()}};
     return paiSeatFailover(function (c) { return _attemptPaiSeat(requestBody, c); },
       candidate, _paiFallbackCandidate(seatName));
+  }
+  async function _callPaiLadder(system, user, options) {
+    if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
+      if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
+      return null;
+    }
+    if (!await _worldBuilderProviderFence()) {
+      throw new Error('ham_world_builder_attempt_receipt_unavailable');
+    }
+    if (_worldBuilderMachine && _worldBuilderProviderCalls >= _worldBuilderMaxProviderCalls) {
+      throw new Error('ham_world_builder_provider_budget_exhausted');
+    }
+    if (_worldBuilderMachine) _worldBuilderProviderCalls++;
+    return require('./model.ladder.js').deliberate(system, user,
+      Object.assign({seat:_providerSeat || _paiSeatName()}, options || {}));
   }
   async function callPAIPlain(sys, user, maxTokens) {
     var messages = sys ? [{role:'system',content:sys},{role:'user',content:user}] : user;
@@ -4393,7 +4767,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     require('./freestyle.chatter.js').emitInterim({hamUid:hamUid, channel:channel,
       cycleId:_cycleId, fcw:fcw, prompted:!!String(message||'').trim(),
       closedWorld:!!(_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
-        _roomSafeVoice || _internalCodaTurn)});
+        _roomSafeVoice || _internalCodaTurn || _worldBuilderMachine)});
   } catch (eFreestyleRide) {}
   // A structured REACH policy is a closed-world decision over one exact
   // candidate packet. Ambient recent rows, contributors, prior turns, screen
@@ -4402,6 +4776,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var systemPrompt = _structuredReachPolicy ? _structuredReachSystemPrompt
     : _reachIncidentIntake ? _reachIncidentSystemPrompt
       : _roomSafeVoice ? _roomSafeSystemPrompt : fcw.system_prompt;
+  var _shadowReconsideration = identity && identity._shadow_reconsideration;
+  if (!_structuredReachPolicy && !_reachIncidentIntake && _shadowReconsideration &&
+      typeof _shadowReconsideration.context === 'string' &&
+      _shadowReconsideration.context.trim()) {
+    systemPrompt += '\n\n' + _shadowReconsideration.context.trim();
+  }
   var hamObj = fcw.ham;
   // ⬡B:core.tool_loop:GUARD:one_exact_question_for_provenance_and_council:20260715⬡
   // Identity metadata is canonical when present. Otherwise the first trusted
@@ -4454,7 +4834,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // not a person asking whether the current public reply committed, so the public
       // proof guard must not reinterpret those bytes or later replace CODA's complete
       // typed decision with the generic release invariant.
-      internalDeliberation:codaInternalDeliberation(identity)
+      internalDeliberation:internalDeliberation(identity)
     });
   }
   var _currentPreferenceQuestion = !_structuredReachPolicy && !_reachIncidentIntake &&
@@ -4755,6 +5135,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _codaRepositoryAnswer = '';
   var _codaIdentityReceiptVerified = false;
   var _codaActivationDecision = null;
+  var _codaBuildSpec = null;
   var _codaDecisionSource = null;
   if (_codaLeadNeeded) {
     var _codaCallId = 'coda_preload_' + Date.now();
@@ -4763,7 +5144,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _identity_evidence:fcw.identity_evidence,
       _identity_evidence_result:_identityEvidenceProof.result,
       _identity_evidence_receipt:_identityEvidenceProof.receipt };
-    var _codaResult = await executeTool('consult_coda', _codaToolArgs, hamUid, _codaQuestion);
+    var _codaPrefetchRuntime = {buildSpecRequested:!!(identity &&
+      identity.council_context && identity.council_context.mode === 'coding' &&
+      identity.council_context.surface === 'ccwa')};
+    var _codaResult = await executeTool('consult_coda', _codaToolArgs, hamUid,
+      _codaQuestion,_codaPrefetchRuntime);
     var _codaFailureReason = failedCodaReason(_codaResult);
     if (_codaFailureReason) {
       return { ok:false, reason:_codaFailureReason, blocked_by:'CODA',
@@ -4784,6 +5169,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       if (_codaParsed && _codaParsed.ok === true &&
           (_codaParsed.activationDecision === 'APPROVE' || _codaParsed.activationDecision === 'HOLD')) {
         _codaActivationDecision = _codaParsed.activationDecision;
+        _codaDecisionSource = typeof _codaParsed.decisionSource === 'string'
+          ? _codaParsed.decisionSource : null;
+      }
+      if (_codaParsed && _codaParsed.ok === true &&
+          (_codaParsed.buildDecision === 'APPROVE' || _codaParsed.buildDecision === 'HOLD')) {
+        _codaActivationDecision = _codaParsed.buildDecision;
+        _codaBuildSpec = _codaParsed.buildDecision === 'APPROVE' ? _codaParsed.buildSpec : null;
         _codaDecisionSource = typeof _codaParsed.decisionSource === 'string'
           ? _codaParsed.decisionSource : null;
       }
@@ -4853,6 +5245,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var iter=0,tools=_codaLeadNeeded?['consult_coda']:[],
     ans=_signedVoicePurposeAnswer || _signedVoiceHearingAnswer ||
       _signedVoiceFarewellAnswer || null;
+  var _currentCapabilityReadPrefetched=false;
   if (_signedVoicePurposeAnswer) {
     _stampStep('signed_voice_call_purpose_selected', 'exact_handoff_bytes');
   }
@@ -4940,10 +5333,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // verified coding turn literally orders this named mutation, the first tool
   // decision is structural, not optional prose. CODA has already run above;
   // activation itself still waits behind the outbound council commit.
-  var _roadmapActivationNeeded = _effectRuntime.codaVerified === true
-    && /\bcall\s+activate_roadmap_task\b/i.test(String(_exactUserMessage || ''));
-  var _roadmapActivationEnvelope = parseRoadmapActivationSpec(_exactUserMessage);
+  var _roadmapActivationNeeded = _effectRuntime.codaVerified === true &&
+    (_codaActivationDecision === 'APPROVE' ||
+      /\bcall\s+activate_roadmap_task\b/i.test(String(_exactUserMessage || '')));
+  var _roadmapActivationEnvelope = _codaBuildSpec
+    ? {spec:_codaBuildSpec,source:'coda_build_spec'}
+    : parseRoadmapActivationSpec(_exactUserMessage);
   _effectRuntime.activationDecisionRequired = !!_roadmapActivationEnvelope;
+  _effectRuntime.approvedActivationSpec = _roadmapActivationEnvelope &&
+    _roadmapActivationEnvelope.spec || null;
   if (_roadmapActivationEnvelope && _roadmapActivationEnvelope.error) {
     return { ok:false, reason:_roadmapActivationEnvelope.error, blocked_by:'SPAN_ACTIVATION',
       ham:hamObj, cycleId:_cycleId, requestId:_requestId,
@@ -4965,9 +5363,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _toolTextRejectedOnce = false;       // one corrective pass per turn, never two
   var _exactRoutedWords = (_exactUserMessage && _exactUserMessage.trim())
     ? _exactUserMessage : message;
-  var _explicitRequiredActionTool = requiredActionToolForMessage(
-    _exactRoutedWords, routeToolIntent(_exactRoutedWords));
+  var _explicitRequiredActionTool = null;
   while (!ans) {
+    if(_worldBuilderMachine&&iter>=_worldBuilderMaxIterations){
+      return{ok:false,reason:'ham_world_builder_iteration_budget_exhausted',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+        provider_calls:_worldBuilderProviderCalls,ms:Date.now()-t0};
+    }
     // COLD CODE MAY END THE TURN. IT MAY NOT ANSWER IT. When either backstop fires she
     // gets one more pass, tools removed, with an explicit instruction to answer the whole
     // ask from what she already gathered. So hitting a ceiling is never the first time she
@@ -5001,7 +5403,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // This is a real improvement, not a guarantee -- instruction-following on
     // a growing system prompt stays worth watching, not a closed case.
     var body={model:model,messages:msgs,
-      temperature:_structuredReachPolicy?0:_reachIncidentIntake?0.1:0.3};
+      temperature:(_structuredReachPolicy||_worldBuilderMachine)?0:_reachIncidentIntake?0.1:0.3};
     // ⬡B:core.tool_loop:FOUNDER_LAW:she_holds_her_tools_for_the_whole_run:20260726⬡
     // WAS `if (iter<=3)`. From iteration four on she held nothing, so she could not ask
     // for evidence, and the loop went on paying for passes from a disarmed mind. Default
@@ -5010,6 +5412,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // on the table to reach for.
     if (!_closingPassRan) {
       body.tools=_turnToolDefinitions;
+    }
+    if(_worldBuilderMachine){
+      var _worldBuilderFormat=_worldBuilderResponseFormat();
+      if(_worldBuilderFormat)body.response_format=_worldBuilderFormat;
     }
     // Once the exact explicit action has produced its durable pending effect, the next
     // model pass is for A'NU to speak from that committed plan. Leaving all forty-one tools
@@ -5037,21 +5443,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         !(identity && identity.outbound_finalize === true)) {
       _routedToolIntent = routeToolIntent(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      _routedRequiredReadTool = requiredReadToolForMessage(
-        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
-        _routedToolIntent);
-      _routedRequiredActionTool = requiredActionToolForMessage(
-        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
-        _routedToolIntent);
-      _routedRequiresLiveTool = !!_routedRequiredReadTool;
+      _routedRequiredReadTool = null;
+      _routedRequiredActionTool = null;
+      _routedRequiresLiveTool = false;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
-      var _pureVoiceContinuation = _routeEveryVoicePass &&
-        _routedToolIntent === 'general' && isPureConversationalContinuation(
-          (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      // A pure voice continuation such as "go on" is conversation, not a
-      // council dispatch. Keep ordinary substantial language council-capable,
-      // while preserving the fast natural voice continuation with no schemas.
-      if (_pureVoiceContinuation) body.tools = [];
+      var _pureVoiceContinuation = false;
       if (_routedRequiredReadTool || _routedRequiredActionTool) {
         var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
         body.tools = body.tools.filter(function (tool) {
@@ -5212,15 +5608,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // the coding process, she fell through to find_in_brain and answered with the
       // calendar. She holds consult_mace (CODA lead), run_cookoff, run_wonder_games,
       // assemble_bcw but never picked them. A build/code/consult request nudges the
-      // coding lead. HINT not a rail, she keeps all tools. Named machinery (MACE, CODA,
-      // cook-off, wonder games, BCW) or a plain build/code/ship ask routes here.
+      // coding lead. HINT not a rail, she keeps all tools. Named machinery or an ask
+      // with an explicit technical object routes here. Human verbs such as build,
+      // implement, refactor, and ship are not coding evidence by themselves.
       // _isCodaInternalCycle is computed once, at the top of this whole nudge lane (see the
       // FIX comment on entry to this block), and CODA's own internal deliberation never
       // reaches this line at all. Kept here only as a defensive second check: named machinery
-      // (MACE, CODA, cook-off, wonder games, BCW) or a plain build/code/ship ask routes here
+      // (MACE, CODA, cook-off, wonder games, BCW) or an explicit software object routes here
       // for a real human.
       var _isCodingBuildQ =
-        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
+        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|bcw|code (a|an|the|this|up)|write (the )?code|wire up (the )?(api|route|screen|page|service|module|function)|new (software |coding )?agent|coding (process|team|department)|repo|repository|pull request|commit|deploy|api endpoint|database migration|web app|website|javascript|typescript|python|html|css)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
@@ -5235,86 +5632,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // fabrication. This does not touch action requests or day questions above.
       var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
       var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
-      // ⬡B:core.tool_loop:FIX:load_all_tools_let_her_reason_do_not_railroad_one_tool:20260719⬡
-      // FOUNDER DOCTRINE 20260719: forcing tool_choice onto ONE tool strips her
-      // reasoning -- she answered a calendar question to a planning prompt because a
-      // lookup was strapped on. Like the "all tools always available" setting, she
-      // should hold ALL her tools and CHOOSE. So tool_choice stays 'auto' (all tools
-      // on the table) and the intent is delivered as a STRONG PROMPT NUDGE instead of
-      // a hard rail. The data-reader direct-execute safety net downstream still catches
-      // a genuine refusal, so a real day/lookup question can never answer from nothing.
+      // The observations above remain diagnostic telemetry only. They do not select,
+      // remove, prefer, or require a hand. The seated mind receives the complete armory
+      // and decides what the person's words mean from its employment record.
       var _toolNudge = null;
       if (_roadmapActivationNeeded) _toolNudge='activate_roadmap_task';
-      // ⬡B:core.tool_loop:FIX:finance_turns_force_the_budget_tool_so_the_answer_is_never_a_guess:20260722⬡
-      // FOUNDER 911: the LEDGER finance advisor holds the real budget in its deliberation, but the
-      // model was probabilistic about using it, so identical asks flip between the real bills and
-      // "I don't have access". A finance turn is ALWAYS about the person's money, so force
-      // get_budget_summary here: the real income vs bills becomes verified tool evidence the council
-      // grounds on, killing the variance. It is a DATA_READER_TOOL with no required args, so the
-      // forced-read net below makes the model call it even if it tries to skip it.
-      else if (String(channel||'').toLowerCase() === 'finance') _toolNudge='get_budget_summary';
-      else if (_isLaneBoardQ) _toolNudge='read_lane_board';
-      else if (_isCodingBuildQ) _toolNudge='consult_mace';
-      else if (_nashNeeded) { _toolNudge='nash_sports'; _nashNeeded=false; }
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
         // call-purpose question. Keep the full PAI + council, but do not force an
         // unrelated generic Memory Bank read in front of that bounded evidence.
         delete body.tools;
       }
-      else if (_isDayQ) _toolNudge='calendar_read';
-      else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
-        // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
-        // Remove the irrelevant personal and surface schemas, but preserve the
-        // advisor council entrance. Only the whole-utterance continuation seam
-        // above is allowed to remove that cross-domain organ from a voice turn.
-        // Mixed requests such as "why, and email me" do not match this predicate.
-        body.tools = toolsForIntent(body.tools, 'general');
-      }
-      else if (_looksPublicKnowledgeQ &&
-          (!_routedToolIntent || _routedToolIntent === 'general')) {
-        // Public-world question with no personal anchor: answer from the model's own
-        // knowledge. Receipts showed that merely UNFORCING find_in_brain was not
-        // enough -- with the personal-tool schema still in front of her she reached
-        // for read_own_code / find_in_brain anyway and deflected ("I don't have
-        // access to product databases"). So the personal tool schemas are removed
-        // for this turn, but the cross-domain advisor entrance remains available.
-        // Personal and day questions above keep their tools untouched.
-        body.tools = toolsForIntent(body.tools, 'general');
-        delete body.tool_choice;
-      }
-      else if ((!_routedToolIntent || _routedToolIntent === 'general') &&
-          (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd))) _toolNudge='find_in_brain';
-      // Deliver the intent as a nudge, keep tool_choice auto (all tools available, she reasons).
+      // No keyword, category, or cold intent guess selects a hand here. The sole nudge
+      // is a typed roadmap activation already chosen and approved by a seated CODA turn.
       if (_toolNudge && Array.isArray(body.tools) && body.tools.length) {
         body.tool_choice = 'auto';
-        // ⬡B:core.tool_loop:FIX:nudge_for_action_tools_must_be_firm_not_weak:20260719⬡
-        // Founder caught her ignoring the coding/lane nudge and defaulting to
-        // find_in_brain (answering with the calendar). The generic "very likely, if it
-        // helps" text was too soft to beat the base prompt's hard pull toward
-        // calendar_read/find_in_brain for anything that mentions his life or his build.
-        // The DATA READER tools keep the soft text (she should still reason freely about
-        // whether a lookup helps). The ACTION/DEPARTMENT tools (consult_mace/CODA,
-        // read_lane_board, run_cookoff, run_wonder_games, assemble_bcw) get a FIRM
-        // directive: this is the tool for this turn, call it first, do not answer from
-        // the calendar or a brain note instead. Still auto (she holds all tools), just a
-        // strong instruction rather than a hint, matching how NASH is directed.
-        var _nudgeText;
-        if (DATA_READER_TOOLS[_toolNudge]) {
-          _nudgeText = 'For this message, the right tool to use is very likely ' + _toolNudge +
-            '. Call it if it helps you answer from real data, but you hold all your tools; use your judgment.';
-        } else {
-          _nudgeText = 'For THIS message you must call the ' + _toolNudge + ' tool FIRST and answer from its result. ' +
-            'This is a request that ' + _toolNudge + ' handles, not a calendar or brain-note question. ' +
-            'Do not answer from your day, your schedule, or an old note instead; call ' + _toolNudge + ' and use what it returns. ' +
-            'You still hold all your tools, but this is the one this turn needs.';
-        }
+        var _nudgeText = 'A seated CODA judgment already approved the exact typed roadmap '
+          + 'activation carried in this turn. Call ' + _toolNudge + ' so that approved '
+          + 'decision crosses the normal receipt and consequence boundary.';
         if (Array.isArray(body.messages) && body.messages.length) {
           body.messages = body.messages.concat([{ role:'system', content:_nudgeText }]);
         }
-        // Preserve the required-tool signal ONLY for the downstream direct-execute
-        // safety net (data readers), without hard-forcing the model.
-        if (DATA_READER_TOOLS[_toolNudge]) { body._dataReaderNudge = _toolNudge; }
         // ⬡B:core.tool_loop:FIX:roadmap_activation_nudge_rejoins_fail_closed_net:20260720⬡
         // The 20260719 nudge refactor gave data readers and consult_mace a retry +
         // fail-closed safety net, but activate_roadmap_task is neither -- it is a real
@@ -5324,41 +5662,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // instead of failing closed with roadmap_activation_tool_call_missing. This
         // flag rejoins it to that existing net without hard-forcing tool_choice.
         if (_toolNudge === 'activate_roadmap_task') { body._roadmapActivationNudge = true; }
-        // ⬡B:core.tool_loop:FIX:consult_mace_force_execute_when_file_and_repo_named:20260719⬡
-        // Founder caught her refusing to call consult_mace even with the firm nudge:
-        // she generated words with tools=0. consult_mace is not a no-arg reader (it
-        // needs repo+path), so it cannot join DATA_READER_TOOLS blindly. But when the
-        // message NAMES a concrete file and repo, those args are deterministic, so we
-        // can force-execute it exactly like a data reader: parse repo+path, and if the
-        // model still will not emit the call, cold code runs MACE read_file and feeds
-        // the real file back. This only arms when a file+repo are actually present, so
-        // a vague "consult MACE to plan" (no file) still goes to the model to reason.
-        if (_toolNudge === 'consult_mace') {
-          var _mcPath = String(_mSt || '').match(/([a-z0-9_.\-]+\/[a-z0-9_.\/\-]+\.[a-z]+)/i);
-          var _mcRepo = String(_mSt || '').match(/\b(template-mind|anew|canew|eanew|ababase|aba-shared)\b/i);
-          if (_mcPath && _mcRepo) {
-            body._codingReadNudge = { repo: _mcRepo[1], path: _mcPath[1], action: 'read_file' };
-          }
-        }
-      }
-      // ⬡B:core.tool_loop:WONDER:generative_ui_is_a_wonder_she_decides_cold_code_renders:20260721⬡
-      // Founder law, direct: MAKE ALL THE GENERATIVE UI A WONDER, NOT COLD CODE. The prior version
-      // of this block was cold code deciding a semantic thing -- a regex enumerating scene words to
-      // decide "this is a background command", then FORCING tool_choice onto one tool, which is the
-      // exact railroad his own doctrine forbids (load_all_tools_let_her_reason_do_not_railroad_one_tool,
-      // 20260719: forcing tool_choice onto ONE tool strips her reasoning). So the force is gone. The
-      // wonder shape: her surface tools are already on the table (routeToolIntent put them there), she
-      // is the one who decides to change the surface and which scene, and cold code only renders and
-      // reads back. This block does two non-deciding things: a FIRM NUDGE (her own mechanism, same as
-      // the coding/lane nudges, tool_choice stays auto so she still reasons) so she reliably reaches
-      // for the surface tool when they asked for a surface change, and the warm-confirmation directive
-      // pushed into msgs (persistent, so it reaches the compose turn) so she confirms from what she
-      // actually did, in her voice, reading back the real result -- never a promise, never a flat label.
-      if (_routedToolIntent === 'screen' && Array.isArray(body.tools) && body.tools.some(function (t) {
-            return t && t.function && (t.function.name === 'set_background' || t.function.name === 'update_screen'); })) {
-        msgs.push({ role: 'system', content:
-          'This turn is about their surface -- their background, their screen, what they see. You hold your surface tools (set_background for the standing background, update_screen for the live glass). If they asked you to change what is behind everything or on their screen, actually do it this turn by calling the right tool; do not say you will get to it or that it is on the way, and do not answer as if you did something you did not call. Then confirm from what actually happened, reading back the real result, and speak it as A’NU -- the one who already handled it, warm, in full natural sentences the way a butler who knows them would, letting something you genuinely know about them show if it fits, never a flat status label. You still hold all your judgment; if it is genuinely not a surface change, do not force one.' });
-        _stampStep('surface_wonder_nudge', 'screen_tools_available_she_decides');
       }
       }
     }
@@ -5375,6 +5678,40 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       body.messages = body.messages.concat([{ role:'system',
         content:'This exact request asks for owned or current data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
       _stampStep('tool_intent_live_read_required', _routedToolIntent);
+    }
+    // A current-capability question has one exact, read-only owner and no model judgment is
+    // needed to decide whether to consult it. Read once before the first composition so the
+    // affordable path is one grounded draft, with the ordinary single repair still available
+    // if that draft overreaches. The provider never receives a duplicate capability tool after
+    // the verified result is already in its context.
+    if (_routedRequiredReadTool === 'read_current_capabilities' &&
+        !_currentCapabilityReadPrefetched) {
+      var _prefetchedCapabilityId='prefetched_current_capability_'+_cycleId;
+      var _prefetchedCapabilityArgs={question:_exactUserMessage};
+      var _prefetchedCapabilityResult=await executeTool('read_current_capabilities',
+        _prefetchedCapabilityArgs,hamUid,_exactUserMessage,_effectRuntime,false);
+      tools.push('read_current_capabilities');
+      msgs.push({role:'assistant',content:null,tool_calls:[{id:_prefetchedCapabilityId,
+        type:'function',function:{name:'read_current_capabilities',
+          arguments:JSON.stringify(_prefetchedCapabilityArgs)}}]});
+      paiToolEvidence.append(_verifiedToolEvidence,{tool:'read_current_capabilities',
+        args:_prefetchedCapabilityArgs,result:_prefetchedCapabilityResult,hamUid:hamUid,
+        requestId:_requestId,cycleId:_cycleId,toolCallId:_prefetchedCapabilityId,
+        provenance:'pai.current_turn.policy_read'});
+      var _prefetchedCapabilityProjection=currentCapabilityHumanProjection(
+        _exactUserMessage,_verifiedToolEvidence,{hamUid:hamUid,requestId:_requestId,
+          cycleId:_cycleId,question:_exactUserMessage});
+      msgs.push({role:'tool',tool_call_id:_prefetchedCapabilityId,
+        content:JSON.stringify(_prefetchedCapabilityProjection)});
+      msgs.push({role:'system',content:
+        'Answer only from the live capability rows above. Each positive capability sentence must be supported by one live row. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
+      _currentCapabilityReadPrefetched=true;
+      _routedRequiresLiveTool=false;
+      body.messages=msgs;
+      delete body.tools;
+      delete body.tool_choice;
+      delete body._dataReaderNudge;
+      _stampStep('required_capability_read_prefetched','bound_exact_user_message');
     }
     if (_routedRequiredActionTool && Array.isArray(body.tools) && body.tools.length) {
       body.tool_choice = 'required';
@@ -5434,6 +5771,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if(_structuredReachPolicy){
       var _policyFormat=_structuredReachResponseFormat();
       if(_policyFormat)_providerBody.response_format=_policyFormat;
+      _providerBody.provider={require_parameters:true};
+    }
+    if(_worldBuilderMachine){
+      var _worldBuilderProviderFormat=_worldBuilderResponseFormat();
+      if(_worldBuilderProviderFormat)_providerBody.response_format=_worldBuilderProviderFormat;
       _providerBody.provider={require_parameters:true};
     }
     // Closed-world PAI modes deliberately skip ambient Memory Bank assembly. They still need
@@ -5499,21 +5841,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // exactly as the 20260718 law says, and this changes nothing for it.
     if (paiRequestBlocksLadder(_providerBody, r)) {
       if (!_cycleFailure) _noteCycleFailure('pai_seat_tool_turn_unserved');
-    } else if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
-      // The rung shares _modelRequestSignal(), so on an expired voice deadline it would take
-      // the same one-millisecond signal and abort before a byte left, then report `ladder:`
-      // and send the next reader to the ladder. Named for what it is instead.
-      if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
     } else if (!r||r.error||!r.choices){
       try{
-        var _lad=require('./model.ladder.js');
         var _hist=openAiCompatibleHistory(msgs);
         var _flat=_flattenHistoryForFallback(_hist);
         var _sys=_flat.system;
         var _usr=_flat.user;
-        var _lr=await _lad.deliberate(_sys,_usr,{seat:_providerSeat,
-          temperature:_structuredReachPolicy?0:0.3,timeout:60000,
-          json:_structuredReachPolicy?true:false,signal:_modelRequestSignal()});
+        var _lr=await _callPaiLadder(_sys,_usr,{seat:_providerSeat,
+          temperature:(_structuredReachPolicy||_worldBuilderMachine)?0:0.3,timeout:60000,
+          json:(_structuredReachPolicy||_worldBuilderMachine)?true:false,
+          signal:_modelRequestSignal()});
         if(_lr&&_lr.content){
           r={choices:[{message:{role:'assistant',content:_lr.content}}],_provider:'ladder:'+(_lr.via||'')};
           _noteCycleFailure(null);
@@ -5544,7 +5881,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         ' preview='+JSON.stringify(String(((_rc&&_rc.message&&_rc.message.content)||'')).slice(0)));
     }catch(_eRR){}
     if (!r||r.error||!r.choices){
-      ans=_structuredReachPolicy?'{}':'';
+      ans=(_structuredReachPolicy||_worldBuilderMachine)?'{}':'';
       break;
     }
     var ch=r.choices[0],msg=ch.message;
@@ -5591,10 +5928,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       ans=_structuredDraft.ok?_structuredDraft.text:'{}';
       break;
     }
+    if(_worldBuilderMachine&&!((msg&&msg.tool_calls||[]).length)){
+      var _worldDecision=hamWorldBuilderContract.canonicalize(msg&&msg.content);
+      if(!_worldDecision.ok){
+        return{ok:false,reason:_worldDecision.reason,ham:hamObj,cycleId:_cycleId,
+          requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      }
+      ans=_worldDecision.text;
+      break;
+    }
     if (msg && !((msg.tool_calls || []).length) && outputGuard.containsCjk(msg.content) &&
         !outputGuard.explicitNonEnglishRequest(_exactUserMessage || message)) {
       try {
-        var _englishRewrite = await require('./model.ladder.js').deliberate(
+        var _englishRewrite = await _callPaiLadder(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
           String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
             timeout:12000, noGuard:true });
@@ -5879,6 +6225,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // a signed call. Bind read arguments at the execution/evidence boundary;
         // non-voice unresolved-inbox behavior remains unchanged.
         targs = bindExactHamToolArgs(tc.function.name, targs, hamUid, _effectRuntime);
+        if (tc.function.name === 'read_current_capabilities') {
+          targs.question = _exactUserMessage;
+        }
         tc.function.arguments = JSON.stringify(targs);
         _stampStep('tool_call', tc.function.name);
         var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime,true);
@@ -5957,7 +6306,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
             }
           } catch (eTrParse) {}
         }
-        msgs.push({role:'tool',tool_call_id:tc.id,content:tr});
+        var _toolResultForModel=tr;
+        if (tc.function.name === 'read_current_capabilities') {
+          _toolResultForModel=JSON.stringify(currentCapabilityHumanProjection(
+            _exactUserMessage,_verifiedToolEvidence,{hamUid:hamUid,requestId:_requestId,
+              cycleId:_cycleId,question:_exactUserMessage}));
+        }
+        msgs.push({role:'tool',tool_call_id:tc.id,content:_toolResultForModel});
+        if (tc.function.name === 'read_current_capabilities') {
+          msgs.push({role:'system',content:
+            'Answer the capability question itself in concise, plain language. Each positive capability sentence must be supported by one live capability row above. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
+        }
         // ⬡B:core.tool_loop:EVIDENCE:bound_bcw_refocused_after_generic_find:20260715⬡
         // Information questions force a live FIND after CODA's preload. A generic
         // or empty bank result is useful evidence, but it cannot become the last
@@ -6176,12 +6535,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   async function _completeBoundHistoryOnLadder(history, maxTokens, temperature, jsonMode) {
     if (await _turnCancelled(true)) return '';
     try {
-      var _repairLadder = require('./model.ladder.js');
       var _repairHistory = openAiCompatibleHistory(history);
       var _repairFlat = _flattenHistoryForFallback(_repairHistory);
       var _repairSystem = _repairFlat.system;
       var _repairUser = _repairFlat.user;
-      var _repairResult = await _repairLadder.deliberate(_repairSystem, _repairUser,
+      var _repairResult = await _callPaiLadder(_repairSystem, _repairUser,
         {seat:_providerSeat || _paiSeatName(),
           temperature:temperature == null ? 0.1 : temperature,
           timeout:60000,json:jsonMode === true,signal:_modelRequestSignal()});
@@ -6196,13 +6554,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _oneRepairCap;
     var _nameBoundaryRepair = /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
       String(failureCode || ''));
+    var _capabilityBoundaryRepair = /(?:current_capability_evidence_missing|stale_single_file_claim|unsupported_exhaustive_claim|unsupported_capability_clause|unsupported_negative_capability_claim|internal_capability_surface_exposed|ambiguous_capability_subject|supported_capability_clause_missing)/
+      .test(String(failureCode || ''));
     // A privacy-held attribution is evidence of what must NOT be repeated. Feeding
     // it back as the assistant's last sentence anchored the healer on the exact
     // name/creator claim it was asked to remove. Name-boundary repairs therefore
     // start from the original bound context and completed tool results only.
-    var _repairCandidate = _nameBoundaryRepair ? '' : candidate;
+    var _repairCandidate = (_nameBoundaryRepair || _capabilityBoundaryRepair) ? '' : candidate;
     var _nameRepairInstruction = _nameBoundaryRepair
       ? ' Remove every creator, owner, founder, builder, employer, or author attribution and every real-person name from the answer, including the name of the person on this call. Answer who you are, why you are here, or who authorized the call only in terms of what you do, the signed call purpose, and non-human system or Wonder roles already established in the bound context. Do not repeat or paraphrase the rejected attribution.'
+      : '';
+    var _capabilityRepairInstruction = _capabilityBoundaryRepair
+      ? (String(failureCode || '').indexOf('current_capability_evidence_missing') >= 0
+        ? ' The current capability read supplied zero live rows. Answer without claiming the capability is present or absent. State the uncertainty directly in natural human language, with no process narration, tool names, system vocabulary, or invented replacement capability.'
+        : ' Rewrite from the live capability rows already in the completed context. Use short atomic sentences. Begin every positive capability sentence with exactly one visible subject label copied verbatim from the completed capability result. Never combine subject labels in one sentence. Never substitute a pronoun, you, or the system for the visible subject label. For Come Code, write "Come Code can " followed by one full action description copied from that subject, changing only its first letter to lowercase. Use one action per sentence. For other subjects, use one state word listed under that same subject. Omit a claim rather than broaden, combine, or paraphrase it. Remove unsupported, exhaustive, and old limitation claims. Use natural human language with no process narration, tool names, system vocabulary, or invented replacement capability.')
       : '';
     var _repairedHuman = await regenerateHollowAnswer(_repairCandidate, msgs, [async function (repairMessages) {
       return (await _completeBoundHistoryOnLadder(repairMessages, _oneRepairCap, 0.1, false)) || '';
@@ -6211,13 +6576,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       + 'Repair it once as a direct human-facing answer to the original request, using only facts in '
       + 'the bound system context and completed tool results already present. Fix only that named '
       + 'failure. Do not add facts, claim an unexecuted action, emit tool syntax or JSON, mention the '
-      + 'repair, or describe yourself as an AI/model.' + _nameRepairInstruction });
+      + 'repair, or describe yourself as an AI/model.' + _nameRepairInstruction
+      + _capabilityRepairInstruction });
     return _repairedHuman;
   }
   // ⬡B:core.tool_loop:WIRE:loop_exit_receipt:20260718⬡ bisection instrument:
   // names whether the kill is inside the loop or in the post-loop passes.
   try{_stampStep('loop_exit_answer', 'len='+finalAns.length+' tools='+tools.length+' iter='+iter);}catch(_eLX){}
-  var _repositoryDraftRepair = _structuredReachPolicy
+  var _repositoryDraftRepair = (_structuredReachPolicy||_worldBuilderMachine)
     ? { repaired:false, answer:finalAns, reason:null }
     : repairCodaRepositoryDraft(
       finalAns, _codaRepositoryAnswer, !!_codaRepositoryAnswer);
@@ -6229,7 +6595,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // CODA may deterministically select the exact bytes of one explicitly named
   // BCW section. Preserve those bytes so SHADOW can verify the same question-
   // bound digest. Nothing is released here; the complete council still follows.
-  if (!_structuredReachPolicy && _codaDirectNamedEvidenceAnswer) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine && _codaDirectNamedEvidenceAnswer) {
     finalAns = _codaDirectNamedEvidenceAnswer;
     _stampStep('direct_named_evidence_selected', 'verified_coda_decision');
   }
@@ -6244,7 +6610,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     cycleId:_cycleId, question:_exactUserMessage,
     context:{ verified_evidence:_identityVerifiedEvidence
       .concat(_namedAgentVerifiedEvidence, _verifiedToolEvidence) } };
-  var _preferenceDraftFlags = _structuredReachPolicy ? [] : preferenceJudgmentFindings(
+  var _preferenceDraftFlags = (_structuredReachPolicy||_worldBuilderMachine) ? [] : preferenceJudgmentFindings(
     _exactUserMessage, finalAns, _preferenceEvidenceContext);
   if (_preferenceDraftFlags.length) {
     _preCouncilHumanRepairUsed = true;
@@ -6277,7 +6643,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // CODA may already have produced a deterministically valid two-bucket answer.
   // If the conversational draft collapses those origins, repair with CODA's
   // verified candidate; every outbound gate still runs below.
-  if (!_structuredReachPolicy && _identityProvenanceLedger.required && _codaProvenanceAnswer) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine &&
+      _identityProvenanceLedger.required && _codaProvenanceAnswer) {
     var _provenanceDraftCheck = identityProvenance.validateDraft(finalAns,
       _identityProvenanceLedger);
     if (!_provenanceDraftCheck.ok) {
@@ -6291,7 +6658,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // use CODA's verified live bytes as the candidate. Those bytes do not bypass
   // anything: every preparation stage, the full outbound council, STAMP commit,
   // and readback still run below.
-  if (!_structuredReachPolicy && _codaEvidenceRelayAnswer) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine && _codaEvidenceRelayAnswer) {
     var _finalNamedFlags = finalAns
       ? namedContextContradictions(finalAns, _namedContextEvidence) : [{ reason:'empty_answer' }];
     if (!finalAns || _finalNamedFlags.length) {
@@ -6304,7 +6671,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // verification, screen extraction, protocol scrub, destination formatting,
   // SHADOW preparation, PAM, and persona. Repaired bytes therefore traverse
   // the same deterministic preparation once; no retry lane can skip a gate.
-  if (!_structuredReachPolicy && finalAns && !isHumanFacingAnswer(finalAns)) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine && finalAns && !isHumanFacingAnswer(finalAns)) {
     _stampStep('hollow_protocol_answer_caught', String(finalAns || '').slice(0, 80));
     var _repairedHuman = await _repairHumanOnce(finalAns, 'hollow_protocol_answer');
     if (await _turnCancelled(true)) return _turnCancelledResult('after_hollow_repair');
@@ -6354,7 +6721,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // through the canonical mind under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Removing the
   // guard would ship raw JSON to the human; rerouting to re-synthesis cannot be verified here, so it
   // is contained by stamp only.
-  if (!_structuredReachPolicy) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine) {
     var _rawRepair = repairRawJsonAnswer(finalAns, identity && identity.council_context);
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
@@ -6372,7 +6739,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // exists. Claiming an action you did not take is the worst failure. Guard: if the
   // reply claims a reminder/calendar action but the matching tool did not run this
   // turn, strip the false claim and tell the truth. Cold detection, no LLM.
-  if (!_structuredReachPolicy&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
+  if (!_structuredReachPolicy&&!_worldBuilderMachine&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
     _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
     finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
   }
@@ -6383,7 +6750,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // transcript. One plain completion over the SAME bound transcript -- no new
   // tools, no new facts -- and the recovered text still crosses SHADOW, the full
   // council, STAMP, and readback. Empty again = silent, unchanged law.
-  if (!finalAns && tools.length) {
+  if (!_worldBuilderMachine && !finalAns && tools.length) {
     _preCouncilHumanRepairUsed = true;
     try {
       var _evTail = msgs.slice(-14).map(function(m){
@@ -6408,7 +6775,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // Provider fallbacks may all return empty even when the bound request itself is
   // answerable. Give the exact transcript one final, single human-answer repair;
   // its bytes still traverse every preparation, council, STAMP, and readback gate.
-  if (!finalAns && !_preCouncilHumanRepairUsed) {
+  if (!_worldBuilderMachine && !finalAns && !_preCouncilHumanRepairUsed) {
     var _emptyRepair = await _repairHumanOnce('', 'no_answer');
     if (await _turnCancelled(true)) return _turnCancelledResult('after_empty_repair');
     if (_emptyRepair && _emptyRepair.answer) {
@@ -6546,7 +6913,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   }
   // THE REAL SECOND PASS. Deterministic, not another LLM guess trusting itself.
-  if (!_structuredReachPolicy&&_verifiedRealNumbers.length && /\d/.test(finalAns)) {
+  if (!_structuredReachPolicy&&!_worldBuilderMachine&&_verifiedRealNumbers.length && /\d/.test(finalAns)) {
     var _answerNumbers = (finalAns.match(/\b\d+\b/g) || []);
     var _unverified = _answerNumbers.filter(function(n){ return _verifiedRealNumbers.indexOf(n) === -1; });
     if (_unverified.length) {
@@ -6590,13 +6957,42 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // this turn did not run/complete, replace it with the true release invariant.
   // The repaired bytes still traverse screen extraction, formatting, PAM, SHADOW,
   // the full council, STAMP, and readback below.
-  var _proofDraft = _structuredReachPolicy?{repaired:false,answer:finalAns}:
+  var _proofDraft = (_structuredReachPolicy||_worldBuilderMachine)
+    ?{repaired:false,answer:finalAns}:
     currentTurnProofGuard.repairDraft(_proofQuestion, finalAns, {
-      internalDeliberation:_isCodaInternalCycle
+      internalDeliberation:internalDeliberation(identity)
     });
   if (_proofDraft.repaired) {
     finalAns = _proofDraft.answer;
     _stampStep('current_turn_proof_claim_repaired', _proofDraft.reason);
+  }
+  var _capabilityDraft = (_structuredReachPolicy||_worldBuilderMachine)
+    ? {held:false,answer:finalAns,reason:null}
+    : guardCurrentCapabilityClaim(_proofQuestion, finalAns, _verifiedToolEvidence, {
+      hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
+    });
+  if (_capabilityDraft.held) {
+    _stampStep('current_capability_claim_held', _capabilityDraft.reason);
+    var _capabilityRepair = await _repairHumanOnce('', _capabilityDraft.reason);
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_capability_repair');
+    var _capabilityRepairCheck = guardCurrentCapabilityClaim(_proofQuestion,
+      _capabilityRepair.answer, _verifiedToolEvidence, {
+        hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
+      });
+    var _capabilityRepairPostReason = !_capabilityRepair.answer
+      ? 'empty_repair'
+      : (_capabilityRepairCheck.held ? _capabilityRepairCheck.reason : 'accepted');
+    _stampStep('current_capability_claim_repair_checked',
+      'len='+String(_capabilityRepair.answer || '').length+
+      ' post_check_reason='+_capabilityRepairPostReason);
+    if (!_capabilityRepair.answer || _capabilityRepairCheck.held) {
+      _stampStep('cycle_end_silent', 'current_capability_unverified');
+      return {ok:false,reason:'current_capability_unverified',blocked_by:'A\'NU',
+        ham:hamObj,cycleId:_cycleId,requestId:_requestId,tools_used:tools,
+        iterations:iter,ms:Date.now()-t0};
+    }
+    finalAns = _capabilityRepair.answer;
+    _stampStep('current_capability_claim_repaired', _capabilityDraft.reason);
   }
   // ⬡B:core.tool.loop:WIRE:screen_awareness_act:20260709⬡
   // ⬡B:core.tool_loop:REPAIR:one_full_preparation_resubmission:20260719⬡
@@ -6651,7 +7047,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         { hamUid:hamUid,persona:_personaChoice,contributions:{} });
     } catch (ePrepPersona) {}
     if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns, {
-      internalDeliberation:_isCodaInternalCycle
+      internalDeliberation:internalDeliberation(identity)
     })) {
       return {ok:false,answer:finalAns,screenBlock:preparedScreenBlock,
         reason:'false_current_turn_failure_claim_after_preparation'};
@@ -6693,6 +7089,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
         ms:Date.now()-t0};
     }
+  } else if (_worldBuilderMachine) {
+    var _preparedWorldDecision=hamWorldBuilderContract.canonicalize(finalAns);
+    if(!_preparedWorldDecision.ok){
+      return{ok:false,reason:_preparedWorldDecision.reason,blocked_by:'A\'NU',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+        ms:Date.now()-t0};
+    }
+    finalAns=_preparedWorldDecision.text;
   } else {
     var _preparedHuman = _prepareHumanAnswerOnce(finalAns);
     if (!_preparedHuman.ok && !_preCouncilHumanRepairUsed) {
@@ -6746,6 +7150,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // A rejected draft cannot contribute screen bytes to a repaired answer.
     // Only the exact preparation that passed every outbound boundary may commit.
     _screenBlock = _preparedHuman.screenBlock || null;
+  }
+  var _currentCapabilityAnswerBinding = null;
+  if (!_structuredReachPolicy && !_worldBuilderMachine &&
+      currentCapabilityQuestion(_proofQuestion) &&
+      categoricalCurrentCapabilityClaim(finalAns)) {
+    var _preparedCapabilityCheck = guardCurrentCapabilityClaim(_proofQuestion,
+      finalAns, _verifiedToolEvidence, {
+        hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
+      });
+    if (_preparedCapabilityCheck.held) {
+      _stampStep('current_capability_claim_changed_during_preparation',
+        _preparedCapabilityCheck.reason);
+      return {ok:false,reason:'current_capability_unverified',blocked_by:'A\'NU',
+        ham:hamObj,cycleId:_cycleId,requestId:_requestId,tools_used:tools,
+        iterations:iter,ms:Date.now()-t0};
+    }
+    _currentCapabilityAnswerBinding = mintCurrentCapabilityAnswerBinding({
+      hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion,
+      answer:finalAns,evidence:_verifiedToolEvidence
+    });
+    if (!_currentCapabilityAnswerBinding) {
+      _stampStep('current_capability_answer_binding_failed', 'signed_evidence_unverified');
+      return {ok:false,reason:'current_capability_answer_binding_unverified',
+        blocked_by:'A\'NU',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    _stampStep('current_capability_answer_bound',
+      'bytes='+_currentCapabilityAnswerBinding.answer_bytes+
+      ' digest='+_currentCapabilityAnswerBinding.answer_digest);
   }
   // ⬡B:core.tool_loop:GUARD:full_pai_outbound_council_every_return:20260715⬡
   // This is the only successful exit. PAM, SHADOW, META_COMMENTARY, conditional
@@ -6853,11 +7286,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // council/killswitch/presence gauntlet) is the ONLY thing that wakes him. So an
   // autonomous/action turn is no longer reach-eligible. Real inbound/user turns keep
   // full reach; the action itself (a reminder/calendar) is its own effect.
-  var _autonomousChannel = /^(anew_action|autonomous)$/.test(String(channel||'').toLowerCase());
-  var _reachHandoffEligible = !_autonomousChannel && !(identity && (identity.outbound_finalize ||
-    identity.delivery&&identity.delivery.external ||
-    /^(outbound|outreach)/.test(_reachHandoffMode) ||
-    _reachHandoffMode==='proposed_action_dispatch'));
+  var _reachHandoffEligible = reachHandoffEligible(channel,identity);
   // This flag is committed inside the canonical CYCLE_RECEIPT/STAMP pair. If
   // the later candidate append loses its response or fails, the queue scanner
   // can reconstruct exactly this ordinary cycle. Finalizer/external cycles are
@@ -6873,8 +7302,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   else _councilContext.pending_effects = _effectRuntime.pendingEffects.map(function (effect) {
       return { name:effect.name, args:effect.args };
     });
+  _councilContext.available_hands = _structuredReachPolicy ? []
+    : (_turnToolDefinitions || []).map(function (tool) {
+      var fn = tool && tool.function || {};
+      return {name:String(fn.name || ''),description:String(fn.description || '')};
+    }).filter(function (hand) { return hand.name && hand.description; });
   _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
+  var _worldBuilderDraftBytes=_worldBuilderMachine?finalAns:null;
   if (await _turnCancelled(true)) return _turnCancelledResult('before_council');
   if (_reachIncidentIntake&&
       !await reachIncidentFence(identity,'before_council'))return{ok:false,
@@ -6886,13 +7321,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     deliberationInput:String(message||''),
     answer:finalAns,channel:channel,activeWorld:_activeWorld,
     delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext,
-    signal:_turnAbortSignal
+    signal:_turnAbortSignal,
+    currentCapabilityAnswerBinding:_currentCapabilityAnswerBinding
   });
   if (await _turnCancelled(true)) return _turnCancelledResult('after_council');
   var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
   var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
     question:_exactUserMessage,deliberationInput:String(message||''),
-    answer:_council&&_council.answer};
+    answer:_currentCapabilityAnswerBinding ? finalAns : (_council&&_council.answer)};
+  if (_currentCapabilityAnswerBinding) {
+    _mainCouncilExpected.currentCapabilityAnswerBinding =
+      currentCapabilityAnswerBindingReceipt(_currentCapabilityAnswerBinding);
+  }
   if (_identityProvenanceLedger.required) {
     _mainCouncilExpected.identityEvidenceReceipt = _identityEvidenceProof.receipt;
   }
@@ -6930,6 +7370,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       council_stages:(_council&&_council.stages)||[]};
   }
   finalAns = _council.answer;
+  if (_currentCapabilityAnswerBinding) {
+    var _postCouncilCapabilityCheck = guardCurrentCapabilityClaim(_proofQuestion,
+      finalAns, _verifiedToolEvidence, {
+        hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
+      });
+    var _postCouncilCapabilityDigest = _crypto.createHash('sha256')
+      .update(Buffer.from(String(finalAns), 'utf8')).digest('hex');
+    if (_postCouncilCapabilityCheck.held ||
+        _postCouncilCapabilityDigest !== _currentCapabilityAnswerBinding.answer_digest ||
+        Buffer.byteLength(finalAns, 'utf8') !== _currentCapabilityAnswerBinding.answer_bytes) {
+      var _postCouncilCapabilityReason = _postCouncilCapabilityCheck.held
+        ? _postCouncilCapabilityCheck.reason : 'current_capability_bound_answer_mutated';
+      _stampStep('outbound_council_blocked', _postCouncilCapabilityReason);
+      return {ok:false,reason:'current_capability_post_council_unverified',
+        blocked_by:'A\'NU',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    _stampStep('current_capability_post_council_verified',
+      'bytes='+_currentCapabilityAnswerBinding.answer_bytes+
+      ' digest='+_currentCapabilityAnswerBinding.answer_digest);
+  }
   if(_structuredReachPolicy&&(finalAns!==_structuredPolicyDraftBytes||
       !_validStructuredReachPolicy(finalAns))){
     _stampStep('outbound_council_blocked','reach_policy_json_mutated');
@@ -6937,7 +7398,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
       ms:Date.now()-t0};
   }
-  if (!_structuredReachPolicy&&!isHumanFacingAnswer(finalAns)) {
+  if(_worldBuilderMachine&&(finalAns!==_worldBuilderDraftBytes||
+      !hamWorldBuilderContract.canonicalize(finalAns).ok)){
+    _stampStep('outbound_council_blocked','ham_world_builder_json_mutated');
+    return{ok:false,reason:'ham_world_builder_json_mutated',blocked_by:'A\'NU',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+      ms:Date.now()-t0};
+  }
+  if (!_structuredReachPolicy&&!_worldBuilderMachine&&!isHumanFacingAnswer(finalAns)) {
     _stampStep('outbound_council_blocked', 'council_answer_hollow_protocol');
     return {ok:false,reason:'council_answer_hollow_protocol',blocked_by:'STAMP',ham:hamObj,
       cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
@@ -6955,7 +7423,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // the whole cycle again. Silence is the floor this estate already chose for a held answer,
   // and a leaked human is exactly what the floor is for. The reason is named, not anonymous,
   // so the receipt says which boundary stopped it.
-  if (!_structuredReachPolicy) {
+  if (!_structuredReachPolicy && !_worldBuilderMachine) {
     var _postCouncilNameLeak = null;
     // ⬡B:core.tool_loop:FIX:a_leak_guard_that_fails_open_is_not_a_guard:20260729⬡
     // Same correction as the pre council seam above, applied here: an exception from the
@@ -6974,6 +7442,46 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
         ms:Date.now()-t0};
     }
+  }
+  // SHADOW's decision review is not decorative telemetry. When its seated mind says the
+  // selected hand or no-hand choice does not fit the whole request, A'NU receives the
+  // concern and answers it herself. She may stand, reconsider with the complete armory,
+  // or reach no agreement. Cold code validates only the typed exchange and keeps pending
+  // effects uncommitted. It never chooses the replacement hand.
+  var _shadowDecisionReview = !_structuredReachPolicy && !_worldBuilderMachine
+    ? shadowDecisionDialogue.shadowReceipt(_council) : null;
+  if (_shadowDecisionReview) {
+    var _decisionDialogue = await shadowDecisionDialogue.run({hamUid:hamUid,
+      requestId:_requestId,cycleId:_cycleId,request:_exactUserMessage,answer:finalAns,
+      review:_shadowDecisionReview,availableHands:_councilContext.available_hands,
+      handsChosen:tools,pendingEffects:_councilContext.pending_effects,
+      verifiedEvidence:_councilContext.verified_evidence},{deliberate:_callPaiLadder});
+    if (_decisionDialogue.outcome === 'RECONSIDER' &&
+        !(_shadowReconsideration && _shadowReconsideration.round >= 1)) {
+      _stampStep('shadow_decision_reconsidered','anu_retains_decision');
+      var _reconsiderIdentity = Object.assign({},identity || {},{
+        _shadow_reconsideration:{round:1,context:_decisionDialogue.context,
+          prior_cycle_id:_cycleId,prior_request_id:_requestId}});
+      delete _reconsiderIdentity.request_id;
+      delete _reconsiderIdentity.requestId;
+      return runPAI(hamUid,message,channel,_reconsiderIdentity,priorTurns,uiPortal);
+    }
+    if (_decisionDialogue.outcome !== 'PROCEED') {
+      var _decisionEscalation = await shadowDecisionDialogue.escalate({hamUid:hamUid,
+        requestId:_requestId,cycleId:_cycleId,
+        reason:_decisionDialogue.reason||_shadowDecisionReview.reason,
+        recommendedHand:_shadowDecisionReview.recommended_hand});
+      _stampStep('shadow_decision_disagreement_unresolved',
+        _decisionEscalation&&_decisionEscalation.ok?'guardian_clair_flagged':'guardian_clair_flag_failed');
+      return {ok:false,reason:'shadow_decision_disagreement_unresolved',
+        blocked_by:'guardian.clair',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0,
+        escalation:_decisionEscalation&&_decisionEscalation.ok===true
+          ? {ok:true,source:_decisionEscalation.source||null,superior_node_id:'guardian.clair'}
+          : {ok:false,reason:_decisionEscalation&&_decisionEscalation.reason||
+            'shadow_decision_escalation_unavailable'}};
+    }
+    _stampStep('shadow_decision_dialogue_resolved','anu_decision_stands');
   }
   var _stampProof = _committedCouncil.stamp_proof;
   // ⬡B:core.tool.loop:WIRE:the_memory_keeper_on_the_one_common_exit:20260726⬡
@@ -7232,7 +7740,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
               activationDecisionRequired:_effectRuntime.activationDecisionRequired === true,
               codaActivationApproved:_effectRuntime.codaActivationApproved === true,
               codaActivationDecision:_effectRuntime.codaActivationDecision,
-              codaDecisionSource:_effectRuntime.codaDecisionSource }));
+              codaDecisionSource:_effectRuntime.codaDecisionSource,
+              approvedActivationSpec:_effectRuntime.approvedActivationSpec }));
         } catch (eEffectCommit) { _effectRaw = null; _effectThrew = eEffectCommit; }
         if (await _turnCancelled(true)) return _turnCancelledResult('after_effect_commit');
         if (_effectThrew) {
@@ -7534,6 +8043,10 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   isPureConversationalContinuation,
+  currentCapabilityQuestion,currentCapabilityEvidence,categoricalCurrentCapabilityClaim,
+  verifiedCurrentCapabilityRows,verifiedCurrentCapabilityEvidenceCount,
+  currentCapabilityHumanProjection,_currentCapabilityProjectionSafe,
+  currentCapabilityClaimFindings,guardCurrentCapabilityClaim,
   agentFindClosedWorldReason,
   weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
   requiredActionToolForMessage,
@@ -7552,5 +8065,6 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   _noNewEvidenceLimit,_repeatQuestionLimit,
   paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
-  memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,
+  memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
+  reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn}};
