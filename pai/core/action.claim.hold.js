@@ -54,7 +54,7 @@ var CLAIM_GROUPS = [
       'moved your appointment', 'moved the meeting', 'moved your meeting',
       'cancelled the appointment', 'canceled the appointment',
       'cancelled the meeting', 'canceled the meeting'] },
-  { support: null,
+  { supportKind: 'verified_read',
     // READ claims only hold when they name an external object ("the calendar",
     // "your inbox"). "I checked my brain for anything on ELI" is her describing
     // her own memory lookup, introspection inside the cycle, never an external
@@ -107,7 +107,9 @@ var STATE_CLAIMS = [
   { supportKind:'mission_running', verb:'mission running',
     pattern:/\b(?:got (?:the|this) mission set|set (?:this|that) as a mission|queued (?:the|this|that) mission)[^.!?\n]{0,100}\b(?:and\s+)?it(?:\s+is|[’']s)\s+(?:already\s+)?(?:running|live|active)\b/gi },
   { supportKind:'reminder_delivery', verb:'reminder will trigger',
-    pattern:/\b(?:the|this|that)\s+reminder\s+will\s+(?:trigger|fire|notify|alert|reach|nudge)\b/gi }
+    pattern:/\b(?:the|this|that)\s+reminder\s+will\s+(?:trigger|fire|notify|alert|reach|nudge)\b/gi },
+  { supportKind:'reminder_delivery', verb:'job will return',
+    pattern:/\b(?:the|this|that|your)\s+(?:job|task|mission)\s+will\s+(?:return|come\s+back|check\s+in|reach|remind|nudge|notify|alert|follow\s+up)\b/gi }
 ];
 
 // Fillers legally allowed between the first-person subject and the claim verb.
@@ -194,6 +196,31 @@ function validReminderArgs(args) {
   return !!(args && typeof args === 'object' && String(args.text || '').trim());
 }
 
+var READ_DOMAINS = [
+  { object:/\b(?:calendar|calendars|schedule|event|events|appointment|appointments)\b/i,
+    tools:{calendar_read:true} },
+  { object:/\b(?:inbox|email|emails|mailbox|mail)\b/i, tools:{inbox_read:true} },
+  { object:/\b(?:reminder|reminders)\b/i, tools:{read_reminders:true} }
+];
+
+function verifiedReadSupported(claimText, trace) {
+  var evidence = (Array.isArray(trace.verified_evidence) ? trace.verified_evidence : [])
+    .filter(function (item) {
+      return !!(item && item.successful_read === true &&
+        item.evidence_kind === 'verified_read_result' && String(item.tool || '').trim());
+    });
+  if (!evidence.length) return false;
+  var domain = null;
+  for (var i = 0; i < READ_DOMAINS.length; i++) {
+    if (READ_DOMAINS[i].object.test(String(claimText || ''))) {
+      domain = READ_DOMAINS[i];
+      break;
+    }
+  }
+  if (!domain) return true;
+  return evidence.some(function (item) { return domain.tools[item.tool] === true; });
+}
+
 function hasPendingEffect(trace, name, validate) {
   return (Array.isArray(trace.pending_effects) ? trace.pending_effects : []).some(function (effect) {
     return !!(effect && effect.name === name && validate(effect.args));
@@ -215,7 +242,8 @@ function strictClaimSupported(kind, trace) {
   return false;
 }
 
-function claimSupported(support, supportKind, trace, names, evidenceText) {
+function claimSupported(support, supportKind, trace, names, evidenceText, claimText) {
+  if (supportKind === 'verified_read') return verifiedReadSupported(claimText, trace);
   if (supportKind) return strictClaimSupported(supportKind, trace);
   if (!support) return names.length > 0;
   for (var i = 0; i < names.length; i++) {
@@ -254,7 +282,8 @@ function detect(answerText, trace) {
           if (PRECEDING_EXEMPT.test(sentence.slice(0, match.index))) continue;
           if (matcher.objectGate &&
               !matcher.objectGate.test(sentence.slice(match.index + match[0].length))) continue;
-          if (claimSupported(matcher.support, matcher.supportKind, trace, names, evidenceText)) continue;
+          if (claimSupported(matcher.support, matcher.supportKind, trace, names, evidenceText,
+              sentence.slice(match.index))) continue;
           if (claims.length < 8) {
             claims.push({
               claim: sentence.trim().slice(0, 200),
