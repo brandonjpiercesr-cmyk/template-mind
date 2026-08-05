@@ -1525,7 +1525,13 @@ var TOOLS = [
 // CLAIR_reach R4B: tool descriptions are routing policy, not marketing copy.
 // Every tool gets the same explicit positive/negative grammar, with narrower
 // boundaries for the families that caused real wrong-tool incidents.
-var NO_TOOL_BLESSING = 'Calling no tool is a correct choice when the message can be answered from the conversation or general reasoning. Do not call a tool merely because one is available.';
+var NO_TOOL_BLESSING = [
+  'You are the decision maker, not a router. Read the whole situation and silently choose among three honest shapes: answer now, use one or more authorized hands now, or commission work that must continue beyond this answer.',
+  'Calling no tool is a correct choice when the message can be answered from the conversation or general reasoning. Do not call a tool merely because one is available.',
+  'If you decide that work should persist beyond this answer, submit_job is the durable World Builder hand. Call it before saying the work was started, set in motion, assigned, queued, or commissioned.',
+  'A promise or warm description is not an executed hand. Claim an action only from this turn\'s successful tool result.',
+  'These are coaching choices, not keyword categories. You retain judgment over the whole request and may choose a different honest shape when the situation calls for it.'
+].join(' ');
 function toolSelectionBoundary(name) {
   var exact = {
     calendar_read: 'USE WHEN: the person explicitly asks about calendar events, schedule, availability, free time, or a real time slot. DO NOT USE WHEN: the message asks for general knowledge, opinion, planning advice, chit-chat, a favorite team, build status, or any topic merely mentioned near day or calendar context.',
