@@ -2967,12 +2967,14 @@ async function defaultWritStage(ctx) {
   // hamUid rides in so the WRIT organ can read doctrine.writ.persona.v1 from THIS
   // world's brain and supersede its embedded law floor. Resolved upstream through
   // the ABAHAM door, never a literal, and absent it the organ simply uses the floor.
-  var result = await writ.writCheck(ctx.answer, {
+  var checkedAndBanked = await writ.writCheckAndBank(ctx.hamUid, ctx.answer, {
     channel: ctx.channel || 'unknown',
     mode: mode || 'default',
     hamUid: ctx.hamUid,
     internal: mode === 'coding' || mode === 'internal'
   });
+  var result = checkedAndBanked && checkedAndBanked.check;
+  var bank = checkedAndBanked && checkedAndBanked.bank;
   // ⬡B:core.pai_outbound_council:FIX:writ_canonical_output_only:20260715⬡
   // writCheck already applies the canonical fence-aware voice law. Re-running
   // raw stripEmoji/removeEmDash here bypassed its coding context and could
@@ -3023,7 +3025,16 @@ async function defaultWritStage(ctx) {
       law_source: (result && result.law_source) || null,
       overruled_hints: (result && result.overruled_hints) || [],
       organ_decider:(result && result.organ_decider) || null,
-      failed_open:!!(result && result.failed_open)
+      failed_open:!!(result && result.failed_open),
+      // Bounded durable evidence only. The exact source contains the world key, so the
+      // council carries its digest rather than letting that identifier reach a face.
+      verdict_bank: {
+        ok: !!(bank && bank.ok === true),
+        banked: !!(bank && bank.banked === true),
+        reason: (bank && /^[a-z][a-z0-9_.-]{0,63}$/.test(String(bank.reason || '')))
+          ? String(bank.reason) : null,
+        source_digest: (bank && bank.source) ? digestText(String(bank.source)) : null
+      }
     }
   };
 }
