@@ -462,7 +462,13 @@ function fcwEvidenceQueries(input) {
     q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid}),
     q('context',{stamp_type:contract.TURN_STAMP_TYPE,ham_uid:hamUid,
       importance_gte:contract.READER_IMPORTANCE_FLOOR}),
-    q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid},true),
+    // The unqualified source-prefix anchor forced PostgREST to walk the entire turn namespace
+    // before it could return one row. On the live bank that read can time out, which leaves a
+    // successfully saved text turn outside the next FCW. Turn records already carry one exact
+    // stamp and the reader importance floor, so include both selective predicates on the anchor.
+    q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid,
+      stamp_type:contract.TURN_STAMP_TYPE,
+      importance_gte:contract.READER_IMPORTANCE_FLOOR},true),
     q('recent',{stamp_type:'RESULT',ham_uid:hamUid,
       importance_gte:contract.READER_IMPORTANCE_FLOOR,
       source_not_prefix:contract.TURN_SOURCE_PREFIX}),
