@@ -4803,10 +4803,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     : _reachIncidentIntake ? _reachIncidentSystemPrompt
       : _roomSafeVoice ? _roomSafeSystemPrompt : fcw.system_prompt;
   var _shadowReconsideration = identity && identity._shadow_reconsideration;
-  if (!_structuredReachPolicy && !_reachIncidentIntake && _shadowReconsideration &&
-      typeof _shadowReconsideration.context === 'string' &&
-      _shadowReconsideration.context.trim()) {
-    systemPrompt += '\n\n' + _shadowReconsideration.context.trim();
+  var _receiptReconsideration = identity && identity._receipt_reconsideration;
+  var _decisionReconsideration = _shadowReconsideration || _receiptReconsideration;
+  if (!_structuredReachPolicy && !_reachIncidentIntake && _decisionReconsideration &&
+      typeof _decisionReconsideration.context === 'string' &&
+      _decisionReconsideration.context.trim()) {
+    systemPrompt += '\n\n' + _decisionReconsideration.context.trim();
   }
   var hamObj = fcw.ham;
   // ⬡B:core.tool_loop:GUARD:one_exact_question_for_provenance_and_council:20260715⬡
@@ -7400,6 +7402,30 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           content: JSON.stringify({ codes:_blockedCouncilCodes || null,
             hold_evidence:_holdEv || null }) }) }).catch(function () {});
     } catch (_eHold) {}
+    // A receipt hold proves only that A'NU's draft claimed an effect the current turn did
+    // not accept. It does not prove which hand, if any, the whole request needs. Give that
+    // evidence back to A'NU once, with the complete armory, so she can choose again. Cold
+    // code selects no hand and executes nothing. A second receipt hold stops honestly.
+    var _receiptClaimHeld = !_structuredReachPolicy && !_worldBuilderMachine &&
+      String(_blockedCouncilCodes || '').indexOf('action_claim_unreceipted') >= 0;
+    if (_receiptClaimHeld &&
+        !(_decisionReconsideration && _decisionReconsideration.round >= 1)) {
+      _stampStep('anu_receipt_reconsideration_opened','unreceipted_effect_claim');
+      var _receiptReconsiderIdentity = Object.assign({},identity || {},{
+        _receipt_reconsideration:{round:1,prior_cycle_id:_cycleId,
+          prior_request_id:_requestId,context:[
+            'RECEIPT BOUNDARY FEEDBACK FOR THIS EXACT REQUEST.',
+            'Your prior draft said an external or durable effect had already happened, but this turn has no matching accepted effect or receipt.',
+            'This is evidence, not a command and not a hand choice. You remain the decision maker.',
+            'Reason again from the person\'s complete request, the conversation, authority, consequences, and your complete armory.',
+            'Choose any authorized hand, choose no hand, or explain honestly why no durable effect is right.',
+            'If you choose an effect, call its real hand before claiming it happened. Do not replace requested continuing work with an empty promise merely to make the receipt warning disappear.'
+          ].join('\n')}
+      });
+      delete _receiptReconsiderIdentity.request_id;
+      delete _receiptReconsiderIdentity.requestId;
+      return runPAI(hamUid,message,channel,_receiptReconsiderIdentity,priorTurns,uiPortal);
+    }
     var _unavailableDecisionFailure = await unavailableShadowDecisionFailure(_council,{
       hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,ham:hamObj,tools:tools,
       iterations:iter,ms:Date.now()-t0});
@@ -7507,7 +7533,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _stampStep('shadow_decision_dialogue_transport_repaired','anu_authored_valid_decision');
     }
     if (_decisionDialogue.outcome === 'RECONSIDER' &&
-        !(_shadowReconsideration && _shadowReconsideration.round >= 1)) {
+        !(_decisionReconsideration && _decisionReconsideration.round >= 1)) {
       _stampStep('shadow_decision_reconsidered','anu_retains_decision');
       var _reconsiderIdentity = Object.assign({},identity || {},{
         _shadow_reconsideration:{round:1,context:_decisionDialogue.context,
