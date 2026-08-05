@@ -44,6 +44,7 @@ var voiceCallBinding = require('./voice.call.binding.js');
 var voiceRoomSafe = require('./voice.room.safe.js');
 var reachPolicyContract = require('./reach/policy.contract.js');
 var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
+var shadowDecisionDialogue = require('./shadow.decision.dialogue.js');
 var outputGuard = require('./model.output.guard.js');
 // ⬡B:core.tool.loop:WIRE:the_env_only_identity_law_reaches_model_output_too:20260729⬡
 // The founder law "identity is env only, never a literal" was enforced over source code and
@@ -266,7 +267,7 @@ function parseRoadmapActivationSpec(message) {
   var spec;
   try { spec = JSON.parse(tail.slice(start, end + 1)); }
   catch (error) { return { error:'roadmap_activation_spec_json_invalid' }; }
-  var requiredStrings = ['roadmap_source','repository','task'];
+  var requiredStrings = ['roadmap_source','repository','task','test_profile'];
   if (requiredStrings.some(function (key) {
     return typeof spec[key] !== 'string' || !spec[key].trim();
   })) return { error:'roadmap_activation_spec_fields_required' };
@@ -1501,13 +1502,22 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','question'],properties:{
       ham_uid:{type:'string'},question:{type:'string',description:'The founder coding request only, without repeating the server-built BCW.'}
     }}}},
-  {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, and acceptance checks so PAI cannot create orphan or out-of-scope code.',
-    parameters:{type:'object',required:['roadmap_source','repository','task','allowed_paths','acceptance'],properties:{
+  {type:'function',function:{name:'submit_job',description:'Carry work from this ordinary conversation into the person\'s durable World Builder. Use this for any kind of work that should continue beyond the current answer, including life, work, learning, play, advisors, reaching someone, making an artifact, or coding. Describe the purpose and observable signs of success. Do not prescribe implementation steps or force a department. Do not use it for casual conversation, a question fully answered now, or an immediate action already completed by another tool.',
+    parameters:{type:'object',required:['subject','detail','acceptance'],properties:{
+      subject:{type:'string',description:'A short human description of what should become true.'},
+      detail:{type:'string',description:'The context and purpose in the person\'s words, without internal system narration.'},
+      acceptance:{type:'array',minItems:1,maxItems:12,items:{type:'string'},description:'Observable signs that the work is genuinely complete.'},
+      requested_owner:{type:'string',description:'Optional Wonder or seat preference. The World Builder verifies authority and may choose a better owner.'},
+      level:{type:'number',description:'Optional urgency from 0 through 4.'}
+    }}}},
+  {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, acceptance checks, and a named test profile so PAI cannot create orphan, untested, or out-of-scope code.',
+    parameters:{type:'object',required:['roadmap_source','repository','task','allowed_paths','acceptance','test_profile'],properties:{
       roadmap_source:{type:'string',description:'Exact source of an existing ROADMAP bead.'},
       repository:{type:'string',description:'Exact owner/repository that owns the roadmap work.'},
       task:{type:'string',description:'One bounded implementation task selected by CODA.'},
       allowed_paths:{type:'array',items:{type:'string'},description:'Exact repository paths PAI may author.'},
       acceptance:{type:'array',items:{type:'string'},description:'Concrete checks Cathy and CANON will audit.'},
+      test_profile:{type:'string',enum:['syntax','world_builder','come_code','guard'],description:'The canonical supervised test family this bounded task must run.'},
       importance:{type:'number'},max_iterations:{type:'number'},max_llm_calls:{type:'number'}
     }}}}
 ];
@@ -1803,6 +1813,7 @@ function routeToolIntent(message) {
   if (/^(?:please\s+)?remind\s+me\s+(?:why|how|what|who|where|when)\b/.test(text)) {
     return 'general';
   }
+  if (/\bcode of conduct\b/.test(text)) return 'general';
   // An explicit station command owns the turn even when its task text names a
   // calendar, inbox, or other live-data scenario to grade. The founder caught
   // two R4 acceptance asks being hijacked into calendar_read before Wonder
@@ -1854,19 +1865,17 @@ function routeToolIntent(message) {
   // entire team and let me know what you said" and the turn had no route to any org at all.
   if (/\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team)\b/.test(text)) return 'code';
   if (/\b(my|our|stored|brain|memory|bead|previous|recent|most recent|most recently|recently|last)\b/.test(text) &&
-      /\b(decision|preference|history|result|failure|flagged|built|build|did we|identity|who is)\b/.test(text)) return 'memory';
-  if (/\b(code|repo|repository|deploy|builds?|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
+      /\b(decision|preference|history|result|failure|flagged|built|build status|the build|did we|identity|who is)\b/.test(text)) return 'memory';
+  if (/\b(code|repo|repository|deploy|software build|build status|the build|coding lanes?|lane board|mace|coda|cook.?off|wonder games?|bcw|render logs?)\b/.test(text)) return 'code';
   return 'general';
 }
 
 function toolsForIntent(tools, intent) {
-  var allowed = (TOOL_INTENT_NAMES[intent] || TOOL_INTENT_NAMES.general).slice();
-  // The advisor department is A'NU's cross-domain council. It must remain on
-  // the table for ordinary language, not only for turns a regex calls "code".
-  if (allowed.indexOf('consult_advisor') === -1) allowed.push('consult_advisor');
-  return (tools || []).filter(function (tool) {
-    return tool && tool.function && allowed.indexOf(tool.function.name) !== -1;
-  });
+  // Intent labels are diagnostic observations only. They never decide which hands the
+  // mind is allowed to see. Identity, signed read-only modes, and consequence gates still
+  // narrow the armory at their own mechanical boundaries in toolDefinitionsForTurn().
+  // Meaning belongs to the seated mind after it has read the whole employment blueprint.
+  return (tools || []).slice();
 }
 
 // This is a transport boundary, not a meaning judgment. A short whole-utterance
@@ -1973,7 +1982,8 @@ var POST_COUNCIL_TOOLS = Object.freeze({
   edit_layout:true,
   update_screen:true,
   set_background:true,
-  activate_roadmap_task:true
+  activate_roadmap_task:true,
+  submit_job:true
 });
 
 async function runtimeCancellationRequested(runtime) {
@@ -2152,6 +2162,10 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       runtime.codaActivationApproved !== true) {
     return JSON.stringify({ok:false,reason:'coda_activation_approval_required',tool:name});
   }
+  if (name === 'activate_roadmap_task' && runtime && runtime.approvedActivationSpec &&
+      !require('./coda/build.spec.js').same(args,runtime.approvedActivationSpec)) {
+    return JSON.stringify({ok:false,reason:'coda_build_spec_mismatch',tool:name});
+  }
   var shouldQueueMutation = POST_COUNCIL_TOOLS[name]
     && !(name === 'propose_working_session' && args && args.autobook !== true);
   if (shouldQueueMutation && (!runtime || runtime.phase !== 'commit')) {
@@ -2235,6 +2249,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       });
       return JSON.stringify(await require('../advisors/coding.js').runLead(q, cHam,
         { repositoryEvidence:JSON.stringify({ queries:terms, reads:reads }),
+          buildSpecRequested:runtime && runtime.buildSpecRequested === true,
           storedIdentityEvidence:args._identity_evidence,
           identityEvidenceResult:args._identity_evidence_result,
           identityEvidenceReceipt:args._identity_evidence_receipt }));
@@ -3966,7 +3981,39 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     var activationCancelled = await cancelBeforeEffect(name, runtime);
     if (activationCancelled) return activationCancelled;
     return JSON.stringify(await require('./roadmap.activation.js').activate(activationSpec,
-      { cancellation:effectCancellation(runtime) || null }));
+      { cancellation:effectCancellation(runtime) || null,requireCodaApproval:true,
+        codaApproval:{decision:runtime && runtime.codaActivationDecision,
+          decision_source:runtime && runtime.codaDecisionSource,
+          build_spec:runtime && runtime.approvedActivationSpec} }));
+  }
+  if (name === 'submit_job') {
+    var jobSubject = String(args.subject || '').trim();
+    var jobDetail = String(args.detail || '').trim();
+    var jobAcceptance = Array.isArray(args.acceptance) ? args.acceptance.map(function (check) {
+      return String(check == null ? '' : check).replace(/\s+/g,' ').trim();
+    }).filter(Boolean) : [];
+    var jobLevel = args.level === undefined ? 0 : Number(args.level);
+    if (!jobSubject || !jobDetail || jobAcceptance.length < 1 || jobAcceptance.length > 12 ||
+        !Number.isInteger(jobLevel) || jobLevel < 0 || jobLevel > 4) {
+      return JSON.stringify({ok:false,reason:'world_job_description_invalid'});
+    }
+    var jobProof = runtime && runtime.councilResult
+      ? compactCouncilProof(runtime.councilResult) : null;
+    if (!jobProof || jobProof.committed !== true || jobProof.readback_verified !== true ||
+        jobProof.row_count !== 9 || !jobProof.final_source) {
+      return JSON.stringify({ok:false,reason:'world_job_council_unverified'});
+    }
+    var jobRequestId = String(runtime && runtime.parentRequestId || '').trim();
+    if (!jobRequestId) return JSON.stringify({ok:false,reason:'world_job_request_id_required'});
+    var jobCancelled = await cancelBeforeEffect(name,runtime);
+    if (jobCancelled) return jobCancelled;
+    var jobOutcome = await require('./ham.world.builder.intake.js').enqueue({
+      hamUid:hamUid,kind:'mission',trigger:'mission.intervention.changed',
+      evidenceRefs:[jobProof.final_source],subject:jobSubject,detail:jobDetail,
+      acceptance:jobAcceptance,requestedOwner:args.requested_owner || null,
+      originRequestId:jobRequestId,level:jobLevel,submittedBy:'anu_conversation'
+    });
+    return JSON.stringify(jobOutcome);
   }
   if (name === 'notify_ham') {
     var notifyCancelled = await cancelBeforeEffect(name, runtime);
@@ -4294,6 +4341,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var normalizedChannel = String(channel || '').toLowerCase();
     if (_paiSeatName() === 'coda') return 'station.coda';
     if (normalizedChannel === 'ham_world_builder') return 'station.ham_world_builder';
+    if (normalizedChannel === 'wonder_ask' && identity && identity.wonder_ask &&
+        typeof identity.wonder_ask.seat === 'string') {
+      var summonedSeat = null;
+      try { summonedSeat=require('./wonders/registry.js').resolve(identity.wonder_ask.seat); }
+      catch (eSummonedSeat) { summonedSeat=null; }
+      if (summonedSeat && summonedSeat.lifecycle === 'active') return summonedSeat.id;
+    }
     return 'station.pai';
   }
   function _paiSeatCandidate(name) {
@@ -4722,6 +4776,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var systemPrompt = _structuredReachPolicy ? _structuredReachSystemPrompt
     : _reachIncidentIntake ? _reachIncidentSystemPrompt
       : _roomSafeVoice ? _roomSafeSystemPrompt : fcw.system_prompt;
+  var _shadowReconsideration = identity && identity._shadow_reconsideration;
+  if (!_structuredReachPolicy && !_reachIncidentIntake && _shadowReconsideration &&
+      typeof _shadowReconsideration.context === 'string' &&
+      _shadowReconsideration.context.trim()) {
+    systemPrompt += '\n\n' + _shadowReconsideration.context.trim();
+  }
   var hamObj = fcw.ham;
   // ⬡B:core.tool_loop:GUARD:one_exact_question_for_provenance_and_council:20260715⬡
   // Identity metadata is canonical when present. Otherwise the first trusted
@@ -5075,6 +5135,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _codaRepositoryAnswer = '';
   var _codaIdentityReceiptVerified = false;
   var _codaActivationDecision = null;
+  var _codaBuildSpec = null;
   var _codaDecisionSource = null;
   if (_codaLeadNeeded) {
     var _codaCallId = 'coda_preload_' + Date.now();
@@ -5083,7 +5144,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _identity_evidence:fcw.identity_evidence,
       _identity_evidence_result:_identityEvidenceProof.result,
       _identity_evidence_receipt:_identityEvidenceProof.receipt };
-    var _codaResult = await executeTool('consult_coda', _codaToolArgs, hamUid, _codaQuestion);
+    var _codaPrefetchRuntime = {buildSpecRequested:!!(identity &&
+      identity.council_context && identity.council_context.mode === 'coding' &&
+      identity.council_context.surface === 'ccwa')};
+    var _codaResult = await executeTool('consult_coda', _codaToolArgs, hamUid,
+      _codaQuestion,_codaPrefetchRuntime);
     var _codaFailureReason = failedCodaReason(_codaResult);
     if (_codaFailureReason) {
       return { ok:false, reason:_codaFailureReason, blocked_by:'CODA',
@@ -5104,6 +5169,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       if (_codaParsed && _codaParsed.ok === true &&
           (_codaParsed.activationDecision === 'APPROVE' || _codaParsed.activationDecision === 'HOLD')) {
         _codaActivationDecision = _codaParsed.activationDecision;
+        _codaDecisionSource = typeof _codaParsed.decisionSource === 'string'
+          ? _codaParsed.decisionSource : null;
+      }
+      if (_codaParsed && _codaParsed.ok === true &&
+          (_codaParsed.buildDecision === 'APPROVE' || _codaParsed.buildDecision === 'HOLD')) {
+        _codaActivationDecision = _codaParsed.buildDecision;
+        _codaBuildSpec = _codaParsed.buildDecision === 'APPROVE' ? _codaParsed.buildSpec : null;
         _codaDecisionSource = typeof _codaParsed.decisionSource === 'string'
           ? _codaParsed.decisionSource : null;
       }
@@ -5261,10 +5333,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // verified coding turn literally orders this named mutation, the first tool
   // decision is structural, not optional prose. CODA has already run above;
   // activation itself still waits behind the outbound council commit.
-  var _roadmapActivationNeeded = _effectRuntime.codaVerified === true
-    && /\bcall\s+activate_roadmap_task\b/i.test(String(_exactUserMessage || ''));
-  var _roadmapActivationEnvelope = parseRoadmapActivationSpec(_exactUserMessage);
+  var _roadmapActivationNeeded = _effectRuntime.codaVerified === true &&
+    (_codaActivationDecision === 'APPROVE' ||
+      /\bcall\s+activate_roadmap_task\b/i.test(String(_exactUserMessage || '')));
+  var _roadmapActivationEnvelope = _codaBuildSpec
+    ? {spec:_codaBuildSpec,source:'coda_build_spec'}
+    : parseRoadmapActivationSpec(_exactUserMessage);
   _effectRuntime.activationDecisionRequired = !!_roadmapActivationEnvelope;
+  _effectRuntime.approvedActivationSpec = _roadmapActivationEnvelope &&
+    _roadmapActivationEnvelope.spec || null;
   if (_roadmapActivationEnvelope && _roadmapActivationEnvelope.error) {
     return { ok:false, reason:_roadmapActivationEnvelope.error, blocked_by:'SPAN_ACTIVATION',
       ham:hamObj, cycleId:_cycleId, requestId:_requestId,
@@ -5286,8 +5363,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _toolTextRejectedOnce = false;       // one corrective pass per turn, never two
   var _exactRoutedWords = (_exactUserMessage && _exactUserMessage.trim())
     ? _exactUserMessage : message;
-  var _explicitRequiredActionTool = requiredActionToolForMessage(
-    _exactRoutedWords, routeToolIntent(_exactRoutedWords));
+  var _explicitRequiredActionTool = null;
   while (!ans) {
     if(_worldBuilderMachine&&iter>=_worldBuilderMaxIterations){
       return{ok:false,reason:'ham_world_builder_iteration_budget_exhausted',ham:hamObj,
@@ -5367,21 +5443,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         !(identity && identity.outbound_finalize === true)) {
       _routedToolIntent = routeToolIntent(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      _routedRequiredReadTool = requiredReadToolForMessage(
-        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
-        _routedToolIntent);
-      _routedRequiredActionTool = requiredActionToolForMessage(
-        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message,
-        _routedToolIntent);
-      _routedRequiresLiveTool = !!_routedRequiredReadTool;
+      _routedRequiredReadTool = null;
+      _routedRequiredActionTool = null;
+      _routedRequiresLiveTool = false;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
-      var _pureVoiceContinuation = _routeEveryVoicePass &&
-        _routedToolIntent === 'general' && isPureConversationalContinuation(
-          (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      // A pure voice continuation such as "go on" is conversation, not a
-      // council dispatch. Keep ordinary substantial language council-capable,
-      // while preserving the fast natural voice continuation with no schemas.
-      if (_pureVoiceContinuation) body.tools = [];
+      var _pureVoiceContinuation = false;
       if (_routedRequiredReadTool || _routedRequiredActionTool) {
         var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
         body.tools = body.tools.filter(function (tool) {
@@ -5542,15 +5608,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // the coding process, she fell through to find_in_brain and answered with the
       // calendar. She holds consult_mace (CODA lead), run_cookoff, run_wonder_games,
       // assemble_bcw but never picked them. A build/code/consult request nudges the
-      // coding lead. HINT not a rail, she keeps all tools. Named machinery (MACE, CODA,
-      // cook-off, wonder games, BCW) or a plain build/code/ship ask routes here.
+      // coding lead. HINT not a rail, she keeps all tools. Named machinery or an ask
+      // with an explicit technical object routes here. Human verbs such as build,
+      // implement, refactor, and ship are not coding evidence by themselves.
       // _isCodaInternalCycle is computed once, at the top of this whole nudge lane (see the
       // FIX comment on entry to this block), and CODA's own internal deliberation never
       // reaches this line at all. Kept here only as a defensive second check: named machinery
-      // (MACE, CODA, cook-off, wonder games, BCW) or a plain build/code/ship ask routes here
+      // (MACE, CODA, cook-off, wonder games, BCW) or an explicit software object routes here
       // for a real human.
       var _isCodingBuildQ =
-        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|\bbcw\b|build (a|an|the|me|my|out|this)|code (a|an|the|this|up)|write (the )?code|ship (a|an|the|it|this)|implement|wire up|refactor|new agent|coding (process|team|department))\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
+        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|bcw|code (a|an|the|this|up)|write (the )?code|wire up (the )?(api|route|screen|page|service|module|function)|new (software |coding )?agent|coding (process|team|department)|repo|repository|pull request|commit|deploy|api endpoint|database migration|web app|website|javascript|typescript|python|html|css)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
       // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
       // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
       // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
@@ -5565,86 +5632,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // fabrication. This does not touch action requests or day questions above.
       var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
       var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
-      // ⬡B:core.tool_loop:FIX:load_all_tools_let_her_reason_do_not_railroad_one_tool:20260719⬡
-      // FOUNDER DOCTRINE 20260719: forcing tool_choice onto ONE tool strips her
-      // reasoning -- she answered a calendar question to a planning prompt because a
-      // lookup was strapped on. Like the "all tools always available" setting, she
-      // should hold ALL her tools and CHOOSE. So tool_choice stays 'auto' (all tools
-      // on the table) and the intent is delivered as a STRONG PROMPT NUDGE instead of
-      // a hard rail. The data-reader direct-execute safety net downstream still catches
-      // a genuine refusal, so a real day/lookup question can never answer from nothing.
+      // The observations above remain diagnostic telemetry only. They do not select,
+      // remove, prefer, or require a hand. The seated mind receives the complete armory
+      // and decides what the person's words mean from its employment record.
       var _toolNudge = null;
       if (_roadmapActivationNeeded) _toolNudge='activate_roadmap_task';
-      // ⬡B:core.tool_loop:FIX:finance_turns_force_the_budget_tool_so_the_answer_is_never_a_guess:20260722⬡
-      // FOUNDER 911: the LEDGER finance advisor holds the real budget in its deliberation, but the
-      // model was probabilistic about using it, so identical asks flip between the real bills and
-      // "I don't have access". A finance turn is ALWAYS about the person's money, so force
-      // get_budget_summary here: the real income vs bills becomes verified tool evidence the council
-      // grounds on, killing the variance. It is a DATA_READER_TOOL with no required args, so the
-      // forced-read net below makes the model call it even if it tries to skip it.
-      else if (String(channel||'').toLowerCase() === 'finance') _toolNudge='get_budget_summary';
-      else if (_isLaneBoardQ) _toolNudge='read_lane_board';
-      else if (_isCodingBuildQ) _toolNudge='consult_mace';
-      else if (_nashNeeded) { _toolNudge='nash_sports'; _nashNeeded=false; }
       else if (voiceCallContextSatisfiesTurn(channel, hamUid, _exactUserMessage, identity)) {
         // The signed call handoff already supplies the exact answer source for a
         // call-purpose question. Keep the full PAI + council, but do not force an
         // unrelated generic Memory Bank read in front of that bounded evidence.
         delete body.tools;
       }
-      else if (_isDayQ) _toolNudge='calendar_read';
-      else if (voiceConversationalNoGenericLookup(channel, hamUid, _exactUserMessage, identity)) {
-        // Pure small talk needs A'NU's judgment, not a generic Memory Bank read.
-        // Remove the irrelevant personal and surface schemas, but preserve the
-        // advisor council entrance. Only the whole-utterance continuation seam
-        // above is allowed to remove that cross-domain organ from a voice turn.
-        // Mixed requests such as "why, and email me" do not match this predicate.
-        body.tools = toolsForIntent(body.tools, 'general');
-      }
-      else if (_looksPublicKnowledgeQ &&
-          (!_routedToolIntent || _routedToolIntent === 'general')) {
-        // Public-world question with no personal anchor: answer from the model's own
-        // knowledge. Receipts showed that merely UNFORCING find_in_brain was not
-        // enough -- with the personal-tool schema still in front of her she reached
-        // for read_own_code / find_in_brain anyway and deflected ("I don't have
-        // access to product databases"). So the personal tool schemas are removed
-        // for this turn, but the cross-domain advisor entrance remains available.
-        // Personal and day questions above keep their tools untouched.
-        body.tools = toolsForIntent(body.tools, 'general');
-        delete body.tool_choice;
-      }
-      else if ((!_routedToolIntent || _routedToolIntent === 'general') &&
-          (!_liveNow || (_looksLikeInfoQ && !_isScreenCmd))) _toolNudge='find_in_brain';
-      // Deliver the intent as a nudge, keep tool_choice auto (all tools available, she reasons).
+      // No keyword, category, or cold intent guess selects a hand here. The sole nudge
+      // is a typed roadmap activation already chosen and approved by a seated CODA turn.
       if (_toolNudge && Array.isArray(body.tools) && body.tools.length) {
         body.tool_choice = 'auto';
-        // ⬡B:core.tool_loop:FIX:nudge_for_action_tools_must_be_firm_not_weak:20260719⬡
-        // Founder caught her ignoring the coding/lane nudge and defaulting to
-        // find_in_brain (answering with the calendar). The generic "very likely, if it
-        // helps" text was too soft to beat the base prompt's hard pull toward
-        // calendar_read/find_in_brain for anything that mentions his life or his build.
-        // The DATA READER tools keep the soft text (she should still reason freely about
-        // whether a lookup helps). The ACTION/DEPARTMENT tools (consult_mace/CODA,
-        // read_lane_board, run_cookoff, run_wonder_games, assemble_bcw) get a FIRM
-        // directive: this is the tool for this turn, call it first, do not answer from
-        // the calendar or a brain note instead. Still auto (she holds all tools), just a
-        // strong instruction rather than a hint, matching how NASH is directed.
-        var _nudgeText;
-        if (DATA_READER_TOOLS[_toolNudge]) {
-          _nudgeText = 'For this message, the right tool to use is very likely ' + _toolNudge +
-            '. Call it if it helps you answer from real data, but you hold all your tools; use your judgment.';
-        } else {
-          _nudgeText = 'For THIS message you must call the ' + _toolNudge + ' tool FIRST and answer from its result. ' +
-            'This is a request that ' + _toolNudge + ' handles, not a calendar or brain-note question. ' +
-            'Do not answer from your day, your schedule, or an old note instead; call ' + _toolNudge + ' and use what it returns. ' +
-            'You still hold all your tools, but this is the one this turn needs.';
-        }
+        var _nudgeText = 'A seated CODA judgment already approved the exact typed roadmap '
+          + 'activation carried in this turn. Call ' + _toolNudge + ' so that approved '
+          + 'decision crosses the normal receipt and consequence boundary.';
         if (Array.isArray(body.messages) && body.messages.length) {
           body.messages = body.messages.concat([{ role:'system', content:_nudgeText }]);
         }
-        // Preserve the required-tool signal ONLY for the downstream direct-execute
-        // safety net (data readers), without hard-forcing the model.
-        if (DATA_READER_TOOLS[_toolNudge]) { body._dataReaderNudge = _toolNudge; }
         // ⬡B:core.tool_loop:FIX:roadmap_activation_nudge_rejoins_fail_closed_net:20260720⬡
         // The 20260719 nudge refactor gave data readers and consult_mace a retry +
         // fail-closed safety net, but activate_roadmap_task is neither -- it is a real
@@ -5654,41 +5662,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // instead of failing closed with roadmap_activation_tool_call_missing. This
         // flag rejoins it to that existing net without hard-forcing tool_choice.
         if (_toolNudge === 'activate_roadmap_task') { body._roadmapActivationNudge = true; }
-        // ⬡B:core.tool_loop:FIX:consult_mace_force_execute_when_file_and_repo_named:20260719⬡
-        // Founder caught her refusing to call consult_mace even with the firm nudge:
-        // she generated words with tools=0. consult_mace is not a no-arg reader (it
-        // needs repo+path), so it cannot join DATA_READER_TOOLS blindly. But when the
-        // message NAMES a concrete file and repo, those args are deterministic, so we
-        // can force-execute it exactly like a data reader: parse repo+path, and if the
-        // model still will not emit the call, cold code runs MACE read_file and feeds
-        // the real file back. This only arms when a file+repo are actually present, so
-        // a vague "consult MACE to plan" (no file) still goes to the model to reason.
-        if (_toolNudge === 'consult_mace') {
-          var _mcPath = String(_mSt || '').match(/([a-z0-9_.\-]+\/[a-z0-9_.\/\-]+\.[a-z]+)/i);
-          var _mcRepo = String(_mSt || '').match(/\b(template-mind|anew|canew|eanew|ababase|aba-shared)\b/i);
-          if (_mcPath && _mcRepo) {
-            body._codingReadNudge = { repo: _mcRepo[1], path: _mcPath[1], action: 'read_file' };
-          }
-        }
-      }
-      // ⬡B:core.tool_loop:WONDER:generative_ui_is_a_wonder_she_decides_cold_code_renders:20260721⬡
-      // Founder law, direct: MAKE ALL THE GENERATIVE UI A WONDER, NOT COLD CODE. The prior version
-      // of this block was cold code deciding a semantic thing -- a regex enumerating scene words to
-      // decide "this is a background command", then FORCING tool_choice onto one tool, which is the
-      // exact railroad his own doctrine forbids (load_all_tools_let_her_reason_do_not_railroad_one_tool,
-      // 20260719: forcing tool_choice onto ONE tool strips her reasoning). So the force is gone. The
-      // wonder shape: her surface tools are already on the table (routeToolIntent put them there), she
-      // is the one who decides to change the surface and which scene, and cold code only renders and
-      // reads back. This block does two non-deciding things: a FIRM NUDGE (her own mechanism, same as
-      // the coding/lane nudges, tool_choice stays auto so she still reasons) so she reliably reaches
-      // for the surface tool when they asked for a surface change, and the warm-confirmation directive
-      // pushed into msgs (persistent, so it reaches the compose turn) so she confirms from what she
-      // actually did, in her voice, reading back the real result -- never a promise, never a flat label.
-      if (_routedToolIntent === 'screen' && Array.isArray(body.tools) && body.tools.some(function (t) {
-            return t && t.function && (t.function.name === 'set_background' || t.function.name === 'update_screen'); })) {
-        msgs.push({ role: 'system', content:
-          'This turn is about their surface -- their background, their screen, what they see. You hold your surface tools (set_background for the standing background, update_screen for the live glass). If they asked you to change what is behind everything or on their screen, actually do it this turn by calling the right tool; do not say you will get to it or that it is on the way, and do not answer as if you did something you did not call. Then confirm from what actually happened, reading back the real result, and speak it as A’NU -- the one who already handled it, warm, in full natural sentences the way a butler who knows them would, letting something you genuinely know about them show if it fits, never a flat status label. You still hold all your judgment; if it is genuinely not a surface change, do not force one.' });
-        _stampStep('surface_wonder_nudge', 'screen_tools_available_she_decides');
       }
       }
     }
@@ -7329,6 +7302,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   else _councilContext.pending_effects = _effectRuntime.pendingEffects.map(function (effect) {
       return { name:effect.name, args:effect.args };
     });
+  _councilContext.available_hands = _structuredReachPolicy ? []
+    : (_turnToolDefinitions || []).map(function (tool) {
+      var fn = tool && tool.function || {};
+      return {name:String(fn.name || ''),description:String(fn.description || '')};
+    }).filter(function (hand) { return hand.name && hand.description; });
   _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
   var _worldBuilderDraftBytes=_worldBuilderMachine?finalAns:null;
@@ -7464,6 +7442,46 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
         ms:Date.now()-t0};
     }
+  }
+  // SHADOW's decision review is not decorative telemetry. When its seated mind says the
+  // selected hand or no-hand choice does not fit the whole request, A'NU receives the
+  // concern and answers it herself. She may stand, reconsider with the complete armory,
+  // or reach no agreement. Cold code validates only the typed exchange and keeps pending
+  // effects uncommitted. It never chooses the replacement hand.
+  var _shadowDecisionReview = !_structuredReachPolicy && !_worldBuilderMachine
+    ? shadowDecisionDialogue.shadowReceipt(_council) : null;
+  if (_shadowDecisionReview) {
+    var _decisionDialogue = await shadowDecisionDialogue.run({hamUid:hamUid,
+      requestId:_requestId,cycleId:_cycleId,request:_exactUserMessage,answer:finalAns,
+      review:_shadowDecisionReview,availableHands:_councilContext.available_hands,
+      handsChosen:tools,pendingEffects:_councilContext.pending_effects,
+      verifiedEvidence:_councilContext.verified_evidence},{deliberate:_callPaiLadder});
+    if (_decisionDialogue.outcome === 'RECONSIDER' &&
+        !(_shadowReconsideration && _shadowReconsideration.round >= 1)) {
+      _stampStep('shadow_decision_reconsidered','anu_retains_decision');
+      var _reconsiderIdentity = Object.assign({},identity || {},{
+        _shadow_reconsideration:{round:1,context:_decisionDialogue.context,
+          prior_cycle_id:_cycleId,prior_request_id:_requestId}});
+      delete _reconsiderIdentity.request_id;
+      delete _reconsiderIdentity.requestId;
+      return runPAI(hamUid,message,channel,_reconsiderIdentity,priorTurns,uiPortal);
+    }
+    if (_decisionDialogue.outcome !== 'PROCEED') {
+      var _decisionEscalation = await shadowDecisionDialogue.escalate({hamUid:hamUid,
+        requestId:_requestId,cycleId:_cycleId,
+        reason:_decisionDialogue.reason||_shadowDecisionReview.reason,
+        recommendedHand:_shadowDecisionReview.recommended_hand});
+      _stampStep('shadow_decision_disagreement_unresolved',
+        _decisionEscalation&&_decisionEscalation.ok?'guardian_clair_flagged':'guardian_clair_flag_failed');
+      return {ok:false,reason:'shadow_decision_disagreement_unresolved',
+        blocked_by:'guardian.clair',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0,
+        escalation:_decisionEscalation&&_decisionEscalation.ok===true
+          ? {ok:true,source:_decisionEscalation.source||null,superior_node_id:'guardian.clair'}
+          : {ok:false,reason:_decisionEscalation&&_decisionEscalation.reason||
+            'shadow_decision_escalation_unavailable'}};
+    }
+    _stampStep('shadow_decision_dialogue_resolved','anu_decision_stands');
   }
   var _stampProof = _committedCouncil.stamp_proof;
   // ⬡B:core.tool.loop:WIRE:the_memory_keeper_on_the_one_common_exit:20260726⬡
@@ -7722,7 +7740,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
               activationDecisionRequired:_effectRuntime.activationDecisionRequired === true,
               codaActivationApproved:_effectRuntime.codaActivationApproved === true,
               codaActivationDecision:_effectRuntime.codaActivationDecision,
-              codaDecisionSource:_effectRuntime.codaDecisionSource }));
+              codaDecisionSource:_effectRuntime.codaDecisionSource,
+              approvedActivationSpec:_effectRuntime.approvedActivationSpec }));
         } catch (eEffectCommit) { _effectRaw = null; _effectThrew = eEffectCommit; }
         if (await _turnCancelled(true)) return _turnCancelledResult('after_effect_commit');
         if (_effectThrew) {

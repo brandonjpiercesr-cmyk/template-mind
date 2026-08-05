@@ -2032,6 +2032,17 @@ function canonicalShadowContext(value) {
     })) return { ok:false, reason:'shadow_tools_used_invalid' };
     context.tools_used = source.tools_used.slice();
   }
+  if (Array.isArray(source.available_hands)) {
+    if (source.available_hands.length > 80 || source.available_hands.some(function (item) {
+      return !item || typeof item !== 'object' || Array.isArray(item) ||
+        typeof item.name !== 'string' || Buffer.byteLength(item.name, 'utf8') > 160 ||
+        typeof item.description !== 'string' ||
+        Buffer.byteLength(item.description, 'utf8') > 1000;
+    })) return {ok:false,reason:'shadow_available_hands_invalid'};
+    context.available_hands = source.available_hands.map(function (item) {
+      return {name:item.name,description:item.description};
+    });
+  }
   if (Array.isArray(source.pending_effects)) {
     if (source.pending_effects.length > 20) {
       return { ok:false, reason:'shadow_pending_effects_too_many' };
@@ -2289,9 +2300,11 @@ async function defaultShadowStage(ctx, injected) {
         (voiceFarewellAcknowledgement ? 'SHADOW_PASS_VERIFIED_VOICE_FAREWELL' :
           'SHADOW_PASS_TRIVIAL_VOICE_GREETING'))) : null;
 
-  var system = 'You are SHADOW, the required factual-integrity judgment in an outbound council. ' +
+  var system = 'You are SHADOW, A\'NU\'s independent decision and factual-integrity reviewer in the outbound council. ' +
     'Judge whether the proposed answer invents facts, attributes claims without evidence, or states uncertainty as certainty. ' +
-    'Judge factual integrity only; do not reject for style, brevity, completeness, or helpfulness because other council stages own those concerns. ' +
+    'Separately review whether A\'NU\'s chosen hands or choice to use no hand make sense for the person\'s whole request. Read the available hand descriptions as an employment blueprint. Reason from the situation; never infer meaning from a keyword category or prescribe one hand merely because a verb appeared. ' +
+    'When you would choose differently, state the disagreement and the better hand or no-hand approach. That disagreement is counsel to A\'NU, not a cold veto. Recommend escalation only when a consequential disagreement remains unresolved. ' +
+    'Only factual integrity can hold this outbound answer; do not reject for style, brevity, completeness, or helpfulness because other council stages own those concerns. ' +
     // ⬡B:core.pai_outbound_council:REPAIR:paraphrase_is_not_contradiction:20260716⬡
     // The judge was holding faithful paraphrases of bound evidence as
     // contradictions and warm greeting language as invention, which held the
@@ -2318,7 +2331,7 @@ async function defaultShadowStage(ctx, injected) {
     'Named context evidence was deterministically extracted from the bound deliberation input; reject any answer that denies or contradicts it. ' +
     'Identity provenance is deterministic: stored memory and current bound role context may not be collapsed into one identity claim. ' +
     'A current self-preference must name a choice and state whether it is a fresh judgment or stored preference. ' +
-    'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise sentence","claim":"when approved is false, the exact contiguous text copied verbatim from the proposed answer that the bound evidence contradicts or cannot support; empty string when approved is true"}.';
+    'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise factual-integrity sentence","claim":"when approved is false, the exact contiguous text copied verbatim from the proposed answer that the bound evidence contradicts or cannot support; empty string when approved is true","decision_approved":true|false,"decision_reason":"one concise explanation of whether the chosen hand or no-hand decision fits the whole request","recommended_hand":"a named available hand, no_hand, or empty string","escalate":true|false}.';
   if (structuredPolicy) {
     system += ' STRUCTURED REACH POLICY RULE: the exact deliberation_evidence is the complete closed-world authority for this candidate. Every factual claim in reason and message, and the selected action and channel, must be supported by and relevant to that same candidate evidence. Treat policy copied from an older or different event as unsupported even if it would be plausible or operationally available.';
   }
@@ -2327,6 +2340,8 @@ async function defaultShadowStage(ctx, injected) {
     question: ctx.question || '',
     proposed_answer: ctx.answer,
     channel: ctx.channel || 'unknown',
+    available_hands: boundedEvidence(ctx.context && ctx.context.available_hands || []),
+    hands_chosen: boundedEvidence(ctx.context && ctx.context.tools_used || []),
     deterministic_findings: deterministicFindings,
     named_context_evidence: boundedEvidence(namedContextEvidence),
     categorical_memory_absence: boundedEvidence(memoryAbsenceFlag),
@@ -2527,6 +2542,13 @@ async function defaultShadowStage(ctx, injected) {
         approved: parsed && parsed.approved === true,
         reason: parsed && parsed.reason,
         claim: _verbatimClaimFound(parsed) ? String(parsed.claim) : null,
+        decision_approved: parsed && typeof parsed.decision_approved === 'boolean'
+          ? parsed.decision_approved : null,
+        decision_reason: parsed && typeof parsed.decision_reason === 'string'
+          ? parsed.decision_reason : null,
+        recommended_hand: parsed && typeof parsed.recommended_hand === 'string'
+          ? parsed.recommended_hand : null,
+        escalate: parsed && parsed.escalate === true,
         model: judgment.model,
         via: judgment.via,
         response_digest: digestText(judgment.content || ''),
