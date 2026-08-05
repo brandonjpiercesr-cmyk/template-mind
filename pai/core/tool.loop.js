@@ -99,6 +99,7 @@ function shouldIncludeWorldContext(channel, identity, hamUid, question) {
   if (identity && identity.council_context &&
       identity.council_context.mode === 'voice' &&
       identity.council_context.include_world_context === true) return true;
+  if (nativeLiveVoicePreparationEligible(identity, hamUid)) return false;
   // Suppress ambient fusion only when the complete answer source is already
   // bound to this signed call turn: its exact purpose, or receipt of a closed
   // hearing check, or a closed farewell. Later questions keep normal exact-HAM
@@ -169,6 +170,45 @@ function verifiedLiveVoiceContext(identity, hamUid) {
   var pipecat = verifiedVoiceCallContext(identity, hamUid);
   return pipecat ? Object.assign({ transport:'pipecat' }, pipecat) :
     verifiedNativeVoiceSessionContext(identity, hamUid);
+}
+
+function nativeLiveVoicePreparationEligible(identity, hamUid) {
+  var context = identity && identity.council_context;
+  return !!(verifiedNativeVoiceSessionContext(identity, hamUid) &&
+    !(context && context.include_world_context === true));
+}
+
+// A signed native phone turn begins from the identity already resolved by the
+// server and A'NU's canonical persona. Personal history remains available through
+// the normal exact-HAM read tools when the question calls for it. This keeps the
+// real writer's window clear without selecting an answer or weakening the council.
+function nativeLiveVoicePreparation(identity, hamUid) {
+  if (!nativeLiveVoicePreparationEligible(identity, hamUid)) return null;
+  var cleanInline = function (value, limit) {
+    return String(value == null ? '' : value).replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s+/g, ' ').trim().slice(0, limit);
+  };
+  var ham = String(hamUid || '').trim().toUpperCase();
+  var name = cleanInline(identity && identity.name, 160) || 'Unknown';
+  var world = cleanInline(identity && identity.world, 160) || 'unknown';
+  var tier = Number(identity &&
+    (identity.trust_level != null ? identity.trust_level : identity.tier));
+  if (!Number.isFinite(tier)) tier = 0;
+  var persona = require('./persona.js').VOICE;
+  return {
+    ok:true,
+    system_prompt:persona + '\n\nCURRENT PERSON:\nName: ' + name +
+      '\nWorld: ' + world +
+      '\nUse your available tools before making any claim about personal history, current records, schedules, messages, or exact facts. The phone conversation history below is authoritative for what was said during this call. Speak naturally as A\'NU and answer the person directly.',
+    ham:{ uid:ham, name:name, tier:tier, world:world },
+    context:[], named_agent_records:[],
+    identity_record:{ id:null, source:'atmosphere.gate.server_resolved',
+      stamp_type:'HAM_IDENTIFIER' },
+    identity_evidence:{ schema:'anew.identity.evidence.result.v1', ok:true,
+      available:true, ham_uid:ham, subjects:[], records:[], count:0, ms:0 },
+    contributors:null, contributorsResolved:0, contributorsTotal:0,
+    agent_find:null, ms:0, native_voice_preparation:true
+  };
 }
 
 function voiceCallContextSatisfiesTurn(channel, hamUid, question, identity) {
@@ -4783,6 +4823,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     verifiedVoiceCallPurposeAnswer(channel, hamUid, message, identity) ||
     verifiedVoiceHearingAnswer(channel, hamUid, message, identity) ||
     verifiedVoiceFarewellAnswer(channel, hamUid, message, identity));
+  var _nativeLiveVoiceTurn = nativeLiveVoicePreparationEligible(identity, hamUid);
   var _signedVoiceSystemPrompt =
     'INTERNAL SIGNED VOICE ACKNOWLEDGEMENT. Use only the exact provider-bound call fact already verified for this turn. Do not load ambient memory, tools, fused context, or a drafting model.';
   // ⬡B:core.tool_loop:FIX:codas_exact_wall_does_not_depend_on_an_unrelated_ambient_wall:20260802⬡
@@ -4820,6 +4861,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _isolatedHamTier = Number(identity &&
     (identity.trust_level != null ? identity.trust_level : identity.tier));
   if (!Number.isFinite(_isolatedHamTier)) _isolatedHamTier = 0;
+  var _nativeVoicePreparation = _nativeLiveVoiceTurn
+    ? nativeLiveVoicePreparation(identity, hamUid) : null;
   var fcw = (_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
       _roomSafeVoice || _internalCodaTurn) ? {
     ok:true, system_prompt:_reachIncidentIntake ? _reachIncidentSystemPrompt
@@ -4833,12 +4876,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       available:true, ham_uid:String(hamUid||'').toUpperCase(), subjects:[],
       records:[], count:0, ms:0 },
     contributors:null, contributorsResolved:0, contributorsTotal:0, ms:0
-  } : await buildMemoryBank(hamUid,channel,message,identity,_readAuthority,{
+  } : (_nativeVoicePreparation || await buildMemoryBank(hamUid,channel,message,identity,_readAuthority,{
     agentFindWake:{ham_uid:hamUid,cycle_id:_cycleId,request_id:_requestId,
       channel:channel,seat_name:_paiSeatName(),seat_node_id:_agentFindSeatNodeId(),
       observed_at:new Date().toISOString()}
   })
-    .catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};});
+    .catch(function(e){return {ok:false,reason:'fcw_threw:'+e.message};}));
   var _fcwBuildMs=Date.now()-_fcwT0; // \u2b21B:core.tool_loop:WIRE:phase_timing_20260711\u2b21 real profiling, not guessing
   if (await _turnCancelled()) return _turnCancelledResult('after_memory');
   // ⬡B:core.tool.loop:GUARD:memory_wall_required_before_deliberation:20260715⬡
@@ -4890,7 +4933,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     require('./freestyle.chatter.js').emitInterim({hamUid:hamUid, channel:channel,
       cycleId:_cycleId, fcw:fcw, prompted:!!String(message||'').trim(),
       closedWorld:!!(_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
-        _roomSafeVoice || _internalCodaTurn || _worldBuilderMachine)});
+        _nativeLiveVoiceTurn || _roomSafeVoice || _internalCodaTurn || _worldBuilderMachine)});
   } catch (eFreestyleRide) {}
   // A structured REACH policy is a closed-world decision over one exact
   // candidate packet. Ambient recent rows, contributors, prior turns, screen
@@ -8382,6 +8425,7 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,_ghHoldRe
   regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,verifiedNativeVoiceSessionContext,verifiedLiveVoiceContext,
+  nativeLiveVoicePreparationEligible,nativeLiveVoicePreparation,
   bindVerifiedLiveVoiceSession,voiceCallContextSatisfiesTurn,
   verifiedVoiceCallPurposeAnswer,voiceHearingContextSatisfiesTurn,
   verifiedVoiceHearingAnswer,voiceFarewellContextSatisfiesTurn,
