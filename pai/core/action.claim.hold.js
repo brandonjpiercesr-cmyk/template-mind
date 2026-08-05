@@ -71,12 +71,24 @@ var CLAIM_GROUPS = [
       'archived', 'executed the', 'ran the purge', 'ran the script', 'ran the job',
       'wrote to the brain', 'saved the layout', 'cleared the board'] },
   { support: /submit_job|world[._ -]?job|ham[._ -]?world[._ -]?builder|HAM_WORLD_BUILDER_RESULT|WORLD_JOB_RESULT/i,
-    verbs: ['set this as a real small mission', 'set this as a mission',
+    verbs: ['got the mission set', 'got this mission set',
+      'set this as a real small mission', 'set this as a mission',
       'set that as a mission', 'set this in motion', 'set that in motion',
       'put this in motion', 'put that in motion', 'queued the mission',
       'queued the job', 'started the mission', 'started the job',
       'commissioned the mission', 'commissioned the job',
-      'assigned the mission', 'assigned the job'] }
+      'assigned the mission', 'assigned the job'] },
+  // A durable mission and a timed reminder are two different effects. A real
+  // submit_job receipt supports the former; only the actual reminder-writing
+  // hand supports the latter. Keeping these in separate groups prevents one
+  // honest commission from laundering invented times into the final answer.
+  { support: /create_reminder|calendar_book/i,
+    verbs: ['created a recurring reminder', 'created recurring reminders',
+      'created a reminder', 'set up a recurring reminder',
+      'set up recurring reminders'] },
+  { support: /submit_job|world[._ -]?job|ham[._ -]?world[._ -]?builder|HAM_WORLD_BUILDER_RESULT|WORLD_JOB_RESULT/i,
+    verbs: ['logged the mission parameters', 'logged this mission',
+      'logged that mission'] }
 ];
 
 // Fillers legally allowed between the first-person subject and the claim verb.
