@@ -39,10 +39,9 @@ function enabled(env) {
 }
 
 // Each group is a family of first-person past-tense action verbs plus the
-// pattern a supporting receipt name or evidence text must match. A null
-// support pattern marks a READ claim ("I checked", "I pulled"): any real tool
-// executed this turn supports it, because the cold code cannot know which
-// reading tool a mind meant, and a false hold on honest speech is worse.
+// pattern a supporting receipt name or evidence text must match. A completed
+// READ claim ("I checked", "I pulled") requires typed successful-read evidence.
+// Named calendar, inbox, and reminder objects require their exact read hand.
 var CLAIM_GROUPS = [
   { support: /send|sent|email|mail|sms|text|notify|call|phone|message|reach|contact|outbound|forward|reply|blooio|nylas|twilio/i,
     verbs: ['sent', 'emailed', 'e-mailed', 'texted', 'messaged', 'phoned',
