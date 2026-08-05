@@ -18,8 +18,15 @@ function availableDecisionJudgment(value) {
     typeof value.decision_approved === 'boolean' && text(value.decision_reason, 1200));
 }
 
+function councilStages(council) {
+  if (!council || typeof council !== 'object') return [];
+  if (Array.isArray(council.stages)) return council.stages;
+  var committed = council.council_receipt || council.councilReceipt;
+  return committed && Array.isArray(committed.stages) ? committed.stages : [];
+}
+
 function shadowReceipt(council) {
-  var stages = council && Array.isArray(council.stages) ? council.stages : [];
+  var stages = councilStages(council);
   for (var index = stages.length - 1; index >= 0; index--) {
     var stage = stages[index];
     if (!stage || String(stage.stage || '').toUpperCase() !== 'SHADOW') continue;
@@ -183,4 +190,4 @@ async function escalate(input, options) {
 
 module.exports = {run:run,escalate:escalate,shadowReceipt:shadowReceipt,
   reconsiderationContext:reconsiderationContext,_test:{parseObject:parseObject,
-    availableDecisionJudgment:availableDecisionJudgment}};
+    availableDecisionJudgment:availableDecisionJudgment,councilStages:councilStages}};
