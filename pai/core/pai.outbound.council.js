@@ -4713,8 +4713,7 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
 // council commit can recover the server-generated cycle coordinate without buying another
 // model turn. The request row is fully re-derived before its cycle_id is trusted, then the
 // final and STAMP pair cross the same canonical verifier used by the live return path.
-function reconstructCommittedCouncilFromRequest(requestStoredRow, finalStoredRow,
-  stampStoredRow, expected) {
+function inspectCommittedCouncilRequest(requestStoredRow, expected) {
   var requestContent = parseContent(requestStoredRow && requestStoredRow.content);
   var binding = requestContent && requestContent.binding;
   var required = expected || {};
@@ -4743,8 +4742,16 @@ function reconstructCommittedCouncilFromRequest(requestStoredRow, finalStoredRow
   if (!sameRequestReadback(requestStoredRow,requestRow(input,sources,stampMs))) {
     return {ok:false,reason:'committed_council_request_readback_invalid'};
   }
+  return {ok:true,input:input,sources:sources,request_row:requestStoredRow};
+}
+
+function reconstructCommittedCouncilFromRequest(requestStoredRow, finalStoredRow,
+  stampStoredRow, expected) {
+  var inspected = inspectCommittedCouncilRequest(requestStoredRow,expected);
+  if (!inspected.ok) return inspected;
+  var input = inspected.input;
   var recovered = reconstructCommittedCouncil(finalStoredRow,stampStoredRow,
-    targetExpectation.supplied ? {deliveryTarget:targetExpectation.value} : {});
+    input.deliveryTarget ? {deliveryTarget:input.deliveryTarget} : {});
   if (!recovered.ok || recovered.council_receipt.ham_uid !== input.hamUid ||
       recovered.council_receipt.request_id !== input.requestId ||
       recovered.council_receipt.cycle_id !== input.cycleId ||
@@ -4776,6 +4783,7 @@ module.exports = {
   compactCouncilProof: compactCouncilProof,
   councilSources:buildSources,
   reconstructCommittedCouncil:reconstructCommittedCouncil,
+  inspectCommittedCouncilRequest:inspectCommittedCouncilRequest,
   reconstructCommittedCouncilFromRequest:reconstructCommittedCouncilFromRequest,
   reconstructReachHandoffCouncil:reconstructReachHandoffCouncil,
   canonicalizeDeliveryTarget: canonicalizeDeliveryTarget,
