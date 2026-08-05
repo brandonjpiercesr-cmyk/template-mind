@@ -2642,12 +2642,12 @@ function hamWorldBuilderFields(ctx) {
   var canonical = hamWorldBuilderContract.canonicalize(ctx.answer);
   var decision = canonical.decision;
   var human=decision.human_decision;
-  var humanFields=human?[human.prompt,human.action,human.scope]
+  if (!human) return '';
+  return [human.prompt,human.action,human.scope]
     .concat(human.evidence_refs||[])
     .concat((human.options||[]).reduce(function(all,option){
       return all.concat([option.id,option.label]);
-    },[])):[];
-  return [decision.summary,decision.next_action].concat(humanFields)
+    },[]))
     .filter(function (value) { return typeof value === 'string' && value; }).join('\n');
 }
 
@@ -2668,6 +2668,10 @@ function internalCodingDeliberation(ctx) {
 async function defaultMetaCommentaryStage(ctx) {
   var worldBuilderFields = hamWorldBuilderFields(ctx);
   if (worldBuilderFields !== null) {
+    if (!worldBuilderFields) return {ok:true,answer:ctx.answer,
+      reason:'META_COMMENTARY_HAM_WORLD_BUILDER_INTERNAL_PASS',
+      evidence:{flags:[],decider:'not_human_facing',organ_decider:null,
+        failed_open:false,internal_deliberation:true,exact_machine_contract:true}};
     var worldMeta = require('../agents/meta_commentary.js');
     var worldState = {pendingOutbound:worldBuilderFields};
     var worldMetaResult = await worldMeta.handle({intent:String(ctx.question||''),
@@ -2738,6 +2742,9 @@ async function defaultMetaCommentaryStage(ctx) {
 async function defaultQuillStage(ctx) {
   var worldBuilderFields = hamWorldBuilderFields(ctx);
   if (worldBuilderFields !== null) {
+    if (!worldBuilderFields) return {ok:true,answer:ctx.answer,
+      reason:'QUILL_HAM_WORLD_BUILDER_INTERNAL_PASS',evidence:{verdict:'PASS',
+        score:null,issues:[],internal_deliberation:true,exact_machine_contract:true}};
     var worldQuill = require('../board/quill.js');
     var worldQuillResult = await worldQuill.quill(worldBuilderFields,
       Object.assign({},ctx.context||{},{mode:'ham_world_builder_internal'}));
@@ -2954,6 +2961,11 @@ async function healAnswer(answer, reason, stage, input, deps) {
 async function defaultWritStage(ctx) {
   var worldBuilderFields = hamWorldBuilderFields(ctx);
   if (worldBuilderFields !== null) {
+    if (!worldBuilderFields) return {ok:true,answer:ctx.answer,
+      reason:'WRIT_HAM_WORLD_BUILDER_INTERNAL_PASS',evidence:{verdict:'PASS',
+        hard_fails:[],advisory_flags:[],emojis_removed:0,em_dashes_removed:0,
+        meta_removed:0,decider:'not_human_facing',failed_open:false,
+        internal_deliberation:true,exact_machine_contract:true}};
     var worldWrit = require('../board/writ.js');
     var worldWritResult = await worldWrit.writCheck(worldBuilderFields,
       {channel:'ham_world_builder',mode:'ham_world_builder_verdict',hamUid:ctx.hamUid,
