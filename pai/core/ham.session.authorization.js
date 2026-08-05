@@ -5,6 +5,7 @@
 const crypto = require('node:crypto');
 
 const COOKIE_NAME = 'anu_ham';
+const GMGU_COOKIE_NAME = COOKIE_NAME;
 const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
 
 // ⬡B:core.ham_session_authorization:BUILD:two_tiers_one_signer_because_a_typed_id_is_not_a_password:20260728⬡
@@ -24,7 +25,7 @@ const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
 //
 // THE RESOLUTION, and it is the only one that serves both facts at once: A TYPED WORLD ID DOES
 // OPEN THE WORLD, AND WHAT IT OPENS IT WITH IS NOT THE SAME CREDENTIAL A SIGN-IN OPENS IT WITH.
-// There are now two tiers, and they are produced and verified by ONE signer in ONE file, which
+// There are now three tiers, and they are produced and verified by ONE signer in ONE file, which
 // is this one. There is no second session module and there is no second cookie.
 //
 //   sign_in    what the emailed HMAC link, the Google callback and the arrival invite code
@@ -35,6 +36,11 @@ const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
 //              payload, so the tier is a signed fact and not a claim a caller can edit. It
 //              opens the world's own surfaces and it is refused by every door that can spend,
 //              provision, change identity, or reach a human. See signInTierGuard below.
+//
+//   gmgu       what a verified GMG University invitation mints. THIRTY DAYS, marked and expired
+//              inside the signed payload. It is accepted only by the GMGU authorizer. The
+//              general authorizer and the low level verifier refuse it by default, so an older
+//              route cannot inherit this scope merely because it already knows the signer.
 //
 // WHY THE TIER IS IN THE SIGNED PAYLOAD RATHER THAN IN A SECOND COOKIE. A second cookie is a
 // second thing a caller controls, and "which cookie did you send" is not a question a security
@@ -59,9 +65,12 @@ const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
 // who anybody is.
 const TIER_SIGN_IN = 'sign_in';
 const TIER_WORLD_ID = 'world_id';
+const TIER_GMGU = 'gmgu';
 const TIER_SEPARATOR = '~';
 const WORLD_ID_MARK = 'w1';
+const GMGU_MARK = 'g1';
 const WORLD_ID_TTL_SECONDS = 12 * 60 * 60;
+const GMGU_TTL_SECONDS = 30 * 24 * 60 * 60;
 const INTERNAL_CYCLE_VERSION = 'anew.ham.internal-cycle-context.v1';
 const INTERNAL_CYCLE_MAX_LIFETIME_MS = 2 * 60 * 1000;
 // ⬡B:core.ham_session_authorization:FIX:uppercasing_before_checking_let_case_folding_invent_a_world:20260726⬡
@@ -169,6 +178,34 @@ function signWorldIdSession(hamUid, opts) {
   return payload + '.' + mac;
 }
 
+function normalizedGmguTtlSeconds(opts) {
+  const rawTtl = opts && opts.ttlSeconds;
+  const asked = rawTtl === undefined || rawTtl === null || rawTtl === ''
+    ? GMGU_TTL_SECONDS : Number(rawTtl);
+  return Math.max(60, Math.min(Number.isFinite(asked)
+    ? Math.floor(asked) : GMGU_TTL_SECONDS, GMGU_TTL_SECONDS));
+}
+
+function signGmguSession(hamUid, opts) {
+  const normalized = normalizeHamUid(hamUid);
+  if (!normalized) return null;
+  const ttl = normalizedGmguTtlSeconds(opts);
+  const nowSeconds = Math.floor(((opts && opts.now) || Date.now()) / 1000);
+  const payload = normalized + TIER_SEPARATOR + GMGU_MARK + TIER_SEPARATOR + (nowSeconds + ttl);
+  const mac = macFor(payload);
+  if (!mac) return null;
+  return payload + '.' + mac;
+}
+
+function gmguSessionCookie(hamUid, opts) {
+  const token = signGmguSession(hamUid, opts);
+  if (!token) return null;
+  const ttl = normalizedGmguTtlSeconds(opts);
+  return GMGU_COOKIE_NAME + '=' + encodeURIComponent(token)
+    + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + ttl
+    + (opts && opts.secure ? '; Secure' : '');
+}
+
 // The ready made Set-Cookie value for the weaker tier, so no route file hand writes cookie
 // attributes for a credential whose whole point is that it is narrower than the other one. A
 // door that spelled its own Max-Age could silently grant thirty days again.
@@ -194,19 +231,19 @@ function parseSessionPayload(payload) {
   }
   const parts = payload.split(TIER_SEPARATOR);
   if (parts.length !== 3) return null;
-  if (parts[1] !== WORLD_ID_MARK) return null;
+  if (parts[1] !== WORLD_ID_MARK && parts[1] !== GMGU_MARK) return null;
   if (!/^[0-9]{1,12}$/.test(parts[2])) return null;
   const hamUid = normalizeHamUid(parts[0]);
   if (!hamUid) return null;
   return {
     hamUid: hamUid,
-    via: TIER_WORLD_ID,
+    via: parts[1] === GMGU_MARK ? TIER_GMGU : TIER_WORLD_ID,
     expiresAt: Number(parts[2]),
-    canonical: hamUid + TIER_SEPARATOR + WORLD_ID_MARK + TIER_SEPARATOR + parts[2]
+    canonical: hamUid + TIER_SEPARATOR + parts[1] + TIER_SEPARATOR + parts[2]
   };
 }
 
-function verifySessionToken(token) {
+function verifyAnySessionToken(token) {
   const secret = signingSecret();
   if (!secret) return { ok:false, status:503, reason:'ham_session_secret_unconfigured' };
   const raw = typeof token === 'string' ? token.trim() : '';
@@ -230,18 +267,35 @@ function verifySessionToken(token) {
   // stranger typed. Only the sign_in tier has no expiry here, and that is the pre-existing
   // 30 day cookie lifetime the browser enforces, which is a separate question this change
   // deliberately does not reopen.
-  if (parsed.via === TIER_WORLD_ID && !(parsed.expiresAt * 1000 > Date.now())) {
-    return { ok:false, status:401, reason:'world_id_session_expired' };
+  if (parsed.via !== TIER_SIGN_IN && !(parsed.expiresAt * 1000 > Date.now())) {
+    return { ok:false, status:401, reason:parsed.via === TIER_GMGU
+      ? 'gmgu_session_expired' : 'world_id_session_expired' };
   }
   return { ok:true, hamUid:parsed.hamUid, via:parsed.via, expiresAt:parsed.expiresAt };
 }
 
-function cookieToken(cookieHeader) {
+function verifySessionToken(token) {
+  const verified = verifyAnySessionToken(token);
+  if (verified.ok && verified.via === TIER_GMGU) {
+    return { ok:false, status:403, reason:'gmgu_session_scope_forbidden' };
+  }
+  return verified;
+}
+
+function cookieTokenNamed(cookieHeader, cookieName) {
   if (typeof cookieHeader !== 'string') return null;
-  const match = cookieHeader.match(new RegExp('(?:^|;\\s*)' + COOKIE_NAME + '=([^;]*)'));
+  const match = cookieHeader.match(new RegExp('(?:^|;\\s*)' + cookieName + '=([^;]*)'));
   if (!match) return null;
   try { return decodeURIComponent(match[1]); }
   catch (e) { return null; }
+}
+
+function cookieToken(cookieHeader) {
+  return cookieTokenNamed(cookieHeader, COOKIE_NAME);
+}
+
+function gmguCookieToken(cookieHeader) {
+  return cookieTokenNamed(cookieHeader, GMGU_COOKIE_NAME);
 }
 
 function bearerToken(authorization) {
@@ -286,6 +340,36 @@ function authorizeSessionRequest(req) {
   if (!credential) return { ok:false, status:401, reason:'ham_session_required' };
   const verified = verifySessionToken(credential);
   if (!verified.ok) return verified;
+  if (verified.via === TIER_GMGU) {
+    return { ok:false, status:403, reason:'gmgu_session_scope_forbidden' };
+  }
+  return { ok:true, hamUid:verified.hamUid, kind:kind, via:verified.via,
+    expiresAt:verified.expiresAt };
+}
+
+function gmguSessionTokenFromRequest(req) {
+  const requestHeaders = req && req.headers || {};
+  const authorization = requestHeaders.authorization || requestHeaders.Authorization;
+  if (authorization !== undefined) return bearerToken(authorization);
+  const cookies = requestHeaders.cookie || requestHeaders.Cookie;
+  const scoped = gmguCookieToken(cookies);
+  return scoped || cookieToken(cookies);
+}
+
+function authorizeGmguRequest(req) {
+  const requestHeaders = req && req.headers || {};
+  const authorization = requestHeaders.authorization || requestHeaders.Authorization;
+  const credential = gmguSessionTokenFromRequest(req);
+  const kind = authorization !== undefined ? 'bearer' : 'cookie';
+  if (authorization !== undefined && !credential) {
+    return { ok:false, status:401, reason:'ham_session_invalid' };
+  }
+  if (!credential) return { ok:false, status:401, reason:'ham_session_required' };
+  const verified = verifyAnySessionToken(credential);
+  if (!verified.ok) return verified;
+  if (verified.via !== TIER_SIGN_IN && verified.via !== TIER_GMGU) {
+    return { ok:false, status:403, reason:'sign_in_required_for_this' };
+  }
   return { ok:true, hamUid:verified.hamUid, kind:kind, via:verified.via,
     expiresAt:verified.expiresAt };
 }
@@ -797,6 +881,7 @@ const WORLD_ID_MAY_WRITE_PATHS = [
   /^\/auth\/advisor\/request\/?$/i,
   /^\/auth\/advisor\/resolve\/?$/i,
   /^\/arrival\/invite\/verify\/?$/i,
+  /^\/gmgu\/invite\/verify\/?$/i,
   /^\/os\/wake\/[^/]+\/?$/i,
   /^\/os\/sleep\/?$/i,
   /^\/door\/where\/?$/i,
@@ -1034,6 +1119,16 @@ function requireSignInTier(session) {
   return session;
 }
 
+function requireGmguTier(session) {
+  if (!session || !session.ok) {
+    return session || { ok:false, status:401, reason:'ham_session_required' };
+  }
+  if (session.via !== TIER_SIGN_IN && session.via !== TIER_GMGU) {
+    return { ok:false, status:403, reason:'sign_in_required_for_this' };
+  }
+  return session;
+}
+
 // ⬡B:core.ham_session_authorization:FIX:the_door_was_wide_and_every_room_was_narrow:20260726⬡
 // WHY THIS EXISTS. HAM_PATTERN above is the one shape a world ID has in this estate, and it
 // allows a dot and a colon: BDIF.ADVISOR is a real world. Thirteen page builders did not ask
@@ -1061,23 +1156,31 @@ function worldIdForPage(value) {
 
 module.exports = {
   COOKIE_NAME,
+  GMGU_COOKIE_NAME,
   TIER_SIGN_IN,
   TIER_WORLD_ID,
+  TIER_GMGU,
   WORLD_ID_TTL_SECONDS,
+  GMGU_TTL_SECONDS,
   signingSecret,
   normalizeHamUid,
   worldIdForPage,
   signHamSession,
   signWorldIdSession,
+  signGmguSession,
   worldIdSessionCookie,
+  gmguSessionCookie,
   worldIdTierRefusal,
   heldSessionOn,
   signInTierGuard,
   requireSignInTier,
+  requireGmguTier,
   verifySessionToken,
   sessionTokenFromRequest,
+  gmguSessionTokenFromRequest,
   forwardSessionHeaders,
   authorizeSessionRequest,
+  authorizeGmguRequest,
   authorizeHamRequest,
   authorizeExactHamRequest,
   internalSessionHeaders,
@@ -1092,5 +1195,5 @@ module.exports = {
   requireHamSession,
   requireExactHamSession,
   requireAnyHamSession,
-  _test:{ cookieToken, bearerToken }
+  _test:{ cookieToken, gmguCookieToken, bearerToken }
 };
