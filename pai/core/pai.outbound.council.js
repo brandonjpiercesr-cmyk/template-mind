@@ -167,7 +167,7 @@ function validCurrentCapabilityBindingReceipt(receipt, expected) {
     receipt.answer_digest === digestText(expected.answer) &&
     receipt.answer_bytes === Buffer.byteLength(expected.answer, 'utf8') &&
     /^[a-f0-9]{64}$/.test(String(receipt.evidence_digest || '')) &&
-    Number.isInteger(receipt.evidence_count) && receipt.evidence_count > 0 &&
+    Number.isInteger(receipt.evidence_count) && receipt.evidence_count === 1 &&
     receipt.exact_contract_preserved === true);
 }
 
@@ -4317,8 +4317,23 @@ function verifyCouncilReceipt(receipt, expected) {
   if (receipt.answer !== expected.answer || receipt.answer_digest !== digestText(expected.answer)) return false;
   if (receipt.answer_bytes !== Buffer.byteLength(expected.answer, 'utf8')) return false;
   var capabilityReceipt = receipt.current_capability_answer_binding;
-  var expectedCapabilityReceipt = expected.currentCapabilityAnswerBinding ||
-    expected.current_capability_answer_binding || null;
+  var camelCapabilityExpected = hasOwn(expected,'currentCapabilityAnswerBinding');
+  var snakeCapabilityExpected = hasOwn(expected,'current_capability_answer_binding');
+  if (camelCapabilityExpected && snakeCapabilityExpected &&
+      digestObject(expected.currentCapabilityAnswerBinding) !==
+        digestObject(expected.current_capability_answer_binding)) return false;
+  var capabilityExpectationSupplied = camelCapabilityExpected || snakeCapabilityExpected;
+  var expectedCapabilityReceipt = camelCapabilityExpected
+    ? expected.currentCapabilityAnswerBinding
+    : snakeCapabilityExpected ? expected.current_capability_answer_binding : null;
+  // Omitted means unspecified; explicit null means strict absence.
+  if (!capabilityExpectationSupplied && capabilityReceipt) {
+    if (!validCurrentCapabilityBindingReceipt(capabilityReceipt, {
+      hamUid:hamUid,requestId:requestId,cycleId:cycleId,
+      question:expected.question,answer:expected.answer
+    })) return false;
+    expectedCapabilityReceipt = capabilityReceipt;
+  }
   if (!!capabilityReceipt !== !!expectedCapabilityReceipt) return false;
   if (capabilityReceipt &&
       (!validCurrentCapabilityBindingReceipt(capabilityReceipt, {
