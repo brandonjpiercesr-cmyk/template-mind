@@ -46,6 +46,23 @@ var reachPolicyContract = require('./reach/policy.contract.js');
 var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
 var shadowDecisionDialogue = require('./shadow.decision.dialogue.js');
 var outputGuard = require('./model.output.guard.js');
+var LIVE_VOICE_SESSION = Symbol.for('anew.verified.live.voice.session');
+
+// The verified route attaches this proof through a symbol. Object.assign carries
+// the symbol through the World Builder identity clone, while JSON serialization
+// cannot leak the provider authorization into prompts or durable receipts.
+function bindVerifiedLiveVoiceSession(identity, transport, input, authorization) {
+  if (!identity || typeof identity !== 'object' || transport !== 'elevenlabs_native' ||
+      !input || typeof input !== 'object' || typeof authorization !== 'string') return false;
+  var proof = Object.freeze({ transport:transport,
+    input:Object.freeze(Object.assign({}, input, {
+      deliveryTarget:Object.freeze(Object.assign({}, input.deliveryTarget || {}))
+    })), authorization:authorization });
+  Object.defineProperty(identity, LIVE_VOICE_SESSION, {
+    enumerable:true, configurable:false, writable:false, value:proof
+  });
+  return true;
+}
 
 async function unavailableShadowDecisionFailure(council, context, dialogue) {
   if (!council || council.reason !== 'shadow_decision_judgment_unavailable') return null;
@@ -124,6 +141,34 @@ function verifiedVoiceCallContext(identity, hamUid) {
       !/^[a-f0-9]{64}$/.test(String(context.call_binding_digest || ''))) return null;
   var expectedDigest = voiceCallBinding.fromEvidence(expectedHam, item, result);
   return expectedDigest === context.call_binding_digest ? result : null;
+}
+
+function verifiedNativeVoiceSessionContext(identity, hamUid) {
+  var context = identity && identity.council_context;
+  var proof = identity && identity[LIVE_VOICE_SESSION];
+  if (!context || context.mode !== 'voice' || !proof ||
+      proof.transport !== 'elevenlabs_native' || !proof.input) return null;
+  var input = proof.input;
+  var expectedHam = String(hamUid || '').trim().toUpperCase();
+  if (!expectedHam || String(input.hamUid || '').trim().toUpperCase() !== expectedHam ||
+      input.purpose !== 'voice_session_bind' ||
+      !input.deliveryTarget || input.deliveryTarget.kind !== 'ham' ||
+      String(input.deliveryTarget.value || '').trim().toUpperCase() !== expectedHam ||
+      !/^[A-Za-z0-9._:-]{8,220}$/.test(String(input.sessionId || '')) ||
+      !require('./pai.outbound.authorization.js').verifyInitialMessage(
+        input, proof.authorization)) return null;
+  return { transport:'elevenlabs_native', session_id:input.sessionId,
+    request_id:input.requestId, cycle_id:input.cycleId,
+    receipt_digest:input.receiptDigest };
+}
+
+// Real-time preparation is transport-neutral. Pipecat retains its exact call
+// binding and native ElevenLabs carries the already-verified signed session.
+// Both still cross the complete postwrite council before speech is released.
+function verifiedLiveVoiceContext(identity, hamUid) {
+  var pipecat = verifiedVoiceCallContext(identity, hamUid);
+  return pipecat ? Object.assign({ transport:'pipecat' }, pipecat) :
+    verifiedNativeVoiceSessionContext(identity, hamUid);
 }
 
 function voiceCallContextSatisfiesTurn(channel, hamUid, question, identity) {
@@ -4177,7 +4222,7 @@ function preWriteCouncilEligible(answerSelected, structuredReachPolicy, reachInc
   // both pre-write organs. Authenticated live voice still crosses the complete
   // post-write council before any bytes are authorized for TTS.
   var liveVoice = String(channel || '').toLowerCase() === 'voice' &&
-    !!verifiedVoiceCallContext(identity, hamUid);
+    !!verifiedLiveVoiceContext(identity, hamUid);
   return !answerSelected && !structuredReachPolicy && !reachIncidentIntake &&
     !internalDeliberation(identity) && !liveVoice;
 }
@@ -5350,7 +5395,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   _effectRuntime.viewerTierSource = String(_readAuthority && _readAuthority.source || 'unresolved');
   _effectRuntime.readAuthority = _readAuthority;
   _effectRuntime.exactHamReads = _effectRuntime.channel === 'voice' &&
-    !!verifiedVoiceCallContext(identity, hamUid);
+    !!verifiedLiveVoiceContext(identity, hamUid);
   _effectRuntime.abortSignal = _turnAbortSignal || null;
   _effectRuntime.isCancelled = _turnCancelled;
   _effectRuntime.activationDecisionRequired = false;
@@ -8237,7 +8282,7 @@ function normalizeSubmitJobArgs(input) {
   return {ok:true,args:args};
 }
 
-module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
+module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
@@ -8252,7 +8297,8 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   prioritizeVerifiedEvidence,prioritizeCouncilEvidence,regenerateHollowAnswer,
   regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
-  verifiedVoiceCallContext,voiceCallContextSatisfiesTurn,
+  verifiedVoiceCallContext,verifiedNativeVoiceSessionContext,verifiedLiveVoiceContext,
+  bindVerifiedLiveVoiceSession,voiceCallContextSatisfiesTurn,
   verifiedVoiceCallPurposeAnswer,voiceHearingContextSatisfiesTurn,
   verifiedVoiceHearingAnswer,voiceFarewellContextSatisfiesTurn,
   verifiedVoiceFarewellAnswer,voiceConversationalNoGenericLookup,
