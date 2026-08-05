@@ -2967,12 +2967,14 @@ async function defaultWritStage(ctx) {
   // hamUid rides in so the WRIT organ can read doctrine.writ.persona.v1 from THIS
   // world's brain and supersede its embedded law floor. Resolved upstream through
   // the ABAHAM door, never a literal, and absent it the organ simply uses the floor.
-  var result = await writ.writCheck(ctx.answer, {
+  var checkedAndBanked = await writ.writCheckAndBank(ctx.hamUid, ctx.answer, {
     channel: ctx.channel || 'unknown',
     mode: mode || 'default',
     hamUid: ctx.hamUid,
     internal: mode === 'coding' || mode === 'internal'
   });
+  var result = checkedAndBanked && checkedAndBanked.check;
+  var bank = checkedAndBanked && checkedAndBanked.bank;
   // ⬡B:core.pai_outbound_council:FIX:writ_canonical_output_only:20260715⬡
   // writCheck already applies the canonical fence-aware voice law. Re-running
   // raw stripEmoji/removeEmDash here bypassed its coding context and could
@@ -3023,7 +3025,16 @@ async function defaultWritStage(ctx) {
       law_source: (result && result.law_source) || null,
       overruled_hints: (result && result.overruled_hints) || [],
       organ_decider:(result && result.organ_decider) || null,
-      failed_open:!!(result && result.failed_open)
+      failed_open:!!(result && result.failed_open),
+      // Bounded durable evidence only. The exact source contains the world key, so the
+      // council carries its digest rather than letting that identifier reach a face.
+      verdict_bank: {
+        ok: !!(bank && bank.ok === true),
+        banked: !!(bank && bank.banked === true),
+        reason: (bank && /^[a-z][a-z0-9_.-]{0,63}$/.test(String(bank.reason || '')))
+          ? String(bank.reason) : null,
+        source_digest: (bank && bank.source) ? digestText(String(bank.source)) : null
+      }
     }
   };
 }
@@ -4633,8 +4644,8 @@ function compactCouncilProof(result) {
 // Rebuild the in-process proof object from the two canonical durable rows. The
 // proof's authoritative fields are already present in the final receipt and
 // committed STAMP row; read_back_at is observational and is rebound to the
-// committed STAMP end time. This is intentionally restricted to ordinary PAI
-// cycles carrying the explicit reach_handoff marker and no external target.
+// committed STAMP end time. An external pair stays refused unless its caller
+// independently supplies the exact delivery target committed by the receipt.
 function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
   var opts = options || {};
   var finalContent = parseContent(finalStoredRow && finalStoredRow.content);
@@ -4645,7 +4656,10 @@ function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
     return { ok:false, reason:'reach_handoff_receipt_ineligible' };
   }
   var target = readDeliveryTargetBinding(receipt);
-  if (!target.ok || target.present) {
+  var targetExpectation = expectedDeliveryTarget(opts);
+  if (!target.ok || (targetExpectation.supplied
+      ? !verifyDeliveryTargetBinding(receipt, targetExpectation.value)
+      : target.present)) {
     return { ok:false, reason:opts.requireReach === true
       ? 'reach_handoff_external_receipt_rejected' : 'committed_council_external_receipt_rejected' };
   }
@@ -4653,6 +4667,7 @@ function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
     cycleId:receipt.cycle_id, question:receipt.question,
     deliberationInput:receipt.deliberation_input, answer:receipt.answer,
     currentCapabilityAnswerBinding:receipt.current_capability_answer_binding || null };
+  if (targetExpectation.supplied) input.deliveryTarget = targetExpectation.value;
   var sources = buildSources(input.cycleId, input.requestId);
   var preparedAt = Date.parse(receipt.prepared_at);
   if (!Number.isFinite(preparedAt) || !sameFinalReadback(finalStoredRow,
@@ -4673,7 +4688,7 @@ function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
     return { ok:false, reason:opts.requireReach === true
       ? 'reach_handoff_row_identity_missing' : 'committed_council_row_identity_missing' };
   }
-  var proofCore = {
+  var proofCore = Object.assign({
     schema:STAMP_PROOF_SCHEMA, ok:true, ham_uid:receipt.ham_uid,
     request_id:receipt.request_id, cycle_id:receipt.cycle_id,
     request_source:receipt.request_source,
@@ -4691,7 +4706,7 @@ function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
     stage:stampContent.stage, commit:stampContent.commit,
     stamp_content_digest:digestObject(stampContent), readback_verified:true,
     read_back_at:new Date(stampAt).toISOString()
-  };
+  }, target.binding || {});
   var proof = Object.assign({}, proofCore, { proof_digest:digestObject(proofCore) });
   if (!verifyCommittedCouncil(receipt, proof, input)) {
     return { ok:false, reason:opts.requireReach === true
@@ -4709,18 +4724,21 @@ function reconstructReachHandoffCouncil(finalStoredRow, stampStoredRow) {
 // council commit can recover the server-generated cycle coordinate without buying another
 // model turn. The request row is fully re-derived before its cycle_id is trusted, then the
 // final and STAMP pair cross the same canonical verifier used by the live return path.
-function reconstructCommittedCouncilFromRequest(requestStoredRow, finalStoredRow,
-  stampStoredRow, expected) {
+function inspectCommittedCouncilRequest(requestStoredRow, expected) {
   var requestContent = parseContent(requestStoredRow && requestStoredRow.content);
   var binding = requestContent && requestContent.binding;
   var required = expected || {};
+  var targetExpectation = expectedDeliveryTarget(required);
+  var requestTarget = readDeliveryTargetBinding(binding || {});
   if (!binding || requestContent.schema !== REQUEST_SCHEMA ||
       binding.ham_uid !== required.hamUid || binding.request_id !== required.requestId ||
       binding.request_source !== 'pai.request.' + required.requestId ||
       requestStoredRow.source !== binding.request_source ||
       requestContent.question !== required.question ||
       requestContent.deliberation_input !== required.deliberationInput ||
-      !readDeliveryTargetBinding(binding).ok || readDeliveryTargetBinding(binding).present) {
+      !requestTarget.ok || (targetExpectation.supplied
+        ? !verifyDeliveryTargetBinding(binding, targetExpectation.value)
+        : requestTarget.present)) {
     return {ok:false,reason:'committed_council_request_invalid'};
   }
   var aclDate = String(requestStoredRow.acl_stamp || '').match(/:(\d{8})\u2b21$/);
@@ -4730,11 +4748,21 @@ function reconstructCommittedCouncilFromRequest(requestStoredRow, finalStoredRow
   var input = {hamUid:binding.ham_uid,requestId:binding.request_id,
     cycleId:binding.cycle_id,question:requestContent.question,
     deliberationInput:requestContent.deliberation_input};
+  if (targetExpectation.supplied) input.deliveryTarget = targetExpectation.value;
   var sources = buildSources(input.cycleId,input.requestId);
   if (!sameRequestReadback(requestStoredRow,requestRow(input,sources,stampMs))) {
     return {ok:false,reason:'committed_council_request_readback_invalid'};
   }
-  var recovered = reconstructCommittedCouncil(finalStoredRow,stampStoredRow);
+  return {ok:true,input:input,sources:sources,request_row:requestStoredRow};
+}
+
+function reconstructCommittedCouncilFromRequest(requestStoredRow, finalStoredRow,
+  stampStoredRow, expected) {
+  var inspected = inspectCommittedCouncilRequest(requestStoredRow,expected);
+  if (!inspected.ok) return inspected;
+  var input = inspected.input;
+  var recovered = reconstructCommittedCouncil(finalStoredRow,stampStoredRow,
+    input.deliveryTarget ? {deliveryTarget:input.deliveryTarget} : {});
   if (!recovered.ok || recovered.council_receipt.ham_uid !== input.hamUid ||
       recovered.council_receipt.request_id !== input.requestId ||
       recovered.council_receipt.cycle_id !== input.cycleId ||
@@ -4766,6 +4794,7 @@ module.exports = {
   compactCouncilProof: compactCouncilProof,
   councilSources:buildSources,
   reconstructCommittedCouncil:reconstructCommittedCouncil,
+  inspectCommittedCouncilRequest:inspectCommittedCouncilRequest,
   reconstructCommittedCouncilFromRequest:reconstructCommittedCouncilFromRequest,
   reconstructReachHandoffCouncil:reconstructReachHandoffCouncil,
   canonicalizeDeliveryTarget: canonicalizeDeliveryTarget,
