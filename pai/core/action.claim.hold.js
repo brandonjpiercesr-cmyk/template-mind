@@ -76,6 +76,9 @@ var CLAIM_GROUPS = [
       'set that as a mission', 'set this in motion', 'set that in motion',
       'put this in motion', 'put that in motion', 'queued the mission',
       'queued the job', 'commissioned the mission', 'commissioned the job',
+      ] },
+  { supportKind: 'mission_running',
+    verbs: ['started the mission', 'started the job',
       'assigned the mission', 'assigned the job'] },
   // A durable mission and a timed reminder are two different effects. A real
   // submit_job receipt supports the former; only the actual reminder-writing
@@ -98,7 +101,7 @@ var STATE_CLAIMS = [
   { supportKind:'mission_running', verb:'mission running',
     pattern:/\b(?:(?:it|this|that)(?:\s+is|[’']s)|(?:the mission|the job|this mission|that mission)\s+is)\s+(?:already\s+)?(?:running|live|active)\b/gi },
   { supportKind:'mission_running', verb:'live track',
-    pattern:/\bthis\s+is\s+(?:now\s+)?a\s+live\s+track(?:\s+now)?\b/gi },
+    pattern:/\b(?:this|it)(?:\s+is|[’']s)\s+(?:now\s+)?a\s+live\s+track(?:\s+now)?\b/gi },
   { supportKind:'reminder_delivery', verb:'reminder will trigger',
     pattern:/\b(?:the|this|that)\s+reminder\s+will\s+(?:trigger|fire|notify|alert|reach|nudge)\b/gi },
   { supportKind:'reminder_delivery', verb:'follow-up will arrive',
@@ -176,15 +179,6 @@ function collectEvidenceText(trace) {
   return pieces.join('\n');
 }
 
-function parseJsonObject(raw) {
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
-  if (typeof raw !== 'string' || !raw.trim()) return null;
-  try {
-    var parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch (eParse) { return null; }
-}
-
 function validMissionArgs(args) {
   var level = args && args.level === undefined ? 0 : Number(args && args.level);
   return !!(args && typeof args === 'object' && String(args.subject || '').trim() &&
@@ -204,30 +198,15 @@ function hasPendingEffect(trace, name, validate) {
   });
 }
 
-function currentTurnToolResult(trace, name, validate) {
-  return (Array.isArray(trace.verified_evidence) ? trace.verified_evidence : []).some(function (item) {
-    if (!item || item.schema !== 'anew.pai.executed-tool-evidence.v1' ||
-        item.provenance !== 'pai.current_turn.execute_tool' ||
-        item.evidence_kind !== 'verified_tool_result' || item.tool !== name) return false;
-    var args = parseJsonObject(item.args);
-    var result = parseJsonObject(item.result);
-    return validate(args) && !!(result && result.ok !== false && result.executed !== false &&
-      result.queued !== true);
-  });
-}
-
 function strictClaimSupported(kind, trace) {
   if (kind === 'mission_submission') {
-    return hasPendingEffect(trace, 'submit_job', validMissionArgs) ||
-      currentTurnToolResult(trace, 'submit_job', validMissionArgs);
+    return hasPendingEffect(trace, 'submit_job', validMissionArgs);
   }
   if (kind === 'reminder_create') {
-    return hasPendingEffect(trace, 'create_reminder', validReminderArgs) ||
-      currentTurnToolResult(trace, 'create_reminder', validReminderArgs);
+    return hasPendingEffect(trace, 'create_reminder', validReminderArgs);
   }
   if (kind === 'reminder_recurrence') {
-    return hasPendingEffect(trace, 'create_recurring_reminder', validReminderArgs) ||
-      currentTurnToolResult(trace, 'create_recurring_reminder', validReminderArgs);
+    return hasPendingEffect(trace, 'create_recurring_reminder', validReminderArgs);
   }
   // The current armory has no typed receipt that proves a submitted job is
   // already running, or that a stored reminder will actually reach the person.
