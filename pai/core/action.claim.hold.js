@@ -75,11 +75,11 @@ var CLAIM_GROUPS = [
       'set this as a real small mission', 'set this as a mission',
       'set that as a mission', 'set this in motion', 'set that in motion',
       'put this in motion', 'put that in motion', 'queued the mission',
-      'queued the job', 'commissioned the mission', 'commissioned the job',
-      ] },
+      'queued the job'] },
   { supportKind: 'mission_running',
     verbs: ['started the mission', 'started the job',
-      'assigned the mission', 'assigned the job'] },
+      'assigned the mission', 'assigned the job',
+      'commissioned the mission', 'commissioned the job'] },
   // A durable mission and a timed reminder are two different effects. A real
   // submit_job receipt supports the former; only the actual reminder-writing
   // hand supports the latter. Keeping these in separate groups prevents one
@@ -99,13 +99,11 @@ var CLAIM_GROUPS = [
 // from a tool name or free-form memory text.
 var STATE_CLAIMS = [
   { supportKind:'mission_running', verb:'mission running',
-    pattern:/\b(?:(?:it|this|that)(?:\s+is|[’']s)|(?:the mission|the job|this mission|that mission)\s+is)\s+(?:already\s+)?(?:running|live|active)\b/gi },
-  { supportKind:'mission_running', verb:'live track',
-    pattern:/\b(?:this|it)(?:\s+is|[’']s)\s+(?:now\s+)?a\s+live\s+track(?:\s+now)?\b/gi },
+    pattern:/\b(?:the mission|the job|this mission|that mission)\s+is\s+(?:already\s+)?(?:running|live|active)\b/gi },
+  { supportKind:'mission_running', verb:'mission running',
+    pattern:/\b(?:got (?:the|this) mission set|set (?:this|that) as a mission|queued (?:the|this|that) mission)[^.!?\n]{0,100}\b(?:and\s+)?it(?:\s+is|[’']s)\s+(?:already\s+)?(?:running|live|active)\b/gi },
   { supportKind:'reminder_delivery', verb:'reminder will trigger',
-    pattern:/\b(?:the|this|that)\s+reminder\s+will\s+(?:trigger|fire|notify|alert|reach|nudge)\b/gi },
-  { supportKind:'reminder_delivery', verb:'follow-up will arrive',
-    pattern:/\bfollow[- ]?ups?\s+(?:will\s+)?(?:trigger|fire|arrive|come|happen|at)\b/gi }
+    pattern:/\b(?:the|this|that)\s+reminder\s+will\s+(?:trigger|fire|notify|alert|reach|nudge)\b/gi }
 ];
 
 // Fillers legally allowed between the first-person subject and the claim verb.
