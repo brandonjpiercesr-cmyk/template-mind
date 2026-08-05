@@ -121,10 +121,18 @@ var STATE_CLAIMS = [
     pattern:/\b(?:the mission|the job|this mission|that mission)\s+is\s+(?:already\s+)?(?:running|live|active)\b/gi },
   { supportKind:'mission_running', verb:'mission running',
     pattern:/\b(?:got (?:the|this) mission set|set (?:this|that) as a mission|queued (?:the|this|that) mission)[^.!?\n]{0,100}\b(?:and\s+)?it(?:\s+is|[’']s)\s+(?:already\s+)?(?:running|live|active)\b/gi },
+  { supportKind:'mission_running', verb:'job started',
+    pattern:/(?:^|[.!?]\s+|\n)\s*I(?:\s+have|[’']ve)\s+got\s+(?:(?:the|this|that|your)\s+)?(?:[A-Za-z0-9’'-]+\s+){0,4}(?:job|task|mission)\s+(?:started|running|live|active)\b/gim },
   { supportKind:'reminder_delivery', verb:'reminder will trigger',
     pattern:/\b(?:the|this|that)\s+reminder\s+will\s+(?:trigger|fire|notify|alert|reach|nudge)\b/gi },
   { supportKind:'reminder_delivery', verb:'job will return',
-    pattern:/\b(?:the|this|that|your)\s+(?:job|task|mission)\s+will\s+(?:return|come\s+back|check\s+in|reach|remind|nudge|notify|alert|follow\s+up)\b/gi }
+    pattern:/\b(?:the|this|that|your)\s+(?:job|task|mission)\s+will\s+(?:return|come\s+back|check\s+in|reach|remind|nudge|notify|alert|follow\s+up)\b/gi },
+  { supportKind:'reminder_delivery', verb:'promised future return',
+    pattern:/\bI(?:\s+will|[’']ll)\s+(?:make\s+sure\s+|ensure\s+)?(?:it|this|that|the\s+(?:job|task|mission|reminder))\s+(?:will\s+)?(?:returns?|comes?\s+back|checks?\s+in|reaches?|reminds?|nudges?|notifies?|alerts?|follows?\s+up|surfaces?|appears?)\b[^.!?\n]{0,120}\b(?:tomorrow|morning|tonight|first\s+thing|later|when\s+(?:you|he|she|they)\s+(?:wake|wakes|arrive|arrives|return|returns|log|logs)\b)\b/gi },
+  { supportKind:'reminder_delivery', verb:'setting future surface',
+    pattern:/\bI(?:\s+am|[’']m)\s+setting\s+(?:it|this|that|the\s+(?:job|task|mission|reminder))\s+(?:up\s+)?to\s+(?:surface|appear|return|reach|notify|alert|nudge|follow\s+up)\b[^.!?\n]{0,120}\b(?:tomorrow|morning|tonight|first\s+thing|later|when\s+(?:you|he|she|they)\s+(?:wake|wakes|arrive|arrives|return|returns|log|logs)\b)\b/gi },
+  { supportKind:'future_schedule_delivery', verb:'scheduled future placement',
+    pattern:/\b(?:the|this|that|your)\s+(?:[A-Za-z0-9’'-]+\s+){0,4}(?:routine|job|task|mission|plan|reminder)\s+will\s+(?:sit|land|surface|appear|return)\s+(?:right\s+)?before\b[^.!?\n]{0,180}\b(?:(?:your|the)\s+(?:first\s+)?(?:call|meeting|event|appointment)|(?:you|he|she|they)\s+(?:wake|leave|start))\b/gi }
 ];
 
 // Fillers legally allowed between the first-person subject and the claim verb.
@@ -199,11 +207,14 @@ function collectEvidenceText(trace) {
 }
 
 function validMissionArgs(args) {
-  var level = args && args.level === undefined ? 0 : Number(args && args.level);
-  return !!(args && typeof args === 'object' && String(args.subject || '').trim() &&
-    String(args.detail || '').trim() && Array.isArray(args.acceptance) &&
+  var level = args && args.level === undefined ? 0 : args && args.level;
+  return !!(args && typeof args === 'object' && !Array.isArray(args) &&
+    typeof args.subject === 'string' && args.subject.trim() &&
+    typeof args.detail === 'string' && args.detail.trim() && Array.isArray(args.acceptance) &&
     args.acceptance.length >= 1 && args.acceptance.length <= 12 &&
-    args.acceptance.every(function (check) { return !!String(check || '').trim(); }) &&
+    args.acceptance.every(function (check) {
+      return typeof check === 'string' && !!check.trim();
+    }) &&
     Number.isInteger(level) && level >= 0 && level <= 4);
 }
 
