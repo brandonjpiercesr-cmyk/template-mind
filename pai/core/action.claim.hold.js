@@ -121,18 +121,19 @@ var STATE_CLAIMS = [
     pattern:/\b(?:the mission|the job|this mission|that mission)\s+is\s+(?:already\s+)?(?:running|live|active)\b/gi },
   { supportKind:'mission_running', verb:'mission running',
     pattern:/\b(?:got (?:the|this) mission set|set (?:this|that) as a mission|queued (?:the|this|that) mission)[^.!?\n]{0,100}\b(?:and\s+)?it(?:\s+is|[’']s)\s+(?:already\s+)?(?:running|live|active)\b/gi },
-  { supportKind:'mission_running', verb:'job started',
+  { supportKind:'mission_running', verb:'job started', sentenceScoped:true,
     pattern:/(?:^|[.!?]\s+|\n)\s*I(?:\s+have|[’']ve)\s+got\s+(?:(?:the|this|that|your)\s+)?(?:[A-Za-z0-9’'-]+\s+){0,4}(?:job|task|mission)\s+(?:started|running|live|active)\b/gim },
   { supportKind:'reminder_delivery', verb:'reminder will trigger',
     pattern:/\b(?:the|this|that)\s+reminder\s+will\s+(?:trigger|fire|notify|alert|reach|nudge)\b/gi },
   { supportKind:'reminder_delivery', verb:'job will return',
     pattern:/\b(?:the|this|that|your)\s+(?:job|task|mission)\s+will\s+(?:return|come\s+back|check\s+in|reach|remind|nudge|notify|alert|follow\s+up)\b/gi },
-  { supportKind:'reminder_delivery', verb:'promised future return',
+  { supportKind:'reminder_delivery', verb:'promised future return', sentenceScoped:true,
     pattern:/\bI(?:\s+will|[’']ll)\s+(?:make\s+sure\s+|ensure\s+)?(?:it|this|that|the\s+(?:job|task|mission|reminder))\s+(?:will\s+)?(?:returns?|comes?\s+back|checks?\s+in|reaches?|reminds?|nudges?|notifies?|alerts?|follows?\s+up|surfaces?|appears?)\b[^.!?\n]{0,120}\b(?:tomorrow|morning|tonight|first\s+thing|later|when\s+(?:you|he|she|they)\s+(?:wake|wakes|arrive|arrives|return|returns|log|logs)\b)\b/gi },
-  { supportKind:'reminder_delivery', verb:'setting future surface',
+  { supportKind:'reminder_delivery', verb:'setting future surface', sentenceScoped:true,
     pattern:/\bI(?:\s+am|[’']m)\s+setting\s+(?:it|this|that|the\s+(?:job|task|mission|reminder))\s+(?:up\s+)?to\s+(?:surface|appear|return|reach|notify|alert|nudge|follow\s+up)\b[^.!?\n]{0,120}\b(?:tomorrow|morning|tonight|first\s+thing|later|when\s+(?:you|he|she|they)\s+(?:wake|wakes|arrive|arrives|return|returns|log|logs)\b)\b/gi },
   { supportKind:'future_schedule_delivery', verb:'scheduled future placement',
-    pattern:/\b(?:the|this|that|your)\s+(?:[A-Za-z0-9’'-]+\s+){0,4}(?:routine|job|task|mission|plan|reminder)\s+will\s+(?:sit|land|surface|appear|return)\s+(?:right\s+)?before\b[^.!?\n]{0,180}\b(?:(?:your|the)\s+(?:first\s+)?(?:call|meeting|event|appointment)|(?:you|he|she|they)\s+(?:wake|leave|start))\b/gi }
+    sentenceScoped:true,exclude:/\b(?:appendix|handbook|document|report|chapter|section|page|story|novel|script|code|tests?)\b/i,
+    pattern:/\b(?:the|this|that|your)\s+(?:[A-Za-z0-9’'-]+\s+){0,4}(?:routine|job|task|mission|reminder)\s+will\s+(?:sit|land|surface|appear|return)\s+(?:right\s+)?before\b[^.!?\n]{0,180}\b(?:(?:your|the)\s+(?:first\s+)?(?:call|meeting|event|appointment)|(?:you|he|she|they)\s+(?:wake|leave|start))\b/gi }
 ];
 
 // Fillers legally allowed between the first-person subject and the claim verb.
@@ -143,6 +144,12 @@ var FILLERS = '(?:\\s+(?:have|had|just|already|also|then|now|personally|actually
 // Reported or hypothetical speech immediately before the "I" passes: it is a
 // quote of others or a supposition, never her own claim of a done act.
 var PRECEDING_EXEMPT = /\b(?:if|whether|unless|suppose|supposing|imagine|imagining|wish|hoping|hope|said|says|saying|asked|asks|told|tells|claims?|claimed|wrote|writes|denied|denies)\s*(?:that\s+)?$/i;
+
+function statePrecedingExempt(value) {
+  var prefix=String(value||'').replace(/["'“‘]\s*$/,'').trim();
+  return PRECEDING_EXEMPT.test(prefix) ||
+    /(?:^|\b)(?:in\s+(?:the|this)\s+(?:story|example)|for\s+example)[,:]?\s*$/i.test(prefix);
+}
 
 function escapeVerb(verb) {
   return verb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
@@ -333,16 +340,24 @@ function detect(answerText, trace) {
   }
   for (var stateIndex = 0; stateIndex < STATE_CLAIMS.length; stateIndex++) {
     var stateClaim = STATE_CLAIMS[stateIndex];
-    stateClaim.pattern.lastIndex = 0;
-    var stateMatch;
-    while ((stateMatch = stateClaim.pattern.exec(text)) !== null) {
-      if (claimSupported(null,stateClaim.supportKind,trace,names,evidenceText,
-          stateMatch[0])) continue;
-      if (claims.length < 8) {
-        claims.push({
-          claim:String(stateMatch[0] || '').trim().slice(0, 200),
-          verb:stateClaim.verb
-        });
+    var stateTexts=stateClaim.sentenceScoped===true?sentences:[text];
+    for (var stateTextIndex=0;stateTextIndex<stateTexts.length;stateTextIndex++) {
+      var stateText=stateTexts[stateTextIndex];
+      if (!stateText || (stateClaim.sentenceScoped===true && /\?\s*$/.test(stateText))) continue;
+      if (stateClaim.exclude && stateClaim.exclude.test(stateText)) continue;
+      stateClaim.pattern.lastIndex = 0;
+      var stateMatch;
+      while ((stateMatch = stateClaim.pattern.exec(stateText)) !== null) {
+        if (stateClaim.sentenceScoped===true&&
+            statePrecedingExempt(stateText.slice(0,stateMatch.index))) continue;
+        if (claimSupported(null,stateClaim.supportKind,trace,names,evidenceText,
+            stateMatch[0])) continue;
+        if (claims.length < 8) {
+          claims.push({
+            claim:String(stateMatch[0] || '').trim().slice(0, 200),
+            verb:stateClaim.verb
+          });
+        }
       }
     }
   }
