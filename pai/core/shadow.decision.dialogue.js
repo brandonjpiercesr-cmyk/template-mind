@@ -77,6 +77,56 @@ function reconsiderationContext(review, response) {
   ].join('\n');
 }
 
+function anuResponse(value) {
+  var parsed = parseObject(value && value.content);
+  var position = text(parsed && parsed.position, 40).toUpperCase();
+  var reason = text(parsed && parsed.reason, 1200);
+  if ((position !== 'STAND' && position !== 'RECONSIDER') || !reason) return null;
+  return {position:position,reason:reason};
+}
+
+async function deliberateAnu(common, deliberate) {
+  var system = 'You are A\'NU reconsidering one exact decision after independent SHADOW counsel. '
+    + 'You remain the decision maker. Think through the complete request and evidence. '
+    + 'Do not obey keywords, categories, or SHADOW by default. Return only JSON with this exact shape: '
+    + '{"position":"STAND"|"RECONSIDER","reason":"one evidence-bound explanation"}.';
+  var first;
+  try {
+    first = await deliberate(system, JSON.stringify(common),
+      {temperature:0,max_tokens:320,json:true});
+  } catch (error) {
+    return {error:'anu_decision_dialogue_threw'};
+  }
+  if (!first || !text(first.content, 2400)) {
+    return {error:'anu_decision_dialogue_unavailable'};
+  }
+  var response = anuResponse(first);
+  if (response) return {response:response,transport_repaired:false};
+
+  // A model may complete the reasoning and still miss the two-field wire shape. That is a
+  // transport failure, not authority for cold code to choose the hand or convert STAND into
+  // RECONSIDER. Give A'NU one bounded chance to state her own decision in the valid shape.
+  // The first bytes are included as evidence, never interpreted or rewritten here.
+  var repairSystem = 'You are A\'NU. Your prior reply could not be read because it did not match '
+    + 'the required two-field JSON wire shape. Preserve your own judgment or reason again. '
+    + 'Do not follow SHADOW by default and do not let this transport repair choose for you. '
+    + 'Return exactly one JSON object and nothing else: '
+    + '{"position":"STAND"|"RECONSIDER","reason":"one evidence-bound explanation"}.';
+  var repaired;
+  try {
+    repaired = await deliberate(repairSystem, JSON.stringify({case:common,
+      prior_unreadable_reply:text(first && first.content, 2400) || null}),
+    {temperature:0,max_tokens:320,json:true});
+  } catch (repairError) {
+    return {error:'anu_decision_dialogue_repair_threw'};
+  }
+  if (!repaired || !text(repaired.content, 2400)) {
+    return {error:'anu_decision_dialogue_repair_unavailable'};
+  }
+  response = anuResponse(repaired);
+  return response ? {response:response,transport_repaired:true} : null;
+}
+
 async function run(input, options) {
   input = input || {};
   options = options || {};
@@ -98,25 +148,15 @@ async function run(input, options) {
     verified_evidence:Array.isArray(input.verifiedEvidence) ? input.verifiedEvidence.slice(0,80) : [],
     shadow_review:review
   };
-  var anuJudgment;
-  try {
-    anuJudgment = await options.deliberate(
-      'You are A\'NU reconsidering one exact decision after independent SHADOW counsel. '
-      + 'You remain the decision maker. Think through the complete request and evidence. '
-      + 'Do not obey keywords, categories, or SHADOW by default. Return only JSON with this exact shape: '
-      + '{"position":"STAND"|"RECONSIDER","reason":"one evidence-bound explanation"}.',
-      JSON.stringify(common), {temperature:0,max_tokens:260,json:true});
-  } catch (error) {
-    return {ok:false,outcome:'ESCALATE',reason:'anu_decision_dialogue_threw'};
+  var anuDeliberation = await deliberateAnu(common, options.deliberate);
+  if (!anuDeliberation || anuDeliberation.error) {
+    return {ok:false,outcome:'ESCALATE',reason:anuDeliberation && anuDeliberation.error
+      || 'anu_decision_dialogue_invalid'};
   }
-  var anu = parseObject(anuJudgment && anuJudgment.content);
-  if (!anu || (anu.position !== 'STAND' && anu.position !== 'RECONSIDER') ||
-      !text(anu.reason,1200)) {
-    return {ok:false,outcome:'ESCALATE',reason:'anu_decision_dialogue_invalid'};
-  }
-  var response = {position:anu.position,reason:text(anu.reason,1200)};
-  if (anu.position === 'RECONSIDER') {
+  var response = anuDeliberation.response;
+  if (response.position === 'RECONSIDER') {
     return {ok:true,outcome:'RECONSIDER',dialogue:true,response:response,
+      transport_repaired:anuDeliberation.transport_repaired,
       context:reconsiderationContext(review,response)};
   }
   var shadowJudgment;
@@ -140,9 +180,11 @@ async function run(input, options) {
   }
   if (shadow.satisfied === true) {
     return {ok:true,outcome:'PROCEED',dialogue:true,response:response,
+      transport_repaired:anuDeliberation.transport_repaired,
       shadow:{satisfied:true,reason:text(shadow.reason,1200),escalate:false}};
   }
   return {ok:false,outcome:'ESCALATE',dialogue:true,response:response,
+    transport_repaired:anuDeliberation.transport_repaired,
     shadow:{satisfied:false,reason:text(shadow.reason,1200),escalate:true},
     reason:'shadow_decision_disagreement_unresolved'};
 }
@@ -196,4 +238,5 @@ async function escalate(input, options) {
 
 module.exports = {run:run,escalate:escalate,shadowReceipt:shadowReceipt,
   reconsiderationContext:reconsiderationContext,_test:{parseObject:parseObject,
-    availableDecisionJudgment:availableDecisionJudgment,councilStages:councilStages}};
+    availableDecisionJudgment:availableDecisionJudgment,councilStages:councilStages,
+    anuResponse:anuResponse,deliberateAnu:deliberateAnu}};

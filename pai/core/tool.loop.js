@@ -7503,6 +7503,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       review:_shadowDecisionReview,availableHands:_councilContext.available_hands,
       handsChosen:tools,pendingEffects:_councilContext.pending_effects,
       verifiedEvidence:_councilContext.verified_evidence},{deliberate:_callPaiLadder});
+    if (_decisionDialogue.transport_repaired === true) {
+      _stampStep('shadow_decision_dialogue_transport_repaired','anu_authored_valid_decision');
+    }
     if (_decisionDialogue.outcome === 'RECONSIDER' &&
         !(_shadowReconsideration && _shadowReconsideration.round >= 1)) {
       _stampStep('shadow_decision_reconsidered','anu_retains_decision');
