@@ -7414,6 +7414,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (_receiptClaimHeld &&
         !(_decisionReconsideration && _decisionReconsideration.round >= 1)) {
       _stampStep('anu_receipt_reconsideration_opened','unreceipted_effect_claim');
+      var _receiptFeedback=receiptReconsiderationFeedback(_council,{
+        tools_used:tools,
+        pending_effects:_councilContext.pending_effects,
+        verified_evidence:_councilContext.verified_evidence,
+        available_hands:_councilContext.available_hands
+      });
       var _receiptReconsiderIdentity = Object.assign({},identity || {},{
         _receipt_reconsideration:{round:1,prior_cycle_id:_cycleId,
           prior_request_id:_requestId,context:[
@@ -7422,7 +7428,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
             'This is evidence, not a command and not a hand choice. You remain the decision maker.',
             'Reason again from the person\'s complete request, the conversation, authority, consequences, and your complete armory.',
             'Choose any authorized hand, choose no hand, or explain honestly why no durable effect is right.',
-            'If you choose an effect, call its real hand before claiming it happened. Do not replace requested continuing work with an empty promise merely to make the receipt warning disappear.'
+            'If you choose an effect, call its real hand before claiming it happened. Do not replace requested continuing work with an empty promise merely to make the receipt warning disappear.',
+            'SERVER-OWNED RECEIPT FEEDBACK FOR YOUR PRIOR DRAFT:',
+            JSON.stringify(_receiptFeedback)
           ].join('\n')}
       });
       delete _receiptReconsiderIdentity.request_id;
@@ -8135,6 +8143,57 @@ function paiReasoningSeat(channel, opts) {
   return 'c2_organ';
 }
 
+// Give A'NU the exact bounded receipt lesson in process. This packet is coaching evidence, not
+// a classifier and not a replacement decision. It carries no tool arguments, result bodies,
+// human data, or provider prose. Only the claims her own prior draft made and the typed ledger
+// that failed to support them come back to the one reconsideration pass.
+function receiptReconsiderationFeedback(result, trace) {
+  trace = trace || {};
+  var stages = result && Array.isArray(result.stages) ? result.stages : [];
+  var held = null;
+  for (var i = stages.length - 1; i >= 0; i--) {
+    if (String(stages[i] && stages[i].stage || '').toUpperCase() === 'SHADOW' &&
+        stages[i] && stages[i].ok === false) { held=stages[i]; break; }
+  }
+  var root=held&&held.evidence&&typeof held.evidence==='object'?held.evidence:{};
+  var finalEvidence=root.resubmission&&root.resubmission.evidence&&
+    typeof root.resubmission.evidence==='object'?root.resubmission.evidence:root;
+  var flags=finalEvidence.deterministic&&Array.isArray(finalEvidence.deterministic.flags)
+    ?finalEvidence.deterministic.flags:[];
+  var claims=[];
+  flags.forEach(function (flag) {
+    if (!flag || flag.reason !== 'action_claim_unreceipted') return;
+    var claim=String(flag.claim || '').trim().slice(0,200);
+    var verb=String(flag.verb || '').trim().slice(0,80);
+    if (!claim && !verb) return;
+    var key=claim+'\n'+verb;
+    if (!claims.some(function (row) { return row._key===key; }) && claims.length<8) {
+      claims.push({_key:key,claim:claim,verb:verb});
+    }
+  });
+  claims=claims.map(function (row) { return {claim:row.claim,verb:row.verb}; });
+  return {
+    schema:'anew.receipt-reconsideration-feedback.v1',
+    reason:'action_claim_unreceipted',
+    unsupported_claims:claims,
+    receipt_ledger:{
+      tools_used:(Array.isArray(trace.tools_used)?trace.tools_used:[])
+        .map(function (name) { return String(name || '').slice(0,100); }).filter(Boolean).slice(0,80),
+      pending_effects:(Array.isArray(trace.pending_effects)?trace.pending_effects:[])
+        .map(function (effect) { return String(effect&&effect.name || '').slice(0,100); })
+        .filter(Boolean).slice(0,40),
+      verified_evidence:(Array.isArray(trace.verified_evidence)?trace.verified_evidence:[])
+        .map(function (item) { return {tool:String(item&&item.tool || '').slice(0,100),
+          evidence_kind:String(item&&item.evidence_kind || '').slice(0,100),
+          successful_read:item&&item.successful_read===true}; })
+        .filter(function (item) { return !!item.tool; }).slice(0,40)
+    },
+    available_hands:(Array.isArray(trace.available_hands)?trace.available_hands:[])
+      .map(function (hand) { return String(hand&&hand.name || '').slice(0,100); })
+      .filter(Boolean).slice(0,100)
+  };
+}
+
 module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
@@ -8165,4 +8224,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
-  paiReasoningSeat}};
+  paiReasoningSeat,receiptReconsiderationFeedback}};

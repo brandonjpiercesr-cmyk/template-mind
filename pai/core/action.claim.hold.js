@@ -101,6 +101,10 @@ var CLAIM_GROUPS = [
 // storage claims. They require their own typed proof and never inherit support
 // from a tool name or free-form memory text.
 var STATE_CLAIMS = [
+  { supportKind:'verified_calendar_read', verb:'checked calendar',
+    pattern:/\bI\s+took\s+the\s+liberty\s+of\s+checking\s+(?:(?:the|your|his|her|their)\s+)?calendar\b/gi },
+  { supportKind:'verified_calendar_read', verb:'found calendar availability',
+    pattern:/\bI\s+found\s+(?:a\s+few|some|several|[0-9]+)?\s*open\s+(?:time\s+)?slots\b/gi },
   { supportKind:'mission_submission', verb:'creating a job',
     pattern:/\bI(?:\s+am|[’']m)\s+(?:creating|setting\s+up|saving|persisting|queuing)\s+(?:(?:the|this|that|your)\s+)?(?:real\s+|small\s+)*(?:job|task|mission)\b/gi },
   { supportKind:'reminder_create', verb:'created the reminder',
@@ -251,8 +255,19 @@ function strictClaimSupported(kind, trace) {
   return false;
 }
 
+function verifiedNamedReadSupported(tool, trace) {
+  return (Array.isArray(trace.verified_evidence) ? trace.verified_evidence : [])
+    .some(function (item) {
+      return !!(item && item.tool === tool && item.successful_read === true &&
+        item.evidence_kind === 'verified_read_result');
+    });
+}
+
 function claimSupported(support, supportKind, trace, names, evidenceText, claimText) {
   if (supportKind === 'verified_read') return verifiedReadSupported(claimText, trace);
+  if (supportKind === 'verified_calendar_read') {
+    return verifiedNamedReadSupported('calendar_read', trace);
+  }
   if (supportKind) return strictClaimSupported(supportKind, trace);
   if (!support) return names.length > 0;
   for (var i = 0; i < names.length; i++) {
@@ -305,10 +320,11 @@ function detect(answerText, trace) {
   }
   for (var stateIndex = 0; stateIndex < STATE_CLAIMS.length; stateIndex++) {
     var stateClaim = STATE_CLAIMS[stateIndex];
-    if (strictClaimSupported(stateClaim.supportKind, trace)) continue;
     stateClaim.pattern.lastIndex = 0;
     var stateMatch;
     while ((stateMatch = stateClaim.pattern.exec(text)) !== null) {
+      if (claimSupported(null,stateClaim.supportKind,trace,names,evidenceText,
+          stateMatch[0])) continue;
       if (claims.length < 8) {
         claims.push({
           claim:String(stateMatch[0] || '').trim().slice(0, 200),
