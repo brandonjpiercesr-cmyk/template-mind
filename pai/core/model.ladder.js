@@ -147,6 +147,24 @@ function requestSignal(opts, timeout) {
   return combinedSignal([opts && opts.signal, deadline]);
 }
 
+async function providerFetch(url, init) {
+  var edge = require('./provider.request.edge.js');
+  var admission = edge.currentAdmission();
+  if (!admission) return fetch(url, init);
+  var attempted = await edge.executeCurrentProviderRequest({hamUid:admission.hamUid,
+    call:function(){return fetch(url, init);}});
+  if (!attempted || attempted.ok !== true) {
+    var refused=new Error(attempted && attempted.reason || 'provider_admission_refused');
+    refused.code='PROVIDER_ADMISSION_REFUSED';
+    throw refused;
+  }
+  return attempted.response;
+}
+
+function rethrowAdmissionRefusal(error) {
+  if (error && error.code === 'PROVIDER_ADMISSION_REFUSED') throw error;
+}
+
 async function tryRunPodGLM(system, user, opts) {
   // \u2b21B:core.model.ladder:FIX:glm_runpod_is_the_real_primary_20260715\u2b21 GLM
   // 5.2 already runs on its own RunPod serverless GPU (endpoint glm-5-2-envolve,
@@ -221,11 +239,11 @@ async function tryRunPodGLM(system, user, opts) {
     var timeout = opts.timeout;
     var runpodKey = seatMap && seatMap.sanitizeKey ? seatMap.sanitizeKey(process.env.GLM_RUNPOD_KEY) : String(process.env.GLM_RUNPOD_KEY || '').trim();
     if (!runpodKey) return null;
-    var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runpodKey }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
+    var r = await providerFetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runpodKey }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
     return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: _rpModel, via: 'runpod' } : null;
-  } catch (e) { return null; }
+  } catch (e) { rethrowAdmissionRefusal(e);return null; }
 }
 // Every OpenRouter rung resolves one exact functional seat. The seat supplies
 // both its model and its key, so one request cannot rotate through unrelated
@@ -347,7 +365,7 @@ async function tryOpenRouterGLM(system, user, opts) {
     if (opts.json) body.response_format = { type: 'json_object' };
     // Keep the model's native reasoning available. The return boundary still
     // requires usable content before this rung can win.
-    var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
+    var r = await providerFetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
@@ -356,7 +374,7 @@ async function tryOpenRouterGLM(system, user, opts) {
     // anything else, and after the re-seat above every seat can.
     return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts),
       model:glmModel,model_slug:glmModel,via:candidate.via } : null;
-  } catch (e) { return null; }
+  } catch (e) { rethrowAdmissionRefusal(e);return null; }
 }
 async function tryOrnith(system, user, opts) {
   var url = process.env.ORNITH_URL; if (!url) return null;
@@ -382,7 +400,7 @@ async function tryOrnith(system, user, opts) {
       ? seatMap.sanitizeKey(process.env.ORNITH_LADDER_API_KEY)
       : String(process.env.ORNITH_LADDER_API_KEY || '').trim();
     if (!ornithKey) return null;
-    var r = await fetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + ornithKey },
+    var r = await providerFetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + ornithKey },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
@@ -398,7 +416,7 @@ async function tryOrnith(system, user, opts) {
     // handed that CJK reasoning trace straight to a human. Scrubbed like every
     // other rung, not a new behaviour, a missed one.
     return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: _ornithModel, via: process.env.ORNITH_VIA || 'openrouter' } : null;
-  } catch (e) { return null; }
+  } catch (e) { rethrowAdmissionRefusal(e);return null; }
 }
 // The seat's declared failover rung. Named `qwen` because that is what the default
 // deliberation seat's failover has always been on the wire, and renaming a rung would
@@ -419,7 +437,7 @@ async function tryQwen(system, user, opts) {
     if (opts.json) body.response_format = { type: 'json_object' };
     // Keep the failover model's native reasoning available too. Empty or unusable
     // content still loses this rung and the ladder continues.
-    var r = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
+    var r = await providerFetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
     if (!r.ok) return null;
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
@@ -429,7 +447,7 @@ async function tryQwen(system, user, opts) {
     // cleaning, and it was the one without it.
     return hasAcceptedContent(c, opts) ? {content:cleanModelContent(c, opts),model:qwenModel,
       model_slug:qwenModel,via:candidate.via} : null;
-  } catch (e) { return null; }
+  } catch (e) { rethrowAdmissionRefusal(e);return null; }
 }
 // ⬡B:core.model_ladder:FIX:anthropic_backup_floor_kills_no_answer:20260721⬡
 // The gaslight cycle, root cause found live: the ladder's open-weight rungs (GLM on
@@ -455,7 +473,7 @@ async function tryAnthropicBackup(system, user, opts) {
   // shared validator.
   var model = seatMap ? seatMap.safeModelOverride(process.env.ANTHROPIC_LADDER_MODEL, 'claude-haiku-4-5') : 'claude-haiku-4-5';
   try {
-    var r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
+    var r = await providerFetch('https://api.anthropic.com/v1/messages', { method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: model, max_tokens: Number(opts.max_tokens),
         temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.4,
@@ -465,7 +483,7 @@ async function tryAnthropicBackup(system, user, opts) {
     var d = await r.json();
     var c = (d.content || []).map(function (b) { return b.text || ''; }).join('');
     return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: model, via: 'anthropic' } : null;
-  } catch (e) { return null; }
+  } catch (e) { rethrowAdmissionRefusal(e);return null; }
 }
 // ⬡B:core.model_ladder:CLEANUP:groq_runner_deleted_stack_spotless:20260717⬡
 // The Groq floor is gone. GROQ_API_KEY is off every service, the fetch boundary
@@ -571,7 +589,7 @@ async function transcribe(audio, opts) {
       var form = new FormData();
       form.append('file', new Blob([buf], { type: opts.mime || 'audio/webm' }), opts.filename || 'note.webm');
       form.append('model', process.env.TOGETHER_WHISPER_MODEL || 'openai/whisper-large-v3');
-      var r = await fetch('https://api.together.xyz/v1/audio/transcriptions', {
+      var r = await providerFetch('https://api.together.xyz/v1/audio/transcriptions', {
         method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: form,
         signal: requestSignal(opts, opts.timeout) });
       if (r.ok) {
@@ -591,7 +609,7 @@ async function transcribe(audio, opts) {
       var form2 = new FormData();
       form2.append('file', new Blob([buf], { type: opts.mime || 'audio/webm' }), opts.filename || 'note.webm');
       form2.append('model_id', process.env.ELEVENLABS_STT_MODEL || 'scribe_v1');
-      var r2 = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+      var r2 = await providerFetch('https://api.elevenlabs.io/v1/speech-to-text', {
         method: 'POST', headers: { 'xi-api-key': elKey }, body: form2,
         signal: requestSignal(opts, opts.timeout) });
       if (r2.ok) {
