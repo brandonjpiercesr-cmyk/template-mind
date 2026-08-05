@@ -2192,6 +2192,13 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       !require('./coda/build.spec.js').same(args,runtime.approvedActivationSpec)) {
     return JSON.stringify({ok:false,reason:'coda_build_spec_mismatch',tool:name});
   }
+  if (name === 'submit_job') {
+    var normalizedJobArgs=normalizeSubmitJobArgs(args);
+    if (!normalizedJobArgs.ok) {
+      return JSON.stringify({ok:false,reason:'world_job_description_invalid'});
+    }
+    args=normalizedJobArgs.args;
+  }
   var shouldQueueMutation = POST_COUNCIL_TOOLS[name]
     && !(name === 'propose_working_session' && args && args.autobook !== true);
   if (shouldQueueMutation && (!runtime || runtime.phase !== 'commit')) {
@@ -4013,16 +4020,14 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
           build_spec:runtime && runtime.approvedActivationSpec} }));
   }
   if (name === 'submit_job') {
-    var jobSubject = String(args.subject || '').trim();
-    var jobDetail = String(args.detail || '').trim();
-    var jobAcceptance = Array.isArray(args.acceptance) ? args.acceptance.map(function (check) {
-      return String(check == null ? '' : check).replace(/\s+/g,' ').trim();
-    }).filter(Boolean) : [];
-    var jobLevel = args.level === undefined ? 0 : Number(args.level);
-    if (!jobSubject || !jobDetail || jobAcceptance.length < 1 || jobAcceptance.length > 12 ||
-        !Number.isInteger(jobLevel) || jobLevel < 0 || jobLevel > 4) {
+    var committedJobArgs=normalizeSubmitJobArgs(args);
+    if (!committedJobArgs.ok) {
       return JSON.stringify({ok:false,reason:'world_job_description_invalid'});
     }
+    var jobSubject=committedJobArgs.args.subject;
+    var jobDetail=committedJobArgs.args.detail;
+    var jobAcceptance=committedJobArgs.args.acceptance;
+    var jobLevel=committedJobArgs.args.level;
     var jobProof = runtime && runtime.councilResult
       ? compactCouncilProof(runtime.councilResult) : null;
     if (!jobProof || jobProof.committed !== true || jobProof.readback_verified !== true ||
@@ -4036,7 +4041,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     var jobOutcome = await require('./ham.world.builder.intake.js').enqueue({
       hamUid:hamUid,kind:'mission',trigger:'mission.intervention.changed',
       evidenceRefs:[jobProof.final_source],subject:jobSubject,detail:jobDetail,
-      acceptance:jobAcceptance,requestedOwner:args.requested_owner || null,
+      acceptance:jobAcceptance,requestedOwner:committedJobArgs.args.requested_owner || null,
       originRequestId:jobRequestId,level:jobLevel,submittedBy:'anu_conversation'
     });
     return JSON.stringify(jobOutcome);
@@ -8194,6 +8199,32 @@ function receiptReconsiderationFeedback(result, trace) {
   };
 }
 
+// OpenAI-compatible providers occasionally serialize an array argument as a markdown list.
+// Preserve the model-authored words and repair only that transport shape before the pending
+// effect reaches council. Validation still owns subject, detail, item count, and urgency.
+function normalizeSubmitJobArgs(input) {
+  var args=input&&typeof input==='object'?Object.assign({},input):{};
+  var rawAcceptance=args.acceptance;
+  var acceptance=Array.isArray(rawAcceptance)?rawAcceptance.slice()
+    :(typeof rawAcceptance==='string'?rawAcceptance.split(/\r?\n/):[]);
+  acceptance=acceptance.map(function (check) {
+    return String(check == null ? '' : check).replace(/^\s*(?:[-*•]|[0-9]+[.)])\s*/,'')
+      .replace(/\s+/g,' ').trim();
+  }).filter(Boolean);
+  var subject=String(args.subject || '').replace(/\s+/g,' ').trim();
+  var detail=String(args.detail || '').replace(/\s+/g,' ').trim();
+  var level=args.level===undefined?0:Number(args.level);
+  if (!subject || !detail || acceptance.length<1 || acceptance.length>12 ||
+      !Number.isInteger(level) || level<0 || level>4) {
+    return {ok:false,reason:'world_job_description_invalid',args:null};
+  }
+  args.subject=subject;
+  args.detail=detail;
+  args.acceptance=acceptance;
+  args.level=level;
+  return {ok:true,args:args};
+}
+
 module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
@@ -8224,4 +8255,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
-  paiReasoningSeat,receiptReconsiderationFeedback}};
+  paiReasoningSeat,receiptReconsiderationFeedback,normalizeSubmitJobArgs}};
