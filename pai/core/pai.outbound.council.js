@@ -2373,6 +2373,7 @@ async function defaultShadowStage(ctx, injected) {
   var voiceRealtime = String(ctx.channel || '').toLowerCase() === 'voice';
   var judgment = null;
   var parsed = null;
+  var deterministicCandidateHeld = !boardPassed;
   // ⬡B:core.pai_outbound_council:REPAIR:exact_voice_shadow_no_network:20260717⬡
   // SHADOW still runs and emits its normal durable stage receipt. Only the
   // probabilistic network judgment is unnecessary when cold checks are clean
@@ -2388,7 +2389,11 @@ async function defaultShadowStage(ctx, injected) {
   // falls through to the unchanged model+review path. Deferred to the voice SHADOW wonder pass.
   if (deterministicVoicePassReason) {
     parsed = { approved:true, reason:deterministicVoicePassReason };
-  } else {
+  } else if (!deterministicCandidateHeld) {
+    // A candidate that already fails a mechanical receipt or evidence boundary cannot
+    // ship regardless of SHADOW's opinion. Do not buy a model judgment on bytes that
+    // are already held. The healer repairs them first, then the resubmission receives
+    // the one independent review that can actually affect delivery.
     judgment = await modelLadder.deliberate(system, user, {
       max_tokens: 240,
       temperature: 0,
@@ -2401,6 +2406,10 @@ async function defaultShadowStage(ctx, injected) {
     parsed = judgment && parseStrictJsonObject(judgment.content);
   }
   var modelPassed = !!(parsed && parsed.approved === true && isNonEmpty(parsed.reason));
+  var hasRealDecisionJudgment = !!(parsed &&
+    typeof parsed.decision_approved === 'boolean' && isNonEmpty(parsed.decision_reason));
+  var requiresRealDecisionJudgment = !!(boardPassed && ctx.healed === true &&
+    namedCauseIn(ctx.healedFrom, [actionClaimHold.REASON]));
   // ⬡B:core.pai_outbound_council:REBUILD:shadow_is_a_wonder_not_a_nasty_c:20260718⬡
   // FOUNDER LAW: the verdict belongs to the WONDER; deterministic proofs are
   // evidence it weighs, never cold overrides. Applied at the graft SOURCE so
@@ -2471,7 +2480,7 @@ async function defaultShadowStage(ctx, injected) {
       });
     }));
   var wonderUnavailableCleanPass = !!(boardPassed && deterministicFindings.length === 0 &&
-    (!judgment || !parsed) && !attemptedRelayEvidence);
+    (!judgment || !parsed) && !attemptedRelayEvidence && !requiresRealDecisionJudgment);
   // ⬡B:core.pai_outbound_council:FIX:shadow_holds_only_with_a_quotable_false_claim_20260718⬡
   // Founder doctrine, decides-vs-renders + no nasty-C holds: SHADOW is a
   // HALLUCINATION judge. Its only job is to catch an invented fact. So on a
@@ -2495,9 +2504,11 @@ async function defaultShadowStage(ctx, injected) {
   // fabrication either trips the deterministic board or is quotable-verifiable within the slice; a
   // starved judge never gets to silence her voice from what it could not see.
   var judgeWasBlindfolded = !!(deliberationEvidence && deliberationEvidence.truncated === true);
+  var shadowDecisionUnavailableHold = !!(requiresRealDecisionJudgment &&
+    !hasRealDecisionJudgment);
   var shadowFailOpenCleanBoard = !!(boardPassed && deterministicFindings.length === 0 &&
     !modelPassed && (!shadowHasQuotableFalseClaim || judgeWasBlindfolded) &&
-    !(attemptedRelayEvidence && (!judgment || !parsed)));
+    !(attemptedRelayEvidence && (!judgment || !parsed)) && !shadowDecisionUnavailableHold);
   var relayUnavailableHold = !!(attemptedRelayEvidence && (!judgment || !parsed));
   // ⬡B:core.pai_outbound_council:REPAIR:verified_exact_relay_overrides_a_flaky_model_rejection:20260719⬡
   // verifiedExactNamedEvidenceRelay (exactRelay) is a strict, code-verified match: exact text
@@ -2509,13 +2520,14 @@ async function defaultShadowStage(ctx, injected) {
   // apply when the judge never ran at all (relayUnavailableHold owns that case) or when the
   // board itself is not clean (boardPassed required).
   var exactRelayOverridesJudgment = !!(boardPassed && exactRelay && judgment && parsed);
-  var shadowPassed = !relayUnavailableHold && boardPassed &&
+  var shadowPassed = !relayUnavailableHold && !shadowDecisionUnavailableHold && boardPassed &&
     (exactRelayOverridesJudgment || modelPassed || wonderUnavailableCleanPass || shadowFailOpenCleanBoard);
 
   return {
     ok: shadowPassed,
     answer: ctx.answer,
     reason: deterministicVoicePassReason ||
+      (shadowDecisionUnavailableHold ? 'shadow_decision_judgment_unavailable' :
       (relayUnavailableHold ? 'shadow_model_unavailable' :
       (exactRelayOverridesJudgment ? 'SHADOW_PASS_VERIFIED_EVIDENCE_RELAY' :
       // The unreceipted action claim hold carries its own named reason so the
@@ -2534,7 +2546,7 @@ async function defaultShadowStage(ctx, injected) {
               // so downstream code and the founder can tell a real evidenced hold from an
               // ambiguous one. wren/reply.js already retries on both labels identically, so this
               // does not change retry behavior, only the accuracy of the reason string.
-              'shadow_model_hold')))))),
+              'shadow_model_hold'))))))),
     evidence: {
       deterministic: {
         verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length || actionClaimFlags.length || threeSourceFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
@@ -2554,6 +2566,7 @@ async function defaultShadowStage(ctx, injected) {
         model_skipped: true,
         overridden_by_exact_named_evidence_relay: false
       } : judgment ? {
+        judgment_status: 'AVAILABLE',
         approved: parsed && parsed.approved === true,
         reason: parsed && parsed.reason,
         claim: _verbatimClaimFound(parsed) ? String(parsed.claim) : null,
@@ -2569,7 +2582,9 @@ async function defaultShadowStage(ctx, injected) {
         response_digest: digestText(judgment.content || ''),
         deterministic_proofs_given_to_wonder: { exact_relay: !!exactRelay, runtime_identity: !!runtimeIdentity },
         overridden_by_exact_named_evidence_relay: exactRelayOverridesJudgment
-      } : { approved: false, reason: 'no_real_judgment' },
+      } : { judgment_status:'UNAVAILABLE', approved:false, reason:'no_real_judgment',
+        decision_approved:null, decision_reason:null, recommended_hand:null,
+        escalate:false },
       review_judgment: reviewJudgment ? {
         approved: reviewParsed && reviewParsed.approved === true,
         reason: reviewParsed && reviewParsed.reason,
@@ -3906,7 +3921,8 @@ async function runOutboundCouncil(input, injected) {
             var _reNorm;
             try {
               _reNorm = normalizeStageResult(await handler(buildStageContext(
-                input, _healed, quillRequired, stages, { stage: stage, healed: true }
+                input, _healed, quillRequired, stages,
+                { stage: stage, healed: true, healedFrom: _healReason }
               )), _healed);
             } catch (_reJudgeErr) {
               _reNorm = {
@@ -3947,6 +3963,16 @@ async function runOutboundCouncil(input, injected) {
                   ms: receipt.ms,
                   evidence_digest: digestObject(receipt.evidence || {})
                 },
+                initial_decision_judgment: stage === 'SHADOW' && receipt.evidence &&
+                  receipt.evidence.judgment &&
+                  typeof receipt.evidence.judgment.decision_approved === 'boolean'
+                  ? {
+                    judgment_status:receipt.evidence.judgment.judgment_status || 'AVAILABLE',
+                    decision_approved:receipt.evidence.judgment.decision_approved,
+                    decision_reason:String(receipt.evidence.judgment.decision_reason || '').slice(0,1200),
+                    recommended_hand:String(receipt.evidence.judgment.recommended_hand || '').slice(0,160),
+                    escalate:receipt.evidence.judgment.escalate === true
+                  } : null,
                 resubmission: {
                   reason: _reNorm.reason || null,
                   started_at: new Date(_reStarted).toISOString(),

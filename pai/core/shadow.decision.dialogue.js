@@ -19,11 +19,20 @@ function shadowReceipt(council) {
     var stage = stages[index];
     if (!stage || String(stage.stage || '').toUpperCase() !== 'SHADOW') continue;
     var evidence = stage.evidence && typeof stage.evidence === 'object' ? stage.evidence : {};
-    if (evidence.resubmission && evidence.resubmission.evidence) {
-      evidence = evidence.resubmission.evidence;
-    }
-    var judgment = evidence.judgment && typeof evidence.judgment === 'object'
-      ? evidence.judgment : null;
+    var resubmission = evidence.resubmission && evidence.resubmission.evidence &&
+      typeof evidence.resubmission.evidence === 'object'
+      ? evidence.resubmission.evidence : null;
+    var latest = resubmission && resubmission.judgment &&
+      typeof resubmission.judgment === 'object' ? resubmission.judgment : null;
+    var initial = evidence.initial_decision_judgment &&
+      typeof evidence.initial_decision_judgment === 'object'
+      ? evidence.initial_decision_judgment
+      : (evidence.judgment && typeof evidence.judgment === 'object'
+        ? evidence.judgment : null);
+    // A real resubmission decision supersedes the first one. An unavailable or
+    // malformed retry does not erase model-authored counsel that already exists.
+    var judgment = latest && typeof latest.decision_approved === 'boolean'
+      ? latest : initial;
     if (!judgment || judgment.decision_approved !== false) return null;
     return {
       decision_approved:false,
@@ -133,13 +142,17 @@ async function escalate(input, options) {
   var suffix = crypto.createHash('sha256').update(hamUid+'\n'+requestId+'\n'+cycleId,'utf8')
     .digest('hex');
   var source = 'ANU.'+hamUid+'.shadow_decision.'+suffix;
+  var reviewUnavailable = text(input.reason,1200) === 'shadow_decision_judgment_unavailable';
   var content = {schema:'anew.shadow.decision.escalation.v1',ham_uid:hamUid,
     request_id:requestId,cycle_id:cycleId,
     reason:text(input.reason,1200),recommended_hand:text(input.recommendedHand,160)||null,
+    review_status:reviewUnavailable?'UNAVAILABLE':'DISAGREEMENT',
     pending_effects_committed:false,superior_node_id:'guardian.clair'};
   try {
     await brain.writeBead({hamUid:hamUid,agentGlobal:'CLAIR',source:source,
-      type:'GAP_FLAGS',summary:'A\'NU and SHADOW still disagree. No pending effect ran.',
+      type:'GAP_FLAGS',summary:reviewUnavailable
+        ? 'SHADOW review was unavailable. No pending effect ran.'
+        : 'A\'NU and SHADOW still disagree. No pending effect ran.',
       content:content,importance:9,edges:[
         {type:'CAUSED_BY',target:'pai.cycle.'+cycleId},
         {type:'PRODUCED_BY',target:'guardian.clair'},
@@ -153,6 +166,7 @@ async function escalate(input, options) {
         String(row.source||'') !== source || String(row.stamp_type||'') !== 'GAP_FLAGS' ||
         !stored || stored.schema !== content.schema || stored.request_id !== requestId ||
         stored.cycle_id !== cycleId || stored.pending_effects_committed !== false ||
+        stored.review_status !== content.review_status ||
         stored.superior_node_id !== 'guardian.clair') {
       return {ok:false,reason:'shadow_decision_escalation_readback_unverified'};
     }
