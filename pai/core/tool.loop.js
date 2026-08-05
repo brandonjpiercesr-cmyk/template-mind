@@ -8034,7 +8034,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   } catch (eRcpt) { /* diagnostic only, after the mandatory durable proof */ }
   try {
     if (await _turnCancelled()) return _turnCancelledResult('before_tracker');
-    if (!_structuredReachPolicy && !_reachIncidentIntake && !_blockedFallback) {
+    if (_personalIntentEligible && !_structuredReachPolicy &&
+        !_reachIncidentIntake && !_blockedFallback) {
       var _trkD = require('./tracker.js');
       if (_trkD.looksLikeActionRequest(_exactUserMessage)) {
         await _trkD.stampTrack({ hamUid: hamUid, status: 'DONE', kind: 'request',
