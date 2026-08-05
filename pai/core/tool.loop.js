@@ -4138,13 +4138,16 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     }
     var jobRequestId = String(runtime && runtime.parentRequestId || '').trim();
     if (!jobRequestId) return JSON.stringify({ok:false,reason:'world_job_request_id_required'});
+    var jobCycleId = String(runtime && runtime.parentCycleId || '').trim();
+    if (!jobCycleId) return JSON.stringify({ok:false,reason:'world_job_cycle_id_required'});
     var jobCancelled = await cancelBeforeEffect(name,runtime);
     if (jobCancelled) return jobCancelled;
     var jobOutcome = await require('./ham.world.builder.intake.js').enqueue({
       hamUid:hamUid,kind:'mission',trigger:'mission.intervention.changed',
       evidenceRefs:[jobProof.final_source],subject:jobSubject,detail:jobDetail,
       acceptance:jobAcceptance,requestedOwner:committedJobArgs.args.requested_owner || null,
-      originRequestId:jobRequestId,level:jobLevel,submittedBy:'anu_conversation'
+      originRequestId:jobRequestId,originCycleId:jobCycleId,
+      level:jobLevel,submittedBy:'anu_conversation'
     });
     return JSON.stringify(jobOutcome);
   }
@@ -4489,10 +4492,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // CODA-specific outage from the outside, at 100%, structurally, every single cycle. One
   // function, fixed once; the spend-attribution copy in runPAI() below carries the same fix.
   function _paiSeatName() {
-    var normalizedChannel = String(channel || '').toLowerCase();
-    if (normalizedChannel === 'voice') return 'voice_fast';
-    if (normalizedChannel === 'coding') return 'coda';
-    return 'c2_organ';
+    return paiCycleSeat(channel,identity);
   }
   // ⬡B:core.tool_loop:WIRE:agent_find_binds_the_model_seat_to_its_registry_seat:20260801⬡
   // Provider seats name the wallet/model boundary; registry seats name the job being done.
@@ -8261,10 +8261,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // _paiSeatName() for the full finding.
   var _channelLower = String(channel || '').toLowerCase();
   var _worldBuilderTurn = _channelLower === 'ham_world_builder';
-  var seat = paiReasoningSeat(channel,{
-    decisionReconsideration:!!(identity &&
-      (identity._shadow_reconsideration || identity._receipt_reconsideration))
-  });
+  var seat = paiCycleSeat(channel,identity);
   var ownerNodeId = _channelLower === 'coding' ? 'station.coda'
     : _worldBuilderTurn ? 'station.ham_world_builder' : 'station.pai';
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
@@ -8318,6 +8315,17 @@ function paiReasoningSeat(channel, opts) {
   if (opts.decisionReconsideration === true) return 'c3_mind';
   if (opts.bodyHasTools !== true && opts.mindArmed === true) return 'c3_mind';
   return 'c2_organ';
+}
+
+// One seat identity owns the complete paid cycle, including Agent FIND's FCW, spend
+// attribution, and the provider request. Receipt reconsideration used to select C3 only at
+// the final provider call while the same cycle's FCW remained bound to C2. The provider
+// boundary correctly refused those mismatched bytes before A'NU could choose a hand.
+function paiCycleSeat(channel, identity) {
+  return paiReasoningSeat(channel,{
+    decisionReconsideration:!!(identity &&
+      (identity._shadow_reconsideration || identity._receipt_reconsideration))
+  });
 }
 
 // Give A'NU the exact bounded receipt lesson in process. This packet is coaching evidence, not
@@ -8442,4 +8450,4 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,_ghHoldRe
   founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
-  paiReasoningSeat,receiptReconsiderationFeedback,normalizeSubmitJobArgs}};
+  paiReasoningSeat,paiCycleSeat,receiptReconsiderationFeedback,normalizeSubmitJobArgs}};
