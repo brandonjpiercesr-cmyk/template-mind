@@ -734,6 +734,20 @@ function shadowEvidenceMaxBytes() {
   return Math.max(32000, Math.min(200000, parsed));
 }
 
+// Live receipt 20260805: the ordinary World Builder acceptance turn reached
+// SHADOW at 9.2 seconds, just beyond the old 9 second caller deadline, so the
+// model never reviewed the decision and the clean-board availability fallback
+// released an invented mission. This remains one judgment call, not an extra
+// paid pass. Give the seated reviewer enough time to answer, while keeping an
+// env-owned bounded deadline for a genuinely lost provider connection.
+function shadowDecisionTimeoutMs(env) {
+  var value = (env || process.env || {}).PAI_SHADOW_TIMEOUT_MS;
+  if (value === undefined || value === null || String(value).trim() === '') return 20000;
+  var raw = Number(value);
+  if (!Number.isFinite(raw)) return 20000;
+  return Math.max(5000, Math.min(60000, Math.floor(raw)));
+}
+
 function utf8Window(buffer, start, length) {
   var from = Math.max(0, Math.min(buffer.length, start));
   while (from < buffer.length && (buffer[from] & 0xc0) === 0x80) from++;
@@ -2378,7 +2392,7 @@ async function defaultShadowStage(ctx, injected) {
     judgment = await modelLadder.deliberate(system, user, {
       max_tokens: 240,
       temperature: 0,
-      timeout: voiceRealtime ? 1800 : (parseInt(process.env.PAI_SHADOW_TIMEOUT_MS||'9000',10)),
+      timeout: voiceRealtime ? 1800 : shadowDecisionTimeoutMs(injected.env || process.env),
       tightTimeout: !voiceRealtime,
       json: true,
       realtime: voiceRealtime,
@@ -2430,7 +2444,7 @@ async function defaultShadowStage(ctx, injected) {
     reviewJudgment = await modelLadder.deliberate(reviewSystem, reviewUser, {
       max_tokens: 240,
       temperature: 0,
-      timeout: voiceRealtime ? 1800 : (parseInt(process.env.PAI_SHADOW_TIMEOUT_MS||'9000',10)),
+      timeout: voiceRealtime ? 1800 : shadowDecisionTimeoutMs(injected.env || process.env),
       tightTimeout: !voiceRealtime,
       json: true,
       realtime: voiceRealtime,
@@ -4863,6 +4877,7 @@ module.exports = {
     identityEvidenceReceiptContradictions:identityEvidenceReceiptContradictions,
     verifiedFactEvidenceText:verifiedFactEvidenceText,
     shadowEvidenceMaxBytes:shadowEvidenceMaxBytes,
+    shadowDecisionTimeoutMs:shadowDecisionTimeoutMs,
     defaultShadowStage: defaultShadowStage,
     defaultWritStage: defaultWritStage,
     healAnswer: healAnswer
