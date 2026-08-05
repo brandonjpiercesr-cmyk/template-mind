@@ -2373,7 +2373,7 @@ async function defaultShadowStage(ctx, injected) {
   var voiceRealtime = String(ctx.channel || '').toLowerCase() === 'voice';
   var judgment = null;
   var parsed = null;
-  var deterministicCandidateHeld = !boardPassed;
+  var mechanicalActionReceiptHold = actionClaimFlags.length > 0;
   // ⬡B:core.pai_outbound_council:REPAIR:exact_voice_shadow_no_network:20260717⬡
   // SHADOW still runs and emits its normal durable stage receipt. Only the
   // probabilistic network judgment is unnecessary when cold checks are clean
@@ -2389,11 +2389,11 @@ async function defaultShadowStage(ctx, injected) {
   // falls through to the unchanged model+review path. Deferred to the voice SHADOW wonder pass.
   if (deterministicVoicePassReason) {
     parsed = { approved:true, reason:deterministicVoicePassReason };
-  } else if (!deterministicCandidateHeld) {
-    // A candidate that already fails a mechanical receipt or evidence boundary cannot
-    // ship regardless of SHADOW's opinion. Do not buy a model judgment on bytes that
-    // are already held. The healer repairs them first, then the resubmission receives
-    // the one independent review that can actually affect delivery.
+  } else if (!mechanicalActionReceiptHold) {
+    // A candidate that claims completed action without a current-turn receipt cannot
+    // ship regardless of SHADOW's opinion. Do not buy a model judgment on those exact
+    // bytes. Other deterministic findings remain evidence for SHADOW to reason over;
+    // cold code does not replace the Wonder's judgment.
     judgment = await modelLadder.deliberate(system, user, {
       max_tokens: 240,
       temperature: 0,
@@ -2430,7 +2430,8 @@ async function defaultShadowStage(ctx, injected) {
     return c.length >= 12 && String(ctx.answer || '').indexOf(c) !== -1;
   }
   var _judgeHasQuotable = _verbatimClaimFound(parsed);
-  if (boardPassed && deterministicFindings.length === 0 && judgment && parsed &&
+  if (!requiresRealDecisionJudgment && boardPassed && deterministicFindings.length === 0 &&
+      judgment && parsed &&
       parsed.approved === false && _judgeHasQuotable) {
     // ⬡B:core.pai_outbound_council:FIX:skip_review_when_no_quotable_claim:20260719⬡
     // A hold with no quotable claim on a clean board already fails open; paying a
@@ -3965,9 +3966,11 @@ async function runOutboundCouncil(input, injected) {
                 },
                 initial_decision_judgment: stage === 'SHADOW' && receipt.evidence &&
                   receipt.evidence.judgment &&
-                  typeof receipt.evidence.judgment.decision_approved === 'boolean'
+                  receipt.evidence.judgment.judgment_status === 'AVAILABLE' &&
+                  typeof receipt.evidence.judgment.decision_approved === 'boolean' &&
+                  isNonEmpty(receipt.evidence.judgment.decision_reason)
                   ? {
-                    judgment_status:receipt.evidence.judgment.judgment_status || 'AVAILABLE',
+                    judgment_status:'AVAILABLE',
                     decision_approved:receipt.evidence.judgment.decision_approved,
                     decision_reason:String(receipt.evidence.judgment.decision_reason || '').slice(0,1200),
                     recommended_hand:String(receipt.evidence.judgment.recommended_hand || '').slice(0,160),

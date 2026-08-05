@@ -13,6 +13,11 @@ function parseObject(value) {
   } catch (error) { return null; }
 }
 
+function availableDecisionJudgment(value) {
+  return !!(value && value.judgment_status === 'AVAILABLE' &&
+    typeof value.decision_approved === 'boolean' && text(value.decision_reason, 1200));
+}
+
 function shadowReceipt(council) {
   var stages = council && Array.isArray(council.stages) ? council.stages : [];
   for (var index = stages.length - 1; index >= 0; index--) {
@@ -31,8 +36,8 @@ function shadowReceipt(council) {
         ? evidence.judgment : null);
     // A real resubmission decision supersedes the first one. An unavailable or
     // malformed retry does not erase model-authored counsel that already exists.
-    var judgment = latest && typeof latest.decision_approved === 'boolean'
-      ? latest : initial;
+    var judgment = availableDecisionJudgment(latest)
+      ? latest : (availableDecisionJudgment(initial) ? initial : null);
     if (!judgment || judgment.decision_approved !== false) return null;
     return {
       decision_approved:false,
@@ -177,4 +182,5 @@ async function escalate(input, options) {
 }
 
 module.exports = {run:run,escalate:escalate,shadowReceipt:shadowReceipt,
-  reconsiderationContext:reconsiderationContext,_test:{parseObject:parseObject}};
+  reconsiderationContext:reconsiderationContext,_test:{parseObject:parseObject,
+    availableDecisionJudgment:availableDecisionJudgment}};
