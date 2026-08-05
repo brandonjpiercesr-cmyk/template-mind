@@ -9,6 +9,7 @@
 
 var crypto = require('crypto');
 var paiToolEvidence = require('./pai.tool.evidence.js');
+var currentCapabilityGrounding = require('./current.capability.grounding.js');
 // ⬡B:core.pai_outbound_council:WIRE:shadow_checks_canonical_coding_relay:20260715⬡
 var codingRelay = require('./coding.relay.contract.js');
 var identityProvenance = require('./identity.provenance.js');
@@ -57,6 +58,8 @@ var REQUEST_SCHEMA = 'anew.pai.outbound.request.claim.v1';
 var STAMP_PROOF_SCHEMA = 'anew.pai.outbound.stamp.proof.v1';
 var DELIVERY_TARGET_SCHEMA = 'anew.pai.delivery.target.v1';
 var REACH_HANDOFF_SCHEMA = 'anew.pai.reach-handoff.v1';
+var CURRENT_CAPABILITY_BINDING_SCHEMA = 'anew.pai.current-capability-answer-binding.v1';
+var currentCapabilityBindings = new WeakSet();
 
 function digestText(value) {
   return crypto.createHash('sha256').update(Buffer.from(String(value), 'utf8')).digest('hex');
@@ -82,6 +85,90 @@ function stableStringify(value) {
 
 function digestObject(value) {
   return digestText(stableStringify(value));
+}
+
+function currentCapabilityEvidenceBinding(item) {
+  return {
+    tool:item.tool,
+    provenance:item.provenance,
+    ham_uid:item.ham_uid,
+    request_id:item.request_id,
+    cycle_id:item.cycle_id,
+    tool_call_id:item.tool_call_id,
+    args_digest:item.args_digest,
+    source_result_digest:item.source_result_digest,
+    result_digest:item.result_digest
+  };
+}
+
+// This factory mints only after the canonical exact guard accepts one authentic
+// capability read for these request coordinates. Object identity is retained in
+// a WeakSet, so JSON copies and caller context cannot activate the contract.
+function mintCurrentCapabilityAnswerBinding(input) {
+  input = input || {};
+  var expected = { hamUid:input.hamUid, requestId:input.requestId,
+    cycleId:input.cycleId, question:input.question };
+  var acceptance = currentCapabilityGrounding.accepted(input.question,input.answer,
+    input.evidence,expected);
+  if (!acceptance.ok || !isNonEmpty(input.hamUid) || !isNonEmpty(input.requestId) ||
+      !isNonEmpty(input.cycleId) || !isNonEmpty(input.question) ||
+      !isHumanFacingAnswer(input.answer)) return null;
+  var evidenceBindings = [currentCapabilityEvidenceBinding(acceptance.evidence_item)];
+  var binding = Object.freeze({
+    schema:CURRENT_CAPABILITY_BINDING_SCHEMA,
+    ham_uid:String(input.hamUid),
+    request_id:String(input.requestId),
+    cycle_id:String(input.cycleId),
+    question_digest:digestText(input.question),
+    answer_digest:digestText(input.answer),
+    answer_bytes:Buffer.byteLength(input.answer, 'utf8'),
+    evidence_digest:digestObject(evidenceBindings),
+    evidence_count:evidenceBindings.length
+  });
+  currentCapabilityBindings.add(binding);
+  return binding;
+}
+
+function currentCapabilityAnswerBindingReceipt(binding) {
+  if (!binding || typeof binding !== 'object' ||
+      binding.schema !== CURRENT_CAPABILITY_BINDING_SCHEMA) return null;
+  return { schema:binding.schema, ham_uid:binding.ham_uid,
+    request_id:binding.request_id, cycle_id:binding.cycle_id,
+    question_digest:binding.question_digest, answer_digest:binding.answer_digest,
+    answer_bytes:binding.answer_bytes, evidence_digest:binding.evidence_digest,
+    evidence_count:binding.evidence_count, exact_contract_preserved:true };
+}
+
+function readCurrentCapabilityAnswerBinding(binding, input) {
+  if (!binding) return { present:false, ok:true, receipt:null };
+  var authentic = typeof binding === 'object' && currentCapabilityBindings.has(binding);
+  if (authentic) currentCapabilityBindings.delete(binding);
+  var ok = authentic &&
+    Object.isFrozen(binding) === true && binding.schema === CURRENT_CAPABILITY_BINDING_SCHEMA &&
+    binding.ham_uid === String(input.hamUid) && binding.request_id === String(input.requestId) &&
+    binding.cycle_id === String(input.cycleId) &&
+    binding.question_digest === digestText(input.question) &&
+    binding.answer_digest === digestText(input.answer) &&
+    binding.answer_bytes === Buffer.byteLength(input.answer, 'utf8') &&
+    /^[a-f0-9]{64}$/.test(String(binding.evidence_digest || '')) &&
+    Number.isInteger(binding.evidence_count) && binding.evidence_count > 0;
+  if (!ok) return { present:true, ok:false, receipt:null };
+  return { present:true, ok:true, answer:input.answer,
+    receipt:currentCapabilityAnswerBindingReceipt(binding) };
+}
+
+function validCurrentCapabilityBindingReceipt(receipt, expected) {
+  return !!(receipt && typeof receipt === 'object' && !Array.isArray(receipt) &&
+    receipt.schema === CURRENT_CAPABILITY_BINDING_SCHEMA &&
+    receipt.ham_uid === String(expected.hamUid) &&
+    receipt.request_id === String(expected.requestId) &&
+    receipt.cycle_id === String(expected.cycleId) &&
+    receipt.question_digest === digestText(expected.question) &&
+    receipt.answer_digest === digestText(expected.answer) &&
+    receipt.answer_bytes === Buffer.byteLength(expected.answer, 'utf8') &&
+    /^[a-f0-9]{64}$/.test(String(receipt.evidence_digest || '')) &&
+    Number.isInteger(receipt.evidence_count) && receipt.evidence_count > 0 &&
+    receipt.exact_contract_preserved === true);
 }
 
 function ymd(atMs) {
@@ -2910,7 +2997,9 @@ async function defaultWritStage(ctx) {
       // LLM decided, the regex did not" a provable claim on the receipt instead
       // of an assertion in a comment. Bounded phrases only, never answer bytes.
       law_source: (result && result.law_source) || null,
-      overruled_hints: (result && result.overruled_hints) || []
+      overruled_hints: (result && result.overruled_hints) || [],
+      organ_decider:(result && result.organ_decider) || null,
+      failed_open:!!(result && result.failed_open)
     }
   };
 }
@@ -3112,6 +3201,12 @@ function createDefaultDependencies(overrides) {
   return {
     now: overrides.now || defaults.now,
     stages: Object.assign({}, defaults.stages, overrides.stages || {}),
+    stageOrigins:STAGE_ORDER.reduce(function (origins, stage) {
+      origins[stage]=overrides.stages &&
+        Object.prototype.hasOwnProperty.call(overrides.stages,stage)
+        ? 'injected' : 'default';
+      return origins;
+    },{}),
     persistReceipt: overrides.persistReceipt || defaults.persistReceipt,
     readReceipt: overrides.readReceipt || defaults.readReceipt,
     // The heal path (healAnswer) reads deps.modelLadder and deps.env, but this
@@ -3585,6 +3680,13 @@ async function runOutboundCouncil(input, injected) {
   input = Object.assign({}, input);
   if (suppliedTarget !== undefined) input.deliveryTarget = canonicalizeDeliveryTarget(suppliedTarget);
   delete input.delivery_target;
+  var capabilityBinding = readCurrentCapabilityAnswerBinding(
+    input.currentCapabilityAnswerBinding, input);
+  delete input.currentCapabilityAnswerBinding;
+  if (!capabilityBinding.ok) {
+    return { ok:false, reason:'current_capability_answer_binding_unverified',
+      blocked_by:'INPUT', stages:[] };
+  }
   if (councilCancellationRequested(input)) {
     return { ok:false, reason:'council_cancelled', blocked_by:'CANCELLED', stages:[] };
   }
@@ -3629,6 +3731,10 @@ async function runOutboundCouncil(input, injected) {
       return failureResult('stage_handler_missing', stage, stages, input, currentAnswer);
     }
     var before = currentAnswer;
+    if (capabilityBinding.present && before !== capabilityBinding.answer) {
+      return failureResult('current_capability_bound_input_mutated', stage,
+        stages, input, currentAnswer);
+    }
     var started = nowMs(deps);
     var normalized;
     try {
@@ -3648,6 +3754,59 @@ async function runOutboundCouncil(input, injected) {
     }
     var ended = nowMs(deps);
     var humanStageAnswer = isHumanFacingAnswer(normalized.answer);
+    if (capabilityBinding.present) {
+      var proposedAnswer = normalized.answer;
+      var capabilityContractEvidence = {
+        grounding_mode:'current_capability_exact',
+        grounded_input_digest:capabilityBinding.receipt.answer_digest,
+        grounded_input_bytes:capabilityBinding.receipt.answer_bytes,
+        grounding_evidence_digest:capabilityBinding.receipt.evidence_digest,
+        observed_output_digest:typeof proposedAnswer === 'string'
+          ? digestText(proposedAnswer) : null,
+        observed_output_bytes:typeof proposedAnswer === 'string'
+          ? Buffer.byteLength(proposedAnswer, 'utf8') : null,
+        grounded_input_preserved:false,
+        hold_reason:normalized.ok ? null : String(normalized.reason || 'stage_held').slice(0,120)
+      };
+      var nativeWritPass = stage === 'WRIT' && normalized.ok && humanStageAnswer &&
+        deps.stageOrigins.WRIT === 'default' &&
+        normalized.evidence && normalized.evidence.verdict === 'WRIT_PASS' &&
+        Array.isArray(normalized.evidence.hard_fails) &&
+        normalized.evidence.hard_fails.length === 0 &&
+        normalized.evidence.organ_decider === 'model' &&
+        normalized.evidence.failed_open === false;
+      if (stage === 'WRIT' && nativeWritPass) {
+        normalized.answer = capabilityBinding.answer;
+        capabilityContractEvidence.grounded_input_preserved=true;
+        capabilityContractEvidence.observed_output_transformed=
+          proposedAnswer !== capabilityBinding.answer;
+        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
+          current_capability_contract:capabilityContractEvidence
+        });
+        humanStageAnswer = true;
+      } else if (stage === 'WRIT' && normalized.ok && humanStageAnswer) {
+        normalized.ok = false;
+        normalized.reason = 'writ_native_pass_unverified';
+        capabilityContractEvidence.hold_reason=normalized.reason;
+        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
+          current_capability_contract:capabilityContractEvidence
+        });
+      } else if (normalized.ok && humanStageAnswer &&
+          proposedAnswer !== capabilityBinding.answer) {
+        normalized.ok = false;
+        normalized.reason = stage.toLowerCase() + '_bound_answer_mutated';
+        capabilityContractEvidence.hold_reason=normalized.reason;
+        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
+          current_capability_contract:capabilityContractEvidence
+        });
+      } else {
+        capabilityContractEvidence.grounded_input_preserved=normalized.ok &&
+          humanStageAnswer && proposedAnswer === capabilityBinding.answer;
+        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
+          current_capability_contract:capabilityContractEvidence
+        });
+      }
+    }
     var receipt = makeStageReceipt(stage, i, true, true, normalized.ok && humanStageAnswer,
       before, normalized.answer, started, ended,
       humanStageAnswer ? normalized.reason
@@ -3675,7 +3834,7 @@ async function runOutboundCouncil(input, injected) {
       // this fail-closed catches. Re-running a pure formatter on repaired input decides
       // nothing and changes no verdict, so it belongs in the healable set. STAMP stays
       // out: it is the durable commit preflight and must never be re-run on other bytes.
-      var _healableStage = (stage === 'WRIT' || stage === 'SHADOW' ||
+      var _healableStage = !capabilityBinding.present && (stage === 'WRIT' || stage === 'SHADOW' ||
         stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL' ||
         stage === 'ANU_EXPRESSION');
       // ⬡B:core.pai_outbound_council:FIX:the_receipt_says_why_the_heal_did_not_save_it:20260725⬡
@@ -3978,6 +4137,8 @@ async function runOutboundCouncil(input, injected) {
     answer: currentAnswer,
     answer_bytes: Buffer.byteLength(currentAnswer, 'utf8'),
     answer_digest: finalDigest,
+    current_capability_answer_binding:capabilityBinding.present
+      ? capabilityBinding.receipt : null,
     reach_handoff:reachHandoffBinding(input),
     identity_provenance_required:identityProvenanceRequired,
     identity_evidence_receipt:identityEvidenceReceipt,
@@ -4016,6 +4177,7 @@ async function runOutboundCouncil(input, injected) {
       deliberationInput: input.deliberationInput,
       answer: currentAnswer,
       identityEvidenceReceipt:identityEvidenceReceipt,
+      currentCapabilityAnswerBinding:capabilityBinding.receipt,
       deliveryTarget: input.deliveryTarget
     })) {
     return failureResult('stored_receipt_verification_failed', 'STAMP', stages, input, currentAnswer);
@@ -4108,6 +4270,7 @@ async function runOutboundCouncil(input, injected) {
     deliberationInput: input.deliberationInput,
     answer: currentAnswer,
     identityEvidenceReceipt:identityEvidenceReceipt,
+    currentCapabilityAnswerBinding:capabilityBinding.receipt,
     deliveryTarget: input.deliveryTarget
   })) {
     return failureResult('committed_council_self_verification_failed', 'STAMP', stages, input, currentAnswer);
@@ -4153,6 +4316,15 @@ function verifyCouncilReceipt(receipt, expected) {
     receipt.deliberation_input_bytes !== Buffer.byteLength(expected.deliberationInput, 'utf8')) return false;
   if (receipt.answer !== expected.answer || receipt.answer_digest !== digestText(expected.answer)) return false;
   if (receipt.answer_bytes !== Buffer.byteLength(expected.answer, 'utf8')) return false;
+  var capabilityReceipt = receipt.current_capability_answer_binding;
+  var expectedCapabilityReceipt = expected.currentCapabilityAnswerBinding ||
+    expected.current_capability_answer_binding || null;
+  if (!!capabilityReceipt !== !!expectedCapabilityReceipt) return false;
+  if (capabilityReceipt &&
+      (!validCurrentCapabilityBindingReceipt(capabilityReceipt, {
+        hamUid:hamUid,requestId:requestId,cycleId:cycleId,
+        question:expected.question,answer:expected.answer
+      }) || digestObject(capabilityReceipt) !== digestObject(expectedCapabilityReceipt))) return false;
   // Receipts committed before the REACH handoff marker remain valid council
   // history, but only new receipts with an explicit eligible marker can be
   // reconstructed into a missing candidate.
@@ -4191,6 +4363,36 @@ function verifyCouncilReceipt(receipt, expected) {
     if (receipt.stages[j - 1].output_digest !== receipt.stages[j].input_digest) return false;
   }
   if (receipt.stages[receipt.stages.length - 1].output_digest !== receipt.answer_digest) return false;
+  if (capabilityReceipt) {
+    var writStage = receipt.stages[STAGE_ORDER.indexOf('WRIT')];
+    var writContract = writStage.evidence &&
+      writStage.evidence.current_capability_contract;
+    for (var contractIndex = 0; contractIndex < STAGE_ORDER.length - 1; contractIndex++) {
+      var contractStage = receipt.stages[contractIndex];
+      if (contractStage.executed !== true) continue;
+      var contract = contractStage.evidence &&
+        contractStage.evidence.current_capability_contract;
+      if (!contract || contract.grounding_mode !== 'current_capability_exact' ||
+          contract.grounded_input_preserved !== true || contract.hold_reason !== null ||
+          contract.grounded_input_digest !== capabilityReceipt.answer_digest ||
+          contract.grounded_input_bytes !== capabilityReceipt.answer_bytes ||
+          contract.grounding_evidence_digest !== capabilityReceipt.evidence_digest ||
+          !/^[a-f0-9]{64}$/.test(String(contract.observed_output_digest || '')) ||
+          !Number.isInteger(contract.observed_output_bytes) ||
+          (contractStage.stage !== 'WRIT' &&
+            (contract.observed_output_digest !== capabilityReceipt.answer_digest ||
+             contract.observed_output_bytes !== capabilityReceipt.answer_bytes))) return false;
+    }
+    if (!writContract || writContract.grounded_input_preserved !== true ||
+        writContract.grounded_input_digest !== capabilityReceipt.answer_digest ||
+        !/^[a-f0-9]{64}$/.test(String(writContract.observed_output_digest || '')) ||
+        !Number.isInteger(writContract.observed_output_bytes) ||
+        writStage.evidence.verdict !== 'WRIT_PASS' ||
+        !Array.isArray(writStage.evidence.hard_fails) ||
+        writStage.evidence.hard_fails.length !== 0 ||
+        writStage.evidence.organ_decider !== 'model' ||
+        writStage.evidence.failed_open !== false) return false;
+  }
 
   var unsignedReceipt = Object.assign({}, receipt);
   delete unsignedReceipt.receipt_digest;
@@ -4347,6 +4549,7 @@ function requireVerifiedCouncilDelivery(result, deliveryTarget, expectedAnswer) 
     question: receipt.question,
     deliberationInput: receipt.deliberation_input,
     answer: expectedAnswer,
+    currentCapabilityAnswerBinding:receipt.current_capability_answer_binding || null,
     deliveryTarget: deliveryTarget
   });
 }
@@ -4362,7 +4565,8 @@ function compactCouncilProof(result) {
     cycleId: receipt.cycle_id,
     question: receipt.question,
     deliberationInput: receipt.deliberation_input,
-    answer: result.answer
+    answer: result.answer,
+    currentCapabilityAnswerBinding:receipt.current_capability_answer_binding || null
   };
   if (!verifyCommittedCouncil(receipt, proof, expected)) return null;
   var compact = {
@@ -4408,7 +4612,8 @@ function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
   }
   var input = { hamUid:receipt.ham_uid, requestId:receipt.request_id,
     cycleId:receipt.cycle_id, question:receipt.question,
-    deliberationInput:receipt.deliberation_input, answer:receipt.answer };
+    deliberationInput:receipt.deliberation_input, answer:receipt.answer,
+    currentCapabilityAnswerBinding:receipt.current_capability_answer_binding || null };
   var sources = buildSources(input.cycleId, input.requestId);
   var preparedAt = Date.parse(receipt.prepared_at);
   if (!Number.isFinite(preparedAt) || !sameFinalReadback(finalStoredRow,
@@ -4509,8 +4714,11 @@ module.exports = {
   REQUEST_SCHEMA: REQUEST_SCHEMA,
   STAMP_PROOF_SCHEMA: STAMP_PROOF_SCHEMA,
   DELIVERY_TARGET_SCHEMA: DELIVERY_TARGET_SCHEMA,
+  CURRENT_CAPABILITY_BINDING_SCHEMA: CURRENT_CAPABILITY_BINDING_SCHEMA,
   REQUIRED_EDGE_TYPES: REQUIRED_EDGE_TYPES,
   runOutboundCouncil: runOutboundCouncil,
+  mintCurrentCapabilityAnswerBinding: mintCurrentCapabilityAnswerBinding,
+  currentCapabilityAnswerBindingReceipt: currentCapabilityAnswerBindingReceipt,
   verifyCouncilReceipt: verifyCouncilReceipt,
   validateCouncilReceipt: verifyCouncilReceipt,
   verifyCommittedCouncil: verifyCommittedCouncil,

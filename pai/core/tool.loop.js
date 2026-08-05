@@ -215,6 +215,7 @@ function bindExactHamToolArgs(name, args, hamUid, runtime) {
 // happens, so no future burst can land regardless of what triggers the retry.
 'use strict';
 var paiToolEvidence = require('./pai.tool.evidence.js');
+var currentCapabilityGrounding = require('./current.capability.grounding.js');
 // ⬡B:core.tool.loop:WIRE:funneled_20260713⬡
 // ⬡COLD:remember:remove:ONE_BRAIN_IO:20260723⬡
 // COLD-ANEW-BRAIN-0011 contained: the retired-brain fallback is removed. Per founder law
@@ -287,6 +288,8 @@ const codingRelay = require('./coding.relay.contract.js');
 const { notifyHam, resolvePhone:resolveNotifyPhone } = require('./tools/notify.ham.js');
 const { runOutboundCouncil, runPreWriteCouncil, requireVerifiedCouncilResult,
   requireVerifiedCouncilDelivery,
+  mintCurrentCapabilityAnswerBinding,
+  currentCapabilityAnswerBindingReceipt,
   compactCouncilProof, canonicalizeDeliveryTarget,
   extractNamedContextEvidence, namedContextContradictions,
   currentAssistantPreferenceRequest, preferenceJudgmentFindings,
@@ -1554,15 +1557,7 @@ TOOLS.forEach(function (tool) {
 // cannot establish them. Route those questions through the two canonical owners already in
 // production: the active Wonder registry and the exported Come Code workspace contract.
 function currentCapabilityQuestion(message) {
-  var text = String(message || '').trim().toLowerCase().replace(/[\u2018\u2019]/g, "'");
-  if (!text) return false;
-  if (/\b(?:coding lanes?|lane board|which chats?|what chats?|next to fix|left to fix|who(?:'s| is) working|who(?:'s| is) building)\b/.test(text)) return false;
-  if (/\b(?:capabilit(?:y|ies)|what can you do|what are you able to do|which (?:build |coding )?surfaces?)\b/.test(text)) return true;
-  if (/\b(?:what|which)\b[^?.!]{0,60}\b(?:built|live|working|available|wired)\b/.test(text)) return true;
-  if (/\b(?:do you have|have you got)\b.{0,70}\b(?:access|ability|support|workspace|tool|hand|surface)\b/.test(text)) return true;
-  if (/\bcan you\b.{0,45}\b(?:send|receive|email|text|call|research|browse|code|deploy|build|test|read|write|open a pull request|work across files)\b/.test(text) &&
-      /\b(?:currently|actually|right now|ability|capability)\b/.test(text)) return true;
-  return /\b(?:can|are) you\b.{0,50}\b(?:currently|actually|right now)\b/.test(text);
+  return currentCapabilityGrounding.currentCapabilityQuestion(message);
 }
 
 async function _currentCapabilityRuntime(env, dependencies) {
@@ -1684,30 +1679,12 @@ async function currentCapabilityEvidence(question, env, dependencies) {
 }
 
 function categoricalCurrentCapabilityClaim(answer) {
-  var text=String(answer || '').trim();
-  if (!text) return false;
-  var uncertaintyOnly=/^(?:(?:i\s+)?(?:do not know|don't know|am not sure)(?:\s+(?:yet|right now))?|not sure(?:\s+(?:yet|right now))?|(?:i\s+)?(?:could not verify|can't verify|cannot verify|cannot confirm)(?:\s+(?:what is live|which parts are live|whether (?:it|this|that) is live|if (?:it|this|that) is live|that(?: right now)?|right now))?|(?:it is\s+)?unclear|not confirmed)[.!?]?$/i;
-  return !uncertaintyOnly.test(text);
+  return currentCapabilityGrounding.categoricalClaim(answer);
 }
 
 function verifiedCurrentCapabilityRows(evidence, expected) {
-  var rows = [];
-  (Array.isArray(evidence) ? evidence : []).forEach(function (item) {
-    if (!item || item.tool !== 'read_current_capabilities' ||
-        !paiToolEvidence.verify(item, expected || {}, {requireRead:true})) return;
-    var parsed;
-    try { parsed = JSON.parse(item.result); } catch (error) { return; }
-    if (!parsed || parsed.schema !== 'anew.current-capabilities.v2' || parsed.ok !== true ||
-        !Array.isArray(parsed.capabilities) ||
-        parsed.question_digest !== paiToolEvidence.digest(String(expected && expected.question || ''))) return;
-    var live = parsed.capabilities.filter(function (row) {
-      return row && row.state === 'live' && typeof row.capability_id === 'string' &&
-        Array.isArray(row.source_refs) && row.source_refs.length > 0;
-    });
-    if (live.length !== parsed.evidence_count) return;
-    rows = rows.concat(live);
-  });
-  return rows;
+  var verified=currentCapabilityGrounding.verifiedRows(evidence,expected);
+  return verified.length===1?verified[0].rows:[];
 }
 
 function verifiedCurrentCapabilityEvidenceCount(evidence, expected) {
@@ -1789,96 +1766,8 @@ function currentCapabilityHumanProjection(question, evidence, expected) {
     ? projection : {verified_capabilities:[]};
 }
 
-function _capabilitySubjectGroups(value) {
-  var text=String(value || '').toLowerCase();
-  var groups=[];
-  if (/\bcome code\b/.test(text)) groups.push(['come_code.read','come_code.coder']);
-  if (/\bworld builder\b/.test(text)) groups.push(['world_builder.seat']);
-  if (/\balways on\b/.test(text)) groups.push(['world_builder.always_on']);
-  if (/\bmission board\b/.test(text)) groups.push(['world_builder.mission_board']);
-  if (/\bmeta[ _-]?commentary\b/.test(text)) groups.push(['outbound.meta_commentary']);
-  if (/\bwrit\b/.test(text)) groups.push(['outbound.writ']);
-  return groups;
-}
-
-function _rowHasWorkspaceAction(row, name) {
-  return !!(row&&row.facts&&Array.isArray(row.facts.actions)&&
-    row.facts.actions.some(function (action) {
-      return Array.isArray(action)&&action[0]===name&&typeof action[1]==='string'&&!!action[1];
-    }));
-}
-
-function _exactCapabilitySentenceKey(value) {
-  return String(value || '').trim().replace(/\s+/g,' ').replace(/[.!?]+$/,'').trim()
-    .toLowerCase();
-}
-
-function _exactCapabilitySentences(rows) {
-  var allowed={};
-  (Array.isArray(rows)?rows:[]).forEach(function (row) {
-    if (!row || !row.facts) return;
-    if (/^come_code\./.test(String(row.capability_id || ''))) {
-      var actions=Array.isArray(row.facts.actions)?row.facts.actions:[];
-      actions.forEach(function (action) {
-        var description=Array.isArray(action)?String(action[1] || '').trim():'';
-        if (!description) return;
-        var humanDescription=description.charAt(0).toLowerCase()+description.slice(1);
-        allowed[_exactCapabilitySentenceKey('Come Code can '+humanDescription)]=true;
-      });
-    }
-    if (row.capability_id==='world_builder.seat'&&row.facts.active===true) {
-      allowed[_exactCapabilitySentenceKey('World Builder is live')]=true;
-    }
-    if (row.capability_id==='world_builder.always_on') {
-      if (row.facts.running===true) {
-        allowed[_exactCapabilitySentenceKey('Always On is running')]=true;
-      }
-      if (row.facts.enabled===true) {
-        allowed[_exactCapabilitySentenceKey('Always On is enabled')]=true;
-      }
-    }
-    if (row.capability_id==='world_builder.mission_board'&&row.facts.connected===true) {
-      allowed[_exactCapabilitySentenceKey('Mission Board is connected')]=true;
-    }
-  });
-  return allowed;
-}
-
 function currentCapabilityClaimFindings(question, answer, evidence, expected) {
-  if (!currentCapabilityQuestion(question) || !categoricalCurrentCapabilityClaim(answer)) return [];
-  var rows = verifiedCurrentCapabilityRows(evidence,expected);
-  if (!rows.length) return ['current_capability_evidence_missing'];
-  var text = String(answer || '');
-  var findings = [];
-  if (/\bsingle[ -]?file\b/i.test(text) && rows.some(function (row) {
-    return row.capability_id === 'come_code.coder' &&
-      _rowHasWorkspaceAction(row,'open_change_set_pr');
-  })) findings.push('stale_single_file_claim');
-  if (/\b(?:these are|that is|those are) the only\b|\bonly (?:things|capabilities)\b/i.test(text)) {
-    findings.push('unsupported_exhaustive_claim');
-  }
-  if (/\b(?:meta[ _-]?commentary|writ|council|tool calls?|internal (?:reasoning|stages?|instructions?))\b/i.test(text)) {
-    findings.push('internal_capability_surface_exposed');
-  }
-  var supportedClauses=0;
-  var exactSentences=_exactCapabilitySentences(rows);
-  var unmatchedSentences=[];
-  (text.match(/[^.!?\n]+(?:[.!?]+|$)/g)||[]).forEach(function (sentence) {
-    var key=_exactCapabilitySentenceKey(sentence);
-    if (exactSentences[key]) supportedClauses++;
-    else if (key) unmatchedSentences.push(sentence);
-  });
-  unmatchedSentences.forEach(function (sentence) {
-    if (_capabilitySubjectGroups(sentence).length) {
-      findings.push('unsupported_capability_clause');
-    } else if (/^\s*(?:it|you|we|they|this|that|the system)\b/i.test(sentence)) {
-      findings.push('ambiguous_capability_subject');
-    } else {
-      findings.push('unsupported_capability_clause');
-    }
-  });
-  if (!supportedClauses) findings.push('supported_capability_clause_missing');
-  return Array.from(new Set(findings));
+  return currentCapabilityGrounding.findings(question,answer,evidence,expected);
 }
 
 function guardCurrentCapabilityClaim(question, answer, evidence, expected) {
@@ -7289,6 +7178,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // Only the exact preparation that passed every outbound boundary may commit.
     _screenBlock = _preparedHuman.screenBlock || null;
   }
+  var _currentCapabilityAnswerBinding = null;
+  if (!_structuredReachPolicy && !_worldBuilderMachine &&
+      currentCapabilityQuestion(_proofQuestion) &&
+      categoricalCurrentCapabilityClaim(finalAns)) {
+    var _preparedCapabilityCheck = guardCurrentCapabilityClaim(_proofQuestion,
+      finalAns, _verifiedToolEvidence, {
+        hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
+      });
+    if (_preparedCapabilityCheck.held) {
+      _stampStep('current_capability_claim_changed_during_preparation',
+        _preparedCapabilityCheck.reason);
+      return {ok:false,reason:'current_capability_unverified',blocked_by:'A\'NU',
+        ham:hamObj,cycleId:_cycleId,requestId:_requestId,tools_used:tools,
+        iterations:iter,ms:Date.now()-t0};
+    }
+    _currentCapabilityAnswerBinding = mintCurrentCapabilityAnswerBinding({
+      hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion,
+      answer:finalAns,evidence:_verifiedToolEvidence
+    });
+    if (!_currentCapabilityAnswerBinding) {
+      _stampStep('current_capability_answer_binding_failed', 'signed_evidence_unverified');
+      return {ok:false,reason:'current_capability_answer_binding_unverified',
+        blocked_by:'A\'NU',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    _stampStep('current_capability_answer_bound',
+      'bytes='+_currentCapabilityAnswerBinding.answer_bytes+
+      ' digest='+_currentCapabilityAnswerBinding.answer_digest);
+  }
   // ⬡B:core.tool_loop:GUARD:full_pai_outbound_council_every_return:20260715⬡
   // This is the only successful exit. PAM, SHADOW, META_COMMENTARY, conditional
   // QUILL, WRIT, A'NU expression, and STAMP must all finish in order. STAMP
@@ -7425,13 +7343,18 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     deliberationInput:String(message||''),
     answer:finalAns,channel:channel,activeWorld:_activeWorld,
     delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext,
-    signal:_turnAbortSignal
+    signal:_turnAbortSignal,
+    currentCapabilityAnswerBinding:_currentCapabilityAnswerBinding
   });
   if (await _turnCancelled(true)) return _turnCancelledResult('after_council');
   var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
   var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
     question:_exactUserMessage,deliberationInput:String(message||''),
-    answer:_council&&_council.answer};
+    answer:_currentCapabilityAnswerBinding ? finalAns : (_council&&_council.answer)};
+  if (_currentCapabilityAnswerBinding) {
+    _mainCouncilExpected.currentCapabilityAnswerBinding =
+      currentCapabilityAnswerBindingReceipt(_currentCapabilityAnswerBinding);
+  }
   if (_identityProvenanceLedger.required) {
     _mainCouncilExpected.identityEvidenceReceipt = _identityEvidenceProof.receipt;
   }
@@ -7469,6 +7392,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       council_stages:(_council&&_council.stages)||[]};
   }
   finalAns = _council.answer;
+  if (_currentCapabilityAnswerBinding) {
+    var _postCouncilCapabilityCheck = guardCurrentCapabilityClaim(_proofQuestion,
+      finalAns, _verifiedToolEvidence, {
+        hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
+      });
+    var _postCouncilCapabilityDigest = _crypto.createHash('sha256')
+      .update(Buffer.from(String(finalAns), 'utf8')).digest('hex');
+    if (_postCouncilCapabilityCheck.held ||
+        _postCouncilCapabilityDigest !== _currentCapabilityAnswerBinding.answer_digest ||
+        Buffer.byteLength(finalAns, 'utf8') !== _currentCapabilityAnswerBinding.answer_bytes) {
+      var _postCouncilCapabilityReason = _postCouncilCapabilityCheck.held
+        ? _postCouncilCapabilityCheck.reason : 'current_capability_bound_answer_mutated';
+      _stampStep('outbound_council_blocked', _postCouncilCapabilityReason);
+      return {ok:false,reason:'current_capability_post_council_unverified',
+        blocked_by:'A\'NU',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    _stampStep('current_capability_post_council_verified',
+      'bytes='+_currentCapabilityAnswerBinding.answer_bytes+
+      ' digest='+_currentCapabilityAnswerBinding.answer_digest);
+  }
   if(_structuredReachPolicy&&(finalAns!==_structuredPolicyDraftBytes||
       !_validStructuredReachPolicy(finalAns))){
     _stampStep('outbound_council_blocked','reach_policy_json_mutated');
