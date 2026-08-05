@@ -46,6 +46,24 @@ var reachPolicyContract = require('./reach/policy.contract.js');
 var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
 var shadowDecisionDialogue = require('./shadow.decision.dialogue.js');
 var outputGuard = require('./model.output.guard.js');
+
+async function unavailableShadowDecisionFailure(council, context, dialogue) {
+  if (!council || council.reason !== 'shadow_decision_judgment_unavailable') return null;
+  context = context || {};
+  dialogue = dialogue || shadowDecisionDialogue;
+  var escalation = await dialogue.escalate({hamUid:context.hamUid,
+    requestId:context.requestId,cycleId:context.cycleId,
+    reason:'shadow_decision_judgment_unavailable',recommendedHand:null});
+  return {ok:false,reason:'shadow_decision_judgment_unavailable',
+    blocked_by:'guardian.clair',ham:context.ham,cycleId:context.cycleId,
+    requestId:context.requestId,tools_used:context.tools || [],
+    iterations:context.iterations,ms:context.ms,pending_effects_committed:false,
+    escalation:escalation && escalation.ok === true
+      ? {ok:true,source:escalation.source || null,superior_node_id:'guardian.clair'}
+      : {ok:false,reason:escalation && escalation.reason ||
+        'shadow_decision_escalation_unavailable'},
+    council_stages:council.stages || []};
+}
 // ⬡B:core.tool.loop:WIRE:the_env_only_identity_law_reaches_model_output_too:20260729⬡
 // The founder law "identity is env only, never a literal" was enforced over source code and
 // nowhere else, so a name could be perfectly env resolved and still be spoken to a stranger.
@@ -7382,26 +7400,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           content: JSON.stringify({ codes:_blockedCouncilCodes || null,
             hold_evidence:_holdEv || null }) }) }).catch(function () {});
     } catch (_eHold) {}
-    var _unavailableDecisionEscalation = null;
-    if (_council && _council.reason === 'shadow_decision_judgment_unavailable') {
-      _unavailableDecisionEscalation = await shadowDecisionDialogue.escalate({hamUid:hamUid,
-        requestId:_requestId,cycleId:_cycleId,
-        reason:'shadow_decision_judgment_unavailable',recommendedHand:null});
+    var _unavailableDecisionFailure = await unavailableShadowDecisionFailure(_council,{
+      hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,ham:hamObj,tools:tools,
+      iterations:iter,ms:Date.now()-t0});
+    if (_unavailableDecisionFailure) {
       _stampStep('shadow_decision_review_unavailable',
-        _unavailableDecisionEscalation && _unavailableDecisionEscalation.ok
+        _unavailableDecisionFailure.escalation && _unavailableDecisionFailure.escalation.ok
           ? 'guardian_clair_flagged' : 'guardian_clair_flag_failed');
+      return _unavailableDecisionFailure;
     }
     return {ok:false,reason:(_council&&_council.reason)
         || (_committedCouncil&&_committedCouncil.reason) || 'pai_council_receipt_unverified',
-      blocked_by:_unavailableDecisionEscalation?'guardian.clair':
-        ((_council&&_council.blocked_by)||'STAMP'),ham:hamObj,cycleId:_cycleId,
+      blocked_by:((_council&&_council.blocked_by)||'STAMP'),ham:hamObj,cycleId:_cycleId,
       requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
-      escalation:_unavailableDecisionEscalation && _unavailableDecisionEscalation.ok===true
-        ? {ok:true,source:_unavailableDecisionEscalation.source||null,
-          superior_node_id:'guardian.clair'}
-        : (_unavailableDecisionEscalation
-          ? {ok:false,reason:_unavailableDecisionEscalation.reason||
-            'shadow_decision_escalation_unavailable'} : null),
+      escalation:null,
       council_stages:(_council&&_council.stages)||[]};
   }
   finalAns = _council.answer;
@@ -8102,4 +8114,4 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   reachHandoffEligible,hamWorldBuilderMachineMode,
-  preWriteCouncilEligible,toolDefinitionsForTurn}};
+  preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure}};
