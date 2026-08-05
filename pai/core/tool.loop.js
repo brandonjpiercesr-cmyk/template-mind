@@ -5795,8 +5795,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _mindArmed = _mindSwitch === 'on' || _mindSwitch === 'all'
       || (_mindSwitch !== '' && _mindSwitch.split(',')
         .map(function (name) { return name.trim(); }).indexOf(_mindChannel) >= 0);
-    var _providerSeat = !body.tools&&!_structuredReachPolicy&&_mindArmed
-      ? 'c3_mind' : _paiSeatName();
+    var _providerSeat = paiReasoningSeat(channel,{
+      decisionReconsideration:!!_decisionReconsideration,
+      bodyHasTools:!!body.tools,
+      mindArmed:!_structuredReachPolicy&&_mindArmed
+    });
     if (_structuredReachPolicy) {
       body.messages=msgs;
       delete body.tools;
@@ -8073,7 +8076,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   // _paiSeatName() for the full finding.
   var _channelLower = String(channel || '').toLowerCase();
   var _worldBuilderTurn = _channelLower === 'ham_world_builder';
-  var seat = _channelLower === 'voice' ? 'voice_fast' : _channelLower === 'coding' ? 'coda' : 'c2_organ';
+  var seat = paiReasoningSeat(channel,{
+    decisionReconsideration:!!(identity &&
+      (identity._shadow_reconsideration || identity._receipt_reconsideration))
+  });
   var ownerNodeId = _channelLower === 'coding' ? 'station.coda'
     : _worldBuilderTurn ? 'station.ham_world_builder' : 'station.pai';
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
@@ -8114,6 +8120,21 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
 function _ghHoldResetForTests() { _ghHold = { until: 0, reason: null, status: 0 }; }
 function _ghHoldStateForTests() { return { until:_ghHold.until, reason:_ghHold.reason, status:_ghHold.status }; }
 
+// A receipt failure is evidence that the ordinary seat did not connect its own words to its
+// available hands. The one bounded reconsideration therefore belongs to A'NU's existing C3
+// reasoning seat. This changes no hand, forces no call, and leaves the complete armory on the
+// table. It spends the stronger seat only after a real receipt failure, never on an ordinary
+// successful turn.
+function paiReasoningSeat(channel, opts) {
+  opts = opts || {};
+  var normalizedChannel = String(channel || '').toLowerCase();
+  if (normalizedChannel === 'voice') return 'voice_fast';
+  if (normalizedChannel === 'coding') return 'coda';
+  if (opts.decisionReconsideration === true) return 'c3_mind';
+  if (opts.bodyHasTools !== true && opts.mindArmed === true) return 'c3_mind';
+  return 'c2_organ';
+}
+
 module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
@@ -8143,4 +8164,5 @@ module.exports={runPAI,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTe
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   reachHandoffEligible,hamWorldBuilderMachineMode,
-  preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure}};
+  preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
+  paiReasoningSeat}};
