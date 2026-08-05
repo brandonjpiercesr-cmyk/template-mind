@@ -69,7 +69,14 @@ var CLAIM_GROUPS = [
     verbs: ['updated the board', 'updated your board', 'updated the screen',
       'updated your screen', 'updated the layout', 'banked', 'stamped', 'purged',
       'archived', 'executed the', 'ran the purge', 'ran the script', 'ran the job',
-      'wrote to the brain', 'saved the layout', 'cleared the board'] }
+      'wrote to the brain', 'saved the layout', 'cleared the board'] },
+  { support: /submit_job|world[._ -]?job|ham[._ -]?world[._ -]?builder|HAM_WORLD_BUILDER_RESULT|WORLD_JOB_RESULT/i,
+    verbs: ['set this as a real small mission', 'set this as a mission',
+      'set that as a mission', 'set this in motion', 'set that in motion',
+      'put this in motion', 'put that in motion', 'queued the mission',
+      'queued the job', 'started the mission', 'started the job',
+      'commissioned the mission', 'commissioned the job',
+      'assigned the mission', 'assigned the job'] }
 ];
 
 // Fillers legally allowed between the first-person subject and the claim verb.
