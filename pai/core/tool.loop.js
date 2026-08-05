@@ -4183,6 +4183,34 @@ function memoryTurnRecordVerified(receipt) {
     && receipt.turn_record.readback_verified === true);
 }
 
+function founderDelegatedOrigin(identity) {
+  var context = identity && identity.council_context;
+  var delegated = context && context.founder_delegation;
+  return !!(delegated && typeof delegated === 'object' &&
+    typeof delegated.grant_id === 'string' && delegated.grant_id.trim() &&
+    typeof delegated.delegate === 'string' && delegated.delegate.trim() &&
+    delegated.scope === 'conversation_with_anu');
+}
+
+function personalIntentEligible(identity) {
+  return !founderDelegatedOrigin(identity);
+}
+
+function delegatedTestStamp(identity, requestCandidate) {
+  if (!founderDelegatedOrigin(identity)) return null;
+  var delegated = identity.council_context.founder_delegation;
+  var delegate = String(delegated.delegate || '').trim().toLowerCase()
+    .replace(/[^a-z0-9._:-]+/g, '.').replace(/^\.+|\.+$/g, '').slice(0, 48) || 'delegate';
+  var digest = _crypto.createHash('sha256').update(JSON.stringify({
+    grant_id:String(delegated.grant_id),
+    delegate:String(delegated.delegate),
+    scope:String(delegated.scope),
+    issued_at:delegated.issued_at == null ? null : delegated.issued_at,
+    request_id:String(requestCandidate || '')
+  })).digest('hex').slice(0, 24);
+  return 'test.delegated.' + delegate + '.' + digest;
+}
+
 // The memory durability gate belongs to the kind of turn, not to one route name. CARA was
 // the first door to require it, which left the same person's OMI, voice, portal, email, SMS
 // and /turn conversations able to release effects and report success while their turn record
@@ -4195,6 +4223,7 @@ function memoryTurnRequired(channel, identity, state) {
   var mode = String(context.mode || '').trim().toLowerCase();
   var flags = state || {};
   if (!normalizedChannel) return false;
+  if (!personalIntentEligible(identity)) return false;
   if (flags.structuredReachPolicy === true || flags.reachIncidentIntake === true) return false;
   if (identity && identity.outbound_finalize === true) return false;
   if (context.outbound_finalize === true || context.internal_deliberation === true) return false;
@@ -4221,7 +4250,7 @@ function codaInternalDeliberation(identity) {
 function reachHandoffEligible(channel,identity) {
   var autonomous = /^(anew_action|autonomous)$/.test(String(channel||'').toLowerCase());
   var mode = String(identity&&identity.council_context&&identity.council_context.mode||'');
-  return !autonomous && !internalDeliberation(identity) && !(identity&&(
+  return personalIntentEligible(identity) && !autonomous && !internalDeliberation(identity) && !(identity&&(
     identity.outbound_finalize || identity.delivery&&identity.delivery.external ||
     /^(outbound|outreach)/.test(mode) || mode==='proposed_action_dispatch'));
 }
@@ -4277,6 +4306,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // face replies with ms:0 and no cycle lineage. A new-world mind may be integrated as
   // a tool or contributor inside this cycle, but it must never replace this choke point.
   var t0=Date.now();
+  var _personalIntentEligible=personalIntentEligible(identity);
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
   var _worldBuilderMachine=hamWorldBuilderMachineMode(channel,identity);
   var _worldBuilderBudget=_worldBuilderMachine&&identity&&identity._worldBuilderBudget;
@@ -6905,6 +6935,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // goes fully silent, unchanged.
     var _blockedFallback = false;
     try {
+      if (!_personalIntentEligible) throw new Error('delegated_test_tracker_ineligible');
       if (await _turnCancelled()) return _turnCancelledResult('before_tracker_recovery');
       var _trk = require('./tracker.js');
       var _wasAction = _trk.looksLikeActionRequest(message);
@@ -8003,7 +8034,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   } catch (eRcpt) { /* diagnostic only, after the mandatory durable proof */ }
   try {
     if (await _turnCancelled()) return _turnCancelledResult('before_tracker');
-    if (!_structuredReachPolicy && !_reachIncidentIntake && !_blockedFallback) {
+    if (_personalIntentEligible && !_structuredReachPolicy &&
+        !_reachIncidentIntake && !_blockedFallback) {
       var _trkD = require('./tracker.js');
       if (_trkD.looksLikeActionRequest(_exactUserMessage)) {
         await _trkD.stampTrack({ hamUid: hamUid, status: 'DONE', kind: 'request',
@@ -8176,9 +8208,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var exactHam = String(hamUid || '').trim().toUpperCase();
   var cycleId = exactHam + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
   var requestCandidate = identity && (identity.request_id || identity.requestId);
-  var requestId = typeof requestCandidate === 'string'
+  var testStamp = delegatedTestStamp(identity, requestCandidate);
+  var requestId = testStamp || (typeof requestCandidate === 'string'
     && /^[A-Za-z0-9._:-]{8,160}$/.test(requestCandidate.trim())
-    ? requestCandidate.trim() : cycleId + '.request';
+    ? requestCandidate.trim() : cycleId + '.request');
   // Same seat correction as _paiSeatName() above, kept in step with it on purpose: this is
   // the spend-attribution copy, and channel:'coding' must be attributed to and paid from
   // CODA's own named seat, not the shared c2_organ wallet. See the fix note on
@@ -8362,6 +8395,7 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,_ghHoldRe
   paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
+  founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
   paiReasoningSeat,receiptReconsiderationFeedback,normalizeSubmitJobArgs}};
