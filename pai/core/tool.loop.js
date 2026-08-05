@@ -1684,10 +1684,10 @@ async function currentCapabilityEvidence(question, env, dependencies) {
 }
 
 function categoricalCurrentCapabilityClaim(answer) {
-  if (/\b(?:do not know|don't know|not sure|unclear|could not verify|can't verify|cannot confirm|not confirmed)\b/i
-      .test(String(answer || ''))) return false;
-  return /\b(?:yes|no|active|can|cannot|can't|able|unable|available|unavailable|built|connected|enabled|live|working|works|support|supports|access|limited|only)\b/i
-    .test(String(answer || ''));
+  var text=String(answer || '').trim();
+  if (!text) return false;
+  var uncertaintyOnly=/^(?:(?:i\s+)?(?:do not know|don't know|am not sure)(?:\s+(?:yet|right now))?|not sure(?:\s+(?:yet|right now))?|(?:i\s+)?(?:could not verify|can't verify|cannot verify|cannot confirm)(?:\s+(?:what is live|which parts are live|whether (?:it|this|that) is live|if (?:it|this|that) is live|that(?: right now)?|right now))?|(?:it is\s+)?unclear|not confirmed)[.!?]?$/i;
+  return !uncertaintyOnly.test(text);
 }
 
 function verifiedCurrentCapabilityRows(evidence, expected) {
@@ -1789,30 +1789,6 @@ function currentCapabilityHumanProjection(question, evidence, expected) {
     ? projection : {verified_capabilities:[]};
 }
 
-function _capabilityClaimTokens(value) {
-  var ignored = {a:true,an:true,and:true,are:true,as:true,at:true,based:true,be:true,
-    can:true,current:true,currently:true,do:true,for:true,from:true,in:true,is:true,
-    it:true,now:true,of:true,on:true,only:true,or:true,that:true,the:true,
-    these:true,things:true,to:true,verified:true,with:true,you:true,your:true};
-  var seen = {};
-  return String(value || '').toLowerCase().split(/[^a-z0-9_]+/).map(function (word) {
-    if (word==='always') return word;
-    if (word.length>4&&/ies$/.test(word)) return word.slice(0,-3)+'y';
-    if (word.length>4&&/s$/.test(word)&&!/(?:ss|us)$/.test(word)) return word.slice(0,-1);
-    return word;
-  }).filter(function (word) {
-    if (word.length < 3 || ignored[word] || seen[word]) return false;
-    seen[word] = true;
-    return true;
-  });
-}
-
-function _capabilityActionTokens(value) {
-  var subjects = {always:true,board:true,builder:true,code:true,come:true,foundation:true,
-    mission:true,world:true};
-  return _capabilityClaimTokens(value).filter(function (token) { return !subjects[token]; });
-}
-
 function _capabilitySubjectGroups(value) {
   var text=String(value || '').toLowerCase();
   var groups=[];
@@ -1825,37 +1801,47 @@ function _capabilitySubjectGroups(value) {
   return groups;
 }
 
-function _rowCapabilityActionPhrases(row) {
-  if (!row || !row.facts || typeof row.facts !== 'object') return [];
-  if (/^come_code\./.test(String(row.capability_id || ''))) {
-    var actions=Array.isArray(row.facts.actions)?row.facts.actions:[];
-    return actions.filter(function (action) {
-      return Array.isArray(action)&&action[0]&&action[1];
-    }).map(function (action) {
-      var nameVerb=String(action[0]).split('_')[0];
-      var descriptionVerb=String(action[1]).trim().split(/\s+/)[0];
-      return {verbs:_capabilityActionTokens([nameVerb,descriptionVerb]),
-        tokens:_capabilityActionTokens(String(action[0]).replace(/_/g,' ')+' '+action[1])};
-    });
-  }
-  if (row.capability_id==='world_builder.seat'&&row.facts.active===true) {
-    return [{verbs:['active'],tokens:['active']},{verbs:['live'],tokens:['live']}];
-  }
-  if (row.capability_id==='world_builder.always_on') {
-    return ['running','enabled'].filter(function (term) { return row.facts[term]===true; })
-      .map(function (term) { return {verbs:[term],tokens:[term]}; });
-  }
-  if (row.capability_id==='world_builder.mission_board'&&row.facts.connected===true) {
-    return [{verbs:['connected'],tokens:['connected']}];
-  }
-  return [];
-}
-
 function _rowHasWorkspaceAction(row, name) {
   return !!(row&&row.facts&&Array.isArray(row.facts.actions)&&
     row.facts.actions.some(function (action) {
       return Array.isArray(action)&&action[0]===name&&typeof action[1]==='string'&&!!action[1];
     }));
+}
+
+function _exactCapabilitySentenceKey(value) {
+  return String(value || '').trim().replace(/\s+/g,' ').replace(/[.!?]+$/,'').trim()
+    .toLowerCase();
+}
+
+function _exactCapabilitySentences(rows) {
+  var allowed={};
+  (Array.isArray(rows)?rows:[]).forEach(function (row) {
+    if (!row || !row.facts) return;
+    if (/^come_code\./.test(String(row.capability_id || ''))) {
+      var actions=Array.isArray(row.facts.actions)?row.facts.actions:[];
+      actions.forEach(function (action) {
+        var description=Array.isArray(action)?String(action[1] || '').trim():'';
+        if (!description) return;
+        var humanDescription=description.charAt(0).toLowerCase()+description.slice(1);
+        allowed[_exactCapabilitySentenceKey('Come Code can '+humanDescription)]=true;
+      });
+    }
+    if (row.capability_id==='world_builder.seat'&&row.facts.active===true) {
+      allowed[_exactCapabilitySentenceKey('World Builder is live')]=true;
+    }
+    if (row.capability_id==='world_builder.always_on') {
+      if (row.facts.running===true) {
+        allowed[_exactCapabilitySentenceKey('Always On is running')]=true;
+      }
+      if (row.facts.enabled===true) {
+        allowed[_exactCapabilitySentenceKey('Always On is enabled')]=true;
+      }
+    }
+    if (row.capability_id==='world_builder.mission_board'&&row.facts.connected===true) {
+      allowed[_exactCapabilitySentenceKey('Mission Board is connected')]=true;
+    }
+  });
+  return allowed;
 }
 
 function currentCapabilityClaimFindings(question, answer, evidence, expected) {
@@ -1875,42 +1861,21 @@ function currentCapabilityClaimFindings(question, answer, evidence, expected) {
     findings.push('internal_capability_surface_exposed');
   }
   var supportedClauses=0;
-  var activeSubjectGroups=[];
-  text.split(/[.;:\n]|,\s+(?:and\s+)?/).forEach(function (clause) {
-    if (!/\b(?:active|available|can(?:not|'t)?|connected|enabled|live|lets?|allows?|supports?|working|running|read|find|run|inspect|open|create|work)\b/i.test(clause)) return;
-    var explicitSubjectGroups=_capabilitySubjectGroups(clause);
-    if (explicitSubjectGroups.length) activeSubjectGroups=explicitSubjectGroups;
-    else if (!activeSubjectGroups.length || /^\s*(?:it|this|that|they)\b/i.test(clause)) {
-      findings.push('ambiguous_capability_subject');
-      return;
-    }
-    if (/\b(?:can(?:not|'t)|unable|unavailable|not\s+(?:active|available|connected|enabled|live|running|working))\b/i.test(clause)) {
-      findings.push('unsupported_negative_capability_claim');
-      return;
-    }
-    var parts=activeSubjectGroups.length===1?String(clause).split(/\s+and\s+/i):[clause];
-    var actionParts=parts.map(function (part) { return _capabilityActionTokens(part); })
-      .filter(function (tokens) { return tokens.length; });
-    if (!actionParts.length) {
+  var exactSentences=_exactCapabilitySentences(rows);
+  var unmatchedSentences=[];
+  (text.match(/[^.!?\n]+(?:[.!?]+|$)/g)||[]).forEach(function (sentence) {
+    var key=_exactCapabilitySentenceKey(sentence);
+    if (exactSentences[key]) supportedClauses++;
+    else if (key) unmatchedSentences.push(sentence);
+  });
+  unmatchedSentences.forEach(function (sentence) {
+    if (_capabilitySubjectGroups(sentence).length) {
       findings.push('unsupported_capability_clause');
-      return;
+    } else if (/^\s*(?:it|you|we|they|this|that|the system)\b/i.test(sentence)) {
+      findings.push('ambiguous_capability_subject');
+    } else {
+      findings.push('unsupported_capability_clause');
     }
-    var covered = activeSubjectGroups.every(function (group) {
-      var phrases=[];
-      rows.forEach(function (row) {
-        if (group.indexOf(row.capability_id) < 0) return;
-        phrases=phrases.concat(_rowCapabilityActionPhrases(row));
-      });
-      return actionParts.every(function (tokens) {
-        return phrases.some(function (phrase) {
-          return phrase.verbs.indexOf(tokens[0])>=0&&tokens.every(function (token) {
-            return phrase.tokens.indexOf(token)>=0;
-          });
-        });
-      });
-    });
-    if (!covered) findings.push('unsupported_capability_clause');
-    else supportedClauses++;
   });
   if (!supportedClauses) findings.push('supported_capability_clause_missing');
   return Array.from(new Set(findings));
@@ -6740,7 +6705,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _capabilityRepairInstruction = _capabilityBoundaryRepair
       ? (String(failureCode || '').indexOf('current_capability_evidence_missing') >= 0
         ? ' The current capability read supplied zero live rows. Answer without claiming the capability is present or absent. State the uncertainty directly in natural human language, with no process narration, tool names, system vocabulary, or invented replacement capability.'
-        : ' Rewrite from the live capability rows already in the completed context. Every positive capability sentence must be covered by one row. Remove unsupported, exhaustive, and old limitation claims. Use natural human language with no process narration, tool names, system vocabulary, or invented replacement capability.')
+        : ' Rewrite from the live capability rows already in the completed context. Use short atomic sentences. Begin every positive capability sentence with exactly one visible subject label copied verbatim from the completed capability result. Never combine subject labels in one sentence. Never substitute a pronoun, you, or the system for the visible subject label. For Come Code, write "Come Code can " followed by one full action description copied from that subject, changing only its first letter to lowercase. Use one action per sentence. For other subjects, use one state word listed under that same subject. Omit a claim rather than broaden, combine, or paraphrase it. Remove unsupported, exhaustive, and old limitation claims. Use natural human language with no process narration, tool names, system vocabulary, or invented replacement capability.')
       : '';
     var _repairedHuman = await regenerateHollowAnswer(_repairCandidate, msgs, [async function (repairMessages) {
       return (await _completeBoundHistoryOnLadder(repairMessages, _oneRepairCap, 0.1, false)) || '';
@@ -7152,6 +7117,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _capabilityRepair.answer, _verifiedToolEvidence, {
         hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
       });
+    var _capabilityRepairPostReason = !_capabilityRepair.answer
+      ? 'empty_repair'
+      : (_capabilityRepairCheck.held ? _capabilityRepairCheck.reason : 'accepted');
+    _stampStep('current_capability_claim_repair_checked',
+      'len='+String(_capabilityRepair.answer || '').length+
+      ' post_check_reason='+_capabilityRepairPostReason);
     if (!_capabilityRepair.answer || _capabilityRepairCheck.held) {
       _stampStep('cycle_end_silent', 'current_capability_unverified');
       return {ok:false,reason:'current_capability_unverified',blocked_by:'A\'NU',
