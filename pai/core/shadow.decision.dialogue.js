@@ -41,10 +41,16 @@ function shadowReceipt(council) {
       ? evidence.initial_decision_judgment
       : (evidence.judgment && typeof evidence.judgment === 'object'
         ? evidence.judgment : null);
-    // A real resubmission decision supersedes the first one. An unavailable or
-    // malformed retry does not erase model-authored counsel that already exists.
-    var judgment = availableDecisionJudgment(latest)
-      ? latest : (availableDecisionJudgment(initial) ? initial : null);
+    // The generic council healer can rewrite prose, but it cannot choose or execute a
+    // different hand. Its retry judgment therefore cannot erase an earlier disagreement
+    // about A'NU's hand or no-hand choice. Preserve that counsel for the real A'NU-SHADOW
+    // dialogue below the committed council. A retry remains authoritative when the first
+    // judgment did not disagree, including when the retry is the first usable judgment.
+    var initialDisagreement = availableDecisionJudgment(initial) &&
+      initial.decision_approved === false;
+    var judgment = initialDisagreement ? initial
+      : (availableDecisionJudgment(latest)
+        ? latest : (availableDecisionJudgment(initial) ? initial : null));
     if (!judgment || judgment.decision_approved !== false) return null;
     return {
       decision_approved:false,
