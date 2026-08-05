@@ -70,13 +70,39 @@ var CLAIM_GROUPS = [
       'updated your screen', 'updated the layout', 'banked', 'stamped', 'purged',
       'archived', 'executed the', 'ran the purge', 'ran the script', 'ran the job',
       'wrote to the brain', 'saved the layout', 'cleared the board'] },
-  { support: /submit_job|world[._ -]?job|ham[._ -]?world[._ -]?builder|HAM_WORLD_BUILDER_RESULT|WORLD_JOB_RESULT/i,
-    verbs: ['set this as a real small mission', 'set this as a mission',
+  { supportKind: 'mission_submission',
+    verbs: ['got the mission set', 'got this mission set',
+      'set this as a real small mission', 'set this as a mission',
       'set that as a mission', 'set this in motion', 'set that in motion',
       'put this in motion', 'put that in motion', 'queued the mission',
-      'queued the job', 'started the mission', 'started the job',
-      'commissioned the mission', 'commissioned the job',
-      'assigned the mission', 'assigned the job'] }
+      'queued the job', 'commissioned the mission', 'commissioned the job',
+      'assigned the mission', 'assigned the job'] },
+  // A durable mission and a timed reminder are two different effects. A real
+  // submit_job receipt supports the former; only the actual reminder-writing
+  // hand supports the latter. Keeping these in separate groups prevents one
+  // honest commission from laundering invented times into the final answer.
+  { supportKind: 'reminder_create',
+    verbs: ['created a reminder'] },
+  { supportKind: 'reminder_recurrence',
+    verbs: ['created a recurring reminder', 'created recurring reminders',
+      'set up a recurring reminder', 'set up recurring reminders'] },
+  { supportKind: 'mission_submission',
+    verbs: ['logged the mission parameters', 'logged this mission',
+      'logged that mission'] }
+];
+
+// Current-state and promised-delivery claims are stronger than submission or
+// storage claims. They require their own typed proof and never inherit support
+// from a tool name or free-form memory text.
+var STATE_CLAIMS = [
+  { supportKind:'mission_running', verb:'mission running',
+    pattern:/\b(?:(?:it|this|that)(?:\s+is|[’']s)|(?:the mission|the job|this mission|that mission)\s+is)\s+(?:already\s+)?(?:running|live|active)\b/gi },
+  { supportKind:'mission_running', verb:'live track',
+    pattern:/\bthis\s+is\s+(?:now\s+)?a\s+live\s+track(?:\s+now)?\b/gi },
+  { supportKind:'reminder_delivery', verb:'reminder will trigger',
+    pattern:/\b(?:the|this|that)\s+reminder\s+will\s+(?:trigger|fire|notify|alert|reach|nudge)\b/gi },
+  { supportKind:'reminder_delivery', verb:'follow-up will arrive',
+    pattern:/\bfollow[- ]?ups?\s+(?:will\s+)?(?:trigger|fire|arrive|come|happen|at)\b/gi }
 ];
 
 // Fillers legally allowed between the first-person subject and the claim verb.
@@ -98,6 +124,7 @@ var GROUP_MATCHERS = CLAIM_GROUPS.map(function (group) {
   }).map(escapeVerb).join('|');
   return {
     support: group.support,
+    supportKind: group.supportKind || null,
     objectGate: group.objectGate || null,
     pattern: new RegExp('\\bI(?:[\u2019\u0027](?:ve|d))?' + FILLERS +
       '\\s+(' + alternation + ')\\b', 'g'),
@@ -149,7 +176,66 @@ function collectEvidenceText(trace) {
   return pieces.join('\n');
 }
 
-function claimSupported(support, names, evidenceText) {
+function parseJsonObject(raw) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    var parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch (eParse) { return null; }
+}
+
+function validMissionArgs(args) {
+  var level = args && args.level === undefined ? 0 : Number(args && args.level);
+  return !!(args && typeof args === 'object' && String(args.subject || '').trim() &&
+    String(args.detail || '').trim() && Array.isArray(args.acceptance) &&
+    args.acceptance.length >= 1 && args.acceptance.length <= 12 &&
+    args.acceptance.every(function (check) { return !!String(check || '').trim(); }) &&
+    Number.isInteger(level) && level >= 0 && level <= 4);
+}
+
+function validReminderArgs(args) {
+  return !!(args && typeof args === 'object' && String(args.text || '').trim());
+}
+
+function hasPendingEffect(trace, name, validate) {
+  return (Array.isArray(trace.pending_effects) ? trace.pending_effects : []).some(function (effect) {
+    return !!(effect && effect.name === name && validate(effect.args));
+  });
+}
+
+function currentTurnToolResult(trace, name, validate) {
+  return (Array.isArray(trace.verified_evidence) ? trace.verified_evidence : []).some(function (item) {
+    if (!item || item.schema !== 'anew.pai.executed-tool-evidence.v1' ||
+        item.provenance !== 'pai.current_turn.execute_tool' ||
+        item.evidence_kind !== 'verified_tool_result' || item.tool !== name) return false;
+    var args = parseJsonObject(item.args);
+    var result = parseJsonObject(item.result);
+    return validate(args) && !!(result && result.ok !== false && result.executed !== false &&
+      result.queued !== true);
+  });
+}
+
+function strictClaimSupported(kind, trace) {
+  if (kind === 'mission_submission') {
+    return hasPendingEffect(trace, 'submit_job', validMissionArgs) ||
+      currentTurnToolResult(trace, 'submit_job', validMissionArgs);
+  }
+  if (kind === 'reminder_create') {
+    return hasPendingEffect(trace, 'create_reminder', validReminderArgs) ||
+      currentTurnToolResult(trace, 'create_reminder', validReminderArgs);
+  }
+  if (kind === 'reminder_recurrence') {
+    return hasPendingEffect(trace, 'create_recurring_reminder', validReminderArgs) ||
+      currentTurnToolResult(trace, 'create_recurring_reminder', validReminderArgs);
+  }
+  // The current armory has no typed receipt that proves a submitted job is
+  // already running, or that a stored reminder will actually reach the person.
+  return false;
+}
+
+function claimSupported(support, supportKind, trace, names, evidenceText) {
+  if (supportKind) return strictClaimSupported(supportKind, trace);
   if (!support) return names.length > 0;
   for (var i = 0; i < names.length; i++) {
     if (support.test(names[i])) return true;
@@ -187,7 +273,7 @@ function detect(answerText, trace) {
           if (PRECEDING_EXEMPT.test(sentence.slice(0, match.index))) continue;
           if (matcher.objectGate &&
               !matcher.objectGate.test(sentence.slice(match.index + match[0].length))) continue;
-          if (claimSupported(matcher.support, names, evidenceText)) continue;
+          if (claimSupported(matcher.support, matcher.supportKind, trace, names, evidenceText)) continue;
           if (claims.length < 8) {
             claims.push({
               claim: sentence.trim().slice(0, 200),
@@ -195,6 +281,20 @@ function detect(answerText, trace) {
             });
           }
         }
+      }
+    }
+  }
+  for (var stateIndex = 0; stateIndex < STATE_CLAIMS.length; stateIndex++) {
+    var stateClaim = STATE_CLAIMS[stateIndex];
+    if (strictClaimSupported(stateClaim.supportKind, trace)) continue;
+    stateClaim.pattern.lastIndex = 0;
+    var stateMatch;
+    while ((stateMatch = stateClaim.pattern.exec(text)) !== null) {
+      if (claims.length < 8) {
+        claims.push({
+          claim:String(stateMatch[0] || '').trim().slice(0, 200),
+          verb:stateClaim.verb
+        });
       }
     }
   }
