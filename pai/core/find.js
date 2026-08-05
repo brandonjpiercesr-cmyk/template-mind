@@ -226,6 +226,7 @@ function identityBq(path, timeoutMs) {
 function identityQueryPath(query, page) {
   var q = query || {};
   var parts = [];
+  if (q.include_superseded !== true) parts.push('superseded_by=is.null');
   if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
   if (q.source) parts.push('source=eq.' + encodeURIComponent(q.source));
   else if (q.source_prefix) parts.push('source=like.' + encodeURIComponent(q.source_prefix) + '*');
@@ -244,9 +245,16 @@ function identityQueryPath(query, page) {
 }
 
 function identityRead(query) {
-  return query && query.exhaustive === true
+  var read = query && query.exhaustive === true
     ? readAllPages(query, identityQueryPath, identityBq)
     : identityBq(identityQueryPath(query));
+  return Promise.resolve(read).then(function (result) {
+    if (!result || !Array.isArray(result.rows) || query && query.include_superseded === true) {
+      return result;
+    }
+    result.rows = result.rows.filter(function (row) { return row && row.superseded_by == null; });
+    return result;
+  });
 }
 
 function scopedQuery(query, viewerTier) {
@@ -275,6 +283,7 @@ async function find(queries, options) {
 
   function queryPath(q, page) {
     var parts = [];
+    if (!q || q.include_superseded !== true) parts.push('superseded_by=is.null');
     if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
     // Exact doctrine/provenance readers must not let a prefix-colliding child row impersonate
     // the source they requested. `source` and `source_prefix` are intentionally exclusive.
@@ -336,6 +345,7 @@ async function find(queries, options) {
     if (q.select) {
       var _sel = String(q.select);
       if (!/(^|,)\s*id\s*(,|$)/.test(_sel)) _sel = 'id,' + _sel;
+      if (!/(^|,)\s*superseded_by\s*(,|$)/.test(_sel)) _sel += ',superseded_by';
       parts.push('select=' + encodeURIComponent(_sel));
     }
     // ⬡B:core.find:FIX:order_parameter:20260702⬡
@@ -366,8 +376,11 @@ async function find(queries, options) {
   // Merge + dedupe by id
   var seen = {};
   var merged = [];
-  results.forEach(function(result) {
-    ((result && result.rows) || []).forEach(function(row) {
+  results.forEach(function(result, index) {
+    ((result && result.rows) || []).filter(function (row) {
+      return queries[index] && queries[index].include_superseded === true
+        ? true : row && row.superseded_by == null;
+    }).forEach(function(row) {
       if (!seen[row.id]) {
         seen[row.id] = true;
         merged.push(row);
@@ -388,7 +401,7 @@ async function find(queries, options) {
     queriesTotal:results.length, queriesAvailable:queriesAvailable, failures:failures };
 }
 
-var EVIDENCE_SELECT = 'id,ham_uid,stamp_type,source,summary,agent_global,importance,created_at';
+var EVIDENCE_SELECT = 'id,ham_uid,stamp_type,source,summary,agent_global,importance,created_at,superseded_by';
 // Full FCW expansion needs the human-authored body, never the vector used to locate it.
 // Keeping `embedding` off this transport prevents a selected evidence batch from rebuilding
 // the same heap pressure Agent FIND exists to remove.
@@ -397,6 +410,7 @@ var EVIDENCE_BODY_SELECT = EVIDENCE_SELECT + ',content';
 function evidenceQueryPath(query, page) {
   var q = query || {};
   var parts = [];
+  if (q.include_superseded !== true) parts.push('superseded_by=is.null');
   if (q.ids && q.ids.length) {
     var ids = q.ids.map(function (id) { return String(id).replace(/[^A-Za-z0-9_-]/g, ''); })
       .filter(Boolean);
@@ -521,7 +535,9 @@ async function scanFcwEvidence(input, options) {
       failures.push({contributor:query.contributor,query_index:index,
         reason:String(result && result.reason || 'brain_read_unavailable')});
     } else {
-      var rows = Array.isArray(result.rows) ? result.rows : [];
+      var rows = (Array.isArray(result.rows) ? result.rows : []).filter(function (row) {
+        return query.include_superseded === true ? true : row && row.superseded_by == null;
+      });
       totalRows += rows.length;
       totalPages += 1;
       await opts.onPage(rows, {contributor:query.contributor,query_index:index,page:0,
@@ -558,7 +574,10 @@ async function walkFcwEvidence(input, options) {
     var result = await walkAllPages(query, evidenceQueryPath,
       function (path) { return bq(path, opts.signal); },
       function (rows, page) {
-        return opts.onPage(rows, {contributor:query.contributor,query_index:index,
+        var activeRows = (rows || []).filter(function (row) {
+          return query.include_superseded === true ? true : row && row.superseded_by == null;
+        });
+        return opts.onPage(activeRows, {contributor:query.contributor,query_index:index,
           page:page.page,cursor:page.cursor});
       });
     receipts.push({contributor:query.contributor,query_index:index,result:result});
@@ -594,7 +613,8 @@ async function expandFcwEvidence(selections, viewerTier, options) {
       return {ok:false,available:false,reason:String(read && read.reason ||
         'agent_find_evidence_expansion_failed'),rows:[],by_contributor:{}};
     }
-    (read.rows || []).forEach(function (row) {
+    (read.rows || []).filter(function (row) { return row && row.superseded_by == null; })
+      .forEach(function (row) {
       var entry = byId[String(row.id)];
       if (!entry) return;
       var bytes = Buffer.byteLength(JSON.stringify(row), 'utf8');
@@ -857,8 +877,9 @@ function decodeDoctrineCursor(value) {
 
 function doctrinePagePath(hamUid, input, viewerTier) {
   var request=input||{};
-  var parts=['select=id,source,stamp_type,summary,importance,created_at,content,edges,ham_uid,acl_tier',
+  var parts=['select=id,source,stamp_type,summary,importance,created_at,content,edges,ham_uid,acl_tier,superseded_by',
     'ham_uid=eq.'+encodeURIComponent(hamUid)];
+  if(request.include_superseded!==true)parts.push('superseded_by=is.null');
   if(request.stamp_type)parts.push('stamp_type=eq.'+encodeURIComponent(request.stamp_type));
   else parts.push('stamp_type=in.(ROADMAP,DOCTRINE)');
   if(request.source)parts.push('source=eq.'+encodeURIComponent(request.source));
@@ -885,7 +906,9 @@ async function findDoctrinePage(hamUid, input, viewerTier) {
   request.after=after;
   var read=await bq(doctrinePagePath(hamUid,request,viewerTier));
   if(!read||read.ok!==true||read.available!==true)return read;
-  var rows=Array.isArray(read.rows)?read.rows:[];
+  var rows=(Array.isArray(read.rows)?read.rows:[]).filter(function(row){
+    return request.include_superseded===true?true:row&&row.superseded_by==null;
+  });
   if(request.source){
     if(rows.length!==1||rows[0].ham_uid!==hamUid||rows[0].source!==request.source){
       return {ok:false,available:true,reason:rows.length?'doctrine_source_ambiguous':
