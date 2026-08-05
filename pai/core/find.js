@@ -459,7 +459,9 @@ function fcwEvidenceQueries(input) {
     q('agentJDs',{source_prefix:'agent.jd'}),
     q('agentJDs',{stamp_type:'SCW',ham_uid:hamUid}),
     q('agentJDs',{stamp_type:'AGENT_JD'},true),
-    q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid}),
+    q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid,
+      stamp_type:contract.TURN_STAMP_TYPE,
+      importance_gte:contract.READER_IMPORTANCE_FLOOR}),
     q('context',{stamp_type:contract.TURN_STAMP_TYPE,ham_uid:hamUid,
       importance_gte:contract.READER_IMPORTANCE_FLOOR}),
     // The unqualified source-prefix anchor forced PostgREST to walk the entire turn namespace
@@ -781,7 +783,9 @@ async function findContext(hamUid, limit, viewerTier) {
   // importance-2 housekeeping markers onto her wall as if a person had said them.
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([
-    callerWindow({ source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid }, limit),
+    callerWindow({ source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid,
+      stamp_type: contract.TURN_STAMP_TYPE,
+      importance_gte: contract.READER_IMPORTANCE_FLOOR }, limit),
     callerWindow({ stamp_type: contract.TURN_STAMP_TYPE, ham_uid: hamUid,
       importance_gte: contract.READER_IMPORTANCE_FLOOR }, limit)
   ], viewerTier));
