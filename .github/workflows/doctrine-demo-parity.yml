@@ -30,6 +30,7 @@ jobs:
           node --test
           test/doctrine.find.in.brain.availability.test.js
           test/doctrine.fcw.memory.availability.test.js
+          test/agent.find.truth.beacon.test.js
           test/doctrine.people.tier.test.js
           test/doctrine.privacy.canonical.storage.test.js
           test/doctrine.privacy.mark.wires.read.test.js
