@@ -5,7 +5,9 @@ const crypto = require('node:crypto');
 const normalizeHamUid = require('./ham.uid.validator.js').normalizeHamUid;
 
 const SCHEMA = 'anew.writ-meaning-shadow.v1';
+const ATTEMPT_SCHEMA = 'anew.writ-meaning-shadow-attempt.v1';
 const TYPE = 'WRIT_MEANING_SHADOW_VERDICT';
+const ATTEMPT_TYPE = 'WRIT_MEANING_SHADOW_ATTEMPT';
 const DECISIONS = new Set(['AGREE','DISAGREE','UNCERTAIN']);
 
 function stable(value) {
@@ -82,7 +84,25 @@ function verdict(value) {
   var reason = clean(parsed && parsed.reason, 1200);
   if (!DECISIONS.has(decision) || !reason) return null;
   return {decision:decision,reason:reason,model:clean(value && value.model,160)||null,
-    via:clean(value && value.via,160)||null};
+    via:clean(value && (value.via || value.provider),160)||null};
+}
+
+function completionTruth(value) {
+  var choice = value && value.choices && value.choices[0];
+  if (!choice) return {complete:true,finish_reason:null,native_finish_reason:null};
+  var finish = clean(choice.finish_reason, 80).toLowerCase() || null;
+  var native = clean(choice.native_finish_reason, 80).toLowerCase() || null;
+  var finishComplete = finish === null || finish === 'stop';
+  var nativeComplete = native === null || ['stop','eos','eos_token'].includes(native);
+  return {complete:finishComplete && nativeComplete,finish_reason:finish,
+    native_finish_reason:native};
+}
+
+function opaqueTransportReceipt(value) {
+  var carried = transport(value);
+  if (carried == null) return {digest:null,bytes:0};
+  var represented = typeof carried === 'string' ? carried : stable(carried);
+  return {digest:digest(represented),bytes:Buffer.byteLength(represented,'utf8')};
 }
 
 function rowField(row, snake, camel) {
@@ -109,10 +129,15 @@ async function persist(exactPacket, judged, options) {
   content.receipt_digest = digest(content);
   var source = 'writ.meaning.shadow.' + bound.ham_uid.toLowerCase() + '.' + content.receipt_digest;
   var brain = options.brain || require('./brain.client.js');
+  var writeUncertain = false;
   try {
     await brain.writeBead({hamUid:bound.ham_uid,agentGlobal:'PENNY_SHADOW',source:source,
       type:TYPE,content:content,summary:'PENNY SHADOW challenged the final writing meaning.',
       importance:8,edges:edges});
+  } catch (error) {
+    writeUncertain = true;
+  }
+  try {
     var row = await brain.findBySource(source,bound.ham_uid);
     var read = parse(row && row.content);
     if (!row || row.source !== source ||
@@ -122,9 +147,67 @@ async function persist(exactPacket, judged, options) {
         stable(read) !== stable(content)) {
       return {ok:false,reason:'writ_meaning_shadow_receipt_readback_mismatch'};
     }
-    return {ok:true,source:source,digest:content.receipt_digest,content:content};
+    return {ok:true,source:source,digest:content.receipt_digest,content:content,
+      recovered_after_write_uncertainty:writeUncertain};
   } catch (error) {
     return {ok:false,reason:'writ_meaning_shadow_receipt_unverified'};
+  }
+}
+
+async function persistInvalidAttempt(exactPacket, raw, invalidReason, options) {
+  var bound = exactPacket.binding;
+  var completion = completionTruth(raw);
+  var carried = opaqueTransportReceipt(raw);
+  var edges = [
+    {type:'ABOUT',target:'pai.cycle.' + bound.cycle_id},
+    {type:'PRODUCED_BY',target:'agent.penny_shadow'},
+    {type:'CHALLENGES',target:'station.writ'}
+  ];
+  var content = {schema:ATTEMPT_SCHEMA,binding:bound,shadow_node_id:'agent.penny_shadow',
+    pre_writ_draft:receiptText(exactPacket.pre_writ_draft),
+    writ_output:receiptText(exactPacket.writ_output),
+    post_meta_candidate:receiptText(exactPacket.post_meta_candidate),
+    final_human_output:receiptText(exactPacket.final_human_output),
+    invalid_reason:invalidReason,finish_reason:completion.finish_reason,
+    native_finish_reason:completion.native_finish_reason,transport_digest:carried.digest,
+    transport_bytes:carried.bytes,model:clean(raw && raw.model,160)||null,
+    via:clean(raw && (raw.via || raw.provider),160)||null,
+    provider_request_id:clean(raw && raw.id,240)||null,
+    usage:{prompt_tokens:Number.isSafeInteger(raw && raw.usage && raw.usage.prompt_tokens)
+        ? raw.usage.prompt_tokens:null,
+      completion_tokens:Number.isSafeInteger(raw && raw.usage && raw.usage.completion_tokens)
+        ? raw.usage.completion_tokens:null,
+      reasoning_tokens:Number.isSafeInteger(raw && raw.usage && raw.usage.completion_tokens_details &&
+        raw.usage.completion_tokens_details.reasoning_tokens)
+        ? raw.usage.completion_tokens_details.reasoning_tokens:null,
+      reported_cost:raw && raw.usage && Number.isFinite(raw.usage.cost)
+        ? String(raw.usage.cost):null},verdict_valid:false,decision:null,edges:edges};
+  content.receipt_digest = digest(content);
+  var source = 'writ.meaning.shadow.attempt.' + bound.ham_uid.toLowerCase() + '.' +
+    content.receipt_digest;
+  var brain = options.brain || require('./brain.client.js');
+  var writeUncertain = false;
+  try {
+    await brain.writeBead({hamUid:bound.ham_uid,agentGlobal:'PENNY_SHADOW',source:source,
+      type:ATTEMPT_TYPE,content:content,
+      summary:'PENNY SHADOW returned no usable meaning verdict.',importance:8,edges:edges});
+  } catch (error) {
+    writeUncertain = true;
+  }
+  try {
+    var row = await brain.findBySource(source,bound.ham_uid);
+    var read = parse(row && row.content);
+    if (!row || row.source !== source ||
+        String(rowField(row,'ham_uid','hamUid') || '').toUpperCase() !== bound.ham_uid ||
+        String(rowField(row,'agent_global','agentGlobal') || '').toUpperCase() !== 'PENNY_SHADOW' ||
+        String(rowField(row,'stamp_type','type') || '') !== ATTEMPT_TYPE ||
+        stable(read) !== stable(content)) {
+      return {ok:false,reason:'writ_meaning_shadow_attempt_readback_mismatch'};
+    }
+    return {ok:true,source:source,digest:content.receipt_digest,content:content,
+      recovered_after_write_uncertainty:writeUncertain};
+  } catch (error) {
+    return {ok:false,reason:'writ_meaning_shadow_attempt_unverified'};
   }
 }
 
@@ -140,8 +223,11 @@ async function judge(input, options) {
     + 'preserves the meaning, outcomes, entities, relationships, causality, commitments, uncertainty, '
     + 'and material implications of the source draft. WRIT owns expression and Meta Commentary owns '
     + 'internal-process cleanup. You do not rewrite either Wonder. You only challenge whether their '
-    + 'combined result preserved meaning. Do not decide from word overlap, keyword lists, length, or '
-    + 'surface similarity. Challenge any internal process narration or system vocabulary introduced '
+    + 'combined result materially preserved meaning. '
+    + 'Do not decide from word overlap, keyword lists, length, or surface similarity. '
+    + 'Do not penalize harmless second-person adaptation or ordinary synonyms. A wording '
+    + 'or point-of-view change is not a disagreement unless it materially changes who owns, does, '
+    + 'receives, promises, or experiences something. Challenge any internal process narration or system vocabulary introduced '
     + 'by Meta or the final transport when it was absent from the source. Return strict JSON only: '
     + '{"decision":"AGREE|DISAGREE|UNCERTAIN",'
     + '"reason":"one concrete explanation"}. Use UNCERTAIN whenever the comparison cannot be made '
@@ -155,15 +241,23 @@ async function judge(input, options) {
     var chatSeat = opts.chatSeat || require('./model.router.js').chatSeat;
     raw = await chatSeat('c1_cellm',[
       {role:'system',content:system},{role:'user',content:user}
-    ],{temperature:0,maxTokens:320,attribution:{component:'writ.meaning.shadow',
+    ],{temperature:0,maxTokens:320,reasoning:{effort:'none',exclude:true},
+      requireParameters:true,attribution:{component:'writ.meaning.shadow',
       ham_uid:bound.ham_uid,request_id:bound.request_id + '.writ-meaning-shadow',
       cycle_id:bound.cycle_id,seat:'c1_cellm',owner_node_id:'agent.penny_shadow',
       target_wonder_id:'agent.penny_shadow'}});
   } catch (error) {
     return {ok:false,reason:'writ_meaning_shadow_unavailable'};
   }
-  var judged = verdict(raw);
-  if (!judged) return {ok:false,reason:'writ_meaning_shadow_invalid_verdict'};
+  var completion = completionTruth(raw);
+  var judged = completion.complete ? verdict(raw) : null;
+  if (!judged) {
+    var invalidReason = completion.complete ? 'writ_meaning_shadow_invalid_verdict' :
+      'writ_meaning_shadow_incomplete_verdict';
+    var attempt = await persistInvalidAttempt(exactPacket,raw,invalidReason,opts);
+    if (!attempt.ok) return {ok:false,reason:attempt.reason};
+    return {ok:false,reason:invalidReason,attempt:attempt};
+  }
   var receipt = await persist(exactPacket,judged,opts);
   var publicShadow = receiptVerdict(judged);
   if (!receipt.ok) return {ok:false,reason:receipt.reason,shadow:publicShadow};
@@ -173,6 +267,9 @@ async function judge(input, options) {
   return {ok:true,reason:'writ_meaning_shadow_agreement',shadow:publicShadow,receipt:receipt};
 }
 
-module.exports = {SCHEMA:SCHEMA,TYPE:TYPE,DECISIONS:DECISIONS,judge:judge,
+module.exports = {SCHEMA:SCHEMA,ATTEMPT_SCHEMA:ATTEMPT_SCHEMA,TYPE:TYPE,
+  ATTEMPT_TYPE:ATTEMPT_TYPE,DECISIONS:DECISIONS,judge:judge,
   _test:{stable:stable,digest:digest,parse:parse,binding:binding,packet:packet,
-    verdict:verdict,persist:persist,receiptText:receiptText,receiptVerdict:receiptVerdict}};
+    verdict:verdict,completionTruth:completionTruth,opaqueTransportReceipt:opaqueTransportReceipt,
+    persist:persist,persistInvalidAttempt:persistInvalidAttempt,receiptText:receiptText,
+    receiptVerdict:receiptVerdict}};

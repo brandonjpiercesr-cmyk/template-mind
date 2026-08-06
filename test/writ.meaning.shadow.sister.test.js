@@ -6,12 +6,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const meaning = require('../pai/core/writ.meaning.shadow.wonder.js');
 const council = require('../pai/core/pai.outbound.council.js');
+const router = require('../pai/core/model.router.js');
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 
 function exactBrain() {
   const rows = new Map();
   return {
+    rows:rows,
     async writeBead(spec) {
       const row=Object.assign({id:'row-'+rows.size,ham_uid:spec.hamUid,
         agent_global:spec.agentGlobal,stamp_type:spec.type},clone(spec));
@@ -25,12 +27,32 @@ function exactBrain() {
   };
 }
 
+function lostAcknowledgementBrain() {
+  const brain=exactBrain();
+  const write=brain.writeBead;
+  let writes=0,reads=0;
+  brain.writeBead=async function(spec){writes++;await write.call(brain,spec);
+    throw new Error('acknowledgement_lost_after_commit');};
+  const find=brain.findBySource;
+  brain.findBySource=async function(source){reads++;return find.call(brain,source);};
+  brain.counts=function(){return{writes:writes,reads:reads};};
+  return brain;
+}
+
 function seatDecision(decision) {
   return async function () {
     return {content:JSON.stringify({decision:decision,
       reason:'The final meaning was independently compared.'}),
     model:'penny-sister-test',via:'test-seat'};
   };
+}
+
+async function withEnvAsync(values, fn) {
+  const saved={};
+  Object.keys(values).forEach(function(key){saved[key]=process.env[key];
+    if(values[key]===undefined)delete process.env[key];else process.env[key]=values[key];});
+  try{return await fn();}finally{Object.keys(values).forEach(function(key){
+    if(saved[key]===undefined)delete process.env[key];else process.env[key]=saved[key];});}
 }
 
 function packet(overrides) {
@@ -61,6 +83,118 @@ test('the inherited Penny SHADOW holds a model-owned meaning reversal', async fu
   assert.equal(out.reason,'writ_meaning_shadow_disagreement');
   assert.equal(out.shadow.decision,'DISAGREE');
   assert.equal(JSON.stringify(out.receipt).includes('The surgery'),false);
+});
+
+test('the inherited Penny seat carries validated reasoning controls through the real router',async function(){
+  await withEnvAsync({OR_KEY_C1_CELLM:'template-penny-test-key'},async function(){
+    const priorFetch=global.fetch;let body;
+    global.fetch=async function(_url,init){body=JSON.parse(init.body);return{ok:true,
+      async json(){return{choices:[{message:{content:
+        '{"decision":"AGREE","reason":"Meaning stayed exact."}'}}]};}};};
+    try{
+      await router.chatSeat('c1_cellm',[{role:'user',content:'judge'}],{
+        maxTokens:320,temperature:0,reasoning:{effort:'none',exclude:true},
+        requireParameters:true,allowFallback:false});
+      assert.deepEqual(body.reasoning,{effort:'none',exclude:true});
+      assert.deepEqual(body.provider,{require_parameters:true});
+      assert.equal(body.max_tokens,320);
+      assert.equal(body.temperature,0);
+    }finally{global.fetch=priorFetch;}
+  });
+});
+
+test('the inherited router drops malformed reasoning controls instead of forwarding them',async function(){
+  await withEnvAsync({OR_KEY_C1_CELLM:'template-penny-test-key'},async function(){
+    const priorFetch=global.fetch;let body;
+    global.fetch=async function(_url,init){body=JSON.parse(init.body);return{ok:true,
+      async json(){return{choices:[{message:{content:'{}'}}]};}};};
+    try{
+      await router.chatSeat('c1_cellm',[{role:'user',content:'judge'}],{
+        reasoning:{effort:'invented',exclude:'yes',enabled:'yes',max_tokens:-5},
+        allowFallback:false});
+      assert.equal(Object.prototype.hasOwnProperty.call(body,'reasoning'),false);
+      assert.equal(Object.prototype.hasOwnProperty.call(body,'provider'),false);
+    }finally{global.fetch=priorFetch;}
+  });
+});
+
+test('the inherited Penny SHADOW holds a length-truncated transport and receipts the attempt',async function(){
+  const brain=exactBrain();
+  const out=await meaning.judge(packet(),{brain:brain,chatSeat:async function(){
+    return{model:'qwen/penny',provider:'Alibaba',choices:[{finish_reason:'length',
+      message:{content:'Thinking Process: compare the four texts before answering'}}]};
+  }});
+  assert.equal(out.ok,false);
+  assert.equal(out.reason,'writ_meaning_shadow_incomplete_verdict');
+  assert.equal(brain.rows.size,1);
+  const stored=[...brain.rows.values()][0];
+  assert.equal(stored.stamp_type,meaning.ATTEMPT_TYPE);
+  assert.equal(stored.content.finish_reason,'length');
+  assert.equal(stored.content.transport_bytes,57);
+  assert.equal(stored.content.verdict_valid,false);
+  assert.equal(stored.content.decision,null);
+  assert.equal(JSON.stringify(stored).includes('Thinking Process'),false);
+});
+
+test('the inherited invalid-attempt receipt binds the exact packet without storing raw text',async function(){
+  const brain=exactBrain();
+  const exact=packet();
+  const rawPrefix='{"decision":"AGREE","reason":"This prefix looks complete."}';
+  const out=await meaning.judge(exact,{brain:brain,chatSeat:async function(){
+    return{id:'generation-truncated-template-1',model:'qwen/penny',provider:'Alibaba',
+      usage:{prompt_tokens:1139,completion_tokens:320,
+        completion_tokens_details:{reasoning_tokens:0},cost:0.000157235},
+      choices:[{finish_reason:'length',native_finish_reason:'length',
+        message:{content:rawPrefix}}]};
+  }});
+  assert.equal(out.ok,false);
+  assert.equal(out.reason,'writ_meaning_shadow_incomplete_verdict');
+  assert.equal(out.shadow,undefined);
+  assert.equal(out.receipt,undefined);
+  const stored=[...brain.rows.values()][0];
+  assert.equal(stored.content.schema,meaning.ATTEMPT_SCHEMA);
+  assert.deepEqual(stored.content.binding,{ham_uid:exact.ham_uid,
+    request_id:exact.request_id,cycle_id:exact.cycle_id});
+  assert.equal(stored.content.transport_digest,meaning._test.digest(rawPrefix));
+  assert.equal(stored.content.transport_bytes,Buffer.byteLength(rawPrefix,'utf8'));
+  assert.equal(stored.content.pre_writ_draft.digest,meaning._test.digest(exact.pre_writ_draft));
+  assert.equal(stored.content.final_human_output.digest,
+    meaning._test.digest(exact.final_human_output));
+  assert.deepEqual(stored.content.usage,{prompt_tokens:1139,completion_tokens:320,
+    reasoning_tokens:0,reported_cost:'0.000157235'});
+  const serialized=JSON.stringify(stored);
+  [exact.pre_writ_draft,exact.writ_output,exact.post_meta_candidate,
+    exact.final_human_output,rawPrefix].forEach(function(raw){assert.equal(serialized.includes(raw),false);});
+});
+
+test('a lost invalid-attempt write acknowledgement is recovered by exact readback without a second model call',async function(){
+  const brain=lostAcknowledgementBrain();let modelCalls=0;
+  const rawText='Thinking Process that must never enter the attempt receipt.';
+  const out=await meaning.judge(packet(),{brain:brain,chatSeat:async function(){
+    modelCalls++;return{id:'generation-lost-ack-1',model:'qwen/penny',provider:'Alibaba',
+      choices:[{finish_reason:'length',native_finish_reason:'length',
+        message:{content:rawText}}]};}});
+  assert.equal(out.ok,false);
+  assert.equal(out.reason,'writ_meaning_shadow_incomplete_verdict');
+  assert.equal(out.attempt.recovered_after_write_uncertainty,true);
+  assert.equal(modelCalls,1);
+  assert.deepEqual(brain.counts(),{writes:1,reads:1});
+  assert.equal(brain.rows.size,1);
+  assert.equal(JSON.stringify([...brain.rows.values()][0]).includes(rawText),false);
+});
+
+test('a lost valid-verdict write acknowledgement is recovered by exact readback without a second model call',async function(){
+  const brain=lostAcknowledgementBrain();let modelCalls=0;
+  const out=await meaning.judge(packet(),{brain:brain,chatSeat:async function(){
+    modelCalls++;return{model:'qwen/penny',provider:'Alibaba',choices:[{finish_reason:'stop',
+      native_finish_reason:'stop',message:{content:
+        '{"decision":"DISAGREE","reason":"The final outcome was reversed."}'}}]};}});
+  assert.equal(out.ok,false);
+  assert.equal(out.reason,'writ_meaning_shadow_disagreement');
+  assert.equal(out.receipt.recovered_after_write_uncertainty,true);
+  assert.equal(modelCalls,1);
+  assert.deepEqual(brain.counts(),{writes:1,reads:1});
+  assert.equal(brain.rows.size,1);
 });
 
 test('the inherited final boundary preserves exact command and prose bytes', async function () {
