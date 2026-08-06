@@ -27,6 +27,18 @@ function exactBrain() {
   };
 }
 
+function lostAcknowledgementBrain() {
+  const brain=exactBrain();
+  const write=brain.writeBead;
+  let writes=0,reads=0;
+  brain.writeBead=async function(spec){writes++;await write.call(brain,spec);
+    throw new Error('acknowledgement_lost_after_commit');};
+  const find=brain.findBySource;
+  brain.findBySource=async function(source){reads++;return find.call(brain,source);};
+  brain.counts=function(){return{writes:writes,reads:reads};};
+  return brain;
+}
+
 function seatDecision(decision) {
   return async function () {
     return {content:JSON.stringify({decision:decision,
@@ -153,6 +165,36 @@ test('the inherited invalid-attempt receipt binds the exact packet without stori
   const serialized=JSON.stringify(stored);
   [exact.pre_writ_draft,exact.writ_output,exact.post_meta_candidate,
     exact.final_human_output,rawPrefix].forEach(function(raw){assert.equal(serialized.includes(raw),false);});
+});
+
+test('a lost invalid-attempt write acknowledgement is recovered by exact readback without a second model call',async function(){
+  const brain=lostAcknowledgementBrain();let modelCalls=0;
+  const rawText='Thinking Process that must never enter the attempt receipt.';
+  const out=await meaning.judge(packet(),{brain:brain,chatSeat:async function(){
+    modelCalls++;return{id:'generation-lost-ack-1',model:'qwen/penny',provider:'Alibaba',
+      choices:[{finish_reason:'length',native_finish_reason:'length',
+        message:{content:rawText}}]};}});
+  assert.equal(out.ok,false);
+  assert.equal(out.reason,'writ_meaning_shadow_incomplete_verdict');
+  assert.equal(out.attempt.recovered_after_write_uncertainty,true);
+  assert.equal(modelCalls,1);
+  assert.deepEqual(brain.counts(),{writes:1,reads:1});
+  assert.equal(brain.rows.size,1);
+  assert.equal(JSON.stringify([...brain.rows.values()][0]).includes(rawText),false);
+});
+
+test('a lost valid-verdict write acknowledgement is recovered by exact readback without a second model call',async function(){
+  const brain=lostAcknowledgementBrain();let modelCalls=0;
+  const out=await meaning.judge(packet(),{brain:brain,chatSeat:async function(){
+    modelCalls++;return{model:'qwen/penny',provider:'Alibaba',choices:[{finish_reason:'stop',
+      native_finish_reason:'stop',message:{content:
+        '{"decision":"DISAGREE","reason":"The final outcome was reversed."}'}}]};}});
+  assert.equal(out.ok,false);
+  assert.equal(out.reason,'writ_meaning_shadow_disagreement');
+  assert.equal(out.receipt.recovered_after_write_uncertainty,true);
+  assert.equal(modelCalls,1);
+  assert.deepEqual(brain.counts(),{writes:1,reads:1});
+  assert.equal(brain.rows.size,1);
 });
 
 test('the inherited final boundary preserves exact command and prose bytes', async function () {

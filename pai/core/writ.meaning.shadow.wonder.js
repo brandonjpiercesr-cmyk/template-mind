@@ -129,10 +129,15 @@ async function persist(exactPacket, judged, options) {
   content.receipt_digest = digest(content);
   var source = 'writ.meaning.shadow.' + bound.ham_uid.toLowerCase() + '.' + content.receipt_digest;
   var brain = options.brain || require('./brain.client.js');
+  var writeUncertain = false;
   try {
     await brain.writeBead({hamUid:bound.ham_uid,agentGlobal:'PENNY_SHADOW',source:source,
       type:TYPE,content:content,summary:'PENNY SHADOW challenged the final writing meaning.',
       importance:8,edges:edges});
+  } catch (error) {
+    writeUncertain = true;
+  }
+  try {
     var row = await brain.findBySource(source,bound.ham_uid);
     var read = parse(row && row.content);
     if (!row || row.source !== source ||
@@ -142,7 +147,8 @@ async function persist(exactPacket, judged, options) {
         stable(read) !== stable(content)) {
       return {ok:false,reason:'writ_meaning_shadow_receipt_readback_mismatch'};
     }
-    return {ok:true,source:source,digest:content.receipt_digest,content:content};
+    return {ok:true,source:source,digest:content.receipt_digest,content:content,
+      recovered_after_write_uncertainty:writeUncertain};
   } catch (error) {
     return {ok:false,reason:'writ_meaning_shadow_receipt_unverified'};
   }
@@ -180,10 +186,15 @@ async function persistInvalidAttempt(exactPacket, raw, invalidReason, options) {
   var source = 'writ.meaning.shadow.attempt.' + bound.ham_uid.toLowerCase() + '.' +
     content.receipt_digest;
   var brain = options.brain || require('./brain.client.js');
+  var writeUncertain = false;
   try {
     await brain.writeBead({hamUid:bound.ham_uid,agentGlobal:'PENNY_SHADOW',source:source,
       type:ATTEMPT_TYPE,content:content,
       summary:'PENNY SHADOW returned no usable meaning verdict.',importance:8,edges:edges});
+  } catch (error) {
+    writeUncertain = true;
+  }
+  try {
     var row = await brain.findBySource(source,bound.ham_uid);
     var read = parse(row && row.content);
     if (!row || row.source !== source ||
@@ -193,7 +204,8 @@ async function persistInvalidAttempt(exactPacket, raw, invalidReason, options) {
         stable(read) !== stable(content)) {
       return {ok:false,reason:'writ_meaning_shadow_attempt_readback_mismatch'};
     }
-    return {ok:true,source:source,digest:content.receipt_digest,content:content};
+    return {ok:true,source:source,digest:content.receipt_digest,content:content,
+      recovered_after_write_uncertainty:writeUncertain};
   } catch (error) {
     return {ok:false,reason:'writ_meaning_shadow_attempt_unverified'};
   }
