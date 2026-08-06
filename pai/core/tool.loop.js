@@ -4204,6 +4204,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       artifactRefs:caraArtifactRefsForHand(args,runtime,hamUid),
       subject:jobSubject,detail:jobDetail,
       acceptance:jobAcceptance,requestedOwner:committedJobArgs.args.requested_owner || null,
+      conversationId:runtime&&runtime.caraContext&&runtime.caraContext.conversation_id||null,
       level:jobLevel
     });
     return JSON.stringify(jobOutcome);
