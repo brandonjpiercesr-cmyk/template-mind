@@ -4526,17 +4526,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // ordinary turns are PAI-cycle work. Agent FIND receives both names and proves that binding
   // before any provider bytes can leave this loop.
   function _agentFindSeatNodeId() {
-    var normalizedChannel = String(channel || '').toLowerCase();
-    if (_paiSeatName() === 'coda') return 'station.coda';
-    if (normalizedChannel === 'ham_world_builder') return 'station.ham_world_builder';
-    if (normalizedChannel === 'wonder_ask' && identity && identity.wonder_ask &&
-        typeof identity.wonder_ask.seat === 'string') {
-      var summonedSeat = null;
-      try { summonedSeat=require('./wonders/registry.js').resolve(identity.wonder_ask.seat); }
-      catch (eSummonedSeat) { summonedSeat=null; }
-      if (summonedSeat && summonedSeat.lifecycle === 'active') return summonedSeat.id;
-    }
-    return 'station.pai';
+    return paiOwnerNodeId(channel,identity,_paiSeatName());
   }
   function _paiSeatCandidate(name) {
     var seat = seatMap.seat(name || _paiSeatName());
@@ -8303,8 +8293,7 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var _channelLower = String(channel || '').toLowerCase();
   var _worldBuilderTurn = _channelLower === 'ham_world_builder';
   var seat = paiCycleSeat(channel,identity);
-  var ownerNodeId = _channelLower === 'coding' ? 'station.coda'
-    : _worldBuilderTurn ? 'station.ham_world_builder' : 'station.pai';
+  var ownerNodeId = paiOwnerNodeId(channel,identity,seat);
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
   var result;
   try {
@@ -8375,10 +8364,31 @@ function paiReasoningSeat(channel, opts) {
 // the final provider call while the same cycle's FCW remained bound to C2. The provider
 // boundary correctly refused those mismatched bytes before A'NU could choose a hand.
 function paiCycleSeat(channel, identity) {
+  var normalizedChannel = String(channel || '').trim().toLowerCase();
+  if (normalizedChannel === 'wonder_ask' && identity && identity.wonder_ask &&
+      String(identity.wonder_ask.seat || '') === 'wonder.knowledge_compiler') {
+    return 'c1_cellm';
+  }
   return paiReasoningSeat(channel,{
     decisionReconsideration:!!(identity &&
       (identity._shadow_reconsideration || identity._receipt_reconsideration))
   });
+}
+
+function paiOwnerNodeId(channel, identity, providerSeat) {
+  var normalizedChannel = String(channel || '').trim().toLowerCase();
+  if (String(providerSeat || '') === 'coda' || normalizedChannel === 'coding') {
+    return 'station.coda';
+  }
+  if (normalizedChannel === 'ham_world_builder') return 'station.ham_world_builder';
+  if (normalizedChannel === 'wonder_ask' && identity && identity.wonder_ask &&
+      typeof identity.wonder_ask.seat === 'string') {
+    var summonedSeat = null;
+    try { summonedSeat=require('./wonders/registry.js').resolve(identity.wonder_ask.seat); }
+    catch (error) { summonedSeat=null; }
+    if (summonedSeat && summonedSeat.lifecycle === 'active') return summonedSeat.id;
+  }
+  return 'station.pai';
 }
 
 // Give A'NU the exact bounded receipt lesson in process. This packet is coaching evidence, not
@@ -8503,5 +8513,5 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,_ghHoldRe
   founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
-  paiReasoningSeat,paiCycleSeat,callPaiLadderNetwork,
+  paiReasoningSeat,paiCycleSeat,paiOwnerNodeId,callPaiLadderNetwork,
   receiptReconsiderationFeedback,normalizeSubmitJobArgs}};
