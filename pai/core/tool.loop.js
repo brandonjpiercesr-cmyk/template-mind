@@ -1620,11 +1620,13 @@ var TOOLS = [
       detail:{type:'string',description:'The context and purpose in the person\'s words, without internal system narration.'},
       acceptance:{type:'array',minItems:1,maxItems:12,items:{type:'string'},description:'Observable signs that the work is genuinely complete.'},
       requested_owner:{type:'string',description:'Optional Wonder or seat preference. The World Builder verifies authority and may choose a better owner.'},
-      level:{type:'number',description:'Optional urgency from 0 through 4.'}
+      level:{type:'number',description:'Optional urgency from 0 through 4.'},
+      include_project_context:{type:'boolean',description:'True only when you decide the wider project files are relevant evidence for this exact hand. Exact files from this conversation are included without this flag.'}
     }}}},
   {type:'function',function:{name:'commission_knowledge',description:'Ask the existing Knowledge Compiler Wonder to consider the exact files attached to this conversation for the person\'s living Knowledge. You decide whether this hand is warranted from the whole conversation. The Wonder independently decides update, no_change, or wait through its governed council. Do not use it merely because a file exists, and do not claim that Knowledge changed unless the returned result says update.',
     parameters:{type:'object',required:['title'],properties:{
-      title:{type:'string',description:'A short human title for the knowledge question raised by the attached evidence.'}
+      title:{type:'string',description:'A short human title for the knowledge question raised by the attached evidence.'},
+      include_project_context:{type:'boolean',description:'True only when you decide the wider project files are relevant evidence for this exact knowledge question. Exact files from this conversation are included without this flag.'}
     }}}},
   {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, acceptance checks, and a named test profile so PAI cannot create orphan, untested, or out-of-scope code.',
     parameters:{type:'object',required:['roadmap_source','repository','task','allowed_paths','acceptance','test_profile'],properties:{
@@ -2158,6 +2160,14 @@ function offeredToolNameSet(toolDefinitions) {
 function providerToolNameWasOffered(name, runtime) {
   return !!(runtime && runtime.phase === 'deliberation' &&
     runtime.offeredToolNames && runtime.offeredToolNames[name] === true);
+}
+
+function caraArtifactRefsForHand(args,runtime){
+  var context=runtime&&runtime.caraContext||{};
+  var exact=Array.isArray(context.artifact_evidence_refs)?context.artifact_evidence_refs:[];
+  var project=args&&args.include_project_context===true&&
+    Array.isArray(context.project_artifact_context_refs)?context.project_artifact_context_refs:[];
+  return Array.from(new Set(exact.concat(project).map(String))).slice(0,16);
 }
 
 async function executeTool(name, args, hamUid, origMessage, runtime, providerReturned) {
@@ -4173,7 +4183,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     if (jobCancelled) return jobCancelled;
     var jobOutcome = await require('./world.builder.gateway.js').submitJob({
       hamUid:hamUid,requestId:jobRequestId,cycleId:jobCycleId,councilProof:jobProof,
-      artifactRefs:runtime&&runtime.caraContext&&runtime.caraContext.artifact_evidence_refs,
+      artifactRefs:caraArtifactRefsForHand(args,runtime),
       subject:jobSubject,detail:jobDetail,
       acceptance:jobAcceptance,requestedOwner:committedJobArgs.args.requested_owner || null,
       level:jobLevel
@@ -4201,7 +4211,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     var knowledgeOutcome=await require('./world.builder.gateway.js').commissionKnowledge({
       hamUid:hamUid,title:knowledgeTitle,
       requestId:knowledgeRequestId,cycleId:knowledgeCycleId,councilProof:knowledgeProof,
-      artifactRefs:runtime&&runtime.caraContext&&runtime.caraContext.artifact_evidence_refs
+      artifactRefs:caraArtifactRefsForHand(args,runtime)
     });
     return JSON.stringify(knowledgeOutcome);
   }

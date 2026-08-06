@@ -2,6 +2,7 @@
 
 const test=require('node:test');
 const assert=require('node:assert/strict');
+const fs=require('node:fs');
 const adapter=require('../pai/core/world.builder.gateway.js');
 const auth=require('../pai/core/pai.outbound.authorization.js');
 
@@ -73,4 +74,10 @@ test('shared tool loop loads with the adapter and has no A NEW local Knowledge i
   const source=require('node:fs').readFileSync(require.resolve('../pai/core/tool.loop.js'),'utf8');
   assert.doesNotMatch(source,/require\('\.\/(?:knowledge\.projection|knowledge\.compiler\.handoff|cara\.artifact\.bridge|ham\.world\.builder\.intake)\.js'\)/);
   assert.match(source,/require\('\.\/world\.builder\.gateway\.js'\)/);
+});
+
+test('the existing Template CI job carries both central gateway adapter proofs',function(){
+  const workflow=fs.readFileSync(require.resolve('../.github/workflows/doctrine-demo-parity.yml'),'utf8');
+  assert.match(workflow,/tests\/model\.control\.central\.adapter\.test\.js/);
+  assert.match(workflow,/tests\/world\.builder\.central\.adapter\.test\.js/);
 });
