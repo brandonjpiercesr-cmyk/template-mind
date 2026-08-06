@@ -2162,12 +2162,15 @@ function providerToolNameWasOffered(name, runtime) {
     runtime.offeredToolNames && runtime.offeredToolNames[name] === true);
 }
 
-function caraArtifactRefsForHand(args,runtime){
+function caraArtifactRefsForHand(args,runtime,hamUid){
   var context=runtime&&runtime.caraContext||{};
   var exact=Array.isArray(context.artifact_evidence_refs)?context.artifact_evidence_refs:[];
   var project=args&&args.include_project_context===true&&
     Array.isArray(context.project_artifact_context_refs)?context.project_artifact_context_refs:[];
-  return Array.from(new Set(exact.concat(project).map(String))).slice(0,16);
+  var prefix='vault.'+String(hamUid||'').trim().toLowerCase()+'.';
+  return Array.from(new Set(exact.concat(project).map(function(value){return String(value||'');})
+    .filter(function(ref){return ref===ref.trim()&&ref.length<=200&&
+      /^[A-Za-z0-9._:-]+$/.test(ref)&&ref.indexOf(prefix)===0;}))).slice(0,16);
 }
 
 async function executeTool(name, args, hamUid, origMessage, runtime, providerReturned) {
@@ -4183,7 +4186,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     if (jobCancelled) return jobCancelled;
     var jobOutcome = await require('./world.builder.gateway.js').submitJob({
       hamUid:hamUid,requestId:jobRequestId,cycleId:jobCycleId,councilProof:jobProof,
-      artifactRefs:caraArtifactRefsForHand(args,runtime),
+      artifactRefs:caraArtifactRefsForHand(args,runtime,hamUid),
       subject:jobSubject,detail:jobDetail,
       acceptance:jobAcceptance,requestedOwner:committedJobArgs.args.requested_owner || null,
       level:jobLevel
@@ -4211,7 +4214,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     var knowledgeOutcome=await require('./world.builder.gateway.js').commissionKnowledge({
       hamUid:hamUid,title:knowledgeTitle,
       requestId:knowledgeRequestId,cycleId:knowledgeCycleId,councilProof:knowledgeProof,
-      artifactRefs:caraArtifactRefsForHand(args,runtime)
+      artifactRefs:caraArtifactRefsForHand(args,runtime,hamUid)
     });
     return JSON.stringify(knowledgeOutcome);
   }
