@@ -11,7 +11,18 @@ const DEPLOYMENTS = Object.freeze({
     key_env:'MODAL_PROXY_TOKEN_ID',
     secret_env:'MODAL_PROXY_TOKEN_SECRET',
     default_model:'Qwen/Qwen3.6-35B-A3B-FP8',
-    auth_kind:'modal_proxy'
+    auth_kind:'modal_proxy',
+    eligible_seats:Object.freeze(['coda','deploy_tool','cookoff_qwen']),
+    capabilities:Object.freeze({
+      context_tokens:131072,native_context_tokens:262144,
+      tools:true,structured_output:true,reasoning:true,
+      vision:false,openai_chat_completions:true,streaming:false
+    }),
+    runtime_contract:Object.freeze({
+      declared_scale_to_zero:true,min_containers:0,max_containers:1,
+      requested_gpu:'H100!',gpu_count:1,
+      provider_cancellation:'not_commissioned',billing_reconciliation:'required'
+    })
   })
 });
 
@@ -35,6 +46,28 @@ function endpoint(baseUrl, suffix) {
   return base + '/v1' + suffix;
 }
 
+function rootEndpoint(baseUrl, suffix) {
+  const base=String(baseUrl || '').replace(/\/+$/,'').replace(/\/v1$/i,'');
+  return base + suffix;
+}
+
+function publicDeployment(declared) {
+  if (!declared) return null;
+  return {alias:declared.alias,provider:declared.provider,
+    default_model:declared.default_model,auth_kind:declared.auth_kind,
+    eligible_seats:Array.isArray(declared.eligible_seats) ? declared.eligible_seats.slice() : [],
+    capabilities:Object.assign({},declared.capabilities || {}),
+    runtime_contract:Object.assign({},declared.runtime_contract || {})};
+}
+
+function catalogForSeat(seat) {
+  const name=clean(seat,100);
+  return Object.keys(DEPLOYMENTS).map(function(alias){return DEPLOYMENTS[alias];})
+    .filter(function(declared){
+      return Array.isArray(declared.eligible_seats) && declared.eligible_seats.includes(name);
+    }).map(publicDeployment);
+}
+
 function resolve(alias, env) {
   const runtime = env || process.env;
   const declared = DEPLOYMENTS[clean(alias, 180)];
@@ -56,8 +89,11 @@ function resolve(alias, env) {
   }
   return {ok:true,alias:declared.alias,provider:declared.provider,model:model,
     revision:revision,state:'configured',chat_url:endpoint(baseUrl,'/chat/completions'),
-    models_url:endpoint(baseUrl,'/models'),auth_kind:declared.auth_kind,
-    key_env:declared.key_env,secret_env:declared.secret_env};
+    models_url:endpoint(baseUrl,'/models'),
+    attestation_url:rootEndpoint(baseUrl,'/anew/attestation'),auth_kind:declared.auth_kind,
+    key_env:declared.key_env,secret_env:declared.secret_env,
+    capabilities:Object.assign({},declared.capabilities || {}),
+    runtime_contract:Object.assign({},declared.runtime_contract || {})};
 }
 
 function publicState(alias, env) {
@@ -78,11 +114,14 @@ function publicState(alias, env) {
   return {alias:out.alias || clean(alias, 180),provider:out.provider || null,
     model:out.ok ? out.model : null,revision:out.ok ? out.revision : null,
     state:out.state || 'unavailable',configured:out.ok === true,ready:false,
-    reason:out.ok ? null : out.reason,stages:stages,
+    reason:out.ok ? null : out.reason,
+    capabilities:declared ? Object.assign({},declared.capabilities || {}) : {},
+    runtime_contract:declared ? Object.assign({},declared.runtime_contract || {}) : {},
+    stages:stages,
     missing_configuration:stages.reduce(function(all,row){
       return all.concat(row.missing);
     },[])};
 }
 
-module.exports = {DEPLOYMENTS,resolve,publicState,
-  _test:{modalBaseUrl,endpoint}};
+module.exports = {DEPLOYMENTS,resolve,publicState,catalogForSeat,
+  _test:{modalBaseUrl,endpoint,rootEndpoint,publicDeployment}};
