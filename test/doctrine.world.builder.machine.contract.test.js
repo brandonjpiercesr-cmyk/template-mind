@@ -52,7 +52,7 @@ test('World Builder JSON schema keeps the same strict top level contract', funct
     ['disposition','human_decision','next_action','summary']);
 });
 
-test('every provider ladder call crosses the common World Builder budget fence', function () {
+test('World Builder provider counts are telemetry and never a semantic fence', function () {
   const source=fs.readFileSync(path.join(__dirname,'..','pai','core','tool.loop.js'),'utf8');
   const code=source.split('\n').filter(function (line) {
     return !/^\s*\/\//.test(line);
@@ -65,9 +65,16 @@ test('every provider ladder call crosses the common World Builder budget fence',
   assert.doesNotMatch(door,/_worldBuilderProviderFence/);
   assert.match(door,/callPaiLadderNetwork/);
   assert.doesNotMatch(door,/executeCurrentProviderRequest/);
-  assert.match(door,/_worldBuilderProviderCalls >= _worldBuilderMaxProviderCalls/);
+  assert.match(door,/if \(_worldBuilderMachine\) _worldBuilderProviderCalls\+\+/);
+  assert.doesNotMatch(code,/ham_world_builder_iteration_budget_exhausted/);
+  assert.doesNotMatch(code,/ham_world_builder_provider_budget_exhausted/);
+  assert.doesNotMatch(code,/_worldBuilderProviderCalls\s*>=\s*_worldBuilderMaxProviderCalls/);
+  assert.doesNotMatch(code,/iter\s*>=\s*_worldBuilderMaxIterations/);
+  assert.match(code,/world_builder_observation:_worldBuilderMachine\?\{/);
+  assert.match(code,/semantic_authority:false,purpose:'TELEMETRY_ONLY'/);
+  assert.match(code,/changed_evidence:Object\.keys\(_seenEvidence\)\.length>0/);
   assert.match(door,/Object\.assign\(\{seat:_providerSeat \|\| _paiSeatName\(\)\}/,
     'the common ladder door owns the exact paid seat when a caller omits it');
   assert.equal((code.match(/\.deliberate\(/g)||[]).length,1,
-    'branch local ladder calls must not bypass the shared fence');
+    'branch local ladder calls must not bypass the shared provider doorway');
 });
