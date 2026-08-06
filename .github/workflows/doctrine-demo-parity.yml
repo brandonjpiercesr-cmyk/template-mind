@@ -54,6 +54,7 @@ jobs:
           test/day.memory.union.test.js
           test/fusion.span.today.test.js
           test/mind.entry.cycle-auth.test.js
+          test/writ.meaning.shadow.sister.test.js
           tests/model.control.central.adapter.test.js
           tests/world.builder.central.adapter.test.js
           tests/pending.effects.receipt.parity.test.js

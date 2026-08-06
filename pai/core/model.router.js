@@ -148,6 +148,19 @@ function seatFallback(tier) {
   return name ? seatResolveFor(seatMap.fallback(name)) : null;
 }
 
+// Resolve one named functional seat without entering Template's legacy fallback
+// chain. A named Wonder owns its own key, model, provider, and spend attribution.
+function seatResolveNamed(name) {
+  var seat = seatMap.seat(name);
+  var resolved = seatResolveFor(seat);
+  return resolved && Object.assign(resolved,{seatName:seat.seat,keyEnv:seat.keyEnv});
+}
+function seatFallbackNamed(name) {
+  var seat = seatMap.fallback(name);
+  var resolved = seatResolveFor(seat);
+  return resolved && Object.assign(resolved,{seatName:seat.seat,keyEnv:seat.keyEnv});
+}
+
 // ⬡COLD:decide:become:PAI_MODEL_ROUTING_WONDER:20260724⬡
 // ⬡B:cathy.shadow.cold_audit:COLD_AUDIT:template_router_key_presence_decider_2db29c44:20260724⬡
 // CATHY.SHADOW cold audit (COLD-TEMPLATE-PROVIDER-0112, verdict become): key PRESENCE was
@@ -228,6 +241,24 @@ async function _attempt(r, messages, opts) {
     : { model:r.model, messages:messages, max_tokens:(opts&&opts.maxTokens)||2000 };
   if (isAnthropic && sysMsg) body.system = sysMsg;
   if (opts && opts.temperature !== undefined) body.temperature = opts.temperature;
+  if (r.providerName === 'openrouter' && opts && opts.reasoning &&
+      typeof opts.reasoning === 'object' &&
+      !Array.isArray(opts.reasoning)) {
+    var reasoning = {};
+    if (typeof opts.reasoning.effort === 'string' &&
+        ['none','minimal','low','medium','high','xhigh','max'].indexOf(
+          opts.reasoning.effort) >= 0) reasoning.effort = opts.reasoning.effort;
+    if (typeof opts.reasoning.exclude === 'boolean') reasoning.exclude = opts.reasoning.exclude;
+    if (typeof opts.reasoning.enabled === 'boolean') reasoning.enabled = opts.reasoning.enabled;
+    if (Number.isSafeInteger(Number(opts.reasoning.max_tokens)) &&
+        Number(opts.reasoning.max_tokens) > 0) {
+      reasoning.max_tokens = Number(opts.reasoning.max_tokens);
+    }
+    if (Object.keys(reasoning).length) body.reasoning = reasoning;
+  }
+  if (r.providerName === 'openrouter' && opts && opts.requireParameters === true) {
+    body.provider = {require_parameters:true};
+  }
   var hdrs = isAnthropic
     ? { 'x-api-key':r.apiKey, 'anthropic-version':'2023-06-01', 'Content-Type':'application/json' }
     : { 'Authorization':'Bearer '+r.apiKey, 'Content-Type':'application/json' };
@@ -267,6 +298,32 @@ async function chat(tier, messages, opts) {
   throw lastErr || new Error('All providers failed for tier ' + tier);
 }
 
+// Call a named Wonder seat and only that seat's declared fallback. This keeps
+// Template's legacy tier router intact while making the named seat API already
+// used by inherited Wonders real in production.
+async function chatSeat(name, messages, opts) {
+  opts = Object.assign({},opts || {});
+  var chain = [];
+  var primary = seatResolveNamed(name); if (primary) chain.push(primary);
+  if (opts.allowFallback !== false) {
+    var fallback = seatFallbackNamed(name); if (fallback) chain.push(fallback);
+  }
+  if (!chain.length) {
+    throw new Error('No provider available for named seat ' + name +
+      ' -- its named key is not configured.');
+  }
+  var invoke = async function () {
+    var lastErr = null;
+    for (var i = 0; i < chain.length; i++) {
+      try { return await _attempt(chain[i],messages,opts); }
+      catch (error) { lastErr = error; }
+    }
+    throw lastErr || new Error('All providers failed for named seat ' + name);
+  };
+  return opts.attribution && typeof opts.attribution === 'object'
+    ? require('./spend.guard.js').withAttribution(opts.attribution,invoke) : invoke();
+}
+
 function modelForDepth(depth, opts) {
   if (depth <= 0) return null;
   var tier = depth === 1 ? 'c1' : depth === 2 ? 'c2' : depth === 3 ? 'c3' : 'c4';
@@ -274,4 +331,7 @@ function modelForDepth(depth, opts) {
   return r ? r.model : null;
 }
 
-module.exports = { resolve:resolve, chat:chat, modelForDepth:modelForDepth, getProviderName:getProviderName, PROVIDERS:PROVIDERS, seatResolve:seatResolve, seatFallback:seatFallback };
+module.exports = { resolve:resolve, chat:chat, chatSeat:chatSeat,
+  modelForDepth:modelForDepth, getProviderName:getProviderName, PROVIDERS:PROVIDERS,
+  seatResolve:seatResolve, seatFallback:seatFallback,
+  seatResolveNamed:seatResolveNamed, seatFallbackNamed:seatFallbackNamed };
