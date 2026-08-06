@@ -10,6 +10,8 @@
 // spoken line and retries when it hits, the way the narration always did.
 'use strict';
 
+const isDeepStrictEqual = require('node:util').isDeepStrictEqual;
+
 // ⬡B:core.prose_quality:QUALITY:corny_prose_detector:20260714⬡ (moved from
 // seer.native, behavior preserved exactly). The founder called the writing
 // fluffy and corny more than once; a prompt rule alone is a nudge, not a fix.
@@ -209,13 +211,14 @@ async function writProse(hamUid, stage, text, options) {
     output_digest: verdict.output_digest || null,
     output_bytes: Number.isInteger(verdict.output_bytes) ? verdict.output_bytes : null
   };
+  const verdictEdges = [{ type: 'PRODUCED_BY', target: 'station.writ' }];
   try {
     await bank.writeBead({
       hamUid: ham, agentGlobal: opts.agentGlobal || 'WRIT', source: source, type: 'WRIT_VERDICT',
       summary: '[WRIT ' + verdict.stage.toUpperCase() + '] ' + (verdict.passes ? 'passes' : 'held'),
       content: payload,
       importance: 4,
-      edges: [{ type: 'PRODUCED_BY', target: 'station.writ' }]
+      edges: verdictEdges
     });
   } catch (error) {
     return { ok: true, banked: false, reason: 'writ_verdict_bank_failed', verdict: verdict };
@@ -234,8 +237,17 @@ async function writProse(hamUid, stage, text, options) {
   if (typeof content === 'string') {
     try { content = JSON.parse(content); } catch (error) { content = null; }
   }
+  // brain.client is the canonical production writer. It embeds the exact typed
+  // edges into content for the legacy bank and also mirrors them into the real
+  // edges column on the new bank. An injected store may preserve the payload and
+  // edges as separate exact fields instead. Those are the only two truthful
+  // representations. The old comparison accepted only the pre-adapter shape, so
+  // every successful real write came back with one canonical extra field and was
+  // mislabeled unverified. Deep strict equality ignores object key order while
+  // still refusing every extra, missing, or changed value.
+  const expectedContent = Object.assign({}, payload, { edges: verdictEdges });
   const exact = !!(read && read.source === source && content &&
-    JSON.stringify(content) === JSON.stringify(payload));
+    (isDeepStrictEqual(content, payload) || isDeepStrictEqual(content, expectedContent)));
   return exact
     ? { ok:true, banked:true, source:source, receipt_state:state, verdict:verdict }
     : { ok:true, banked:false, source:source, receipt_state:'receipt_unverified',
