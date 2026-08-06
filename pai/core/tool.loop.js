@@ -394,10 +394,25 @@ const { runOutboundCouncil, runPreWriteCouncil, requireVerifiedCouncilResult,
   requireVerifiedCouncilDelivery,
   mintCurrentCapabilityAnswerBinding,
   currentCapabilityAnswerBindingReceipt,
-  compactCouncilProof, canonicalizeDeliveryTarget,
+  compactCouncilProof, canonicalizeDeliveryTarget, createPendingEffectsBinding,
   extractNamedContextEvidence, namedContextContradictions,
   currentAssistantPreferenceRequest, preferenceJudgmentFindings,
   boundedCouncilFailureCodes, councilHoldEvidence, isHumanFacingAnswer } = require('./pai.outbound.council.js');
+
+function pendingEffectSetCheck(councilResult,effects){
+  var exact=(Array.isArray(effects)?effects:[]).map(function(effect){
+    return{name:effect&&effect.name,args:effect&&
+      Object.prototype.hasOwnProperty.call(effect,'args')?effect.args:{}};
+  });
+  var binding=createPendingEffectsBinding(exact);
+  var proof=compactCouncilProof(councilResult);
+  if(!binding)return{ok:false,reason:'pending_effect_set_invalid'};
+  if(!proof||proof.pending_effects_count!==binding.count||
+      proof.pending_effects_digest!==binding.digest){
+    return{ok:false,reason:'pending_effect_set_receipt_mismatch',binding:binding,proof:proof};
+  }
+  return{ok:true,binding:binding,proof:proof};
+}
 // ⬡B:core.tool.loop:WIRE:ledger_tools_registered:20260707⬡
 // CLAIR fix, real gap found in audit 20260707: LEDGER (Budget OS) had a live
 // backend, 16 real BNPL plans, a working /budget/ask endpoint -- and was never
@@ -7627,7 +7642,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
   var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
     question:_exactUserMessage,deliberationInput:String(message||''),
-    answer:_currentCapabilityAnswerBinding ? finalAns : (_council&&_council.answer)};
+    answer:_currentCapabilityAnswerBinding ? finalAns : (_council&&_council.answer),
+    pendingEffects:_councilContext.pending_effects};
   if (_currentCapabilityAnswerBinding) {
     _mainCouncilExpected.currentCapabilityAnswerBinding =
       currentCapabilityAnswerBindingReceipt(_currentCapabilityAnswerBinding);
@@ -7900,7 +7916,25 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // own nested read-only PAI finalizer, so the provider boundary can verify a
   // full receipt/STAMP pair whose exact answer is the exact bytes it sends.
   var _effectResults = [];
+  var _effectSetCheck=pendingEffectSetCheck(_council,_effectRuntime.pendingEffects);
+  if(!_effectSetCheck.ok){
+    _stampStep('post_council_effect_set_held',_effectSetCheck.reason);
+    _abandonMemoryKeeperTurn('effect_set_unverified');
+    return{ok:false,reason:_effectSetCheck.reason,blocked_by:'STAMP',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,pending_effects_committed:false,
+      councilProof:compactCouncilProof(_council),side_effects:[],tools_used:tools,
+      iterations:iter,ms:Date.now()-t0};
+  }
   for (var _effectIndex = 0; _effectIndex < _effectRuntime.pendingEffects.length; _effectIndex++) {
+    _effectSetCheck=pendingEffectSetCheck(_council,_effectRuntime.pendingEffects);
+    if(!_effectSetCheck.ok){
+      _stampStep('post_council_effect_set_held',_effectSetCheck.reason);
+      _abandonMemoryKeeperTurn('effect_set_changed_before_'+_effectIndex);
+      return{ok:false,reason:_effectSetCheck.reason,blocked_by:'STAMP',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,pending_effects_committed:false,
+        councilProof:compactCouncilProof(_council),side_effects:_effectResults,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
     if (await _turnCancelled(true)) return _turnCancelledResult('before_effect');
     var _effect = _effectRuntime.pendingEffects[_effectIndex];
     var _effectArgs = Object.assign({}, _effect.args || {});
@@ -8574,7 +8608,7 @@ function normalizeSubmitJobArgs(input) {
   return {ok:true,args:args};
 }
 
-module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
+module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,

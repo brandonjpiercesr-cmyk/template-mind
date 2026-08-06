@@ -68,6 +68,10 @@ function runPaiHarness(t, options) {
     return typeof value === 'string' && !!value.trim() &&
       !/<(?:tool_call|function)\b/i.test(value);
   };
+  const pendingEffectsBinding=function (value) {
+    const exact=Array.isArray(value)?value:[];
+    return{count:exact.length,digest:'template.pending.'+JSON.stringify(exact)};
+  };
   cacheModule(paths.builder, { buildMemoryBank:async function () {
     return { ok:true, system_prompt:'Exact test-only HAM wall.',
       ham:{ uid:'HAM.ONE', name:'Test HAM', tier:10 }, context:[],
@@ -78,19 +82,25 @@ function runPaiHarness(t, options) {
   cacheModule(paths.council, {
     runOutboundCouncil:async function (input) {
       calls.council.push(input);
+      const pendingBinding=pendingEffectsBinding(input.context&&input.context.pending_effects);
       return { ok:true, answer:input.answer,
         stages:Array.from({ length:7 }, function (_, index) {
           return { stage:'test-stage-' + index, ok:true };
         }),
         council_receipt:{ source:'r1e.test.council', row_count:9,
-          stage_count:7, readback_verified:true },
-        stamp_proof:{ committed:true, row_count:9, readback_verified:true } };
+          stage_count:7, readback_verified:true,
+          pending_effects_count:pendingBinding.count,
+          pending_effects_digest:pendingBinding.digest },
+        stamp_proof:{ committed:true, row_count:9, readback_verified:true,
+          pending_effects_count:pendingBinding.count,
+          pending_effects_digest:pendingBinding.digest } };
     },
     requireVerifiedCouncilResult:function (result) {
       return { ok:true, answer:result.answer, stamp_proof:result.stamp_proof };
     },
     requireVerifiedCouncilDelivery:function () { return { ok:false }; },
     compactCouncilProof:function (result) { return result && result.stamp_proof; },
+    createPendingEffectsBinding:pendingEffectsBinding,
     canonicalizeDeliveryTarget:function (value) { return value || null; },
     extractNamedContextEvidence:function () { return []; },
     namedContextContradictions:function () { return []; },

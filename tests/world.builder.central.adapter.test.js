@@ -80,4 +80,5 @@ test('the existing Template CI job carries both central gateway adapter proofs',
   const workflow=fs.readFileSync(require.resolve('../.github/workflows/doctrine-demo-parity.yml'),'utf8');
   assert.match(workflow,/tests\/model\.control\.central\.adapter\.test\.js/);
   assert.match(workflow,/tests\/world\.builder\.central\.adapter\.test\.js/);
+  assert.match(workflow,/tests\/pending\.effects\.receipt\.parity\.test\.js/);
 });

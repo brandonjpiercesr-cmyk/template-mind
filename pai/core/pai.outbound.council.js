@@ -90,6 +90,43 @@ function digestObject(value) {
   return digestText(stableStringify(value));
 }
 
+function canonicalPendingEffects(value) {
+  var effects=value===undefined||value===null?[]:value;
+  if(!Array.isArray(effects)||effects.length>20)return null;
+  var canonical=[];
+  for(var index=0;index<effects.length;index++){
+    var effect=effects[index];
+    if(!effect||typeof effect!=='object'||Array.isArray(effect))return null;
+    var name=typeof effect.name==='string'?effect.name.trim():'';
+    var args=hasOwn(effect,'args')?effect.args:{};
+    if(!/^[A-Za-z0-9._:-]{1,160}$/.test(name)||!args||
+        typeof args!=='object'||Array.isArray(args))return null;
+    var encoded;
+    try{encoded=stableStringify(args);}catch(_ePendingEncode){return null;}
+    if(Buffer.byteLength(encoded,'utf8')>64000)return null;
+    var exactArgs;
+    try{exactArgs=JSON.parse(encoded);}catch(_ePendingParse){return null;}
+    canonical.push({name:name,args:exactArgs});
+  }
+  return canonical;
+}
+
+function createPendingEffectsBinding(value) {
+  var canonical=canonicalPendingEffects(value);
+  if(!canonical)return null;
+  return{count:canonical.length,digest:digestObject(canonical)};
+}
+
+function validPendingEffectsBinding(value) {
+  return !!(value&&Number.isInteger(value.count)&&value.count>=0&&value.count<=20&&
+    /^[a-f0-9]{64}$/.test(String(value.digest||'')));
+}
+
+function samePendingEffectsBinding(left,right) {
+  return !!(validPendingEffectsBinding(left)&&validPendingEffectsBinding(right)&&
+    left.count===right.count&&left.digest===right.digest);
+}
+
 function currentCapabilityEvidenceBinding(item) {
   return {
     tool:item.tool,
@@ -692,6 +729,8 @@ function validateInput(input) {
       catch (eTarget) { return 'delivery_target_invalid'; }
     }
   }
+  var pendingEffects=input.context&&input.context.pending_effects;
+  if(createPendingEffectsBinding(pendingEffects)===null)return 'pending_effects_invalid';
   return null;
 }
 
@@ -3923,6 +3962,8 @@ async function runOutboundCouncil(input, injected) {
   var stages = [];
   var stageRuntime = Object.create(null);
   var sources = buildSources(input.cycleId, input.requestId);
+  var pendingEffectsBinding=createPendingEffectsBinding(
+    input.context&&input.context.pending_effects);
   var identityProvenanceRequired = identityProvenance.requiresProvenanceSplit(
     input.question);
   var identityEvidenceReceipt = identityProvenanceRequired
@@ -4374,6 +4415,8 @@ async function runOutboundCouncil(input, injected) {
     answer: currentAnswer,
     answer_bytes: Buffer.byteLength(currentAnswer, 'utf8'),
     answer_digest: finalDigest,
+    pending_effects_count:pendingEffectsBinding.count,
+    pending_effects_digest:pendingEffectsBinding.digest,
     current_capability_answer_binding:capabilityBinding.present
       ? capabilityBinding.receipt : null,
     reach_handoff:reachHandoffBinding(input),
@@ -4413,6 +4456,7 @@ async function runOutboundCouncil(input, injected) {
       question: input.question,
       deliberationInput: input.deliberationInput,
       answer: currentAnswer,
+      pendingEffects:input.context&&input.context.pending_effects,
       identityEvidenceReceipt:identityEvidenceReceipt,
       currentCapabilityAnswerBinding:capabilityBinding.receipt,
       deliveryTarget: input.deliveryTarget
@@ -4442,6 +4486,8 @@ async function runOutboundCouncil(input, injected) {
     deliberation_input_bytes: Buffer.byteLength(input.deliberationInput, 'utf8'),
     deliberation_input_digest: deliberationDigest,
     answer_digest: finalDigest,
+    pending_effects_count:storedReceipt.pending_effects_count,
+    pending_effects_digest:storedReceipt.pending_effects_digest,
     identity_provenance_required:identityProvenanceRequired,
     identity_evidence_receipt:identityEvidenceReceipt,
     request_row_id: requestRowId,
@@ -4481,6 +4527,8 @@ async function runOutboundCouncil(input, injected) {
     deliberation_input_bytes: Buffer.byteLength(input.deliberationInput, 'utf8'),
     deliberation_input_digest: deliberationDigest,
     answer_digest: finalDigest,
+    pending_effects_count:storedReceipt.pending_effects_count,
+    pending_effects_digest:storedReceipt.pending_effects_digest,
     identity_provenance_required:identityProvenanceRequired,
     identity_evidence_receipt:identityEvidenceReceipt,
     stamp_source: sources.stageSources[stampIndex],
@@ -4506,6 +4554,7 @@ async function runOutboundCouncil(input, injected) {
     question: input.question,
     deliberationInput: input.deliberationInput,
     answer: currentAnswer,
+    pendingEffects:input.context&&input.context.pending_effects,
     identityEvidenceReceipt:identityEvidenceReceipt,
     currentCapabilityAnswerBinding:capabilityBinding.receipt,
     deliveryTarget: input.deliveryTarget
@@ -4553,6 +4602,19 @@ function verifyCouncilReceipt(receipt, expected) {
     receipt.deliberation_input_bytes !== Buffer.byteLength(expected.deliberationInput, 'utf8')) return false;
   if (receipt.answer !== expected.answer || receipt.answer_digest !== digestText(expected.answer)) return false;
   if (receipt.answer_bytes !== Buffer.byteLength(expected.answer, 'utf8')) return false;
+  var receiptHasPendingCount=hasOwn(receipt,'pending_effects_count');
+  var receiptHasPendingDigest=hasOwn(receipt,'pending_effects_digest');
+  if(receiptHasPendingCount!==receiptHasPendingDigest)return false;
+  var receiptPendingBinding=receiptHasPendingCount?{
+    count:receipt.pending_effects_count,digest:receipt.pending_effects_digest}:null;
+  if(receiptPendingBinding&&!validPendingEffectsBinding(receiptPendingBinding))return false;
+  var expectedPendingSupplied=hasOwn(expected,'pendingEffects')||hasOwn(expected,'pending_effects');
+  if(expectedPendingSupplied){
+    var expectedPendingBinding=createPendingEffectsBinding(hasOwn(expected,'pendingEffects')
+      ?expected.pendingEffects:expected.pending_effects);
+    if(!expectedPendingBinding||!samePendingEffectsBinding(
+        receiptPendingBinding,expectedPendingBinding))return false;
+  }
   var capabilityReceipt = receipt.current_capability_answer_binding;
   var camelCapabilityExpected = hasOwn(expected,'currentCapabilityAnswerBinding');
   var snakeCapabilityExpected = hasOwn(expected,'current_capability_answer_binding');
@@ -4682,6 +4744,18 @@ function verifyCommittedCouncil(receipt, stampProof, expected) {
   if (!stampProof || stampProof.schema !== STAMP_PROOF_SCHEMA || stampProof.ok !== true ||
     stampProof.readback_verified !== true) return false;
   if (!sameDeliveryTargetBinding(stampProof, receipt)) return false;
+  var receiptHasPending=hasOwn(receipt,'pending_effects_count')&&
+    hasOwn(receipt,'pending_effects_digest');
+  var proofHasPending=hasOwn(stampProof,'pending_effects_count')&&
+    hasOwn(stampProof,'pending_effects_digest');
+  if((hasOwn(receipt,'pending_effects_count')||hasOwn(receipt,'pending_effects_digest'))&&
+      !receiptHasPending)return false;
+  if((hasOwn(stampProof,'pending_effects_count')||hasOwn(stampProof,'pending_effects_digest'))&&
+      !proofHasPending)return false;
+  if(receiptHasPending!==proofHasPending)return false;
+  if(receiptHasPending&&!samePendingEffectsBinding(
+      {count:receipt.pending_effects_count,digest:receipt.pending_effects_digest},
+      {count:stampProof.pending_effects_count,digest:stampProof.pending_effects_digest}))return false;
   if (stampProof.identity_provenance_required !==
       receipt.identity_provenance_required) return false;
   if (receipt.identity_provenance_required === true) {
@@ -4728,6 +4802,11 @@ function verifyCommittedCouncil(receipt, stampProof, expected) {
     commit.question_digest !== questionDigest ||
     commit.deliberation_input_bytes !== Buffer.byteLength(expected.deliberationInput, 'utf8') ||
     commit.deliberation_input_digest !== deliberationDigest || commit.answer_digest !== answerDigest ||
+    (receiptHasPending&&(!samePendingEffectsBinding(
+      {count:receipt.pending_effects_count,digest:receipt.pending_effects_digest},
+      {count:commit.pending_effects_count,digest:commit.pending_effects_digest}))) ||
+    (!receiptHasPending&&(hasOwn(commit,'pending_effects_count')||
+      hasOwn(commit,'pending_effects_digest'))) ||
     commit.identity_provenance_required !== receipt.identity_provenance_required ||
     !identityProvenance.sameEvidenceReceiptOrEmpty(commit.identity_evidence_receipt,
       receipt.identity_evidence_receipt) ||
@@ -4834,6 +4913,10 @@ function compactCouncilProof(result) {
     stage_count: STAGE_ORDER.length,
     committed: true
   };
+  if(hasOwn(receipt,'pending_effects_count')&&hasOwn(receipt,'pending_effects_digest')){
+    compact.pending_effects_count=receipt.pending_effects_count;
+    compact.pending_effects_digest=receipt.pending_effects_digest;
+  }
   if (receipt.identity_provenance_required === true) {
     compact.identity_evidence_receipt = receipt.identity_evidence_receipt;
   }
@@ -4909,6 +4992,10 @@ function reconstructCommittedCouncil(finalStoredRow, stampStoredRow, options) {
     stamp_content_digest:digestObject(stampContent), readback_verified:true,
     read_back_at:new Date(stampAt).toISOString()
   }, target.binding || {});
+  if(hasOwn(receipt,'pending_effects_count')&&hasOwn(receipt,'pending_effects_digest')){
+    proofCore.pending_effects_count=receipt.pending_effects_count;
+    proofCore.pending_effects_digest=receipt.pending_effects_digest;
+  }
   var proof = Object.assign({}, proofCore, { proof_digest:digestObject(proofCore) });
   if (!verifyCommittedCouncil(receipt, proof, input)) {
     return { ok:false, reason:opts.requireReach === true
@@ -5002,6 +5089,8 @@ module.exports = {
   canonicalizeDeliveryTarget: canonicalizeDeliveryTarget,
   createDeliveryTargetBinding: createDeliveryTargetBinding,
   verifyDeliveryTargetBinding: verifyDeliveryTargetBinding,
+  createPendingEffectsBinding:createPendingEffectsBinding,
+  samePendingEffectsBinding:samePendingEffectsBinding,
   isHumanFacingAnswer: isHumanFacingAnswer,
   isCleanBoardHold: isCleanBoardHold,
   CLEAN_BOARD_HOLD_REASONS: CLEAN_BOARD_HOLD_REASONS,
