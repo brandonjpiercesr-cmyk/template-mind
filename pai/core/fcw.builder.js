@@ -320,7 +320,8 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   if (_agentFindWake) {
     _agentFindRecentIdx = _batch.length;
     _batch.push(require('./agent.find.js').readRecentCycleTruth({
-      ham_uid:hamUid,seat_node_id:_agentFindWake.seat_node_id,viewer_tier:_viewerTier
+      ham_uid:hamUid,seat_node_id:_agentFindWake.seat_node_id,viewer_tier:_viewerTier,
+      cycle_id:_agentFindWake.cycle_id,request_id:_agentFindWake.request_id
     }));
     _labels.push('agentFindRecentCycleTruth');
   }

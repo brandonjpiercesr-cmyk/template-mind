@@ -75,7 +75,12 @@ function copyQuery(query, hamUid, viewerTier) {
   return output;
 }
 
-function recentTruthQueries(node, hamUid, viewerTier) {
+function recentTruthQueries(node, input) {
+  const value = input || {};
+  const hamUid = exactHam(value.ham_uid);
+  const viewerTier = value.viewer_tier;
+  const cycleId = clean(value.cycle_id, 220);
+  const requestId = clean(value.request_id, 220);
   const configured = node && node.metadata && node.metadata.agent_find &&
     node.metadata.agent_find.recent_truth;
   // Every registered seat gets an executable default rather than an unresolved toolbelt
@@ -87,12 +92,56 @@ function recentTruthQueries(node, hamUid, viewerTier) {
     : suffix ? [{source_prefix:suffix + '.'}] : [];
   if (!source.length) return {ok:false,reason:'agent_find_recent_truth_contract_missing'};
   const queries = source.map(function (query) {
+    const cycleScope = clean(query && query.cycle_scope, 80);
+    if (cycleScope === 'current_request') {
+      if (!cycleId || !requestId) return null;
+      return copyQuery(Object.assign({}, query, {
+        source:'pai.cycle.' + cycleId,source_prefix:null
+      }), hamUid, viewerTier);
+    }
     return copyQuery(query, hamUid, viewerTier);
   }).filter(function (query) {
-    return query.stamp_type || query.source || query.source_prefix || query.agent_global;
+    return query && (query.stamp_type || query.source || query.source_prefix || query.agent_global);
   });
-  return queries.length ? {ok:true,queries:queries}
+  if (source.some(function (query) { return clean(query && query.cycle_scope, 80) ===
+      'current_request'; }) && (!cycleId || !requestId)) {
+    return {ok:false,reason:'agent_find_recent_truth_cycle_scope_missing'};
+  }
+  return queries.length ? {ok:true,queries:queries,cycle_id:cycleId,request_id:requestId,
+    current_request_only:source.some(function (query) {
+      return clean(query && query.cycle_scope,80)==='current_request';
+    })}
     : {ok:false,reason:'agent_find_recent_truth_contract_invalid'};
+}
+
+function parsedRowContent(row) {
+  if (plain(row && row.content)) return row.content;
+  try {
+    const parsed = JSON.parse(row && row.content || 'null');
+    return plain(parsed) ? parsed : null;
+  } catch (error) { return null; }
+}
+
+function belongsToRequest(row, cycleId, requestId) {
+  if (!cycleId || clean(row && row.source) !== 'pai.cycle.' + cycleId) return false;
+  const content = parsedRowContent(row);
+  const contentCycle = clean(content && (content.cycleId || content.cycle_id), 220);
+  const contentRequest = clean(content && (content.requestId || content.request_id), 220);
+  return contentCycle === cycleId && !!requestId && contentRequest === requestId;
+}
+
+function scopedRecentRows(rows, built) {
+  const seen = new Set();
+  return (Array.isArray(rows) ? rows : []).filter(function (row) {
+    if (built.current_request_only && !belongsToRequest(row, built.cycle_id, built.request_id)) {
+      return false;
+    }
+    const key = [clean(row && row.id),clean(row && row.source),clean(row && row.stamp_type),
+      clean(row && row.created_at, 80),clean(row && row.summary, 500)].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function readRecentCycleTruth(input, options) {
@@ -104,7 +153,8 @@ async function readRecentCycleTruth(input, options) {
   const node = registry.resolve(value.seat_node_id);
   if (!hamUid || !node) return {ok:false,available:false,
     reason:'agent_find_seat_binding_invalid',beads:[]};
-  const built = recentTruthQueries(node, hamUid, value.viewer_tier);
+  const built = recentTruthQueries(node, {ham_uid:hamUid,viewer_tier:value.viewer_tier,
+    cycle_id:value.cycle_id,request_id:value.request_id});
   if (!built.ok) return {ok:false,available:false,reason:built.reason,beads:[]};
   let found;
   try { found = await finder(built.queries); }
@@ -115,8 +165,11 @@ async function readRecentCycleTruth(input, options) {
       reason:clean(found && found.reason || 'agent_find_recent_truth_unavailable', 160),
       failures:found && found.failures || [],beads:[]};
   }
-  return {ok:true,available:true,partial:found.partial === true,beads:found.beads,
-    count:found.beads.length,ms:Number(found.ms || 0),queries:built.queries,
+  const beads = scopedRecentRows(found.beads, built);
+  return {ok:true,available:true,partial:found.partial === true,beads:beads,
+    count:beads.length,ms:Number(found.ms || 0),queries:built.queries,
+    scope:{cycle_id:built.cycle_id || null,request_id:built.request_id || null,
+      cross_cycle_mode:built.current_request_only ? 'excluded' : 'seat_history'},
     failures:Array.isArray(found.failures) ? found.failures : []};
 }
 
@@ -350,9 +403,15 @@ function recentTruthRecord(result) {
     };
   });
   const policyExcluded = !!(result && result.policy_excluded === true);
+  const scope = plain(result && result.scope) ? {
+    cycle_id:clean(result.scope.cycle_id, 220) || null,
+    request_id:clean(result.scope.request_id, 220) || null,
+    cross_cycle_mode:clean(result.scope.cross_cycle_mode, 80) || null
+  } : null;
   return {available:policyExcluded ? false : true,policy_excluded:policyExcluded,
     exclusion_reason:policyExcluded ? clean(result && result.exclusion_reason, 240) : null,
     partial:result && result.partial === true,count:rows.length,rows:rows,
+    scope:scope,
     query_count:result && Array.isArray(result.queries) ? result.queries.length : 0,
     failures:result && Array.isArray(result.failures) ? result.failures : []};
 }
@@ -765,6 +824,7 @@ module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
   _test:{recentTruthQueries:recentTruthQueries,employmentRecord:employmentRecord,
     recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt,
     parseProviderBody:parseProviderBody,messageFacts:messageFacts,closedWorldRecent:closedWorldRecent,
+    scopedRecentRows:scopedRecentRows,belongsToRequest:belongsToRequest,
     questionTerms:questionTerms,candidateFacts:candidateFacts,compareCandidates:compareCandidates,
     runtimeContextBudgets:runtimeContextBudgets,
     digest:digest}};
