@@ -12,16 +12,24 @@ function cache(file, exports) {
 }
 
 function councilStub() {
+  const pendingEffectsBinding=function (value) {
+    const exact=Array.isArray(value)?value:[];
+    return{count:exact.length,digest:'template.memory.pending.'+JSON.stringify(exact)};
+  };
   return {
     runOutboundCouncil:async function (input) {
+      const pendingBinding=pendingEffectsBinding(input.context&&input.context.pending_effects);
       return {ok:true, answer:input.answer,
         council_receipt:{persistence:{final_source:'memory.gate.test.council'},
           source:'memory.gate.test.council', row_count:9, stage_count:7,
-          readback_verified:true},
+          readback_verified:true,pending_effects_count:pendingBinding.count,
+          pending_effects_digest:pendingBinding.digest},
         stages:Array.from({length:7}, function (_, index) {
           return {stage:'stage-' + index, ok:true};
         }),
-        stamp_proof:{committed:true,row_count:9,readback_verified:true}};
+        stamp_proof:{committed:true,row_count:9,readback_verified:true,
+          pending_effects_count:pendingBinding.count,
+          pending_effects_digest:pendingBinding.digest}};
     },
     runPreWriteCouncil:async function () { return {ok:false,reason:'test_no_brief'}; },
     requireVerifiedCouncilResult:function (result) {
@@ -29,6 +37,7 @@ function councilStub() {
     },
     requireVerifiedCouncilDelivery:function () { return {ok:false}; },
     compactCouncilProof:function (result) { return result && result.stamp_proof; },
+    createPendingEffectsBinding:pendingEffectsBinding,
     canonicalizeDeliveryTarget:function (value) { return value || null; },
     extractNamedContextEvidence:function () { return []; },
     namedContextContradictions:function () { return []; },

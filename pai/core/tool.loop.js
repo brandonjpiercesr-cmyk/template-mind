@@ -394,10 +394,25 @@ const { runOutboundCouncil, runPreWriteCouncil, requireVerifiedCouncilResult,
   requireVerifiedCouncilDelivery,
   mintCurrentCapabilityAnswerBinding,
   currentCapabilityAnswerBindingReceipt,
-  compactCouncilProof, canonicalizeDeliveryTarget,
+  compactCouncilProof, canonicalizeDeliveryTarget, createPendingEffectsBinding,
   extractNamedContextEvidence, namedContextContradictions,
   currentAssistantPreferenceRequest, preferenceJudgmentFindings,
   boundedCouncilFailureCodes, councilHoldEvidence, isHumanFacingAnswer } = require('./pai.outbound.council.js');
+
+function pendingEffectSetCheck(councilResult,effects){
+  var exact=(Array.isArray(effects)?effects:[]).map(function(effect){
+    return{name:effect&&effect.name,args:effect&&
+      Object.prototype.hasOwnProperty.call(effect,'args')?effect.args:{}};
+  });
+  var binding=createPendingEffectsBinding(exact);
+  var proof=compactCouncilProof(councilResult);
+  if(!binding)return{ok:false,reason:'pending_effect_set_invalid'};
+  if(!proof||proof.pending_effects_count!==binding.count||
+      proof.pending_effects_digest!==binding.digest){
+    return{ok:false,reason:'pending_effect_set_receipt_mismatch',binding:binding,proof:proof};
+  }
+  return{ok:true,binding:binding,proof:proof};
+}
 // ⬡B:core.tool.loop:WIRE:ledger_tools_registered:20260707⬡
 // CLAIR fix, real gap found in audit 20260707: LEDGER (Budget OS) had a live
 // backend, 16 real BNPL plans, a working /budget/ask endpoint -- and was never
@@ -1343,6 +1358,8 @@ var TOOLS = [
     parameters:{type:'object',properties:{}}}},
   {type:'function',function:{name:'read_current_capabilities',description:'READ WHAT YOU CAN ACTUALLY DO RIGHT NOW. Returns current, canonical capability facts from the live Wonder registry and the mounted Come Code workspace exports. Use this before answering what you can do, whether a capability is built or available, or which build surfaces are working. Never infer a capability from memory or an older conversation.',
     parameters:{type:'object',properties:{question:{type:'string',description:'The person\'s exact capability question.'}},required:['question']}}},
+  {type:'function',function:{name:'read_current_knowledge',description:'READ THE PERSON\'S CURRENT LIVING KNOWLEDGE. Returns only exact same-person Knowledge Compiler views in warm human language with human source labels. Use this when the current question may depend on what their compiled living knowledge already holds. Current views are the default. Ask for history only when earlier versions are genuinely relevant. Contested details stay visibly contested and earlier versions never silently become current.',
+    parameters:{type:'object',properties:{include_history:{type:'boolean',description:'true only when the person asks for an earlier version or the current reasoning genuinely needs history.'}}}}},
   {type:'function',function:{name:'nash_sports',description:'NASH the sports agent. Live and recent scores/results for a league. '
     +'Use for ANY question about a game, score, or whether a team won (Lakers, NBA, NFL, MLB, NHL, WNBA). '
     +'Pass league as one of: nba, nfl, mlb, nhl, wnba. Returns the latest scoreboard lines.',
@@ -1618,7 +1635,13 @@ var TOOLS = [
       detail:{type:'string',description:'The context and purpose in the person\'s words, without internal system narration.'},
       acceptance:{type:'array',minItems:1,maxItems:12,items:{type:'string'},description:'Observable signs that the work is genuinely complete.'},
       requested_owner:{type:'string',description:'Optional Wonder or seat preference. The World Builder verifies authority and may choose a better owner.'},
-      level:{type:'number',description:'Optional urgency from 0 through 4.'}
+      level:{type:'number',description:'Optional urgency from 0 through 4.'},
+      include_project_context:{type:'boolean',description:'True only when you decide the wider project files are relevant evidence for this exact hand. Exact files from this conversation are included without this flag.'}
+    }}}},
+  {type:'function',function:{name:'commission_knowledge',description:'Ask the existing Knowledge Compiler Wonder to consider the exact files attached to this conversation for the person\'s living Knowledge. You decide whether this hand is warranted from the whole conversation. The Wonder independently decides update, no_change, or wait through its governed council. Do not use it merely because a file exists, and do not claim that Knowledge changed unless the returned result says update.',
+    parameters:{type:'object',required:['title'],properties:{
+      title:{type:'string',description:'A short human title for the knowledge question raised by the attached evidence.'},
+      include_project_context:{type:'boolean',description:'True only when you decide the wider project files are relevant evidence for this exact knowledge question. Exact files from this conversation are included without this flag.'}
     }}}},
   {type:'function',function:{name:'activate_roadmap_task',description:'After CODA has selected one bounded item from an exact existing ROADMAP, hand it to SPAN as one idempotent owned TASK. This does not build or merge. It requires the repository, exact allowed paths, acceptance checks, and a named test profile so PAI cannot create orphan, untested, or out-of-scope code.',
     parameters:{type:'object',required:['roadmap_source','repository','task','allowed_paths','acceptance','test_profile'],properties:{
@@ -1654,6 +1677,8 @@ function toolSelectionBoundary(name) {
     read_lane_board: 'USE WHEN: the person asks which coding lanes or chats are active, who owns work, or whether lanes may collide. DO NOT USE WHEN: they ask about their calendar, general project advice, repository contents, or ordinary conversation.',
     read_wonder_departments: 'USE WHEN: the person asks about your team, your wonders, your departments, who works for you, or what parts of your system exist and whether they are alive. DO NOT USE WHEN: they ask about human coding chats (that is read_lane_board), their own calendar, or ordinary conversation.',
     read_current_capabilities: 'USE WHEN: the person asks what you can do now, whether a named capability is built or available, or which coding and build surfaces currently work. DO NOT USE WHEN: they are directly asking you to perform an already understood action, asking general knowledge, or making ordinary conversation.',
+    read_current_knowledge: 'USE WHEN: the current question may depend on the person\'s compiled living Knowledge. DO NOT USE WHEN: the answer is already in the current conversation, the question is general knowledge, or you are only searching for an uncompiled raw bead.',
+    commission_knowledge: 'USE WHEN: after reading the whole conversation and its exact attached evidence, you decide the Knowledge Compiler Wonder should judge whether living Knowledge changes. DO NOT USE WHEN: a file merely exists, no exact conversation artifact is present, or an ordinary answer is enough.',
     update_screen: 'USE WHEN: the person explicitly asks to change or show something on the live glass. DO NOT USE WHEN: they ask for a spoken answer, general advice, stored memory, or a real-world action outside the screen.',
     email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
     contact_send: 'USE WHEN: the person explicitly authorizes this exact text to this exact resolved third party. DO NOT USE WHEN: they mention a person, ask for contact details, brainstorm wording, or have not authorized the exact send.',
@@ -1912,7 +1937,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   sports:['nash_sports'],
   reminders:['read_reminders','create_reminder','stop_mentioning'],
   budget:['get_budget_summary','get_budget_upcoming','read_budget_fit','compare_scenario'],
-  memory:['find_in_brain','find_identity_evidence','write_to_brain'],
+  memory:['read_current_knowledge','find_in_brain','find_identity_evidence','write_to_brain'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','raise_911_escalation','find_in_brain',
     'read_lane_board','read_wonder_departments','read_current_capabilities','read_render_logs','get_recent_builds','read_own_code','consult_coda',
     'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page','propose_model_change'],
@@ -2102,7 +2127,8 @@ var POST_COUNCIL_TOOLS = Object.freeze({
   update_screen:true,
   set_background:true,
   activate_roadmap_task:true,
-  submit_job:true
+  submit_job:true,
+  commission_knowledge:true
 });
 
 async function runtimeCancellationRequested(runtime) {
@@ -2149,6 +2175,17 @@ function offeredToolNameSet(toolDefinitions) {
 function providerToolNameWasOffered(name, runtime) {
   return !!(runtime && runtime.phase === 'deliberation' &&
     runtime.offeredToolNames && runtime.offeredToolNames[name] === true);
+}
+
+function caraArtifactRefsForHand(args,runtime,hamUid){
+  var context=runtime&&runtime.caraContext||{};
+  var exact=Array.isArray(context.artifact_evidence_refs)?context.artifact_evidence_refs:[];
+  var project=args&&args.include_project_context===true&&
+    Array.isArray(context.project_artifact_context_refs)?context.project_artifact_context_refs:[];
+  var prefix='vault.'+String(hamUid||'').trim().toLowerCase()+'.';
+  return Array.from(new Set(exact.concat(project).map(function(value){return String(value||'');})
+    .filter(function(ref){return ref===ref.trim()&&ref.length<=200&&
+      /^[A-Za-z0-9._:-]+$/.test(ref)&&ref.indexOf(prefix)===0;}))).slice(0,16);
 }
 
 async function executeTool(name, args, hamUid, origMessage, runtime, providerReturned) {
@@ -2839,6 +2876,18 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     } catch (eCapability) {
       return JSON.stringify({ok:false,schema:'anew.current-capabilities.v2',
         evidence_count:0,reason:'current_capability_read_failed'});
+    }
+  }
+  if (name === 'read_current_knowledge') {
+    try {
+      var _knowledgeRequestId=String(runtime&&runtime.parentRequestId||'').trim();
+      if(!_knowledgeRequestId)return JSON.stringify({ok:false,status:'knowledge_unavailable'});
+      return JSON.stringify(await require('./world.builder.gateway.js').readKnowledge({
+        hamUid:hamUid,requestId:_knowledgeRequestId,
+        includeHistory:args&&args.include_history===true
+      }));
+    } catch(eKnowledgeRead) {
+      return JSON.stringify({ok:false,status:'knowledge_unavailable'});
     }
   }
   if (name === 'nash_sports') {
@@ -4150,14 +4199,39 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     if (!jobCycleId) return JSON.stringify({ok:false,reason:'world_job_cycle_id_required'});
     var jobCancelled = await cancelBeforeEffect(name,runtime);
     if (jobCancelled) return jobCancelled;
-    var jobOutcome = await require('./ham.world.builder.intake.js').enqueue({
-      hamUid:hamUid,kind:'mission',trigger:'mission.intervention.changed',
-      evidenceRefs:[jobProof.final_source],subject:jobSubject,detail:jobDetail,
+    var jobOutcome = await require('./world.builder.gateway.js').submitJob({
+      hamUid:hamUid,requestId:jobRequestId,cycleId:jobCycleId,councilProof:jobProof,
+      artifactRefs:caraArtifactRefsForHand(args,runtime,hamUid),
+      subject:jobSubject,detail:jobDetail,
       acceptance:jobAcceptance,requestedOwner:committedJobArgs.args.requested_owner || null,
-      originRequestId:jobRequestId,originCycleId:jobCycleId,
-      level:jobLevel,submittedBy:'anu_conversation'
+      level:jobLevel
     });
     return JSON.stringify(jobOutcome);
+  }
+  if (name === 'commission_knowledge') {
+    var knowledgeTitle=String(args&&args.title||'').replace(/[\r\n\t]/g,' ')
+      .replace(/\s+/g,' ').trim().slice(0,300);
+    if (!knowledgeTitle) return JSON.stringify({ok:false,reason:'knowledge_handoff_title_missing'});
+    var knowledgeProof=runtime&&runtime.councilResult
+      ?compactCouncilProof(runtime.councilResult):null;
+    if(!knowledgeProof||knowledgeProof.committed!==true||
+        knowledgeProof.readback_verified!==true||knowledgeProof.row_count!==9||
+        !knowledgeProof.final_source){
+      return JSON.stringify({ok:false,reason:'knowledge_handoff_council_unverified'});
+    }
+    var knowledgeRequestId=String(runtime&&runtime.parentRequestId||'').trim();
+    var knowledgeCycleId=String(runtime&&runtime.parentCycleId||'').trim();
+    if(!knowledgeRequestId||!knowledgeCycleId){
+      return JSON.stringify({ok:false,reason:'knowledge_handoff_cycle_identity_required'});
+    }
+    var knowledgeCancelled=await cancelBeforeEffect(name,runtime);
+    if(knowledgeCancelled)return knowledgeCancelled;
+    var knowledgeOutcome=await require('./world.builder.gateway.js').commissionKnowledge({
+      hamUid:hamUid,title:knowledgeTitle,
+      requestId:knowledgeRequestId,cycleId:knowledgeCycleId,councilProof:knowledgeProof,
+      artifactRefs:caraArtifactRefsForHand(args,runtime,hamUid)
+    });
+    return JSON.stringify(knowledgeOutcome);
   }
   if (name === 'propose_model_change') {
     var modelIntentProof=runtime && runtime.councilResult
@@ -7568,7 +7642,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
   var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
     question:_exactUserMessage,deliberationInput:String(message||''),
-    answer:_currentCapabilityAnswerBinding ? finalAns : (_council&&_council.answer)};
+    answer:_currentCapabilityAnswerBinding ? finalAns : (_council&&_council.answer),
+    pendingEffects:_councilContext.pending_effects};
   if (_currentCapabilityAnswerBinding) {
     _mainCouncilExpected.currentCapabilityAnswerBinding =
       currentCapabilityAnswerBindingReceipt(_currentCapabilityAnswerBinding);
@@ -7841,7 +7916,25 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // own nested read-only PAI finalizer, so the provider boundary can verify a
   // full receipt/STAMP pair whose exact answer is the exact bytes it sends.
   var _effectResults = [];
+  var _effectSetCheck=pendingEffectSetCheck(_council,_effectRuntime.pendingEffects);
+  if(!_effectSetCheck.ok){
+    _stampStep('post_council_effect_set_held',_effectSetCheck.reason);
+    _abandonMemoryKeeperTurn('effect_set_unverified');
+    return{ok:false,reason:_effectSetCheck.reason,blocked_by:'STAMP',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,pending_effects_committed:false,
+      councilProof:compactCouncilProof(_council),side_effects:[],tools_used:tools,
+      iterations:iter,ms:Date.now()-t0};
+  }
   for (var _effectIndex = 0; _effectIndex < _effectRuntime.pendingEffects.length; _effectIndex++) {
+    _effectSetCheck=pendingEffectSetCheck(_council,_effectRuntime.pendingEffects);
+    if(!_effectSetCheck.ok){
+      _stampStep('post_council_effect_set_held',_effectSetCheck.reason);
+      _abandonMemoryKeeperTurn('effect_set_changed_before_'+_effectIndex);
+      return{ok:false,reason:_effectSetCheck.reason,blocked_by:'STAMP',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,pending_effects_committed:false,
+        councilProof:compactCouncilProof(_council),side_effects:_effectResults,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
     if (await _turnCancelled(true)) return _turnCancelledResult('before_effect');
     var _effect = _effectRuntime.pendingEffects[_effectIndex];
     var _effectArgs = Object.assign({}, _effect.args || {});
@@ -8011,6 +8104,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         return /\b(?:5\d\d|429)\b|rate.?limit|time.?out|timed out|ECONN|ETIMEDOUT|EAI_AGAIN|hang up|fetch failed|network|unavailable|overloaded|too many/i
           .test(_why);
       };
+      _effectSetCheck=pendingEffectSetCheck(_council,_effectRuntime.pendingEffects);
+      if(!_effectSetCheck.ok){
+        _stampStep('post_council_effect_set_held',_effectSetCheck.reason);
+        _abandonMemoryKeeperTurn('effect_set_changed_before_commit_'+_effectIndex);
+        return{ok:false,reason:_effectSetCheck.reason,blocked_by:'STAMP',ham:hamObj,
+          cycleId:_cycleId,requestId:_requestId,pending_effects_committed:false,
+          councilProof:compactCouncilProof(_council),side_effects:_effectResults,
+          tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      }
       for (;;) {
         _effectAttempts++;
         var _effectThrew = null;
@@ -8515,7 +8617,7 @@ function normalizeSubmitJobArgs(input) {
   return {ok:true,args:args};
 }
 
-module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
+module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
