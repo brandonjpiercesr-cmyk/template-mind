@@ -23,6 +23,34 @@ function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_
 function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 var identityProvenance = require('./identity.provenance.js');
 
+// The deployed legacy table predates these columns. Sending even one unknown column in a
+// PostgREST select or predicate rejects the entire read with HTTP 400, which used to make every
+// ordinary A'NU turn fail before deliberation. Canonical memory_bank.beads owns active-truth
+// supersession. Legacy aibe_brain cannot express that state, so it must not be queried as if it
+// can. This is a physical storage capability boundary, never a semantic choice.
+var NEW_BANK_ONLY_COLUMNS = Object.freeze({
+  superseded_by:true, edges:true, spawned_by:true, abcd_tag:true
+});
+function supportsActiveTruth() { return _tbl() !== 'aibe_brain'; }
+function activeTruthPredicate(parts, query) {
+  if (supportsActiveTruth() && (!query || query.include_superseded !== true)) {
+    parts.push('superseded_by=is.null');
+  }
+}
+function compatibleSelect(value, requireActiveTruthColumn) {
+  var seen=Object.create(null), columns=String(value||'').split(',').map(function(column){
+    return column.trim();
+  }).filter(function(column){
+    if(!column||seen[column])return false;
+    if(!supportsActiveTruth()&&NEW_BANK_ONLY_COLUMNS[column])return false;
+    seen[column]=true;return true;
+  });
+  if(requireActiveTruthColumn&&supportsActiveTruth()&&!seen.superseded_by){
+    columns.push('superseded_by');
+  }
+  return columns.join(',');
+}
+
 
 function bh() {
   var BU = _bu();
@@ -226,7 +254,7 @@ function identityBq(path, timeoutMs) {
 function identityQueryPath(query, page) {
   var q = query || {};
   var parts = [];
-  if (q.include_superseded !== true) parts.push('superseded_by=is.null');
+  activeTruthPredicate(parts,q);
   if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
   if (q.source) parts.push('source=eq.' + encodeURIComponent(q.source));
   else if (q.source_prefix) parts.push('source=like.' + encodeURIComponent(q.source_prefix) + '*');
@@ -283,7 +311,7 @@ async function find(queries, options) {
 
   function queryPath(q, page) {
     var parts = [];
-    if (!q || q.include_superseded !== true) parts.push('superseded_by=is.null');
+    activeTruthPredicate(parts,q);
     if (q.stamp_type) parts.push('stamp_type=eq.' + encodeURIComponent(q.stamp_type));
     // Exact doctrine/provenance readers must not let a prefix-colliding child row impersonate
     // the source they requested. `source` and `source_prefix` are intentionally exclusive.
@@ -345,7 +373,7 @@ async function find(queries, options) {
     if (q.select) {
       var _sel = String(q.select);
       if (!/(^|,)\s*id\s*(,|$)/.test(_sel)) _sel = 'id,' + _sel;
-      if (!/(^|,)\s*superseded_by\s*(,|$)/.test(_sel)) _sel += ',superseded_by';
+      _sel=compatibleSelect(_sel,true);
       parts.push('select=' + encodeURIComponent(_sel));
     }
     // ⬡B:core.find:FIX:order_parameter:20260702⬡
@@ -394,23 +422,29 @@ async function find(queries, options) {
   }).filter(Boolean);
   var queriesAvailable = results.length - failures.length;
   var available = results.length === 0 || queriesAvailable > 0;
+  var activeTruthRequested=queries.some(function(query){
+    return !query||query.include_superseded!==true;
+  });
 
   return { ok:available, available:available, partial:available && failures.length > 0,
+    active_truth_enforced:!activeTruthRequested||supportsActiveTruth(),
     reason:available ? null : String(failures[0] && failures[0].reason || 'brain_read_unavailable'),
     beads:merged, ms:Date.now() - t0, count:merged.length,
     queriesTotal:results.length, queriesAvailable:queriesAvailable, failures:failures };
 }
 
-var EVIDENCE_SELECT = 'id,ham_uid,stamp_type,source,summary,agent_global,importance,created_at,superseded_by';
+var EVIDENCE_BASE_SELECT = 'id,ham_uid,stamp_type,source,summary,agent_global,importance,created_at';
 // Full FCW expansion needs the human-authored body, never the vector used to locate it.
 // Keeping `embedding` off this transport prevents a selected evidence batch from rebuilding
 // the same heap pressure Agent FIND exists to remove.
-var EVIDENCE_BODY_SELECT = EVIDENCE_SELECT + ',content';
+function evidenceSelect(includeBody){
+  return compatibleSelect(EVIDENCE_BASE_SELECT+(includeBody?',content':''),true);
+}
 
 function evidenceQueryPath(query, page) {
   var q = query || {};
   var parts = [];
-  if (q.include_superseded !== true) parts.push('superseded_by=is.null');
+  activeTruthPredicate(parts,q);
   if (q.ids && q.ids.length) {
     var ids = q.ids.map(function (id) { return String(id).replace(/[^A-Za-z0-9_-]/g, ''); })
       .filter(Boolean);
@@ -445,7 +479,7 @@ function evidenceQueryPath(query, page) {
     var id = encodeURIComponent(String(c.id));
     parts.push('or=(created_at.lt.' + created + ',and(created_at.eq.' + created + ',id.lt.' + id + '))');
   }
-  if (q.select) parts.push('select=' + encodeURIComponent(q.select));
+  if (q.select) parts.push('select=' + encodeURIComponent(compatibleSelect(q.select,true)));
   parts.push('order=created_at.desc,id.desc');
   parts.push('limit=' + (page && page.limit != null ? page.limit
     : (q.limit != null ? q.limit : PROVIDER_PAGE_SIZE)));
@@ -463,7 +497,7 @@ function fcwEvidenceQueries(input) {
   var terms = Array.isArray(value.question_terms) ? value.question_terms : [];
   function q(contributor, query, anchor) {
     return Object.assign({contributor:contributor,viewer_tier:viewerTier,
-      select:EVIDENCE_SELECT,summary_terms:anchor ? [] : terms,
+      select:evidenceSelect(false),summary_terms:anchor ? [] : terms,
       anchor:anchor === true,limit:anchor ? 1 : PROVIDER_PAGE_SIZE}, query || {});
   }
   var queries = [
@@ -556,8 +590,11 @@ async function scanFcwEvidence(input, options) {
       return failure.reason==='brain_unconfigured';
     })?'memory_bank_unavailable':'agent_find_compact_scan_unavailable';
   }
+  var activeTruthEnforced=supportsActiveTruth();
   return {ok:available,available:available,reason:unavailableReason,
-    partial:failures.length > 0 || continuations.length > 0,failures:failures,
+    partial:failures.length > 0 || continuations.length > 0 || !activeTruthEnforced,
+    active_truth_enforced:activeTruthEnforced,
+    storage_limitations:activeTruthEnforced?[]:['legacy_supersession_unavailable'],failures:failures,
     continuations:continuations,queries_total:queries.length,pages:totalPages,
     rows_seen:totalRows};
 }
@@ -607,7 +644,7 @@ async function expandFcwEvidence(selections, viewerTier, options) {
   for (var offset = 0; offset < ids.length; offset += 50) {
     var batch = ids.slice(offset, offset + 50);
     var read = await bq(evidenceQueryPath({ids:batch,viewer_tier:viewerTier,
-      select:EVIDENCE_BODY_SELECT},
+      select:evidenceSelect(true)},
       {limit:batch.length}), opts.signal);
     if (!read || read.ok !== true || read.available !== true) {
       return {ok:false,available:false,reason:String(read && read.reason ||
@@ -635,7 +672,10 @@ async function expandFcwEvidence(selections, viewerTier, options) {
       byContributor[name].push(entry.row);
     });
   });
+  var activeTruthEnforced=supportsActiveTruth();
   return {ok:true,available:true,rows:rows,by_contributor:byContributor,
+    active_truth_enforced:activeTruthEnforced,
+    storage_limitations:activeTruthEnforced?[]:['legacy_supersession_unavailable'],
     retained_bytes:retainedBytes,max_bytes:maxBytes,envelope_reached:omitted.length > 0,
     omitted:omitted};
 }
@@ -877,9 +917,11 @@ function decodeDoctrineCursor(value) {
 
 function doctrinePagePath(hamUid, input, viewerTier) {
   var request=input||{};
-  var parts=['select=id,source,stamp_type,summary,importance,created_at,content,edges,ham_uid,acl_tier,superseded_by',
+  var parts=['select='+encodeURIComponent(compatibleSelect(
+    'id,source,stamp_type,summary,importance,created_at,content,edges,ham_uid,acl_tier,superseded_by',
+    true)),
     'ham_uid=eq.'+encodeURIComponent(hamUid)];
-  if(request.include_superseded!==true)parts.push('superseded_by=is.null');
+  activeTruthPredicate(parts,request);
   if(request.stamp_type)parts.push('stamp_type=eq.'+encodeURIComponent(request.stamp_type));
   else parts.push('stamp_type=in.(ROADMAP,DOCTRINE)');
   if(request.source)parts.push('source=eq.'+encodeURIComponent(request.source));
@@ -915,12 +957,14 @@ async function findDoctrinePage(hamUid, input, viewerTier) {
         'doctrine_source_not_found',rows:[]};
     }
     return {ok:true,available:true,mode:'read',rows:[rows[0]],cursor:null,next_cursor:null,
-      complete:true,readback_verified:true};
+      complete:true,readback_verified:true,active_truth_enforced:supportsActiveTruth(),
+      storage_limitations:supportsActiveTruth()?[]:['legacy_supersession_unavailable']};
   }
   var page=rows.slice(0,request.limit),hasMore=rows.length>request.limit;
   return {ok:true,available:true,mode:request.query?'search':'inventory',rows:page,
     cursor:request.cursor||null,next_cursor:hasMore?encodeDoctrineCursor(page[page.length-1]):null,
-    complete:!hasMore,readback_verified:true};
+    complete:!hasMore,readback_verified:true,active_truth_enforced:supportsActiveTruth(),
+    storage_limitations:supportsActiveTruth()?[]:['legacy_supersession_unavailable']};
 }
 
 // ⬡B:core.find:WIRE:findPersonProfile:20260702⬡

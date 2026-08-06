@@ -289,6 +289,8 @@ async function planWallEvidence(input, options) {
   const partial = scan.partial === true || expanded.envelope_reached === true ||
     compactOmissions.length > 0;
   return {ok:true,available:true,complete:!partial,partial:partial,
+    active_truth_enforced:scan.active_truth_enforced !== false,
+    storage_limitations:list(scan.storage_limitations),
     schema:'envolve.agent-find.evidence-plan.v1',
     ham_uid:hamUid,seat_node_id:seatNodeId,question_sha256:digest(clean(value.question,12000)),
     query_ms:Date.now() - started,candidates_seen:candidatesSeen,compact_pages:scan.pages,
@@ -375,6 +377,10 @@ function wallRecord(fcw) {
     unavailable_contributors:list(fcw && fcw.unavailableContributors),
     partial_contributors:list(fcw && fcw.partialContributors)
   };
+  if(fcw&&fcw.agent_find&&typeof fcw.agent_find.active_truth_enforced==='boolean'){
+    output.active_truth_enforced=fcw.agent_find.active_truth_enforced;
+    output.storage_limitations=list(fcw.agent_find.storage_limitations);
+  }
   if (clean(fcw && fcw.wall_scope, 80)) output.wall_scope=clean(fcw.wall_scope,80);
   if (clean(fcw && fcw.context_policy, 160)) {
     output.context_policy=clean(fcw.context_policy,160);
@@ -486,11 +492,13 @@ async function bindWall(input, options) {
   const wallGaps = {
     partial: fcw.partial === true,
     unavailable: list(fcw.unavailableContributors),
-    degraded: list(fcw.partialContributors)
+    degraded: list(fcw.partialContributors),
+    storage_limitations:list(fcw.agent_find&&fcw.agent_find.storage_limitations)
   };
   if (wallGaps.partial || wallGaps.unavailable.length || wallGaps.degraded.length) {
     console.error('[agent.find] wall is thin, proceeding on named gaps rather than silencing her:',
-      JSON.stringify({unavailable: wallGaps.unavailable, degraded: wallGaps.degraded}).slice(0, 300));
+      JSON.stringify({unavailable: wallGaps.unavailable, degraded: wallGaps.degraded,
+        storage_limitations:wallGaps.storage_limitations}).slice(0, 300));
   }
   if (!hamUid || !cycleId || !requestId || !providerSeat || !target || !self ||
       self.lifecycle !== 'active' || (target.lifecycle !== 'active' && target.lifecycle !== 'contained')) {
@@ -553,12 +561,17 @@ async function bindWall(input, options) {
   // The thin-wall gap rides on the returned wall so nothing downstream has to guess whether it
   // is looking at a complete picture, and so a thin turn is distinguishable from a full one in
   // the receipt rather than only in a log line.
-  const gapAppendix = (wallGaps.partial || wallGaps.unavailable.length || wallGaps.degraded.length)
+  const storageGap=wallGaps.storage_limitations.indexOf('legacy_supersession_unavailable')>=0
+    ? ' This memory store could not verify whether an older record was later corrected. Treat '
+      + 'its history as useful but not complete current truth, and say that plainly if it matters.'
+    : '';
+  const gapAppendix = (wallGaps.partial || wallGaps.unavailable.length ||
+    wallGaps.degraded.length || wallGaps.storage_limitations.length)
     ? ('\n\nSome of what you normally read was not available for this turn' +
        (wallGaps.unavailable.length ? ', missing: ' + wallGaps.unavailable.join(', ') : '') +
        (wallGaps.degraded.length ? ', incomplete: ' + wallGaps.degraded.join(', ') : '') +
        '. Answer on what you do have and say plainly what you could not check. Never fill a gap ' +
-       'with a guess.')
+       'with a guess.'+storageGap)
     : '';
   return Object.assign({}, fcw, {
     agent_find_wall_gaps: wallGaps,

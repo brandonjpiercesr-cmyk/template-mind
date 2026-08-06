@@ -143,6 +143,25 @@ function dedupeContextRows(rows) {
   });
 }
 
+function agentFindWallProjection(plan,systemPrompt){
+  return {
+    ok:true,schema:plan.schema,node_id:'station.agent_find',
+    seat_node_id:plan.seat_node_id,question_sha256:plan.question_sha256,
+    selected_row_ids:plan.selected_row_ids,selections:plan.selections,query_ms:plan.query_ms,
+    candidates_seen:plan.candidates_seen,compact_pages:plan.compact_pages,
+    fcw_bytes:Buffer.byteLength(systemPrompt,'utf8'),evidence_body_bytes:plan.fcw_bytes,
+    fcw_byte_budget:plan.fcw_byte_budget,context_budget_source:plan.context_budget_source,
+    byte_envelope_reached:plan.byte_envelope_reached,omitted:plan.omitted,
+    complete:plan.complete,partial:plan.partial,
+    active_truth_enforced:plan.active_truth_enforced===true,
+    storage_limitations:Array.isArray(plan.storage_limitations)
+      ? plan.storage_limitations.slice():[],
+    continuations:plan.continuations,
+    full_history_expansion_available:plan.full_history_expansion_available,
+    heap_high_water_bytes:plan.heap_high_water_bytes
+  };
+}
+
 async function buildMemoryBank(hamUid, channel, question, identity, resolvedReadTier, options) {
   // ⬡B:core.fcw.builder:WIRE:gate_identity_authority:20260701⬡
   // When the ATMOSPHERE gate has already resolved this person, its envelope is the
@@ -1004,24 +1023,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     }
   };
   if (_evidencePlan) {
-    _builtWall.agent_find = {
-      ok:true,schema:_evidencePlan.schema,node_id:'station.agent_find',
-      seat_node_id:_evidencePlan.seat_node_id,
-      question_sha256:_evidencePlan.question_sha256,
-      selected_row_ids:_evidencePlan.selected_row_ids,
-      selections:_evidencePlan.selections,query_ms:_evidencePlan.query_ms,
-      candidates_seen:_evidencePlan.candidates_seen,compact_pages:_evidencePlan.compact_pages,
-      fcw_bytes:Buffer.byteLength(systemPrompt,'utf8'),
-      evidence_body_bytes:_evidencePlan.fcw_bytes,
-      fcw_byte_budget:_evidencePlan.fcw_byte_budget,
-      context_budget_source:_evidencePlan.context_budget_source,
-      byte_envelope_reached:_evidencePlan.byte_envelope_reached,
-      omitted:_evidencePlan.omitted,
-      complete:_evidencePlan.complete,partial:_evidencePlan.partial,
-      continuations:_evidencePlan.continuations,
-      full_history_expansion_available:_evidencePlan.full_history_expansion_available,
-      heap_high_water_bytes:_evidencePlan.heap_high_water_bytes
-    };
+    _builtWall.agent_find=agentFindWallProjection(_evidencePlan,systemPrompt);
   }
   if (!_agentFindWake) return _builtWall;
   var _agentFindRecent = (_agentFindRecentIdx >= 0 && _results[_agentFindRecentIdx] &&
@@ -1040,4 +1042,5 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
 // ⬡B:core.fcw_builder:ALIAS:memory_bank_doctrine_name_20260712⬡ BIND doctrine: Memory
 // Bank is the name, Memory Bank is retired. The builder is renamed to its doctrine-correct
 // name; the old export stays only so the not-yet-migrated reach paths keep working.
-module.exports = { buildMemoryBank, _test:{ selectHamIdentityBead, dedupeContextRows } }; // dead name buildFCW fully retired system-wide; internal fn name is legacy-only
+module.exports = { buildMemoryBank, _test:{ selectHamIdentityBead, dedupeContextRows,
+  agentFindWallProjection } }; // dead name buildFCW fully retired system-wide; internal fn name is legacy-only
