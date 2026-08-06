@@ -4342,7 +4342,10 @@ function agentFindClosedWorldReason(flags) {
 }
 
 function callPaiLadderNetwork(system, user, options) {
-  return require('./model.ladder.js').deliberate(system,user,options || {});
+  var opts=options || {};
+  if(!opts.seat)throw new Error('pai_ladder_seat_required');
+  return require('./model.ladder.js').deliberate(system,user,
+    Object.assign({},opts,{seat:opts.seat}));
 }
 
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
