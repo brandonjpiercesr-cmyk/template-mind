@@ -14,11 +14,13 @@ const DEPLOYMENTS = Object.freeze({
     auth_kind:'modal_proxy',
     eligible_seats:Object.freeze(['coda','deploy_tool','cookoff_qwen']),
     capabilities:Object.freeze({
-      context_tokens:262144,tools:true,structured_output:true,reasoning:true,
+      context_tokens:131072,native_context_tokens:262144,
+      tools:true,structured_output:true,reasoning:true,
       vision:false,openai_chat_completions:true,streaming:false
     }),
     runtime_contract:Object.freeze({
-      scale_to_zero:true,min_containers:0,max_containers:1,gpu:'H100!',gpu_count:1,
+      declared_scale_to_zero:true,min_containers:0,max_containers:1,
+      requested_gpu:'H100!',gpu_count:1,
       provider_cancellation:'not_commissioned',billing_reconciliation:'required'
     })
   })
