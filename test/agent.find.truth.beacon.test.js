@@ -124,18 +124,21 @@ test('template provider request fails closed for an unregistered paid owner', as
   assert.equal(result.reason, 'agent_find_provider_binding_invalid');
 });
 
-test('template simultaneous same-HAM cycle reads never exchange raw model draft bytes',
+test('template simultaneous same-HAM requests exclude every foreign cycle draft',
   async () => {
     const cycleA='HAM.TEST.1.life',cycleB='HAM.TEST.1.fun';
+    const requestA=cycleA+'.request',requestB=cycleB+'.request';
     const sentinelA='TEMPLATE_PRIVATE_LIFE_DRAFT_a91f';
     const sentinelB='TEMPLATE_PRIVATE_FUN_DRAFT_b72e';
-    function row(id,cycleId,sentinel) {
+    const wrongRequestSentinel='TEMPLATE_PRIVATE_WRONG_REQUEST_c43a';
+    function row(id,cycleId,requestId,sentinel) {
       return {id:id,ham_uid:HAM,stamp_type:'CYCLE_STEP',source:'pai.cycle.'+cycleId,
         summary:'[CYCLE '+cycleId.slice(-8)+'] model_rung_result: '+sentinel,
-        content:{cycleId:cycleId,step:'model_rung_result',channel:'cara',detail:sentinel,
-          atMs:id*10},created_at:'2026-08-06T10:00:0'+id+'.000Z',importance:3};
+        content:{cycleId:cycleId,requestId:requestId,step:'model_rung_result',channel:'cara',
+          detail:sentinel,atMs:id*10},created_at:'2026-08-06T10:00:0'+id+'.000Z',importance:3};
     }
-    const contaminated=[row(1,cycleA,sentinelA),row(2,cycleB,sentinelB)];
+    const contaminated=[row(1,cycleA,requestA,sentinelA),row(2,cycleB,requestB,sentinelB),
+      row(3,cycleA,requestA+'.forged',wrongRequestSentinel)];
     async function sameHamRead() {
       await Promise.resolve();
       return {ok:true,available:true,partial:false,beads:contaminated,
@@ -143,19 +146,17 @@ test('template simultaneous same-HAM cycle reads never exchange raw model draft 
     }
     const results=await Promise.all([
       agentFind.readRecentCycleTruth({ham_uid:HAM,seat_node_id:'station.pai',viewer_tier:2,
-        cycle_id:cycleA,request_id:cycleA+'.request'},{registry:registry,find:sameHamRead}),
+        cycle_id:cycleA,request_id:requestA},{registry:registry,find:sameHamRead}),
       agentFind.readRecentCycleTruth({ham_uid:HAM,seat_node_id:'station.pai',viewer_tier:2,
-        cycle_id:cycleB,request_id:cycleB+'.request'},{registry:registry,find:sameHamRead})
+        cycle_id:cycleB,request_id:requestB},{registry:registry,find:sameHamRead})
     ]);
     assert.equal(JSON.stringify(results[0]).includes(sentinelA),true);
     assert.equal(JSON.stringify(results[0]).includes(sentinelB),false);
+    assert.equal(JSON.stringify(results[0]).includes(wrongRequestSentinel),false);
     assert.equal(JSON.stringify(results[1]).includes(sentinelB),true);
     assert.equal(JSON.stringify(results[1]).includes(sentinelA),false);
-    results.forEach(function (result) {
-      assert.equal(result.ok,true);
-      assert.ok(result.beads.some(function (item) {
-        return item.summary==='prior cycle fact: model_rung_result' &&
-          item.content.cross_cycle_fact_only===true;
-      }));
-    });
+    assert.equal(results[0].beads.length,1);
+    assert.equal(results[0].beads[0].content.requestId,requestA);
+    assert.equal(results[1].beads.length,1);
+    assert.equal(results[1].beads[0].content.requestId,requestB);
   });

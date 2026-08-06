@@ -91,26 +91,26 @@ function recentTruthQueries(node, input) {
   const source = Array.isArray(configured) && configured.length ? configured
     : suffix ? [{source_prefix:suffix + '.'}] : [];
   if (!source.length) return {ok:false,reason:'agent_find_recent_truth_contract_missing'};
-  let crossCycleFactsOnly = false;
   const queries = source.map(function (query) {
     const cycleScope = clean(query && query.cycle_scope, 80);
-    if (cycleScope === 'current_cycle') {
+    if (cycleScope === 'current_request') {
       if (!cycleId || !requestId) return null;
       return copyQuery(Object.assign({}, query, {
         source:'pai.cycle.' + cycleId,source_prefix:null
       }), hamUid, viewerTier);
     }
-    if (cycleScope === 'same_ham_facts_only') crossCycleFactsOnly = true;
     return copyQuery(query, hamUid, viewerTier);
   }).filter(function (query) {
     return query && (query.stamp_type || query.source || query.source_prefix || query.agent_global);
   });
   if (source.some(function (query) { return clean(query && query.cycle_scope, 80) ===
-      'current_cycle'; }) && (!cycleId || !requestId)) {
+      'current_request'; }) && (!cycleId || !requestId)) {
     return {ok:false,reason:'agent_find_recent_truth_cycle_scope_missing'};
   }
   return queries.length ? {ok:true,queries:queries,cycle_id:cycleId,request_id:requestId,
-    cross_cycle_facts_only:crossCycleFactsOnly}
+    current_request_only:source.some(function (query) {
+      return clean(query && query.cycle_scope,80)==='current_request';
+    })}
     : {ok:false,reason:'agent_find_recent_truth_contract_invalid'};
 }
 
@@ -122,43 +122,20 @@ function parsedRowContent(row) {
   } catch (error) { return null; }
 }
 
-function cycleStepName(row) {
-  const content = parsedRowContent(row);
-  const direct = clean(content && content.step, 80);
-  if (/^[A-Za-z0-9_.:-]{1,80}$/.test(direct)) return direct;
-  const matched = clean(row && row.summary, 500).match(/\]\s+([A-Za-z0-9_.:-]{1,80})(?:\s*:|$)/);
-  return matched ? matched[1] : 'cycle_step_observed';
-}
-
-function belongsToCycle(row, cycleId) {
+function belongsToRequest(row, cycleId, requestId) {
   if (!cycleId || clean(row && row.source) !== 'pai.cycle.' + cycleId) return false;
   const content = parsedRowContent(row);
   const contentCycle = clean(content && (content.cycleId || content.cycle_id), 220);
-  return !contentCycle || contentCycle === cycleId;
-}
-
-function safeCrossCycleFact(row) {
-  const content = parsedRowContent(row);
-  const channel = clean(content && content.channel, 80);
-  const atMs = Number(content && content.atMs);
-  const safeContent = {step:cycleStepName(row),cross_cycle_fact_only:true};
-  if (/^[A-Za-z0-9_.:-]{1,80}$/.test(channel)) safeContent.channel = channel;
-  if (Number.isFinite(atMs) && atMs >= 0) safeContent.atMs = atMs;
-  return {
-    id:row && row.id,ham_uid:exactHam(row && row.ham_uid),
-    stamp_type:clean(row && row.stamp_type),source:clean(row && row.source),
-    summary:'prior cycle fact: ' + safeContent.step,
-    content:safeContent,created_at:clean(row && row.created_at, 80) || null,
-    importance:Number(row && row.importance || 0)
-  };
+  const contentRequest = clean(content && (content.requestId || content.request_id), 220);
+  return contentCycle === cycleId && !!requestId && contentRequest === requestId;
 }
 
 function scopedRecentRows(rows, built) {
   const seen = new Set();
-  return (Array.isArray(rows) ? rows : []).map(function (row) {
-    if (!built.cross_cycle_facts_only || belongsToCycle(row, built.cycle_id)) return row;
-    return safeCrossCycleFact(row);
-  }).filter(function (row) {
+  return (Array.isArray(rows) ? rows : []).filter(function (row) {
+    if (built.current_request_only && !belongsToRequest(row, built.cycle_id, built.request_id)) {
+      return false;
+    }
     const key = [clean(row && row.id),clean(row && row.source),clean(row && row.stamp_type),
       clean(row && row.created_at, 80),clean(row && row.summary, 500)].join('|');
     if (seen.has(key)) return false;
@@ -192,7 +169,7 @@ async function readRecentCycleTruth(input, options) {
   return {ok:true,available:true,partial:found.partial === true,beads:beads,
     count:beads.length,ms:Number(found.ms || 0),queries:built.queries,
     scope:{cycle_id:built.cycle_id || null,request_id:built.request_id || null,
-      cross_cycle_mode:built.cross_cycle_facts_only ? 'facts_only' : 'seat_history'},
+      cross_cycle_mode:built.current_request_only ? 'excluded' : 'seat_history'},
     failures:Array.isArray(found.failures) ? found.failures : []};
 }
 
@@ -847,7 +824,7 @@ module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
   _test:{recentTruthQueries:recentTruthQueries,employmentRecord:employmentRecord,
     recentTruthRecord:recentTruthRecord,wallRecord:wallRecord,employmentPrompt:employmentPrompt,
     parseProviderBody:parseProviderBody,messageFacts:messageFacts,closedWorldRecent:closedWorldRecent,
-    scopedRecentRows:scopedRecentRows,safeCrossCycleFact:safeCrossCycleFact,
+    scopedRecentRows:scopedRecentRows,belongsToRequest:belongsToRequest,
     questionTerms:questionTerms,candidateFacts:candidateFacts,compareCandidates:compareCandidates,
     runtimeContextBudgets:runtimeContextBudgets,
     digest:digest}};
