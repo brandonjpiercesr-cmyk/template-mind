@@ -4390,11 +4390,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _personalIntentEligible=personalIntentEligible(identity);
   var _structuredReachPolicy=structuredReachPolicyMode(channel,identity);
   var _worldBuilderMachine=hamWorldBuilderMachineMode(channel,identity);
-  var _worldBuilderBudget=_worldBuilderMachine&&identity&&identity._worldBuilderBudget;
-  var _worldBuilderMaxIterations=_worldBuilderBudget&&
-    Number.isInteger(_worldBuilderBudget.maxIterations)?_worldBuilderBudget.maxIterations:8;
-  var _worldBuilderMaxProviderCalls=_worldBuilderBudget&&
-    Number.isInteger(_worldBuilderBudget.maxProviderCalls)?_worldBuilderBudget.maxProviderCalls:12;
+  var _worldBuilderObservation=_worldBuilderMachine&&identity&&identity._worldBuilderObservation;
   var _worldBuilderProviderCalls=0;
   var _providerAdmissionRequired=!!require('./provider.request.edge.js').currentAdmission();
   // The verified voice route authorizes this object through a process-owned
@@ -4657,10 +4653,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // the exact provider boundary so a Qwen primary cannot hand Qwen-only
     // template fields to a non-Qwen rescue (or vice versa).
     applyProviderThinkingPolicy(providerBody, candidate.seat.model);
-    if(_worldBuilderMachine&&_worldBuilderProviderCalls>=_worldBuilderMaxProviderCalls){
-      return{error:{code:'ham_world_builder_provider_budget_exhausted',
-        seat:candidate.seat&&candidate.seat.seat}};
-    }
     try {
       var startProvider=function(){
         if(_worldBuilderMachine)_worldBuilderProviderCalls++;
@@ -4717,9 +4709,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (paiVoiceDeadlineExhausted(_voiceModelDeadline, Date.now())) {
       if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
       return null;
-    }
-    if (_worldBuilderMachine && _worldBuilderProviderCalls >= _worldBuilderMaxProviderCalls) {
-      throw new Error('ham_world_builder_provider_budget_exhausted');
     }
     var startLadder=function(){
       if (_worldBuilderMachine) _worldBuilderProviderCalls++;
@@ -5572,11 +5561,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     ? _exactUserMessage : message;
   var _explicitRequiredActionTool = null;
   while (!ans) {
-    if(_worldBuilderMachine&&iter>=_worldBuilderMaxIterations){
-      return{ok:false,reason:'ham_world_builder_iteration_budget_exhausted',ham:hamObj,
-        cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
-        provider_calls:_worldBuilderProviderCalls,ms:Date.now()-t0};
-    }
     // COLD CODE MAY END THE TURN. IT MAY NOT ANSWER IT. When either backstop fires she
     // gets one more pass, tools removed, with an explicit instruction to answer the whole
     // ask from what she already gathered. So hitting a ceiling is never the first time she
@@ -8166,7 +8150,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     ham:hamObj,cycleId:_cycleId,
     requestId:_requestId,request_id:_requestId,councilReceipt:_councilReceipt,council_receipt:_councilReceipt,
     stampProof:_stampProof,stamp_proof:_stampProof,
-    tools_used:tools,iterations:iter,ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,
+    tools_used:tools,iterations:iter,
+    world_builder_observation:_worldBuilderMachine?{
+      semantic_authority:false,purpose:'TELEMETRY_ONLY',
+      configured_iterations:_worldBuilderObservation&&_worldBuilderObservation.maxIterations||null,
+      configured_provider_calls:_worldBuilderObservation&&
+        _worldBuilderObservation.maxProviderCalls||null,
+      provider_calls:_worldBuilderProviderCalls,
+      changed_evidence:Object.keys(_seenEvidence).length>0}:null,
+    ms:Date.now()-t0,fcw_ms:(fcw&&fcw.ms)||0,fcw_build_ms:_fcwBuildMs,
     fcw_contributors:(fcw&&fcw.contributors)||null,
     fcw_contributors_resolved:(fcw&&fcw.contributorsResolved)||0,
     fcw_contributors_total:(fcw&&fcw.contributorsTotal)||0,
