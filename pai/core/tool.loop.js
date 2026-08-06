@@ -508,9 +508,9 @@ var DATA_READER_TOOLS = {
 // Both were cold code deciding she was finished thinking, which is the standing law
 // inverted. Neither is a literal any more.
 //
-// THE CEILING IS NOT WHAT ENDS A TURN NOW. The progress stop is (search
-// no_new_evidence below). A counter is a runaway backstop and nothing else, and it is
-// only safe to raise it BECAUSE something better ends the turn first.
+// THE CEILING IS NOT WHAT ENDS A TURN NOW. Repeated evidence or question counts are
+// infrastructure observations. They wake the named continuation Wonder and its independent
+// PENNY SHADOW challenge. Only that governed judgment can open an answer pass.
 //
 // 72 is derived, not round. She holds 41 registered tools (TOOLS below). The honest
 // worst case for a genuinely productive turn is one full sweep of her armory plus a
@@ -540,9 +540,8 @@ function _repeatQuestionLimit() { return _boundEnvInt('PAI_REPEAT_QUESTION_LIMIT
 
 // ⬡B:core.tool_loop:BUILD:no_new_evidence_is_arithmetic_the_answer_is_hers:20260726⬡
 // THE DOCTRINAL LINE, and everything below respects it: cold code MAY detect that no new
-// evidence arrived. Cold code may NEVER decide what the answer is. Detecting a repeat is
-// arithmetic. Composing the reply is hers. So the only thing this machinery is allowed to
-// do on firing is hand her one more turn to speak with everything already gathered.
+// evidence arrived. Cold code may NEVER decide whether thinking is finished or what the
+// answer is. Detecting a repeat is arithmetic. The observation wakes A'NU and PENNY SHADOW.
 function _stableJson(value) {
   if (value === undefined) return 'null';
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -5537,25 +5536,58 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     _roadmapActivationNeeded = _effectRuntime.codaActivationApproved === true;
   }
   // ⬡B:core.tool_loop:BUILD:the_progress_stop_and_the_closing_pass:20260726⬡
-  // She should stop because she is not getting anywhere, never because a counter ran out.
+  // A repeat counter only wakes judgment. It never decides that she is done thinking.
   var _barrenLimit = _noNewEvidenceLimit();
   var _repeatLimit = _repeatQuestionLimit();
   var _seenEvidence = Object.create(null); // every (tool, args, result) triple this turn
   var _seenCalls = Object.create(null);    // every (tool, args) question asked this turn
   var _barrenRun = 0;                      // CONSECUTIVE iterations that added nothing new
   var _repeatRun = 0;                      // CONSECUTIVE iterations that asked nothing new
-  var _closingReason = null;               // set once, by cold code, to end the turn
+  var _closingReason = null;               // set only by A'NU plus PENNY SHADOW judgment
   var _closingPassRan = false;
   var _toolTextRejectedOnce = false;       // one corrective pass per turn, never two
   var _exactRoutedWords = (_exactUserMessage && _exactUserMessage.trim())
     ? _exactUserMessage : message;
   var _explicitRequiredActionTool = null;
+  async function _wakeTurnContinuation(signal,genuineProgress,changedEvidence) {
+    if (await _turnCancelled(true)) return {terminal:_turnCancelledResult('before_continuation_judgment')};
+    var _continuationJudge=identity&&typeof identity._turnContinuationJudge==='function'
+      ?identity._turnContinuationJudge:require('./pai.turn.continuation.wonder.js').judge;
+    var _evidenceDigest=_crypto.createHash('sha256').update(
+      Object.keys(_seenEvidence).sort().join('\n'),'utf8').digest('hex');
+    var _continuationInput={ham_uid:hamUid,request_id:_requestId,cycle_id:_cycleId,
+      signal:signal,facts:{changed_evidence_digest:_evidenceDigest,
+        changed_evidence:changedEvidence===true,genuine_progress:genuineProgress===true,
+        repeated_failure:genuineProgress!==true,
+        provider_uncertainty:_cycleFailure?String(_cycleFailure).slice(0,240):null,
+        cost_truth:{state:'OUTCOME_UNKNOWN',provider_passes_observed:iter},
+        kill_truth:{state:'CLEAR'},observations:{barren_run:_barrenRun,
+          repeated_question_run:_repeatRun,tools_used:tools.length,
+          infrastructure_signal:signal,semantic_authority:false}}};
+    var _judged;
+    try{
+      _judged=await _continuationJudge(_continuationInput,{deliberate:async function(seat,messages,opts){
+        return _callPaiLadder(messages[0].content,messages[1].content,
+          Object.assign({},opts||{},{seat:seat}));}});
+    }catch(eContinuation){_judged={ok:false,reason:'turn_continuation_judgment_threw'};}
+    if(await _turnCancelled(true))return{terminal:_turnCancelledResult('after_continuation_judgment')};
+    if(!_judged||_judged.ok!==true)return{terminal:{ok:false,
+      reason:_judged&&_judged.reason||'turn_continuation_judgment_unverified',
+      blocked_by:'PAI_CONTINUATION',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+      tools_used:tools,iterations:iter,ms:Date.now()-t0}};
+    _stampStep('turn_continuation_judged',_judged.decision+' signal='+signal+
+      ' receipt='+String(_judged.receipt&&_judged.receipt.source||'mechanical_hold'));
+    if(_judged.decision==='ANSWER_NOW')return{close:true,reason:'wonder_answer_now'};
+    if(_judged.decision==='CONTINUE')return{continue:true};
+    return{terminal:{ok:false,reason:_judged.decision==='WAIT'
+      ?'turn_continuation_wait':'turn_continuation_escalated',
+      blocked_by:_judged.decision==='WAIT'?'A\'NU':'guardian.clair',ham:hamObj,
+      cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+      continuation_receipt:_judged.receipt||null,ms:Date.now()-t0}};
+  }
   while (!ans) {
-    // COLD CODE MAY END THE TURN. IT MAY NOT ANSWER IT. When either backstop fires she
-    // gets one more pass, tools removed, with an explicit instruction to answer the whole
-    // ask from what she already gathered. So hitting a ceiling is never the first time she
-    // is asked to speak, and the honest working-limit line further down is what is left
-    // only if she is handed the floor and still says nothing.
+    // A'NU can open an answer pass only after the continuation Wonder and PENNY SHADOW
+    // agree. Cold code merely applies that receipt and removes tools for the answer pass.
     if (_closingReason && _closingPassRan) break;
     if (_closingReason && !_closingPassRan) {
       _closingPassRan = true;
@@ -6389,17 +6421,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         });
         _barrenRun++;
         if (_barrenRun >= _barrenLimit && !_closingReason) {
-          _closingReason = 'no_new_evidence';
-          _stampStep('progress_stop', 'no_new_evidence after ' + _barrenRun +
-            ' consecutive barren iterations, iter=' + iter);
+          var _breachEvidenceJudgment=await _wakeTurnContinuation('no_new_evidence',false,false);
+          if(_breachEvidenceJudgment.terminal)return _breachEvidenceJudgment.terminal;
+          if(_breachEvidenceJudgment.close)_closingReason=_breachEvidenceJudgment.reason;
+          else _barrenRun=0;
         }
         if (_breachAskedNew) { _repeatRun = 0; }
         else {
           _repeatRun++;
           if (_repeatRun >= _repeatLimit && !_closingReason) {
-            _closingReason = 'no_new_question';
-            _stampStep('progress_stop', 'no_new_question after ' + _repeatRun +
-              ' consecutive iterations asking nothing new, iter=' + iter);
+            var _breachQuestionJudgment=await _wakeTurnContinuation('no_new_question',false,false);
+            if(_breachQuestionJudgment.terminal)return _breachQuestionJudgment.terminal;
+            if(_breachQuestionJudgment.close)_closingReason=_breachQuestionJudgment.reason;
+            else _repeatRun=0;
           }
         }
         continue;
@@ -6581,11 +6615,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           + 'NEVER say their budget is not set up, or that they have no income or no bills, when the result shows projectedIncome, incomeSources, or recurringBills. Only if the result is genuinely empty (empty:true) do you say the budget is not set up yet.' });
       }
       // ⬡B:core.tool_loop:BUILD:the_progress_stop_deciding_half:20260726⬡
-      // THIS is what ends a turn now, not a counter. An iteration whose every call
-      // produced a triple already in this turn added NOTHING to the transcript except a
-      // second copy of what was already in it. That is a mechanical fact about bytes, and
-      // cold code is allowed to notice it. It stays a fact and never becomes a judgment:
-      // all it does is open the closing pass, where SHE answers.
+      // An iteration whose every call produced an already-seen triple added no new bytes.
+      // Cold code records that fact. Once the infrastructure signal matures, A'NU and
+      // PENNY SHADOW judge its meaning. The counter itself opens nothing.
       //
       // THE FAILURE MODES IT MUST NOT HIT, and why the threshold is 3:
       //  - A legitimate retry after a transient error. The refused GitHub search of
@@ -6614,9 +6646,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           'run=' + _barrenRun + '/' + _barrenLimit + ' iter=' + iter +
           ' calls=' + msg.tool_calls.length);
         if (_barrenRun >= _barrenLimit && !_closingReason) {
-          _closingReason = 'no_new_evidence';
-          _stampStep('progress_stop', 'no_new_evidence after ' + _barrenRun +
-            ' consecutive barren iterations, iter=' + iter);
+          var _evidenceJudgment=await _wakeTurnContinuation('no_new_evidence',false,false);
+          if(_evidenceJudgment.terminal)return _evidenceJudgment.terminal;
+          if(_evidenceJudgment.close)_closingReason=_evidenceJudgment.reason;
+          else _barrenRun=0;
         }
       }
       // THE WEAK SIGNAL, and the reason it exists is a hole in the strong one that would
@@ -6632,9 +6665,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       else {
         _repeatRun++;
         if (_repeatRun >= _repeatLimit && !_closingReason) {
-          _closingReason = 'no_new_question';
-          _stampStep('progress_stop', 'no_new_question after ' + _repeatRun +
-            ' consecutive iterations asking nothing new, iter=' + iter);
+          var _questionJudgment=await _wakeTurnContinuation('no_new_question',false,false);
+          if(_questionJudgment.terminal)return _questionJudgment.terminal;
+          if(_questionJudgment.close)_closingReason=_questionJudgment.reason;
+          else _repeatRun=0;
         }
       }
       continue;
@@ -8201,6 +8235,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           cycleId:_cycleId, requestId:_requestId, channel:channel, answer:finalAns,
           question:_exactUserMessage, deliberationInput:String(message||''),
           councilProof:compactCouncilProof(_council), councilResult:_council,
+          evidenceLineage:_councilContext.world_job_evidence_lineage||null,
           // The committed council marker is the canonical world binding. Raw
           // identity/HAM labels may be mixed-case, conflicting, or deliberately
           // excluded from the allowlisted active-world lane.
