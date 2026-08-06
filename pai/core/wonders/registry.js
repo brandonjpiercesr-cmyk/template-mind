@@ -111,7 +111,9 @@ const NODES = [
     context_policy:'context.pai.full.v1', authority_policy:'authority.pai.v1',
     return_gate:'gate.ham.active_channel', metadata:{wiring:[wire('core'),wire('logful'),
       wire('core/tool.loop.js#runPAI'),wire('core/pai.turn.continuation.wonder.js#judge')],agent_find:{recent_truth:[
-        {stamp_type:'CYCLE_STEP',source_prefix:'pai.cycle.',limit:12}
+        {stamp_type:'CYCLE_STEP',cycle_scope:'current_cycle',limit:12},
+        {stamp_type:'CYCLE_STEP',source_prefix:'pai.cycle.',
+          cycle_scope:'same_ham_facts_only',limit:12}
       ]}}
   },
   {
