@@ -76,7 +76,7 @@ function internalEffectPayload(input, now) {
   var nonce = String(input.nonce || '');
   var expiresAt = Number(input.expiresAt);
   if (!body || typeof body !== 'object' || Array.isArray(body) ||
-      !/^\/(?:reach\/out|vara\/call|iman\/send|lina\/send|lina\/call|model-control\/internal\/intents)$/.test(path) ||
+      !/^\/(?:reach\/out|vara\/call|iman\/send|lina\/send|lina\/call|model-control\/internal\/intents|world-builder\/internal\/(?:read-knowledge|commission-knowledge|submit-job))$/.test(path) ||
       !/^[A-Za-z0-9._:-]{8,160}$/.test(requestId) ||
       !/^[A-Z0-9._:-]{2,160}$/.test(hamUid) ||
       !/^[A-Za-z0-9._:-]{16,220}$/.test(nonce) ||
