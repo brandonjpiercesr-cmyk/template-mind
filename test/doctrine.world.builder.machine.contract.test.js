@@ -62,7 +62,9 @@ test('every provider ladder call crosses the common World Builder budget fence',
   assert.ok(start > -1 && end > start);
   const door=code.slice(start,end);
   assert.match(door,/paiVoiceDeadlineExhausted/);
-  assert.match(door,/_worldBuilderProviderFence/);
+  assert.doesNotMatch(door,/_worldBuilderProviderFence/);
+  assert.match(door,/callPaiLadderNetwork/);
+  assert.doesNotMatch(door,/executeCurrentProviderRequest/);
   assert.match(door,/_worldBuilderProviderCalls >= _worldBuilderMaxProviderCalls/);
   assert.match(door,/Object\.assign\(\{seat:_providerSeat \|\| _paiSeatName\(\)\}/,
     'the common ladder door owns the exact paid seat when a caller omits it');

@@ -4341,6 +4341,13 @@ function agentFindClosedWorldReason(flags) {
   return null;
 }
 
+function callPaiLadderNetwork(system, user, options) {
+  var opts=options || {};
+  if(!opts.seat)throw new Error('pai_ladder_seat_required');
+  return require('./model.ladder.js').deliberate(system,user,
+    Object.assign({},opts,{seat:opts.seat}));
+}
+
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
@@ -4358,16 +4365,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _worldBuilderMaxProviderCalls=_worldBuilderBudget&&
     Number.isInteger(_worldBuilderBudget.maxProviderCalls)?_worldBuilderBudget.maxProviderCalls:12;
   var _worldBuilderProviderCalls=0;
-  var _worldBuilderProviderFenceReady=false;
-  async function _worldBuilderProviderFence(){
-    if(!_worldBuilderMachine)return true;
-    if(_worldBuilderProviderFenceReady)return true;
-    if(!identity||typeof identity._worldBuilderBeforeProvider!=='function')return false;
-    try{
-      _worldBuilderProviderFenceReady=await identity._worldBuilderBeforeProvider()===true;
-      return _worldBuilderProviderFenceReady;
-    }catch(eWorldBuilderFence){return false;}
-  }
+  var _providerAdmissionRequired=!!require('./provider.request.edge.js').currentAdmission();
   // The verified voice route authorizes this object through a process-owned
   // WeakSet. A JSON field named room_safe is never sufficient to close a world.
   var _roomSafeVoice=String(channel||'').toLowerCase()==='voice' &&
@@ -4632,19 +4630,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return{error:{code:'ham_world_builder_provider_budget_exhausted',
         seat:candidate.seat&&candidate.seat.seat}};
     }
-    if(!await _worldBuilderProviderFence()){
-      return{error:{code:'ham_world_builder_attempt_receipt_unavailable',
-        seat:candidate.seat&&candidate.seat.seat}};
-    }
-    if(_worldBuilderMachine)_worldBuilderProviderCalls++;
     try {
-      var response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method:'POST',
-        headers:{Authorization:'Bearer ' + candidate.key,'Content-Type':'application/json',
-          'HTTP-Referer':process.env.SELF_BASE_URL||process.env.AIBEBASE_URL||'https://aibebase.onrender.com',
-          'X-Title':'ANEW Envolve'},
-        body:JSON.stringify(providerBody),signal:_providerAttemptSignal(candidate)
-      });
+      var startProvider=function(){
+        if(_worldBuilderMachine)_worldBuilderProviderCalls++;
+        return fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method:'POST',
+          headers:{Authorization:'Bearer ' + candidate.key,'Content-Type':'application/json',
+            'HTTP-Referer':process.env.SELF_BASE_URL||process.env.AIBEBASE_URL||'https://aibebase.onrender.com',
+            'X-Title':'ANEW Envolve'},
+          body:JSON.stringify(providerBody),signal:_providerAttemptSignal(candidate)
+        });
+      };
+      var response;
+      if(_providerAdmissionRequired){
+        var admitted=await require('./provider.request.edge.js').executeCurrentProviderRequest({
+          hamUid:hamUid,call:startProvider});
+        if(!admitted||admitted.ok!==true){
+          return{error:{code:admitted&&admitted.reason||'provider_admission_refused',
+            seat:candidate.seat&&candidate.seat.seat}};
+        }
+        response=admitted.response;
+      }else response=await startProvider();
       var payload = await response.json();
       if (response && response.ok === false) {
         if(!(payload&&payload.error))payload={error:{code:'pai_seat_http_'+response.status}};
@@ -4681,15 +4687,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       if (!_cycleFailure) _noteCycleFailure('pai_voice_deadline_exhausted');
       return null;
     }
-    if (!await _worldBuilderProviderFence()) {
-      throw new Error('ham_world_builder_attempt_receipt_unavailable');
-    }
     if (_worldBuilderMachine && _worldBuilderProviderCalls >= _worldBuilderMaxProviderCalls) {
       throw new Error('ham_world_builder_provider_budget_exhausted');
     }
-    if (_worldBuilderMachine) _worldBuilderProviderCalls++;
-    return require('./model.ladder.js').deliberate(system, user,
-      Object.assign({seat:_providerSeat || _paiSeatName()}, options || {}));
+    var startLadder=function(){
+      if (_worldBuilderMachine) _worldBuilderProviderCalls++;
+      return callPaiLadderNetwork(system,user,
+        Object.assign({seat:_providerSeat || _paiSeatName()}, options || {}));
+    };
+    // model.ladder owns each actual network request. Wrapping the ladder itself here would
+    // count a non-network orchestration call as a provider start before rung one exists.
+    return startLadder();
   }
   async function callPAIPlain(sys, user, maxTokens) {
     var messages = sys ? [{role:'system',content:sys},{role:'user',content:user}] : user;
@@ -6401,6 +6409,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       for (var i=0;i<msg.tool_calls.length;i++){
         if (await _turnCancelled()) return _turnCancelledResult('before_tool');
         var tc=msg.tool_calls[i],targs={};
+        var _governedToolEdge=require('./provider.request.edge.js');
         try{targs=JSON.parse(tc.function.arguments||'{}');}catch(e){}
         // ⬡B:core.tool_loop:GUARD:signed_voice_reads_bind_exact_ham:20260717⬡
         // A model once asked for the legacy unresolved-inbox HAM while serving
@@ -6412,7 +6421,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         }
         tc.function.arguments = JSON.stringify(targs);
         _stampStep('tool_call', tc.function.name);
-        var tr=await executeTool(tc.function.name,targs,hamUid,message,_effectRuntime,true);
+        var _governedTool=await _governedToolEdge.executeCurrentGovernedWork({hamUid:hamUid,
+          call:function(){return executeTool(tc.function.name,targs,hamUid,message,
+            _effectRuntime,true);}});
+        if(!_governedTool.ok){
+          _stampStep('cycle_parked','person_stop_before_tool_execution');
+          return {ok:false,reason:_governedTool.reason||'kill_switch_unverified',
+            blocked_by:'PERSON_STOP',stop_stage:'before_tool_execution',ham:{uid:hamUid},
+            cycleId:_cycleId,requestId:_requestId,tools_used:tools.slice(),
+            iterations:Number.isInteger(iter)?iter:0,ms:Date.now()-t0};
+        }
+        var tr=_governedTool.response;
         tools.push(tc.function.name);
         // THE PROGRESS STOP, measuring half. Pure arithmetic over what was asked and what
         // actually came back. Nothing here reads meaning; it only counts repeats.
@@ -8267,12 +8286,24 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
   var component = String(process.env.PAI_COMPONENT_ID || 'pai.cycle').trim();
   var result;
   try {
-    result = await require('./spend.guard.js').withAttribution({ham_uid:exactHam,
-      cycle_id:cycleId,request_id:requestId,seat:seat,component:component,
-      owner_node_id:ownerNodeId,target_wonder_id:'wonder.anu'},function () {
-        return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
-          {cycle_id:cycleId,request_id:requestId});
-      });
+    var runAttributed=function(){
+      return require('./spend.guard.js').withAttribution({ham_uid:exactHam,
+        cycle_id:cycleId,request_id:requestId,seat:seat,component:component,
+        owner_node_id:ownerNodeId,target_wonder_id:'wonder.anu'},function () {
+          return runPAIInner(hamUid,message,channel,identity,priorTurns,uiPortal,
+            {cycle_id:cycleId,request_id:requestId});
+        });
+    };
+    var admissionHook=identity&&typeof identity._beforeProviderAdmission==='function'
+      ?identity._beforeProviderAdmission
+      :_worldBuilderTurn&&identity&&typeof identity._worldBuilderBeforeProvider==='function'
+        ?identity._worldBuilderBeforeProvider:null;
+    if(_worldBuilderTurn&&!admissionHook)admissionHook=async function(){return false;};
+    if(admissionHook&&!require('./provider.request.edge.js').currentAdmission()){
+      result=await require('./provider.request.edge.js').runWithAdmission({hamUid:exactHam,
+        admit:admissionHook,onRefused:identity&&identity._onProviderAdmissionRefused},
+      runAttributed);
+    }else result=await runAttributed();
   } catch (eTurn) {
     // A thrown turn is still a turn she took, and it is the one most worth tracing.
     // Stamp the honest failure, then rethrow exactly as before: no caller sees a
@@ -8450,4 +8481,5 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,_ghHoldRe
   founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
-  paiReasoningSeat,paiCycleSeat,receiptReconsiderationFeedback,normalizeSubmitJobArgs}};
+  paiReasoningSeat,paiCycleSeat,callPaiLadderNetwork,
+  receiptReconsiderationFeedback,normalizeSubmitJobArgs}};
