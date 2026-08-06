@@ -73,7 +73,7 @@ test('Template refuses a changed project-context judgment before execution',asyn
   assert.equal(loop.pendingEffectSetCheck(result,changed).ok,false);
   const source=fs.readFileSync(require.resolve('../pai/core/tool.loop.js'),'utf8');
   assert.ok((source.match(/pendingEffectSetCheck\(_council,_effectRuntime\.pendingEffects\)/g)||[])
-    .length>=2,'the inherited executor must verify before and during effect execution');
+    .length>=3,'the inherited executor must verify before planning, effect, and commit');
 });
 
 test('Template refuses malformed pending effects before durable writes',async function(){

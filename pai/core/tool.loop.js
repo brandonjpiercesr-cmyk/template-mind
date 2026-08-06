@@ -8104,6 +8104,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         return /\b(?:5\d\d|429)\b|rate.?limit|time.?out|timed out|ECONN|ETIMEDOUT|EAI_AGAIN|hang up|fetch failed|network|unavailable|overloaded|too many/i
           .test(_why);
       };
+      _effectSetCheck=pendingEffectSetCheck(_council,_effectRuntime.pendingEffects);
+      if(!_effectSetCheck.ok){
+        _stampStep('post_council_effect_set_held',_effectSetCheck.reason);
+        _abandonMemoryKeeperTurn('effect_set_changed_before_commit_'+_effectIndex);
+        return{ok:false,reason:_effectSetCheck.reason,blocked_by:'STAMP',ham:hamObj,
+          cycleId:_cycleId,requestId:_requestId,pending_effects_committed:false,
+          councilProof:compactCouncilProof(_council),side_effects:_effectResults,
+          tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      }
       for (;;) {
         _effectAttempts++;
         var _effectThrew = null;
