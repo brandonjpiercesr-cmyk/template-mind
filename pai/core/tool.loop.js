@@ -4850,7 +4850,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         source:'pai.cycle.'+_cycleId,
         acl_stamp:'\u2b21B:core.tool.loop:CYCLE_STEP:'+step+':'+Date.now()+'\u2b21',
         summary:'[CYCLE '+_cycleId.slice(-8)+'] '+step+(detail?': '+String(detail).slice(0):''),
-        content:JSON.stringify({cycleId:_cycleId,step:step,channel:channel,
+        content:JSON.stringify({cycleId:_cycleId,requestId:_requestId,step:step,channel:channel,
           sessionId:_voiceSessionId || null,turnId:_voiceTurnId || null,
           detail:detail||null,atMs:Date.now()-t0}),
         importance:3})
