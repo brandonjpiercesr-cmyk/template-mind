@@ -60,6 +60,9 @@ var DELIVERY_TARGET_SCHEMA = 'anew.pai.delivery.target.v1';
 var REACH_HANDOFF_SCHEMA = 'anew.pai.reach-handoff.v1';
 var CURRENT_CAPABILITY_BINDING_SCHEMA = 'anew.pai.current-capability-answer-binding.v1';
 var currentCapabilityBindings = new WeakSet();
+var WRIT_MEANING_PACKET = Symbol('writ_meaning_packet');
+var writMeaningPacketRuns = new WeakMap();
+var consumedWritMeaningPackets = new WeakSet();
 
 function digestText(value) {
   return crypto.createHash('sha256').update(Buffer.from(String(value), 'utf8')).digest('hex');
@@ -387,7 +390,9 @@ function namedCauseIn(reason, causes) {
 }
 
 function isCleanBoardHold(reason) {
-  return namedCauseIn(reason, CLEAN_BOARD_HOLD_REASONS) !== null;
+  var normalized = String(reason == null ? '' : reason).trim().toLowerCase()
+    .replace(/(^|:)writ_unavailable_hold(?=:|$)/g, '$1writ_hold');
+  return namedCauseIn(normalized, CLEAN_BOARD_HOLD_REASONS) !== null;
 }
 
 // ⬡B:core.pai_outbound_council:FIX:a_retry_that_cannot_win_is_not_a_retry:20260725⬡
@@ -3003,18 +3008,25 @@ async function defaultWritStage(ctx) {
     reason:'WRIT_STRUCTURED_REACH_POLICY_PASS', evidence:{ verdict:'PASS',
       hard_fails:[],advisory_flags:[],emojis_removed:0,em_dashes_removed:0,
       meta_removed:0,exact_structured_policy:true } };
+  var preWritDraft = ctx.answer;
   var writ = require('../board/writ.js');
   var mode = ctx.context && ctx.context.mode;
   // ⬡B:core.pai_outbound_council:WIRE:writ_reads_its_law_for_this_world:20260728⬡
   // hamUid rides in so the WRIT organ can read doctrine.writ.persona.v1 from THIS
   // world's brain and supersede its embedded law floor. Resolved upstream through
   // the ABAHAM door, never a literal, and absent it the organ simply uses the floor.
-  var checkedAndBanked = await writ.writCheckAndBank(ctx.hamUid, ctx.answer, {
+  var writContext = {
     channel: ctx.channel || 'unknown',
     mode: mode || 'default',
     hamUid: ctx.hamUid,
     internal: mode === 'coding' || mode === 'internal'
-  });
+  };
+  if (ctx.context && typeof ctx.context.deliberate === 'function') writContext.deliberate = ctx.context.deliberate;
+  if (ctx.context && ctx.context.brain) writContext.brain = ctx.context.brain;
+  var writBankOptions = {};
+  if (ctx.context && ctx.context.brain) writBankOptions.brain = ctx.context.brain;
+  var checkedAndBanked = await writ.writCheckAndBank(ctx.hamUid, ctx.answer,
+    writContext, writBankOptions);
   var result = checkedAndBanked && checkedAndBanked.check;
   var bank = checkedAndBanked && checkedAndBanked.bank;
   // ⬡B:core.pai_outbound_council:FIX:writ_canonical_output_only:20260715⬡
@@ -3022,6 +3034,45 @@ async function defaultWritStage(ctx) {
   // raw stripEmoji/removeEmDash here bypassed its coding context and could
   // mutate fenced code or literal CLI flags after WRIT said they were safe.
   var output = result && typeof result.cleaned === 'string' ? result.cleaned : '';
+  var writOutput = output;
+  var writOutputDigest = output ? digestText(output) : null;
+  var writOutputBound = !!(bank && bank.banked === true && bank.verdict &&
+    bank.verdict.output_digest === writOutputDigest &&
+    bank.verdict.output_bytes === Buffer.byteLength(output, 'utf8'));
+  var postMeta = null;
+  var postMetaHoldReason = null;
+  var requiresHumanRecheck = mode !== 'coding' && mode !== 'internal';
+  if (requiresHumanRecheck && result && result.ok === true && writOutputBound && output.trim()) {
+    var metaOrgan = require('../agents/meta_commentary.js');
+    var postState = {pendingOutbound:output};
+    postMeta = await metaOrgan.handle({
+      intent:ctx.question || '', channel:ctx.channel || 'unknown', hamUid:ctx.hamUid,
+      forceModel:true, deliberate:ctx.context && ctx.context.deliberate,
+      brain:ctx.context && ctx.context.brain
+    }, postState);
+    var metaVerdict = postMeta && postMeta.metaCommentary;
+    var metaOutput = postMeta && typeof postMeta.pendingOutbound === 'string'
+      ? postMeta.pendingOutbound : '';
+    var metaOutputBound = !!(metaVerdict && metaVerdict.output_digest === digestText(metaOutput) &&
+      metaVerdict.output_bytes === Buffer.byteLength(metaOutput, 'utf8'));
+    var metaModelProven = !!(metaVerdict && metaVerdict.ok === true &&
+      metaVerdict.organ_decider === 'model' && metaVerdict.failed_open !== true &&
+      metaVerdict.banked === true && metaVerdict.receipt_state === 'completed' &&
+      metaOutputBound && metaOutput.trim());
+    var metaUnavailableProven = !!(metaVerdict && metaVerdict.ok === true &&
+      metaVerdict.decider === 'organ_unavailable_failed_open' &&
+      metaVerdict.failed_open === true && metaVerdict.banked === true &&
+      metaVerdict.receipt_state === 'unavailable' && metaOutputBound &&
+      metaOutput === writOutput && metaOutput.trim());
+    var metaProven = metaModelProven || metaUnavailableProven;
+    if (metaProven) {
+      output = metaOutput;
+    } else {
+      postMetaHoldReason = metaVerdict && metaVerdict.ok !== true
+        ? 'writ_post_meta_model_hold' : 'writ_post_meta_receipt_unverified';
+      output = '';
+    }
+  }
   // ⬡B:core.pai_outbound_council:FIX:the_writ_hold_reason_names_which_law_broke:20260725⬡
   // The same disease as the hollow hold fixed above, one stage over. On the hold path
   // board/writ/writ.js sets no reason at all, so this carried the bare verdict 'WRIT_HOLD'
@@ -3045,12 +3096,26 @@ async function defaultWritStage(ctx) {
   }).slice(0, 2);
   var writVerdict = result && (result.reason || result.verdict);
   var writHeld = !!(result && result.ok !== true);
-  return {
-    ok: !!(result && result.ok === true && output.trim().length > 0),
+  var writReceiptVerified = !ctx.hamUid || writOutputBound;
+  if (result && result.ok === true && !writReceiptVerified) output = '';
+  var meaningPacket = requiresHumanRecheck && output.trim() && ctx.runtime &&
+    typeof ctx.runtime === 'object' ? Object.freeze({
+      ham_uid:String(ctx.hamUid || '').toUpperCase(),request_id:String(ctx.requestId || ''),
+      cycle_id:String(ctx.cycleId || ''),pre_writ_draft:preWritDraft,
+      pre_writ_digest:digestText(preWritDraft),
+      pre_writ_bytes:Buffer.byteLength(preWritDraft,'utf8'),
+      writ_output:writOutput,writ_output_digest:digestText(writOutput),
+      writ_output_bytes:Buffer.byteLength(writOutput,'utf8'),
+      post_meta_candidate:output,post_meta_digest:digestText(output),
+      post_meta_bytes:Buffer.byteLength(output,'utf8')
+    }) : null;
+  if (meaningPacket) writMeaningPacketRuns.set(meaningPacket,ctx.runtime);
+  var stageResult = {
+    ok: !!(result && result.ok === true && output.trim().length > 0 && writReceiptVerified),
     answer: output,
-    reason: (writHeld && uniqueFails.length && writVerdict)
+    reason: postMetaHoldReason || ((writHeld && uniqueFails.length && writVerdict)
       ? (String(writVerdict) + ':' + uniqueFails.join(':'))
-      : writVerdict,
+      : writVerdict),
     evidence: {
       verdict: result && result.verdict,
       hard_fails: (result && result.hardFails) || [],
@@ -3068,17 +3133,35 @@ async function defaultWritStage(ctx) {
       overruled_hints: (result && result.overruled_hints) || [],
       organ_decider:(result && result.organ_decider) || null,
       failed_open:!!(result && result.failed_open),
+      why_changed:(result && result.why_changed) || null,
+      semantic_verdict:(result && result.semantic_verdict) || null,
+      semantic_changes:(result && result.semantic_changes) || [],
+      post_writ_meta:postMeta && postMeta.metaCommentary ? {
+        ok:postMeta.metaCommentary.ok === true,
+        decider:postMeta.metaCommentary.decider || null,
+        organ_decider:postMeta.metaCommentary.organ_decider || null,
+        failed_open:postMeta.metaCommentary.failed_open === true,
+        why_changed:postMeta.metaCommentary.why_changed || null,
+        banked:postMeta.metaCommentary.banked === true,
+        receipt_state:postMeta.metaCommentary.receipt_state || null,
+        output_bound:metaOutputBound
+      } : null,
       // Bounded durable evidence only. The exact source contains the world key, so the
       // council carries its digest rather than letting that identifier reach a face.
       verdict_bank: {
         ok: !!(bank && bank.ok === true),
         banked: !!(bank && bank.banked === true),
+        output_bound: writOutputBound,
         reason: (bank && /^[a-z][a-z0-9_.-]{0,63}$/.test(String(bank.reason || '')))
           ? String(bank.reason) : null,
         source_digest: (bank && bank.source) ? digestText(String(bank.source)) : null
       }
     }
   };
+  if (meaningPacket) Object.defineProperty(stageResult,WRIT_MEANING_PACKET,{
+    value:meaningPacket,enumerable:false,configurable:false,writable:false
+  });
+  return stageResult;
 }
 
 async function defaultAnuExpressionStage(ctx) {
@@ -3102,12 +3185,60 @@ async function defaultAnuExpressionStage(ctx) {
   var result = anu.speak({ result: { pendingOutbound: ctx.answer } },
     ctx.channel || 'ccwa', ctx.context || {});
   var output = result && typeof result.output === 'string' ? result.output : '';
+  var packet = ctx.runtime && ctx.runtime.writ_meaning_packet;
+  var packetBound = !!(packet && Object.isFrozen(packet) &&
+    writMeaningPacketRuns.get(packet) === ctx.runtime &&
+    !consumedWritMeaningPackets.has(packet) &&
+    packet.ham_uid === String(ctx.hamUid || '').toUpperCase() &&
+    packet.request_id === String(ctx.requestId || '') &&
+    packet.cycle_id === String(ctx.cycleId || '') &&
+    packet.pre_writ_digest === digestText(packet.pre_writ_draft) &&
+    packet.pre_writ_bytes === Buffer.byteLength(packet.pre_writ_draft,'utf8') &&
+    packet.writ_output_digest === digestText(packet.writ_output) &&
+    packet.writ_output_bytes === Buffer.byteLength(packet.writ_output,'utf8') &&
+    packet.post_meta_digest === digestText(packet.post_meta_candidate) &&
+    packet.post_meta_bytes === Buffer.byteLength(packet.post_meta_candidate,'utf8') &&
+    packet.post_meta_candidate === ctx.answer);
+  var meaning = null;
+  var finalPam = null;
+  if (result && result.blocked === false && output.trim() && packetBound) {
+    consumedWritMeaningPackets.add(packet);
+    var meaningWonder = require('./writ.meaning.shadow.wonder.js');
+    meaning = await meaningWonder.judge(Object.assign({},packet,{final_human_output:output}),{
+      brain:ctx.context && ctx.context.brain,
+      chatSeat:ctx.context && ctx.context.meaningShadowChatSeat
+    });
+    var releasedDigest = meaning && meaning.receipt && meaning.receipt.content &&
+      meaning.receipt.content.final_human_output &&
+      meaning.receipt.content.final_human_output.digest;
+    var releasedBytes = meaning && meaning.receipt && meaning.receipt.content &&
+      meaning.receipt.content.final_human_output &&
+      meaning.receipt.content.final_human_output.bytes;
+    var finalBytesBound = releasedDigest === digestText(output) &&
+      releasedBytes === Buffer.byteLength(output,'utf8');
+    if (meaning && meaning.ok === true && finalBytesBound) {
+      finalPam = await defaultPamStage(Object.assign({},ctx,{answer:output}));
+      if (!finalPam || finalPam.ok !== true || finalPam.answer !== output) output = '';
+    } else output = '';
+  } else output = '';
+  var meaningReason = meaning && meaning.ok === true && !finalBytesBound
+    ? 'writ_meaning_shadow_final_bytes_unbound' : (meaning && meaning.reason ||
+      (packetBound ? 'writ_meaning_shadow_not_run' : 'writ_meaning_shadow_packet_unbound'));
   return {
-    ok: !!(result && result.blocked === false && output.trim().length > 0),
+    ok: !!(result && result.blocked === false && output.trim().length > 0 &&
+      meaning && meaning.ok === true && finalPam && finalPam.ok === true),
     answer: output,
     reason: result && result.blocked ? 'anu_expression_blocked' :
-      (output.trim().length > 0 ? 'ANU_EXPRESSION_PASS' : 'anu_expression_empty'),
-    evidence: { channel: result && result.channel, blocked: !!(result && result.blocked) }
+      (output.trim().length > 0 ? 'ANU_EXPRESSION_PASS' : meaningReason),
+    evidence: { channel: result && result.channel, blocked: !!(result && result.blocked),
+      exact_transport:result && result.output === ctx.answer,
+      meaning_shadow:meaning ? {ok:meaning.ok === true,reason:meaning.reason || null,
+        decision:meaning.shadow && meaning.shadow.decision || null,
+        receipt_digest:meaning.receipt && meaning.receipt.digest || null,
+        final_output_bound:!!(meaning.receipt && meaning.receipt.content &&
+          meaning.receipt.content.final_human_output &&
+          meaning.receipt.content.final_human_output.digest === digestText(result.output || ''))} : null,
+      final_pam:finalPam ? {ok:finalPam.ok === true,reason:finalPam.reason || null} : null }
   };
 }
 
@@ -3512,11 +3643,15 @@ function normalizeStageResult(result, currentAnswer) {
   }
   var output = typeof result.answer === 'string' ? result.answer :
     (typeof result.output === 'string' ? result.output : currentAnswer);
+  var meaningPacket = Object.prototype.hasOwnProperty.call(result,WRIT_MEANING_PACKET) &&
+    writMeaningPacketRuns.has(result[WRIT_MEANING_PACKET])
+    ? result[WRIT_MEANING_PACKET] : null;
   return {
     ok: result.ok === true,
     reason: result.reason ? String(result.reason).slice(0, 240) : null,
     answer: output,
-    evidence: boundedEvidence(result.evidence || {})
+    evidence: boundedEvidence(result.evidence || {}),
+    internal:meaningPacket ? {writ_meaning_packet:meaningPacket} : null
   };
 }
 
@@ -3786,6 +3921,7 @@ async function runOutboundCouncil(input, injected) {
   var currentAnswer = input.answer;
   var quillRequired = shouldRunQuill(input);
   var stages = [];
+  var stageRuntime = Object.create(null);
   var sources = buildSources(input.cycleId, input.requestId);
   var identityProvenanceRequired = identityProvenance.requiresProvenanceSplit(
     input.question);
@@ -3816,7 +3952,7 @@ async function runOutboundCouncil(input, injected) {
     var normalized;
     try {
       normalized = normalizeStageResult(await handler(buildStageContext(
-        input, currentAnswer, quillRequired, stages, { stage: stage }
+        input, currentAnswer, quillRequired, stages, { stage: stage, runtime:stageRuntime }
       )), currentAnswer);
     } catch (stageError) {
       normalized = {
@@ -3828,6 +3964,9 @@ async function runOutboundCouncil(input, injected) {
     }
     if (councilCancellationRequested(input)) {
       return failureResult('council_cancelled', 'CANCELLED', stages, input, currentAnswer);
+    }
+    if (stage === 'WRIT' && normalized.internal && normalized.internal.writ_meaning_packet) {
+      stageRuntime.writ_meaning_packet = normalized.internal.writ_meaning_packet;
     }
     var ended = nowMs(deps);
     var humanStageAnswer = isHumanFacingAnswer(normalized.answer);
@@ -3911,7 +4050,12 @@ async function runOutboundCouncil(input, injected) {
       // this fail-closed catches. Re-running a pure formatter on repaired input decides
       // nothing and changes no verdict, so it belongs in the healable set. STAMP stays
       // out: it is the durable commit preflight and must never be re-run on other bytes.
-      var _healableStage = !capabilityBinding.present && (stage === 'WRIT' || stage === 'SHADOW' ||
+      var _semanticFinalHold = (stage === 'ANU_EXPRESSION' &&
+        /^writ_meaning_shadow_/.test(String(normalized.reason || ''))) ||
+        (stage === 'WRIT' &&
+          /^writ_post_meta_/.test(String(normalized.reason || '')));
+      var _healableStage = !capabilityBinding.present && !_semanticFinalHold &&
+        (stage === 'WRIT' || stage === 'SHADOW' ||
         stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL' ||
         stage === 'ANU_EXPRESSION');
       // ⬡B:core.pai_outbound_council:FIX:the_receipt_says_why_the_heal_did_not_save_it:20260725⬡
@@ -3935,7 +4079,7 @@ async function runOutboundCouncil(input, injected) {
             try {
               _reNorm = normalizeStageResult(await handler(buildStageContext(
                 input, _healed, quillRequired, stages,
-                { stage: stage, healed: true, healedFrom: _healReason }
+                { stage: stage, healed: true, healedFrom: _healReason, runtime:stageRuntime }
               )), _healed);
             } catch (_reJudgeErr) {
               _reNorm = {
@@ -4001,6 +4145,9 @@ async function runOutboundCouncil(input, injected) {
               });
             if ((_reNorm.ok || _reModelOnlyCarry) && typeof _reNorm.answer === 'string' &&
                 _reNorm.answer.trim() !== '' && _reHuman) {
+              if (stage === 'WRIT' && _reNorm.internal && _reNorm.internal.writ_meaning_packet) {
+                stageRuntime.writ_meaning_packet = _reNorm.internal.writ_meaning_packet;
+              }
               currentAnswer = _reNorm.answer;
               continue; // healed and passed; move to the next stage
             }
@@ -4921,6 +5068,13 @@ module.exports = {
     shadowDecisionTimeoutMs:shadowDecisionTimeoutMs,
     defaultShadowStage: defaultShadowStage,
     defaultWritStage: defaultWritStage,
+    defaultAnuExpressionStage:defaultAnuExpressionStage,
+    normalizeStageResult:normalizeStageResult,
+    writMeaningPacketFrom:function (result) {
+      return result && Object.prototype.hasOwnProperty.call(result,WRIT_MEANING_PACKET) &&
+        writMeaningPacketRuns.has(result[WRIT_MEANING_PACKET])
+        ? result[WRIT_MEANING_PACKET] : null;
+    },
     healAnswer: healAnswer
   }
 };

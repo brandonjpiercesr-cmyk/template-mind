@@ -12,7 +12,10 @@
 // on a sync return works fine; the reverse does not). Nothing from either
 // file is dropped. board/writ.js becomes a thin re-export of this file.
 //
-// Cold regex only, no LLM, same posture as PAM (board/pam/pam.js).
+// Cold witnesses plus a model Wonder. Cold code records exact facts and formatting bytes.
+// The model owns every judgment about meaning, tone, and expression.
+
+var crypto = require('crypto');
 
 var BANNED_WORDS = [
   'flag', 'land', 'landing on', 'land on', 'drawn to', 'was drawn', "i'm drawn",
@@ -51,8 +54,10 @@ var PROCESS_NARRATION = [
 ];
 
 var INTERNAL_SYSTEM_TERMS = [
-  'abacia', 'abaham', 'acl stamp', 'cellm', 'ham uid', 'bead',
-  '\u2b21b:', 'writgate', 'clabav', 'aibe_brain', 'bead', 'logful', 'abacia_core', 'stamp_type'
+  'abacia', 'abaham', 'acl stamp', 'cellm', 'ham uid',
+  '\u2b21b:', 'writgate', 'clabav', 'aibe_brain', 'logful', 'abacia_core', 'stamp_type',
+  'cara chat portal', 'coding department', 'thinking stream', 'council stage',
+  'model ladder', 'run of show'
 ];
 
 var META_PATTERNS = [
@@ -100,23 +105,59 @@ function isInternalContext(context) {
     mode === 'coding' || mode === 'internal' || context.internal === true;
 }
 
-// WRIT may polish a draft, but it may never replace what the draft says. This
-// witness is deliberately mechanical: it does not judge quality, only whether
-// a proposed rewrite retained enough of the original answer's concrete anchors.
-function preservesSemanticAnchors(original, rewritten) {
+// WRIT may polish a draft, but it may never replace exact facts. This witness
+// is deliberately mechanical: it compares concrete values and named subjects.
+// It does not use word overlap or output length as a proxy for meaning. Those
+// are semantic judgments and belong to the two model Wonders, WRIT and the
+// mandatory post-WRIT Meta Commentary pass.
+function semanticAnchorReport(original, rewritten) {
   original = String(original || '').trim();
   rewritten = String(rewritten || '').trim();
-  if (!original || !rewritten) return false;
-  if (original === rewritten) return true;
-  var stop = new Set(['that','this','with','from','have','your','they','their','there','then','than','what','when','where','which','would','could','should','about','into','only','also','does','were','been','being','because','while','after','before','just','very']);
-  function anchors(text) {
-    return Array.from(new Set((text.toLowerCase().match(/[a-z0-9']+/g) || [])
-      .filter(function (word) { return word.length >= 4 && !stop.has(word); })));
+  if (!original || !rewritten) return { preserves:false, verdict:'REVISE', changes:[{type:'empty_text'}] };
+  if (original === rewritten) return { preserves:true, verdict:'PASS', changes:[] };
+  function multiset(text, pattern, normalize) {
+    var values = String(text).match(pattern) || [];
+    return values.map(normalize || function (value) { return value; }).sort();
   }
-  var source = anchors(original), target = new Set(anchors(rewritten));
-  if (source.length < 4) return rewritten.length >= Math.max(10, original.length * 0.4);
-  var retained = source.filter(function (word) { return target.has(word); }).length;
-  return retained / source.length >= 0.28 && rewritten.length >= original.length * 0.25;
+  function properNames(text) {
+    return (String(text).match(/\b[A-Z][a-z]{1,}(?:\s+[A-Z][a-z]{1,})*\b/g) || [])
+      .filter(function (value) { return !/^(The|This|That|As|Let|Here|Where|What|How|Thanks|Everything|Nothing|Project|Calendar|My|I|We|You|He|She|They|August|September|October|November|December|January|February|March|April|May|June|July)$/i.test(value); });
+  }
+  function ordered(text, values) {
+    return values.map(function (value) { return String(text).indexOf(value); });
+  }
+  var factKinds = [
+    { type:'money', pattern:/\$\s?\d[\d,]*(?:\.\d+)?/g, normalize:function(v){return v.replace(/\s/g,'');} },
+    { type:'date', pattern:/\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?\b/gi, normalize:function(v){return v.toLowerCase();} },
+    { type:'time', pattern:/\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b/gi, normalize:function(v){return v.toLowerCase().replace(/[.\s]/g,'');} },
+    { type:'email', pattern:/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, normalize:function(v){return v.toLowerCase();} },
+    { type:'url', pattern:/https?:\/\/[^\s)]+/gi, normalize:function(v){return v;} },
+    { type:'phone', pattern:/(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}/g, normalize:function(v){return v.replace(/\D/g,'');} },
+    { type:'identifier', pattern:/\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{2,}\b/gi, normalize:function(v){return v.toUpperCase();} },
+    { type:'number', pattern:/\b\d+(?:\.\d+)?%?\b/g, normalize:function(v){return v;} },
+    { type:'status', pattern:/\b(?:approved|rejected|accepted|declined|cancelled|canceled|completed|held|unavailable|pending)\b/gi, normalize:function(v){return v.toLowerCase();} },
+    { type:'action', pattern:/\b(?:sign|signed|send|sent|cancel|cancelled|canceled|approve|approved|reject|rejected|pay|paid|schedule|scheduled|call|called)\b/gi, normalize:function(v){return v.toLowerCase();} },
+    { type:'quote', pattern:/["“][^"”\n]{2,}["”]/g, normalize:function(v){return v;} }
+  ];
+  var changes = [];
+  factKinds.forEach(function (kind) {
+    var beforeFacts = multiset(original, kind.pattern, kind.normalize);
+    var afterFacts = multiset(rewritten, kind.pattern, kind.normalize);
+    if (JSON.stringify(beforeFacts) !== JSON.stringify(afterFacts)) {
+      changes.push({ type:kind.type, before:beforeFacts, after:afterFacts });
+    }
+  });
+  var beforeNames = properNames(original), afterNames = properNames(rewritten);
+  if (JSON.stringify(beforeNames.slice().sort()) !== JSON.stringify(afterNames.slice().sort())) {
+    changes.push({ type:'name', before:beforeNames, after:afterNames });
+  } else if (beforeNames.length > 1 && JSON.stringify(ordered(original, beforeNames)) !== JSON.stringify(ordered(rewritten, beforeNames))) {
+    changes.push({ type:'order', before:beforeNames, after:afterNames });
+  }
+  return { preserves:changes.length === 0, verdict:changes.length ? 'REVISE' : 'PASS', changes:changes };
+}
+
+function preservesSemanticAnchors(original, rewritten) {
+  return semanticAnchorReport(original, rewritten).preserves;
 }
 
 // Preserve every byte between a Markdown fence and its matching close. The
@@ -185,6 +226,24 @@ function findPhrases(lowerContent, list, label) {
   return hits;
 }
 
+// ⬡B:board.writ:BUILD:overrule_receipt_helper:20260728⬡
+// Which of the phrase hints handed to the organ are still present in the text
+// the organ chose to return. Pure observation, decides nothing, moves no
+// verdict: it exists so a receipt can PROVE the mind overruled the scanner
+// rather than merely asserting that it may. Bounded and deduped, phrases only,
+// never answer bytes, so this can ride an internal receipt safely.
+function survivingHints(hintPhrases, renderedText) {
+  var lower = String(renderedText || '').toLowerCase();
+  var seen = {};
+  var survivors = [];
+  (hintPhrases || []).forEach(function (entry) {
+    var phrase = String((entry && (entry.phrase || entry.type)) || entry || '').trim().toLowerCase();
+    if (!phrase || phrase.length < 3 || seen[phrase]) return;
+    if (lower.indexOf(phrase) >= 0) { seen[phrase] = true; survivors.push(phrase); }
+  });
+  return survivors.slice(0, 8);
+}
+
 function checkBannedHeaders(content) {
   var hits = [];
   var lines = content.split('\n');
@@ -196,11 +255,27 @@ function checkBannedHeaders(content) {
   return hits;
 }
 
+// ⬡B:board.writ:FIX:the_greeting_and_rhythm_checks_were_dead_code:20260726⬡
+// Found 20260726: checkColdGreeting and approximateChoppyDensity were DEFINED here,
+// described in the header comment as part of the unified ruleset, and CALLED BY NOTHING.
+// Not by writCheck, not by any caller, not exported. So two of the five failure modes the
+// founder named by hand in his email doctrine were detected by nothing at all:
+//   "Will," instead of "Hey Will," and a lowercase "hey will"   -> the greeting register
+//   "short, mean, punchy and direct"                            -> the rhythm
+// They are wired now, and wired the ONLY way the standing law allows: as HINTS handed to
+// the render organ, exactly like the CTA, process-narration and filler lists beside them.
+// A greeting is a judgment about a relationship, not a fact about characters, so cold code
+// gathers the observation and the LLM rules on it. Nothing here rewrites one of his words.
 function checkColdGreeting(content) {
   var firstLine = (content.split('\n')[0] || '').trim();
   var nameAlone = /^[A-Z][a-zA-Z]{1,20},?\s*$/.test(firstLine);
   var hasGreetingWord = /\b(hey|hi|hello|greetings)\b/i.test(firstLine);
   if (nameAlone && !hasGreetingWord) return { ok: false, flag: { type: 'cold_greeting', line: firstLine } };
+  // His second named shape: the greeting word is there but it is lowercase, so it reads
+  // typed rather than said. Same posture, an observation for the organ, never a verdict.
+  if (hasGreetingWord && /^(hey|hi|hello|greetings)\b/.test(firstLine)) {
+    return { ok: false, flag: { type: 'lowercase_greeting', line: firstLine } };
+  }
   return { ok: true };
 }
 
@@ -241,27 +316,11 @@ async function writCheck(text, context) {
   // Establish internal context before cleanup. Code fences bypass every prose
   // transform, and coding/internal CLI flags retain their literal ASCII `--`.
   var isInternal = isInternalContext(context);
-  var emojiCount = 0;
-  var emojiCleaned = transformOutsideFences(text, function (proseContent) {
-    var result = stripEmoji(proseContent);
-    emojiCount += result.count;
-    return result.cleaned;
-  });
-  var emoji = { cleaned: emojiCleaned, count: emojiCount };
+  var originalText = text;
+  var emoji = { cleaned: text, count: 0 };
   var dashCount = 0;
-  transformOutsideFences(emoji.cleaned, function (proseContent) {
-    dashCount += (proseContent.match(/\u2014/g) || []).length;
-    return proseContent;
-  });
-  var voiced = applyVoiceLaw(emoji.cleaned, context);
-  var metaRemoved = 0;
-  var metaCleaned = transformOutsideFences(voiced, function (proseContent) {
-    var result = stripMeta(proseContent);
-    metaRemoved += result.removed;
-    return result.cleaned;
-  });
-  var meta = { cleaned: metaCleaned, removed: metaRemoved };
-  var cleaned = meta.cleaned;
+  var meta = { cleaned: text, removed: 0 };
+  var cleaned = text;
   var lower = cleaned.toLowerCase();
 
   var hardFails = [];
@@ -303,10 +362,12 @@ async function writCheck(text, context) {
   var _hintProc = findPhrases(lower, PROCESS_NARRATION, 'process_narration');
   var _hintBans = findPhrases(lower, SUPER_BANS, 'ai_filler');
   var _hintHeaders = checkBannedHeaders(cleaned);
+  var _greeting = checkColdGreeting(cleaned);
+  var _hintGreeting = _greeting.ok ? null : _greeting.flag;
+  var _rhythm = approximateChoppyDensity(cleaned);
+  var _hintChoppy = _rhythm.ok ? null : _rhythm;
   var coffee = coffeeshopTest(cleaned);
   var _hintJargon = (!coffee.ok && !isInternal) ? coffee.flags.slice(0, 6) : [];
-
-  hardFails = hardFails.concat(mechanicalLeaks);
 
   var jargonPattern = /\b(BEAD|LOGFUL|abacia_core|acl_stamp|stamp_type)\b/g;
   var jargonFlags = Array.from(new Set(cleaned.match(jargonPattern) || []));
@@ -326,48 +387,99 @@ async function writCheck(text, context) {
   // never killed.
   var qualityVerdict = 'WRIT_PASS';
   var organReason = null;
-  if (hardFails.length === 0 && !isInternal) {
+  var lawSource = null;
+  var overruledHints = [];
+  var organDecider = isInternal ? 'internal_bypass' : 'model_pending';
+  var organFailedOpen = false;
+  var semanticChanges = [];
+  // The phrase hints the organ is handed, gathered once so the overrule receipt
+  // is derived against exactly what the prompt named, never a second list.
+  var _hintsForReceipt = []
+    .concat(_hintCTA, _hintProc, _hintBans, _hintHeaders || []);
+  if (!isInternal) {
     try {
       var _ladder = require('../../core/model.ladder.js');
+      // \u2b21B:board.writ:BUILD:the_organ_judges_against_the_whole_law_not_a_summary:20260728\u2b21
+      // Spec gap 5. This prompt used to carry a hand-written paragraph holding
+      // roughly a fifth of the actual WRIT law: it named process narration and
+      // weak endings and nothing else. The kill list, the super bans, the
+      // behavioral rules, the green lights and the risk posture existed only in
+      // a Claude-side skill document that does not run inside her system, so
+      // the organ was judging her words against a summary while the real law
+      // sat somewhere it could not read. One source now: board/writ/writ.law.js,
+      // brain-superseded (doctrine.writ.persona.v1) with the embedded floor.
+      var _lawMod = require('./writ.law.js');
+      var _law = await _lawMod.writLaw(context.hamUid);
+      lawSource = _law.source;
       var _sys = 'You are A\u2019NU editing your own words before they leave the house. WRIT is the role, not your name. '
-        + 'Your job is to RENDER, not to kill. Fix the writing to obey these laws and return the FIXED text: '
-        + 'strip any meta or process narration (do not narrate steps, tools, or that you searched -- delete a "let me check" style preamble and lead with the real answer), '
-        + 'remove a weak call-to-action ending (end on the last real thought, then Thanks), keep a warm human voice and plain coffee-shop language. '
+        + 'Your job is to RENDER, not to kill. Fix the writing to obey the law below and return the FIXED text.\n\n'
+        + _law.text + '\n\n'
         + 'These are HINTS from a rough pre-scan, they may be wrong, use judgment: '
         + 'possible process-narration=' + JSON.stringify(_hintProc.map(function(f){return f.phrase||f;}).slice(0,4)) + ', '
         + 'possible weak-ending=' + JSON.stringify(_hintCTA.map(function(f){return f.phrase||f;}).slice(0,4)) + ', '
         + 'possible AI-filler to remove=' + JSON.stringify(_hintBans.map(function(f){return f.phrase||f;}).slice(0,6)) + ', '
-        + 'possible banned headers to remove=' + JSON.stringify((_hintHeaders||[]).map(function(f){return f.phrase||f;}).slice(0,4)) + '. '
+        + 'possible banned headers to remove=' + JSON.stringify((_hintHeaders||[]).map(function(f){return f.phrase||f;}).slice(0,4)) + ', '
+        + 'possible cold or lowercase greeting=' + JSON.stringify(_hintGreeting ? { kind:_hintGreeting.type, first_line:String(_hintGreeting.line||'').slice(0,80) } : null) + ', '
+        + 'possible short punchy rhythm=' + JSON.stringify(_hintChoppy ? { ratio:Number(_hintChoppy.ratio.toFixed(2)), short_sentences:_hintChoppy.choppyCount, of:_hintChoppy.totalSentences } : null) + '. '
+        + 'On the greeting hint: he opens warm and by name, Hey Will, not a bare Will, and not a lowercase hey will. Judge whether this reader and this channel want that; it is a relationship call, not a rule. '
+        + 'On the rhythm hint: short mean punchy direct sentences are not his voice, he talks in flowing comma prose. Only smooth it if it actually reads clipped. '
         + 'Reply with ONLY the corrected answer text, nothing else. If the text already obeys every law, return it unchanged. '
         + 'Return the single word HOLD only if the text cannot be fixed because it leaks a real secret or another world\'s private data.';
       var _deliberate = typeof context.deliberate === 'function' ? context.deliberate : _ladder.deliberate;
-      var _out = await _deliberate(_sys, cleaned, { maxTokens: 800, temperature: 0 });
+      var _out = await _deliberate(_sys, originalText, { maxTokens: 800, temperature: 0 });
       var _txt = String((_out && (_out.text || _out.answer || _out.content)) || '').trim();
       if (/^HOLD\s*$/i.test(_txt)) {
+        organDecider = 'model';
         // genuinely unfixable (real leak) -> hold
         qualityVerdict = 'WRIT_HOLD';
         organReason = 'unfixable_leak';
         hardFails.push({ type: 'quality_hold', reason: organReason });
-      } else if (_txt && _txt.length >= 10 && preservesSemanticAnchors(cleaned, _txt)) {
-        // the organ returned a rendered/cleaned answer -> ship the fix, do not kill
+      } else if (_txt) {
+        organDecider = 'model';
+        // ⬡B:board.writ:BUILD:the_overrule_is_on_the_record:20260728⬡
+        // Spec gap 8: "every organ decision that overrules a cold flag gets
+        // stamped into the stage receipt, so 'the LLM decided' is provable, not
+        // asserted." Derived cold and deterministically instead of asking the
+        // organ to append a marker, because a marker the parser misses becomes
+        // stray bytes inside her answer, and this is a hot path. A hint phrase
+        // the organ was explicitly handed, that is still present in the text it
+        // chose to return, was overruled. That is a fact, not a guess, and it
+        // needs no cooperation from the model to be true.
+        overruledHints = survivingHints(_hintsForReceipt, _txt);
+        // The WRIT Wonder owns this expression candidate. Cold word overlap,
+        // length, and regex witnesses do not decide whether its meaning survived.
+        // Penny SHADOW compares the exact source and final chain before release.
         cleaned = _txt;
         qualityVerdict = 'WRIT_PASS';
-      } else if (_txt && _txt.length >= 10) {
-        // A style renderer returned a different answer. Keep the exact pre-WRIT
-        // content and fail open instead of allowing the judge to clobber meaning.
-        organReason = 'rewrite_rejected_semantic_drift';
-        qualityVerdict = 'WRIT_PASS';
+      } else {
+        organDecider = 'model_unavailable';
+        organFailedOpen = true;
+        qualityVerdict = mechanicalLeaks.length ? 'WRIT_UNAVAILABLE_HOLD' : 'WRIT_UNAVAILABLE';
+        if (mechanicalLeaks.length) hardFails = hardFails.concat(mechanicalLeaks);
       }
-      // if the organ returned nothing usable, fall through as PASS (fail open)
     } catch (eOrgan) {
-      // fail open: a broken organ never silences her
-      qualityVerdict = 'WRIT_PASS';
+      organDecider = 'model_unavailable';
+      organFailedOpen = true;
+      qualityVerdict = mechanicalLeaks.length ? 'WRIT_UNAVAILABLE_HOLD' : 'WRIT_UNAVAILABLE';
+      if (mechanicalLeaks.length) hardFails = hardFails.concat(mechanicalLeaks);
     }
   }
 
+  // WRIT owns the rendered bytes. Cold transport does not get a second editing
+  // pass after the model has spoken because whitespace, punctuation, flags,
+  // URLs, emoji, identifiers, and code can all carry meaning. Downstream Penny
+  // SHADOW receives these exact bytes and owns the final meaning challenge.
+  emoji.count = Math.max(0,(originalText.match(
+    /(\p{Extended_Pictographic}|\u{FE0F}|\u{200D}|[\u{1F1E6}-\u{1F1FF}])/gu)||[]).length-
+    (cleaned.match(/(\p{Extended_Pictographic}|\u{FE0F}|\u{200D}|[\u{1F1E6}-\u{1F1FF}])/gu)||[]).length);
+  dashCount = Math.max(0,(originalText.match(/\u2014/g)||[]).length-
+    (cleaned.match(/\u2014/g)||[]).length);
+
   advisoryFlags = advisoryFlags.concat(_hintJargon.map(function (f) { return { type: 'jargon_leak', phrase: f }; }));
 
-  var verdict = hardFails.length > 0 ? 'WRIT_HOLD' : (advisoryFlags.length > 0 ? 'WRIT_ADVISORY' : 'WRIT_PASS');
+  var verdict = hardFails.length > 0 ? qualityVerdict :
+    (qualityVerdict === 'WRIT_UNAVAILABLE' ? qualityVerdict :
+      (advisoryFlags.length > 0 ? 'WRIT_ADVISORY' : qualityVerdict));
 
   return {
     ok: hardFails.length === 0,
@@ -377,6 +489,22 @@ async function writCheck(text, context) {
     hardFails: hardFails,
     advisoryFlags: advisoryFlags,
     organ_reason: organReason,
+    why_changed: cleaned === originalText ? 'The original wording was preserved.' : 'WRIT adjusted presentation while preserving the draft facts.',
+    semantic_changes: semanticChanges,
+    semantic_verdict: semanticChanges.length ? 'REVISE' : 'PASS',
+    organ_decider: organDecider,
+    failed_open: organFailedOpen,
+    // Which law actually judged these words, 'brain' or 'embedded', null when
+    // the organ did not run. A receipt that cannot name its own law is not a
+    // receipt, and this is how a supersede from the brain becomes provable.
+    law_source: lawSource,
+    // ⬡B:board.writ:BUILD:overrule_receipt_surfaced:20260728⬡ Spec gap 8. The
+    // cold hints the organ was handed and kept anyway: proof the mind decided.
+    overruled_hints: overruledHints,
+    // The observations the organ was handed, surfaced so a caller can see them
+    // without re-deriving. Additive: they are HINTS, they never move the verdict.
+    voiceHints: { greeting: _hintGreeting, rhythm: _hintChoppy,
+      cta: _hintCTA, process_narration: _hintProc, filler: _hintBans, headers: _hintHeaders },
     emojis_removed: emoji.count,
     em_dashes_removed: dashCount,
     meta_removed: meta.removed,
@@ -384,7 +512,100 @@ async function writCheck(text, context) {
   };
 }
 
-module.exports = { writCheck: writCheck, removeEmDash: removeEmDash, coffeeshopTest: coffeeshopTest,
+// ⬡B:board.writ:BUILD:writ_names_its_own_hold_once_for_every_consumer:20260725⬡
+// WRIT holds without ever setting `reason` on the hard-fail path, so every consumer has had
+// to reconstruct the named cause out of hardFails by hand. Two of them did it differently:
+// core/pai.outbound.council.js defaultWritStage rebuilds 'WRIT_HOLD:internal_system_leak',
+// while core/council.js writ() reads result.reason (always undefined here) and falls back to
+// the bare word 'writ_hold', dropping the cause on the floor. A downstream gate that reads
+// the cause to decide whether a re-run can win therefore sees nothing through that second
+// door and grants a retry that is terminal. Two hand-maintained copies of one law is the
+// thing the standing laws forbid, so the producer names its own hold, once, here.
+// Returns bounded machine codes only, deduped, capped, never answer bytes.
+function writHoldCauses(result) {
+  var fails = (result && Array.isArray(result.hardFails)) ? result.hardFails : [];
+  var codes = fails
+    .map(function (f) { return String((f && (f.type || f.reason)) || '').trim().toLowerCase(); })
+    .filter(function (code) { return /^[a-z][a-z0-9_.-]{0,47}$/.test(code); });
+  return codes.filter(function (code, index) { return codes.indexOf(code) === index; }).slice(0, 2);
+}
+
+// ⬡B:board.writ:BUILD:the_post_draft_verdict_finally_gets_banked:20260802⬡
+// W4-L4's receipt is "one draft carrying WRIT's LLM verdict bead PRE and POST". The pre half
+// landed in core/prose.quality.js#writProse. This is the post half, and it exists because
+// writCheck has always RETURNED a verdict and never RECORDED one: every ruling it has ever
+// made died in the caller's local variable. That is the exact shape RULINGS keeps catching,
+// a roadmap receipt naming a bead being read as a promise about what gets CALLED when it is
+// a promise about what gets BANKED.
+//
+// ONE SOURCE, DELIBERATELY. This does not grow a second banker beside writProse; it calls it.
+// The verdict banked is the exact verdict writCheck already reached. The old wrapper asked a
+// second model to judge the same draft again, which could bank a different ruling and charged
+// for two minds where the council had only one seat. The injected judge below only carries the
+// existing verdict into the one banker. It makes no new judgment and spends no second model call.
+//
+// BEST EFFORT ON PURPOSE. A failed bank returns a named reason and NEVER converts into a
+// passing grade or blocks a real answer, matching bankVerdict in agents/meta_commentary.js.
+// Cold code may fail to write; it may not decide the writing was fine because it did.
+async function writCheckAndBank(hamUid, text, context, options) {
+  var opts = options || {};
+  var result = await writCheck(text, context);
+  var writ = opts.writProse || require('../../core/prose.quality.js').writProse;
+  function code(value, fallback) {
+    var normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, '_')
+      .replace(/^_+|_+$/g, '').slice(0, 48);
+    return normalized || fallback;
+  }
+  function flagCodes(entries, fallback) {
+    return (Array.isArray(entries) ? entries : []).map(function (entry) {
+      return code(entry && (entry.type || entry.reason || entry.phrase) || entry, fallback);
+    }).filter(Boolean);
+  }
+  var flags = [];
+  flagCodes(result && result.hardFails, 'hard_fail').forEach(function (value) {
+    flags.push({ type: 'hard_fail', code: value });
+  });
+  flagCodes(result && result.advisoryFlags, 'advisory').forEach(function (value) {
+    flags.push({ type: 'advisory', code: value });
+  });
+  flagCodes(result && result.overruled_hints, 'overruled_hint').forEach(function (value) {
+    flags.push({ type: 'overruled_hint', code: value });
+  });
+  if (result && result.failed_open) flags.push({ type: 'failed_open', code: 'model_unavailable' });
+  flags = flags.slice(0, 16);
+
+  var exactOutput = result && typeof result.cleaned === 'string' ? result.cleaned : text;
+  var exactVerdict = {
+    stage: 'post_draft',
+    passes: !!(result && result.ok === true),
+    state: result && result.failed_open ? 'unavailable' :
+      (result && result.ok === true ? 'completed' : 'held'),
+    reasoning: [
+      code(result && result.verdict, 'writ_verdict_unavailable'),
+      code(result && result.organ_decider, 'decider_unavailable'),
+      code(result && result.organ_reason, '')
+    ].filter(Boolean).join(':').slice(0, 160),
+    flags: flags,
+    why_changed: result && result.why_changed || null,
+    output_digest: crypto.createHash('sha256').update(String(exactOutput), 'utf8').digest('hex'),
+    output_bytes: Buffer.byteLength(String(exactOutput), 'utf8')
+  };
+  var banked;
+  try {
+    banked = await writ(hamUid, 'post_draft',
+      exactOutput,
+      Object.assign({}, opts, { judgeProse: async function () { return exactVerdict; } }));
+  } catch (error) {
+    banked = { ok: false, reason: 'writ_bank_threw' };
+  }
+  return { ok: result && result.ok === true, check: result, bank: banked || { ok: false, reason: 'writ_bank_unavailable' } };
+}
+
+module.exports = { writCheck: writCheck, writCheckAndBank: writCheckAndBank,
+  removeEmDash: removeEmDash, coffeeshopTest: coffeeshopTest,
+  writHoldCauses: writHoldCauses,
+  checkColdGreeting: checkColdGreeting, approximateChoppyDensity: approximateChoppyDensity,
   applyVoiceLaw: applyVoiceLaw, stripEmoji: stripEmoji, BANNED_WORDS: BANNED_WORDS,
   SUPER_BANS: SUPER_BANS, CTA_ENDINGS: CTA_ENDINGS, BANNED_HEADERS: BANNED_HEADERS,
-  preservesSemanticAnchors: preservesSemanticAnchors };
+  preservesSemanticAnchors: preservesSemanticAnchors, semanticAnchorReport: semanticAnchorReport,
+  survivingHints: survivingHints };

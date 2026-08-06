@@ -6,7 +6,7 @@
 //   First name: A'NU (Alpha apostrophe Nancy Uniform) -- the face, the product
 //   Last name: A'NEW (Alpha apostrophe Nancy Echo Wilmington) -- the engine, the company
 //
-// A'NU reads A'NEW's report and formats it for the reach channel.
+// A'NU reads A'NEW's final expression and carries its exact bytes to the reach channel.
 // She never runs the cycle herself. She reads what A'NEW produced.
 // The reach channel (CARA, VARA, WREN) is A'NU's leash.
 //
@@ -14,67 +14,25 @@
 //   A'NEW runs the mind cycle -> stamps result to brain
 //   A'NU reads the result -> formats and delivers to the reach channel
 //
-// CCWA: plain text, markdown-safe
-// VARA: voice-optimized -- shorter, more natural cadence, phonetic punctuation
-// WREN: SMS -- 160 char limit, no markdown
+// Channel transport may encode or wrap these bytes. It never rewrites them.
 //
 // ANYHAM test: channel formatting is per-channel type, not per-HAM. No identity hardcode.
 
 // Format A'NEW's output for the CCWA chat channel
 function formatCcwa(output) {
-  if (!output) return '';
-  // Strip markdown headers (CCWA renders inline)
-  return output
-    .replace(/^#{1,3}\s+/gm, '')
-    .replace(/\*\*(.*?)\*\*/g, '$1')
-    // \u2b21B:core.anu:FIX:dash_scrub_must_eat_the_space_it_replaces:20260725\u2b21 The voice law
-    // replaced the dash but left the space in front of it, so every scrubbed line reached the
-    // founder as "the connector , still parked" with a floating comma. Caught in her live
-    // reply, not in a test. Two more misses in the same line: the EN dash was not handled here
-    // at all (it IS handled by the sisters, so a scrub depended on which path ran), and the
-    // spaced "--" form left the same orphan space. This is now the exact pattern the sisters
-    // already prove, core/format.matrix.js and core/synthesize.js: consume the surrounding
-    // whitespace and emit one clean ", ". One source, one behaviour, whichever path formats her.
-    .replace(/\s*[\u2014\u2013]\s*/g, ', ')   // em and en dash -> comma (voice law)
-    .replace(/\s*--\s*/g, ', ')
-    // \u2b21B:core.anu:FIX:strip_the_courtesy_signoff_the_model_wont_stop_adding:20260721\u2b21 Same class
-    // as the em-dash law: the persona forbids a courtesy sign-off, but the model keeps tacking a
-    // trailing "Thanks"/"Best"/"Regards" (often on its own line, sometimes with a signature) onto
-    // her replies. She is mid-conversation with someone she knows, not writing a letter, so a
-    // trailing sign-off is an artifact, stripped here mechanically like em dashes. Tight to the very
-    // end so a real sentence that happens to contain "thanks" mid-reply is untouched.
-    .replace(/[\s\n]*\n\s*(thanks(?:\s+(?:so\s+much|again|a\s+lot))?|thank\s+you|best|regards|cheers|warmly|sincerely|yours)[,.!]*(?:\s*\n\s*[-\u2013]?\s*a['\u2019]?nu)?[\s.!]*$/i, '')
-    // Form 2: the model, once the on-its-own-line sign-off is stripped, moves it INLINE as a final
-    // "Thanks." sentence. Strip a trailing courtesy word that stands as the last sentence, only when
-    // preceded by sentence-ending punctuation so a mid-reply "thanks for the heads up" is untouched.
-    .replace(/([.!?])\s+(thanks(?:\s+(?:so\s+much|again|a\s+lot))?|thank\s+you)[,.!]*\s*$/i, '$1')
-    .trim();
+  return output == null ? '' : String(output);
 }
 
 // Format for VARA voice channel -- shorter sentences, natural cadence
 function formatVara(output) {
-  if (!output) return '';
-  var text = formatCcwa(output);
-  // Voice: no URLs, no parentheticals longer than 10 words
-  text = text.replace(/https?:\/\/\S+/g, 'the link');
-  text = text.replace(/\([^)]{60,}\)/g, '');
-  // ⬡B:core.anu:FIX:voice_is_never_chopped_at_300_chars:20260722⬡ FOUNDER 911: a hard 300-char cut
-  // silenced a long voice answer mid-thought -- TTS speaks any length, so the cap only ever
-  // amputated her. Voice keeps its cadence styling (short sentences, no URLs) but says the whole
-  // thing. "You don't know how long something will ever be." No max characters on her voice.
-  return text.trim();
+  return formatCcwa(output);
 }
 
-// Format for WREN SMS channel -- 160 char hard limit
+// Format for WREN text delivery. Blooio sends iMessage and does not inherit the
+// 160 character limit of one SMS segment. Keep destination length policy in the
+// existing format matrix so A'NU has one formatter, not two conflicting caps.
 function formatWren(output) {
-  if (!output) return '';
-  var text = formatCcwa(output);
-  // Strip all markdown
-  text = text.replace(/[*_`#]/g, '').trim();
-  if (text.length <= 160) return text;
-  // Truncate at last word boundary before 157
-  var cut = text.lastIndexOf(' ', 157);
-  return text.slice(0, cut > 0 ? cut : 157) + '...';
+  return formatCcwa(output);
 }
 
 // speak: the single A'NU entry point
