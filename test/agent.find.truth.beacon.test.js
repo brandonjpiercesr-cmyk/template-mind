@@ -26,6 +26,24 @@ function brainHarness() {
   }};
 }
 
+function externalClosureCallers(root) {
+  const callers=[];
+  function walk(dir) {
+    fs.readdirSync(dir,{withFileTypes:true}).forEach(function (entry) {
+      const file=path.join(dir,entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile()&&entry.name.endsWith('.js')&&
+          !file.endsWith(path.join('core','agent.find.js'))&&
+          !file.endsWith(path.join('core','truth.beacon.js'))&&
+          /\brecordExternalClosureVerification\s*\(/.test(fs.readFileSync(file,'utf8'))) {
+        callers.push(file);
+      }
+    });
+  }
+  walk(root);
+  return callers;
+}
+
 test('template registry resolves one executable Agent FIND capability for every paid seat', () => {
   assert.equal(registry.validateRegistry().ok, true);
   assert.equal(registry.resolveCapability('tool.brain.find').owner_node_id,
@@ -33,6 +51,19 @@ test('template registry resolves one executable Agent FIND capability for every 
   for (const id of ['station.pai','station.coda','station.advisors','station.press']) {
     assert.ok(registry.resolve(id).toolbelt.includes('tool.brain.find'));
   }
+  const press=registry.resolve('station.press');
+  const finder=registry.resolve('station.agent_find');
+  assert.equal(press.lifecycle,'active');
+  assert.equal(press.owner_wonder_id,'wonder.anu');
+  assert.equal(press.reports_to,'station.pai');
+  assert.ok(press.metadata.wiring.some(function (edge) {
+    return edge.target==='stations/press.station.js';
+  }));
+  assert.deepEqual(press.metadata.agent_find.recent_truth,
+    [{source_prefix:'press.',limit:12}]);
+  assert.ok(finder.wakes.includes('station.press'));
+  assert.ok(finder.hands_to.includes('station.press'));
+  assert.ok(press.hands_to.includes('station.pai'));
 });
 
 test('the TRUE ZERO keeps external closure injectable without an A NEW-only owner', async () => {
@@ -43,19 +74,20 @@ test('the TRUE ZERO keeps external closure injectable without an A NEW-only owne
   const absent = await agentFind.recordExternalClosureVerification({}, {}, {});
   assert.equal(absent.ok, false);
   assert.equal(absent.reason, 'agent_find_external_closure_delivery_proof_missing');
-  const callers = [];
-  function walk(dir) {
-    fs.readdirSync(dir, {withFileTypes:true}).forEach(function (entry) {
-      const file = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(file);
-      else if (entry.isFile() && entry.name.endsWith('.js') &&
-          file !== path.join(ROOT, 'pai', 'core', 'agent.find.js') &&
-          file !== path.join(ROOT, 'pai', 'core', 'truth.beacon.js') &&
-          fs.readFileSync(file, 'utf8').includes('recordExternalClosureVerification')) callers.push(file);
-    });
-  }
-  walk(path.join(ROOT, 'pai'));
-  assert.deepEqual(callers, []);
+  assert.deepEqual(externalClosureCallers(path.join(ROOT,'pai')),[]);
+});
+
+test('closure metadata is inert while a physical invocation remains detectable', (t) => {
+  const fixture=fs.mkdtempSync(path.join(require('node:os').tmpdir(),
+    'template-external-closure-callers-'));
+  t.after(function () { fs.rmSync(fixture,{recursive:true,force:true}); });
+  fs.writeFileSync(path.join(fixture,'metadata.js'),
+    "module.exports={entrypoint:'recordExternalClosureVerification'};\n");
+  assert.deepEqual(externalClosureCallers(fixture),[]);
+  const caller=path.join(fixture,'caller.js');
+  fs.writeFileSync(caller,
+    "module.exports=(agentFind)=>agentFind.recordExternalClosureVerification({}, {}, {});\n");
+  assert.deepEqual(externalClosureCallers(fixture),[caller]);
 });
 
 test('template bounded provider request is seat-bound before paid bytes can leave', async () => {
