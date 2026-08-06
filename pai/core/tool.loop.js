@@ -1509,6 +1509,14 @@ var TOOLS = [
     +'Checks whether enough real data already exists about this to actually build it. If yes, files a real build task. If not, tells you exactly what specific information to provide first.',
     parameters:{type:'object',required:['ham_uid','capability_description'],
     properties:{ham_uid:{type:'string'},capability_description:{type:'string',description:'what the HAM wants help with, in their own words'}}}}},
+  {type:'function',function:{name:'propose_model_change',description:'Use when you have reasoned that changing or testing one of your model seats could better serve the person. You choose whether this hand is appropriate after reading the whole request. This creates a durable same-world proposal for governed comparison. It does not deploy, switch, or spend on the candidate by itself. Name the seat, exact model, provider profile, deployment alias when serverless, your reasoning, alternatives you considered, acceptance checks, and evidence you relied on.',
+    parameters:{type:'object',required:['seat','proposed_model','provider_profile','reasoning','acceptance'],
+    properties:{seat:{type:'string'},proposed_model:{type:'string'},
+      provider_profile:{type:'string',enum:['managed_openrouter','managed_openai','serverless_openai_compatible']},
+      deployment_ref:{type:'string'},reasoning:{type:'string'},
+      alternatives_considered:{type:'array',items:{type:'string'}},
+      acceptance:{type:'array',items:{type:'string'}},
+      evidence_refs:{type:'array',items:{type:'string'}}}}}},
   // \u2b21B:core.tool_loop:FIX:screen_control_as_real_tool_not_prose_json:20260709\u2b21
   // Founder-caught live, twice, two different failure modes: asking a text-completion
   // model to embed a trailing JSON block inside free conversational prose is unreliable
@@ -1908,7 +1916,7 @@ var TOOL_INTENT_NAMES = Object.freeze({
   memory:['find_in_brain','find_identity_evidence','write_to_brain'],
   code:['consult_mace','assemble_bcw','run_cookoff','run_wonder_games','consult_wonder_meeting','raise_911_escalation','find_in_brain',
     'read_lane_board','read_wonder_departments','read_current_capabilities','read_render_logs','get_recent_builds','read_own_code','consult_coda',
-    'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page'],
+    'activate_roadmap_task','fix_file_in_github','trigger_deploy','look_at_page','propose_model_change'],
   screen:['update_screen','save_layout','edit_layout','set_background'],
   general:[]
 });
@@ -2089,6 +2097,7 @@ var POST_COUNCIL_TOOLS = Object.freeze({
   email_send:true,
   stop_mentioning:true,
   request_new_capability:true,
+  propose_model_change:true,
   save_layout:true,
   edit_layout:true,
   update_screen:true,
@@ -4150,6 +4159,28 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       level:jobLevel,submittedBy:'anu_conversation'
     });
     return JSON.stringify(jobOutcome);
+  }
+  if (name === 'propose_model_change') {
+    var modelIntentProof=runtime && runtime.councilResult
+      ? compactCouncilProof(runtime.councilResult) : null;
+    if (!modelIntentProof || modelIntentProof.committed !== true ||
+        modelIntentProof.readback_verified !== true || modelIntentProof.row_count !== 9 ||
+        !modelIntentProof.final_source) {
+      return JSON.stringify({ok:false,reason:'model_control_cycle_proof_untrusted'});
+    }
+    var modelIntentCycleId=String(runtime && runtime.parentCycleId || '').trim();
+    var modelIntentRequestId=String(runtime && runtime.parentRequestId || '').trim();
+    var modelIntentRequest=String(runtime && runtime.userMessage || '').trim();
+    if (!modelIntentCycleId || !modelIntentRequestId || !modelIntentRequest) {
+      return JSON.stringify({ok:false,reason:'model_control_cycle_identity_required'});
+    }
+    var modelIntentCancelled=await cancelBeforeEffect(name,runtime);
+    if (modelIntentCancelled) return modelIntentCancelled;
+    var modelIntent=await require('./model.control.js').writeReasonedIntent(args,{
+      ham_uid:hamUid,cycle_id:modelIntentCycleId,request_id:modelIntentRequestId,
+      request_text:modelIntentRequest,council_proof:modelIntentProof,env:process.env
+    });
+    return JSON.stringify(modelIntent);
   }
   if (name === 'notify_ham') {
     var notifyCancelled = await cancelBeforeEffect(name, runtime);
@@ -6422,8 +6453,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         tc.function.arguments = JSON.stringify(targs);
         _stampStep('tool_call', tc.function.name);
         var _governedTool=await _governedToolEdge.executeCurrentGovernedWork({hamUid:hamUid,
-          call:function(){return executeTool(tc.function.name,targs,hamUid,message,
-            _effectRuntime,true);}});
+          call:function(){return executeTool(tc.function.name,targs,hamUid,message,_effectRuntime,true);}});
         if(!_governedTool.ok){
           _stampStep('cycle_parked','person_stop_before_tool_execution');
           return {ok:false,reason:_governedTool.reason||'kill_switch_unverified',
