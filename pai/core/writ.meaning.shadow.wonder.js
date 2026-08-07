@@ -83,7 +83,16 @@ function verdict(value) {
   var decision = clean(parsed && parsed.decision, 24).toUpperCase();
   var reason = clean(parsed && parsed.reason, 1200);
   if (!DECISIONS.has(decision) || !reason) return null;
-  return {decision:decision,reason:reason,model:clean(value && value.model,160)||null,
+  // SHADOW REBUILD 20260807 (founder: "get it right, not hold it," never silence her on
+  // tone). FAIL-CLOSED: a disagreement is presumed CONSEQUENTIAL (material: a changed fact,
+  // number, date, name, commitment, authority, or WHO owns/does/receives) and is held, exactly
+  // as the live cycle already holds it. Her voice ships THROUGH a disagreement only when SHADOW
+  // AFFIRMATIVELY clears it as a tone, warmth, length, or ordinary wording nuance
+  // (consequential:false). Presuming material is strictly safer-or-equal to the old blank-on-any
+  // -disagreement: it never ships a material change, it only stops blanking her on pure tone.
+  var consequential = !(parsed && parsed.consequential === false);
+  return {decision:decision,reason:reason,consequential:consequential,
+    model:clean(value && value.model,160)||null,
     via:clean(value && (value.via || value.provider),160)||null};
 }
 
@@ -230,7 +239,11 @@ async function judge(input, options) {
     + 'receives, promises, or experiences something. Challenge any internal process narration or system vocabulary introduced '
     + 'by Meta or the final transport when it was absent from the source. Return strict JSON only: '
     + '{"decision":"AGREE|DISAGREE|UNCERTAIN",'
-    + '"reason":"one concrete explanation"}. Use UNCERTAIN whenever the comparison cannot be made '
+    + '"consequential":true or false,'
+    + '"reason":"one concrete explanation"}. On DISAGREE, set consequential true ONLY when the '
+    + 'final output changes a fact, number, date, name, commitment, authority, or WHO owns, does, '
+    + 'receives, promises, or experiences something. A tone, warmth, length, or ordinary wording '
+    + 'nuance is consequential false. Use UNCERTAIN whenever the comparison cannot be made '
     + 'honestly. Never address the person.';
   var user = JSON.stringify({binding:bound,pre_writ_draft:exactPacket.pre_writ_draft.text,
     writ_output:exactPacket.writ_output.text,
@@ -263,8 +276,11 @@ async function judge(input, options) {
   if (!receipt.ok) return {ok:false,reason:receipt.reason,shadow:publicShadow};
   if (judged.decision !== 'AGREE') return {ok:false,
     reason:judged.decision === 'DISAGREE' ? 'writ_meaning_shadow_disagreement' :
-      'writ_meaning_shadow_uncertain',shadow:publicShadow,receipt:receipt};
-  return {ok:true,reason:'writ_meaning_shadow_agreement',shadow:publicShadow,receipt:receipt};
+      'writ_meaning_shadow_uncertain',
+    decision:judged.decision, consequential:judged.consequential === true,
+    shadow:publicShadow,receipt:receipt};
+  return {ok:true,reason:'writ_meaning_shadow_agreement',
+    decision:'AGREE', consequential:false, shadow:publicShadow,receipt:receipt};
 }
 
 module.exports = {SCHEMA:SCHEMA,ATTEMPT_SCHEMA:ATTEMPT_SCHEMA,TYPE:TYPE,
