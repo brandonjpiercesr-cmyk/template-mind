@@ -3203,6 +3203,26 @@ async function defaultWritStage(ctx) {
   return stageResult;
 }
 
+// ⬡B:core.pai_outbound_council:GUARD:meaning_clearance_is_positive_never_absence:20260807⬡
+// The one place that decides whether SHADOW's verdict releases her bytes. It is written as
+// an ALLOWLIST on purpose. The regression this replaces asked "is there a named break?"
+// and shipped whenever the answer was no, which meant every verdict the author did not
+// think of, UNCERTAIN above all, silently became a release. Asking instead "was this
+// affirmatively cleared?" means a verdict nobody anticipated holds by construction.
+// Cleared means exactly two things and nothing else:
+//   AGREE                              she and SHADOW read the final bytes the same way
+//   DISAGREE + consequential === false SHADOW disagrees, and says the difference is tone,
+//                                      warmth, length, or ordinary wording, not a changed
+//                                      fact, number, date, name, commitment, or authority
+// UNCERTAIN is never a clearance. The shadow's own prompt reserves it for "the comparison
+// cannot be made honestly," and an unverifiable meaning is precisely what must not ship.
+// consequential must be the literal boolean false; a missing, null, or truthy value holds.
+function meaningCleared(meaning) {
+  if (!meaning || typeof meaning !== 'object') return false;
+  if (meaning.decision === 'AGREE') return true;
+  return meaning.decision === 'DISAGREE' && meaning.consequential === false;
+}
+
 async function defaultAnuExpressionStage(ctx) {
   if (hamWorldBuilderDecisionContext(ctx)) {
     var worldAnu = require('./anu.js');
@@ -3262,23 +3282,34 @@ async function defaultAnuExpressionStage(ctx) {
     // Never ship dark: only a proven consequential meaning break, or a PAM leak, holds.
     // The old code blanked her output on ANY non-AGREE verdict, silencing her replies.
     // That was cold code vetoing her meaning, the exact nasty cough the doctrine forbids.
+    // ⬡B:core.pai_outbound_council:FIX:uncertain_is_not_a_clearance:20260807⬡
+    // FIRST CUT SHIPPED A REGRESSION, caught by a blind critic within the hour and fixed
+    // here. The release gate was keyed on decision === 'DISAGREE', so UNCERTAIN could
+    // never match it and fell through to PAM and SHIPPED. The old code required
+    // meaning.ok === true, and judge() returns ok:false for UNCERTAIN, so UNCERTAIN used
+    // to blank. That inverted the one case that most needs holding: the shadow's own
+    // prompt says "use UNCERTAIN whenever the comparison cannot be made honestly," so
+    // "I could not verify her meaning survived" was RELEASING her output.
+    // The gate is now a positive CLEARANCE, not the absence of a named break. Bytes ship
+    // only when SHADOW agreed, or when it disagreed and affirmatively marked the
+    // disagreement non-consequential (tone, warmth, length, ordinary wording). Anything
+    // else, UNCERTAIN included, holds exactly as it did before the rebuild. This is the
+    // "strictly safer-or-equal" property the first cut claimed but did not have: the only
+    // case that ships now and did not ship before is a proven tone-only disagreement.
     var meaningRanBound = !!(meaning && finalBytesBound);
-    var meaningConsequentialBreak = !!(meaning && meaning.decision === 'DISAGREE' &&
-      meaning.consequential === true);
-    if (meaningRanBound && !meaningConsequentialBreak) {
+    if (meaningRanBound && meaningCleared(meaning)) {
       finalPam = await defaultPamStage(Object.assign({},ctx,{answer:output}));
       if (!finalPam || finalPam.ok !== true || finalPam.answer !== output) output = '';
     } else output = '';
   } else output = '';
-  var meaningConsequentialBreakOuter = !!(meaning && meaning.decision === 'DISAGREE' &&
-    meaning.consequential === true);
+  var meaningClearedOuter = meaningCleared(meaning);
   var meaningDissent = !!(meaning && meaning.decision && meaning.decision !== 'AGREE');
   var meaningReason = meaning && meaning.ok === true && !finalBytesBound
     ? 'writ_meaning_shadow_final_bytes_unbound' : (meaning && meaning.reason ||
       (packetBound ? 'writ_meaning_shadow_not_run' : 'writ_meaning_shadow_packet_unbound'));
   return {
     ok: !!(result && result.blocked === false && output.trim().length > 0 &&
-      finalPam && finalPam.ok === true && !meaningConsequentialBreakOuter),
+      finalPam && finalPam.ok === true && meaningClearedOuter),
     answer: output,
     reason: result && result.blocked ? 'anu_expression_blocked' :
       (output.trim().length > 0 ? (meaningDissent
@@ -5172,6 +5203,7 @@ module.exports = {
     defaultShadowStage: defaultShadowStage,
     defaultWritStage: defaultWritStage,
     defaultAnuExpressionStage:defaultAnuExpressionStage,
+    meaningCleared:meaningCleared,
     normalizeStageResult:normalizeStageResult,
     writMeaningPacketFrom:function (result) {
       return result && Object.prototype.hasOwnProperty.call(result,WRIT_MEANING_PACKET) &&
