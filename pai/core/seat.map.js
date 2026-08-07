@@ -385,7 +385,11 @@ function seat(name, runtime) {
       (!unlimitedDailySpend && resolvedCap === null))) {
     return null;
   }
-  if (!isContestant && isBannedProductionModel(resolvedModel)) resolvedModel = d.model;
+  if (!isContestant && isBannedProductionModel(resolvedModel)) {
+    // Ruling 20260807: refusal stands, silence does not. Record loudly and keep refusing.
+    recordBanRefusal(name, resolvedModel, d.model);
+    resolvedModel = d.model;
+  }
   if (d.requiredEnv && !resolvedModel) return null;
   // ⬡B:core.seat_map:FIX:hasFallback_compared_the_raw_override_not_the_normalized_one:20260729⬡
   // CAUGHT BY CATHY (Codex) IN REVIEW ON template-mind#322, P2: this compared the RAW
@@ -396,7 +400,10 @@ function seat(name, runtime) {
   // normalized to the baked default and returned null (no real failover), so the two
   // exported facts contradicted each other. Normalized the same way here so they agree.
   var resolvedFallback = d.fallbackModel ? env(d.envModel + '_FALLBACK', d.fallbackModel, runtime) : null;
-  if (resolvedFallback && !isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
+  if (resolvedFallback && !isContestant && isBannedProductionModel(resolvedFallback)) {
+    recordBanRefusal(name + '.fallback', resolvedFallback, d.fallbackModel);
+    resolvedFallback = d.fallbackModel;
+  }
   return {
     seat: name,
     role: d.role,
@@ -456,9 +463,15 @@ function fallback(name, runtime) {
   if (!d || !d.fallbackModel) return null;
   var isContestant = isContestantSeat(name);
   var resolvedPrimary = env(d.envModel, d.model, runtime);
-  if (!isContestant && isBannedProductionModel(resolvedPrimary)) resolvedPrimary = d.model;
+  if (!isContestant && isBannedProductionModel(resolvedPrimary)) {
+    recordBanRefusal(name, resolvedPrimary, d.model);
+    resolvedPrimary = d.model;
+  }
   var resolvedFallback = env(d.envModel + '_FALLBACK', d.fallbackModel, runtime);
-  if (!isContestant && isBannedProductionModel(resolvedFallback)) resolvedFallback = d.fallbackModel;
+  if (!isContestant && isBannedProductionModel(resolvedFallback)) {
+    recordBanRefusal(name + '.fallback', resolvedFallback, d.fallbackModel);
+    resolvedFallback = d.fallbackModel;
+  }
   if (resolvedFallback === resolvedPrimary) return null;
   // The failover attempt is the SAME governed seat on the same wallet, so it reads the same cap
   // through the same one source and publishes the same ownership facts. Deriving them a second
@@ -554,6 +567,38 @@ function seatNames(runtime) {
 var BANNED_PRODUCTION_MODEL = /(kimi|glm-5\.2|ornith|opus|fable)/i;
 function isBannedProductionModel(model) { return BANNED_PRODUCTION_MODEL.test(String(model || '')); }
 
+// ⬡B:core.seat_map:RULING:a_regex_may_detect_only_a_woken_wonder_decides:20260807⬡
+// Founder 911 doctrine drop, recorded in docs/RULINGS.md 20260807: "regex pass or fail
+// wakes a wonder, an ABA LLM, instead of nasty cough where regex decides and executes."
+// This ban used to refuse silently: an operator wiring a banned SEAT_*_MODEL got the baked
+// default back with no word said anywhere, and would burn a night looping on the mystery.
+// WHAT CHANGES HERE, and what does not: the refusal itself stays exactly as it was, cold
+// code still never spends a banned model (safety is not softened one bit), but every
+// refusal is now RECORDED LOUDLY, a console line naming the seat, the attempted model, and
+// the ban's reason, plus a bounded in-process ring buffer the overseer's next cycle can
+// read and EXPLAIN, which is the wake half of detect-and-wake. The decision about what the
+// refusal means still belongs to a woken LLM reading this record, never to this regex.
+// No env is read here and no PII is ever recorded: seat name, model slug, reason, time.
+var BAN_REFUSAL_REASON = 'founder ban 20260729: no kimi, no glm-5.2, no ornith, no opus,' +
+  ' no fable on a production non-contestant seat (Wonder Games / cook-off contestants exempt)';
+var BAN_REFUSAL_CAP = 50;
+var recentBanRefusals = [];
+function recordBanRefusal(seatName, attemptedModel, keptModel) {
+  var entry = {
+    at: new Date().toISOString(),
+    seat: String(seatName || 'unknown'),
+    attemptedModel: String(attemptedModel || ''),
+    keptModel: String(keptModel || ''),
+    reason: BAN_REFUSAL_REASON
+  };
+  recentBanRefusals.push(entry);
+  if (recentBanRefusals.length > BAN_REFUSAL_CAP) recentBanRefusals.shift();
+  console.warn('[seat.map] BAN REFUSAL (detect-and-wake, ruling 20260807): seat "' +
+    entry.seat + '" attempted banned model "' + entry.attemptedModel +
+    '", kept "' + entry.keptModel + '". ' + entry.reason);
+  return entry;
+}
+
 // ⬡B:core.seat_map:FIX:the_raw_together_callers_never_validated_their_own_env_override:20260729⬡
 // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1. Every direct Together caller this
 // PR migrated off the banned baked default (core/outreach.js, core/survey.js,
@@ -565,14 +610,25 @@ function isBannedProductionModel(model) { return BANNED_PRODUCTION_MODEL.test(St
 // `X || default` only ever falls to the default when X is absent, never when X is
 // banned. This is the one place that fact gets checked, so twelve call sites do not
 // each need their own copy of it.
-function safeModelOverride(envValue, safeDefault) {
+// Ruling 20260807 (docs/RULINGS.md): the revert stays, the silence goes. A banned raw env
+// override is still never spent, but the refusal is recorded loudly (console plus the
+// recentBanRefusals ring buffer) so the overseer's next cycle can read and explain it.
+// Third argument names the calling seat or surface for the record; optional so the twelve
+// existing call sites keep working unchanged and simply record as 'env_override'.
+function safeModelOverride(envValue, safeDefault, seatName) {
   var v = String(envValue || '').trim();
   if (v && !isBannedProductionModel(v)) return v;
+  if (v) recordBanRefusal(seatName || 'env_override', v, safeDefault);
   return safeDefault;
 }
 
 module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
   isBannedProductionModel: isBannedProductionModel, safeModelOverride: safeModelOverride,
+  // Ruling 20260807, detect-and-wake: the live record of every banned-model refusal this
+  // process has made (capped ring buffer, newest last). The overseer reads this to explain
+  // WHY a seat is not running the model an operator wired, instead of leaving a silent
+  // mystery. Exported live so a reader sees refusals as they land; never contains PII.
+  recentBanRefusals: recentBanRefusals,
   // A first class export, not a test hook. Any surface that wants to report who chose a seat's
   // dollar cap reads THIS rather than keeping its own copy of the env parse, which is exactly
   // the second hand maintained reader that let the trap above survive unnoticed.
