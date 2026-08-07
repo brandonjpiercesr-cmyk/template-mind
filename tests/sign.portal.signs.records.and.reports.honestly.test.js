@@ -199,6 +199,53 @@ test('a full signing lands the record and the memory bead in the bank, signature
   }
 });
 
+test('a destination bead in the brain outranks the env fallback, and verify says which source rules', async () => {
+  const bankApp = express();
+  bankApp.get('/rest/v1/beads', (req, res) => res.json([{
+    content: JSON.stringify({ notify_emails: ['brain.fixture@example.com'] }),
+    created_at: '2026-08-07T00:00:00Z'
+  }]));
+  bankApp.get('/rest/v1/signing_records', (req, res) => res.json([]));
+  const bank = await new Promise((resolve) => {
+    const srv = http.createServer(bankApp);
+    srv.listen(0, '127.0.0.1', () => resolve({ base: 'http://127.0.0.1:' + srv.address().port, close: () => srv.close() }));
+  });
+  const held = { n: process.env.SIGN_NOTIFY_EMAILS, u: process.env.MEMORY_BANK_URL, k: process.env.MEMORY_BANK_KEY };
+  process.env.SIGN_NOTIFY_EMAILS = 'env.fixture@example.com';
+  process.env.MEMORY_BANK_URL = bank.base;
+  process.env.MEMORY_BANK_KEY = 'fixture-key';
+  const s = await serve();
+  try {
+    const r = await fetch(s.base + '/sign/verify');
+    const j = await r.json();
+    assert.strictEqual(j.recipients.source, 'brain', 'the brain bead rules when present');
+    assert.strictEqual(j.recipients.configured, 1);
+    assert.ok(j.recipients.masked[0].indexOf('b***') === 0, 'the masked address is the bead one, not env');
+  } finally {
+    [['n', 'SIGN_NOTIFY_EMAILS'], ['u', 'MEMORY_BANK_URL'], ['k', 'MEMORY_BANK_KEY']].forEach(function (p) {
+      if (held[p[0]] !== undefined) process.env[p[1]] = held[p[0]]; else delete process.env[p[1]];
+    });
+    s.close(); bank.close();
+  }
+});
+
+test('the destination door fails closed without exact founder authority', async () => {
+  const held = process.env.FOUNDER_HAM_UID;
+  process.env.FOUNDER_HAM_UID = 'fixture_founder';
+  const s = await serve();
+  try {
+    const r = await fetch(s.base + '/sign/config', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notify_emails: ['intruder.fixture@example.com'] }) });
+    assert.notStrictEqual(r.status, 200, 'no session may set where signatures deliver');
+    const j = await r.json();
+    assert.strictEqual(j.ok, false);
+  } finally {
+    if (held !== undefined) process.env.FOUNDER_HAM_UID = held; else delete process.env.FOUNDER_HAM_UID;
+    s.close();
+  }
+});
+
 test('the founder record doors fail closed without exact founder authority', async () => {
   const held = process.env.FOUNDER_HAM_UID;
   process.env.FOUNDER_HAM_UID = 'fixture_founder';

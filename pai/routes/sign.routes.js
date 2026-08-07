@@ -50,10 +50,41 @@ function bankHeaders(write) {
   return h;
 }
 
-function recipients() {
-  return String(process.env.SIGN_NOTIFY_EMAILS || '')
-    .split(',').map(function (s) { return s.trim(); })
+function parseEmailList(v) {
+  return (Array.isArray(v) ? v : String(v || '').split(','))
+    .map(function (s) { return String(s || '').trim(); })
     .filter(function (s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s); });
+}
+
+// WHERE THE DESTINATION LIVES, the founder's own priority order, 20260807:
+// "identity comes from env or the brain", and he ruled the brain is the better
+// home here so his data sits in his world's own memory where every wonder can
+// read it, not on a hosting dashboard only a human with dashboard access can
+// see. So: the newest sign.portal.config bead in THIS world's bank decides;
+// the SIGN_NOTIFY_EMAILS env var is the fallback when no bead exists yet or
+// the bank is unreachable. Supersede, never delete: setting a new destination
+// writes a new bead, and the newest wins.
+var CONFIG_SOURCE = 'sign.portal.config';
+
+async function recipientsResolved() {
+  if (bankUrl() && bankKey()) {
+    try {
+      var r = await fetch(bankUrl() + '/rest/v1/beads'
+        + '?select=content,created_at&source=eq.' + CONFIG_SOURCE
+        + '&ham_uid=eq.' + encodeURIComponent((process.env.HAM_UID || '').toUpperCase())
+        + '&order=created_at.desc&limit=1', { headers: bankHeaders(false) });
+      if (r.ok) {
+        var rows = await r.json();
+        if (rows.length) {
+          var conf = JSON.parse(rows[0].content || '{}');
+          var fromBrain = parseEmailList(conf.notify_emails);
+          if (fromBrain.length) return { list: fromBrain, source: 'brain' };
+        }
+      }
+    } catch (eConf) { /* fall through to env, honestly reported by source */ }
+  }
+  var fromEnv = parseEmailList(process.env.SIGN_NOTIFY_EMAILS);
+  return { list: fromEnv, source: fromEnv.length ? 'env' : 'none' };
 }
 
 function senderWorld() { return (process.env.SIGN_SENDER_WORLD || 'gmg').trim(); }
@@ -135,7 +166,10 @@ function portalHtml() {
   + 'h2{font-size:21px;font-weight:620;margin-bottom:8px}\n'
   + '.lead{font-size:14.5px;line-height:1.6;color:rgba(243,238,247,.72);margin-bottom:22px}\n'
   + 'label{display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:rgba(243,238,247,.6);margin:16px 0 6px}\n'
-  + 'input[type=text],input[type=email],input[type=tel]{width:100%;padding:13px 15px;font-size:15.5px;color:#fff;'
+  // 16px minimum on inputs, not a taste call: iOS Safari auto-zooms the whole
+  // page on focus of any input below 16px, which is exactly the hard jump the
+  // founder has been burned by before.
+  + 'input[type=text],input[type=email],input[type=tel]{width:100%;padding:13px 15px;font-size:16px;color:#fff;'
   + 'background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);border-radius:12px;outline:none;transition:border .25s,background .25s}\n'
   + 'input:focus{border-color:rgba(241,155,214,.65);background:rgba(255,255,255,.10)}\n'
   + '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}\n'
@@ -187,8 +221,8 @@ function portalHtml() {
   + '<div class="step on" id="step1">\n'
   + '<h2>First, tell us who you are</h2>\n'
   + '<div class="lead">Your name appears in the agreement itself, so enter it exactly as it reads on your tax documents.</div>\n'
-  + '<label for="fullName">Full legal name</label><input id="fullName" type="text" autocomplete="name" maxlength="140">\n'
-  + '<label for="email">Email address</label><input id="email" type="email" autocomplete="email" maxlength="140">\n'
+  + '<label for="fullName">Full legal name</label><input id="fullName" type="text" autocomplete="name" autocorrect="off" maxlength="140">\n'
+  + '<label for="email">Email address</label><input id="email" type="email" autocomplete="email" autocapitalize="none" autocorrect="off" inputmode="email" maxlength="140">\n'
   + '<button class="btn" id="toStep2">Continue</button>\n'
   + '<div class="err" id="err1"></div>\n'
   + '</div>\n'
@@ -276,6 +310,10 @@ function portalHtml() {
   + 'function move(ev){if(!drawing)return;var p=pos(ev);ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(p.x,p.y);ctx.stroke();last=p;drawn=true;ev.preventDefault()}\n'
   + 'function up(){drawing=false}\n'
   + 'pad.addEventListener("pointerdown",down);pad.addEventListener("pointermove",move);window.addEventListener("pointerup",up);\n'
+  + 'pad.addEventListener("pointercancel",up);pad.addEventListener("pointerleave",up);\n'
+  // The keyboard Go/Enter key advances the flow instead of doing nothing.
+  + '[["fullName","toStep2"],["email","toStep2"],["entityName","toStep3"],["phone","toStep3"],["street","toStep3"],["cityStateZip","toStep3"]].forEach(function(p){\n'
+  + '$(p[0]).addEventListener("keydown",function(ev){if(ev.key==="Enter"){ev.preventDefault();$(p[1]).click()}})});\n'
   + '$("clearPad").onclick=function(){sizePad()};\n'
   + 'window.addEventListener("resize",function(){if(mode==="draw"&&!drawn)sizePad()});\n'
   + 'setTimeout(sizePad,60);\n'
@@ -336,7 +374,8 @@ module.exports = function mountSignRoutes(app) {
       if (signatureJpegBase64 && signatureJpegBase64.length > 700000) return res.status(400).json({ ok: false, reason: 'signature_too_large', message: 'The drawn signature is too large. Please clear the pad and sign again.' });
       if (!signatureJpegBase64 && typedSignature.length < 3) return res.status(400).json({ ok: false, reason: 'signature_required', message: 'Please draw or type your signature.' });
 
-      var notify = recipients();
+      var destination = await recipientsResolved();
+      var notify = destination.list;
       if (!notify.length) return res.status(503).json({ ok: false, reason: 'no_recipients_configured', message: 'The signing service is not fully configured yet. Please let your contact know.' });
 
       var fill = Object.assign({
@@ -499,6 +538,41 @@ module.exports = function mountSignRoutes(app) {
     }
   });
 
+  // THE DESTINATION DOOR. The founder (his exact full sign-in, nobody else)
+  // sets where executed agreements deliver, and the setting lands as a config
+  // bead in his world's own memory, superseding the last one. Once set, the
+  // Render env var is only the fallback and the dashboard never needs opening.
+  app.post('/sign/config', async function (req, res) {
+    var founder = await require('../core/founder.session.gate.js').requireFounder(req, res);
+    if (!founder) return;
+    if (!bankUrl() || !bankKey()) return res.status(503).json({ ok: false, reason: 'bank_not_configured' });
+    var list = parseEmailList((req.body || {}).notify_emails);
+    if (!list.length) return res.status(400).json({ ok: false, reason: 'notify_emails_required' });
+    if (list.length > 10) return res.status(400).json({ ok: false, reason: 'too_many_recipients' });
+    try {
+      var ham = (process.env.HAM_UID || '').toUpperCase() || 'UNBOUND';
+      var ins = await fetch(bankUrl() + '/rest/v1/beads', {
+        method: 'POST',
+        headers: Object.assign({}, bankHeaders(true), { Prefer: 'return=minimal' }),
+        body: JSON.stringify({
+          ham_uid: ham,
+          agent_global: 'SIGN',
+          acl_stamp: '⬡B:sign.portal.config:CONFIG:notify_destination:' + day() + '⬡',
+          stamp_type: 'CONFIG',
+          source: CONFIG_SOURCE,
+          spawned_by: 'sign.portal.' + ham,
+          importance: 7,
+          summary: '[SIGN CONFIG] executed agreements deliver to ' + list.length + ' recipient(s)',
+          content: JSON.stringify({ notify_emails: list, set_at: new Date().toISOString() })
+        })
+      });
+      if (!ins.ok) return res.status(502).json({ ok: false, reason: 'bead_insert_failed_' + ins.status });
+      res.json({ ok: true, recipients: { configured: list.length, masked: list.map(maskEmail) }, source: 'brain' });
+    } catch (e) {
+      res.status(502).json({ ok: false, reason: 'bank_unreachable' });
+    }
+  });
+
   // THE FOUNDER'S RECORD ROOM. Both doors sit behind the same exact full
   // sign-in founder authority every irreversible door in this world uses
   // (core/founder.session.gate.js), never a portal-local password. The list
@@ -563,7 +637,8 @@ module.exports = function mountSignRoutes(app) {
   // The receipt door. "You got to verify that it goes to the right spot": this
   // proves the destination configuration live, addresses masked, no secret out.
   app.get('/sign/verify', async function (req, res) {
-    var notify = recipients();
+    var destination = await recipientsResolved();
+    var notify = destination.list;
     var world = senderWorld();
     var grantConfigured = false;
     try { grantConfigured = !!require('../reach/iman.js').resolveGrant(world); } catch (e) { grantConfigured = false; }
@@ -578,7 +653,7 @@ module.exports = function mountSignRoutes(app) {
     var ok = notify.length > 0 && grantConfigured && bank.configured && bank.table_reachable;
     res.status(ok ? 200 : 503).json({
       ok: ok,
-      recipients: { configured: notify.length, masked: notify.map(maskEmail) },
+      recipients: { configured: notify.length, masked: notify.map(maskEmail), source: destination.source },
       sender_world: world,
       sender_grant_configured: grantConfigured,
       bank: bank,
