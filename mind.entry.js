@@ -98,6 +98,12 @@ require('./pai/routes/privacy.routes.js')(app);
 // The same authenticated, read-only named-seat health wall the cycle's internal
 // seat evidence reads. No timer, paid call, or autonomous mutation is mounted.
 require('./pai/routes/seats.health.routes.js')(app);
+// ⬡B:mind.entry:WIRE:document_signing_portal:20260807⬡ The signing portal: a
+// contractor opens GET /sign, reads the agreement personalized to them, signs,
+// and the executed PDF is recorded in this world's bank and delivered to the
+// env-configured recipients through the guarded IMAN path. GET /sign/verify
+// proves the destination live. Identity and recipients are env-only by law.
+require('./pai/routes/sign.routes.js')(app);
 // ⬡B:mind.entry:WIRE:inbox_zero_universal_mount:20260720⬡ the universal per-advisor
 // inbox-zero wonder agent, one shared source in pai/core (mirrored from anew/core),
 // world resolved as a parameter. POST /inbox-zero/:world/run.

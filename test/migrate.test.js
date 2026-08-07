@@ -159,10 +159,17 @@ test('a clean 0004 rerun reaches every paid-admission statement in 0005', async 
 test('the lexical migration tail places provider receipt storage before its atomic RPCs', () => {
   const files=fs.readdirSync(path.join(__dirname,'../migrations'))
     .filter((file)=>/\.sql$/.test(file)).sort();
+  // The law this tripwire holds: 0006 creates the provider receipt storage and
+  // 0007 the atomic RPCs that depend on it, so 0006 must sort first. The tail
+  // snapshot fires whenever a migration is appended, so the author updates it
+  // consciously: 0010 (signing_records, the document portal) is the new tail.
+  assert.ok(files.indexOf('0006_provider_spend_receipts.sql')
+    <files.indexOf('0007_provider_spend_atomic_admission.sql'),
+    'provider receipt storage must apply before its atomic RPCs');
   assert.deepEqual(files.slice(-3),[
-    '0007_provider_spend_atomic_admission.sql',
     '0008_provider_spend_unlimited_ceiling.sql',
-    '0009_provider_spend_reconciliation.sql'
+    '0009_provider_spend_reconciliation.sql',
+    '0010_signing_records.sql'
   ]);
 });
 
