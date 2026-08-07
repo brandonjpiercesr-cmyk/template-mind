@@ -46,6 +46,7 @@ test('GET /sign serves the portal on the founder pink smoke still and nothing un
         'unapproved image on the door: ' + u);
     });
     assert.ok(html.indexOf('Global Majority Group') !== -1, 'the company name fronts the page');
+    assert.ok(html.indexOf(brand.ENVOLVE_LOGO_URL) !== -1, 'the real company mark is on the door, never an invented logo');
     assert.ok(html.indexOf('Independent Contractor Agreement') !== -1);
     assert.ok(html.indexOf('—') === -1, 'no em dash reaches a human surface');
     assert.ok(html.indexOf('7. Confidentiality') !== -1, 'the agreement sections ride the page');
@@ -138,6 +139,99 @@ test('GET /sign/verify reports the destination masked and refuses to claim an un
     if (held !== undefined) process.env.SIGN_NOTIFY_EMAILS = held; else delete process.env.SIGN_NOTIFY_EMAILS;
     s.close();
   }
+});
+
+test('a full signing lands the record and the memory bead in the bank, signature bytes only in the record', async () => {
+  // A fake memory bank that captures exactly what the portal writes, so the
+  // "where does it save" truth is proven against real HTTP, not assumed.
+  const captured = { records: [], beads: [], patches: [] };
+  const bankApp = express();
+  bankApp.use(express.json({ limit: '10mb' }));
+  bankApp.post('/rest/v1/signing_records', (req, res) => { captured.records.push(req.body); res.status(201).json([req.body]); });
+  bankApp.post('/rest/v1/beads', (req, res) => { captured.beads.push(req.body); res.status(201).end(); });
+  bankApp.patch('/rest/v1/signing_records', (req, res) => { captured.patches.push(req.body); res.json([]); });
+  const bank = await new Promise((resolve) => {
+    const srv = http.createServer(bankApp);
+    srv.listen(0, '127.0.0.1', () => resolve({ base: 'http://127.0.0.1:' + srv.address().port, close: () => srv.close() }));
+  });
+  const held = { n: process.env.SIGN_NOTIFY_EMAILS, u: process.env.MEMORY_BANK_URL, k: process.env.MEMORY_BANK_KEY, h: process.env.HAM_UID };
+  process.env.SIGN_NOTIFY_EMAILS = 'fixture.person@example.com';
+  process.env.MEMORY_BANK_URL = bank.base;
+  process.env.MEMORY_BANK_KEY = 'fixture-key';
+  process.env.HAM_UID = 'fixture_world';
+  const s = await serve();
+  try {
+    const r = await fetch(s.base + '/sign/submit', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ consent: true, fullLegalName: 'Fixture Signer Example',
+        email: 'fixture@example.com', street: '1 Fixture Way', cityStateZip: 'Fixture City, XX 00000',
+        phone: '555 0100', typedSignature: 'Fixture Signer Example', clientDate: 'August 7, 2026' }) });
+    const j = await r.json();
+    assert.strictEqual(j.ok, true, JSON.stringify(j).slice(0, 300));
+    assert.strictEqual(j.recorded.ok, true, 'the record landed');
+    assert.strictEqual(j.memoried.ok, true, 'the memory bead landed');
+    assert.strictEqual(j.emailed.ok, false, 'no mail config means an honest emailed:false');
+
+    assert.strictEqual(captured.records.length, 1);
+    const row = captured.records[0];
+    assert.strictEqual(row.ham_uid, 'FIXTURE_WORLD', 'the record binds this exact world');
+    assert.strictEqual(row.signer.full_legal_name, 'Fixture Signer Example');
+    assert.strictEqual(row.signer.signed_at_date, 'August 7, 2026', 'the rebuild snapshot is complete');
+    assert.ok(row.agreement_sha256 && row.pdf_sha256);
+
+    assert.strictEqual(captured.beads.length, 1);
+    const bead = captured.beads[0];
+    assert.strictEqual(bead.stamp_type, 'RECORD');
+    assert.strictEqual(bead.source, 'sign.portal.contractor_agreement');
+    assert.strictEqual(bead.importance, 8);
+    assert.ok(bead.summary.indexOf('Fixture Signer Example') !== -1);
+    assert.ok(bead.acl_stamp.indexOf(row.id) !== -1, 'the bead points at the record');
+    assert.strictEqual(JSON.stringify(bead).indexOf('signature_jpeg'), -1, 'signature bytes never enter memory');
+    assert.ok(JSON.parse(bead.content).pdf_sha256 === row.pdf_sha256);
+
+    assert.strictEqual(captured.patches.length, 1, 'the delivery receipt was patched onto the record');
+    assert.strictEqual(captured.patches[0].email_receipt.ok, false);
+  } finally {
+    [['n', 'SIGN_NOTIFY_EMAILS'], ['u', 'MEMORY_BANK_URL'], ['k', 'MEMORY_BANK_KEY'], ['h', 'HAM_UID']].forEach(function (p) {
+      if (held[p[0]] !== undefined) process.env[p[1]] = held[p[0]]; else delete process.env[p[1]];
+    });
+    s.close(); bank.close();
+  }
+});
+
+test('the founder record doors fail closed without exact founder authority', async () => {
+  const held = process.env.FOUNDER_HAM_UID;
+  process.env.FOUNDER_HAM_UID = 'fixture_founder';
+  const s = await serve();
+  try {
+    for (const path of ['/sign/records', '/sign/records/00000000-0000-4000-8000-000000000000/pdf']) {
+      const r = await fetch(s.base + path);
+      assert.notStrictEqual(r.status, 200, path + ' must not open without a session');
+      const j = await r.json();
+      assert.strictEqual(j.ok, false);
+    }
+    delete process.env.FOUNDER_HAM_UID;
+    const r = await fetch(s.base + '/sign/records');
+    assert.strictEqual(r.status, 503, 'an unconfigured founder identity refuses honestly');
+  } finally {
+    if (held !== undefined) process.env.FOUNDER_HAM_UID = held; else delete process.env.FOUNDER_HAM_UID;
+    s.close();
+  }
+});
+
+test('the executed PDF rebuild is deterministic, so the founder copy can prove itself against the recorded hash', () => {
+  const input = {
+    fill: { contractorName: 'Fixture Signer Example', street: '1 Fixture Way',
+      cityStateZip: 'Fixture City, XX 00000', email: 'fixture@example.com', phone: '555 0100' },
+    typedSignature: 'Fixture Signer Example',
+    signedAtIso: '2026-08-07T00:00:00.000Z', signedAtDate: 'August 7, 2026',
+    recordId: '00000000-0000-4000-8000-000000000000', ip: '203.0.113.9',
+    userAgent: 'fixture agent', agreementSha256: 'abc'
+  };
+  const crypto = require('node:crypto');
+  const a = crypto.createHash('sha256').update(signPdf.buildExecutedPdf(input)).digest('hex');
+  const b = crypto.createHash('sha256').update(signPdf.buildExecutedPdf(input)).digest('hex');
+  assert.strictEqual(a, b);
 });
 
 test('the executed PDF is a real document carrying the agreement, the signer, and the certificate', () => {

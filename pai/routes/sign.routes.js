@@ -66,6 +66,19 @@ function companyFill() {
   };
 }
 
+// The company mark on the door. SIGN_LOGO_URL lets a world carry its own logo
+// (the GMG world can point this at the Global Majority Group mark); the
+// fallback is the real Envolve company logo from core/brand.js, the one place
+// logo URLs are allowed to live. Never an invented URL.
+function logoUrl() {
+  var v = String(process.env.SIGN_LOGO_URL || '').trim();
+  return v || brand.ENVOLVE_LOGO_URL;
+}
+
+function day() {
+  return new Date().toISOString().slice(0, 10).replace(/-/g, '');
+}
+
 function maskEmail(addr) {
   var at = String(addr).indexOf('@');
   if (at < 1) return '***';
@@ -95,6 +108,7 @@ function portalHtml() {
   + '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
   + '<meta name="robots" content="noindex">\n'
   + '<title>' + signPdf.COMPANY_NAME + ' | ' + signPdf.AGREEMENT_TITLE + '</title>\n'
+  + '<link rel="icon" type="image/png" href="' + logoUrl() + '">\n'
   + '<style>\n'
   + '*{box-sizing:border-box;margin:0;padding:0}\n'
   + 'html,body{min-height:100%}\n'
@@ -103,6 +117,8 @@ function portalHtml() {
   + brand.stageCss({ scrim: 'rgba(10,6,16,0.66)', zIndex: 0 }) + '\n'
   + '.wrap{position:relative;z-index:1;max-width:860px;margin:0 auto;padding:48px 20px 80px}\n'
   + '.crest{text-align:center;margin-bottom:34px;opacity:0;animation:rise .9s ease .1s forwards}\n'
+  + '.crest .mark{width:58px;height:58px;object-fit:contain;border-radius:14px;margin-bottom:14px;'
+  + 'filter:drop-shadow(0 6px 18px rgba(224,124,196,.35))}\n'
   + '.crest .org{font-size:12px;letter-spacing:.42em;text-transform:uppercase;color:rgba(243,238,247,.72)}\n'
   + '.crest h1{margin-top:10px;font-size:clamp(26px,4.6vw,40px);font-weight:650;letter-spacing:.01em}\n'
   + '.crest .sub{margin-top:10px;font-size:14.5px;color:rgba(243,238,247,.66)}\n'
@@ -161,7 +177,8 @@ function portalHtml() {
   + '</style>\n</head>\n<body>\n'
   + brand.stageHtml() + '\n'
   + '<div class="wrap">\n'
-  + '<div class="crest"><div class="org">' + signPdf.COMPANY_NAME + '</div>'
+  + '<div class="crest"><img class="mark" src="' + logoUrl() + '" alt="' + signPdf.COMPANY_NAME + '">'
+  + '<div class="org">' + signPdf.COMPANY_NAME + '</div>'
   + '<h1>' + signPdf.AGREEMENT_TITLE + '</h1>'
   + '<div class="sub">A few minutes, one signature, and a copy of everything for your records.</div></div>\n'
   + '<div class="glass">\n'
@@ -265,6 +282,7 @@ function portalHtml() {
   + '$("tabDraw").onclick=function(){mode="draw";this.classList.add("on");$("tabType").classList.remove("on");$("drawBox").style.display="";$("typeBox").style.display="none";setTimeout(sizePad,30)};\n'
   + '$("tabType").onclick=function(){mode="type";this.classList.add("on");$("tabDraw").classList.remove("on");$("drawBox").style.display="none";$("typeBox").style.display="";$("typedName").value=$("typedName").value||state.name;$("typedPreview").textContent=$("typedName").value||"\\u00a0"};\n'
   + '$("typedName").addEventListener("input",function(){$("typedPreview").textContent=this.value||"\\u00a0"});\n'
+  + '$("consent").addEventListener("change",function(){if(this.checked)hideErr("err3")});\n'
   + 'var resultPdf=null;\n'
   + '$("submitBtn").onclick=function(){var btn=this;hideErr("err3");\n'
   + 'if(!$("consent").checked){showErr("err3","Please confirm the signature consent box to continue.");return}\n'
@@ -361,7 +379,17 @@ module.exports = function mountSignRoutes(app) {
               id: recordId,
               ham_uid: (process.env.HAM_UID || '').toUpperCase() || 'UNBOUND',
               agreement_key: signPdf.AGREEMENT_KEY,
-              signer: { full_legal_name: fullLegalName, entity_name: entityName || null, street: street, city_state_zip: cityStateZip, email: email, phone: phone },
+              // The signer snapshot carries EVERYTHING the PDF rebuild needs,
+              // including the company blanks as they stood at signing, so the
+              // founder's copy regenerates byte-identical even if env changes.
+              signer: {
+                full_legal_name: fullLegalName, entity_name: entityName || null,
+                street: street, city_state_zip: cityStateZip, email: email, phone: phone,
+                signed_at_date: str(b.clientDate, 60) || signedAt.toISOString().slice(0, 10),
+                company_state: companyFill().companyState || null,
+                company_entity_type: companyFill().entityType || null,
+                governing_law_state: companyFill().governingState || null
+              },
               signature_jpeg_base64: signatureJpegBase64 || null,
               typed_signature: typedSignature || null,
               agreement_sha256: agreementSha,
@@ -374,6 +402,41 @@ module.exports = function mountSignRoutes(app) {
           recorded = ins.ok ? { ok: true } : { ok: false, reason: 'bank_insert_failed_' + ins.status, detail: (await ins.text().catch(function () { return ''; })).slice(0, 200) };
         } catch (eIns) {
           recorded = { ok: false, reason: 'bank_unreachable', detail: String(eIns.message || '').slice(0, 200) };
+        }
+      }
+
+      // 1b. THE MEMORY. A signed agreement is a fact this world's mind should
+      // know without being asked, so the record also lands as a bead in the one
+      // memory the cycle reads. Signature bytes stay OUT of the bead: memory
+      // gets the fact and the hashes, the signing_records row holds the bytes.
+      var memoried = { ok: false, reason: 'bank_not_configured' };
+      if (bankUrl() && bankKey()) {
+        try {
+          var beadIns = await fetch(bankUrl() + '/rest/v1/beads', {
+            method: 'POST',
+            headers: Object.assign({}, bankHeaders(true), { Prefer: 'return=minimal' }),
+            body: JSON.stringify({
+              ham_uid: (process.env.HAM_UID || '').toUpperCase() || 'UNBOUND',
+              agent_global: 'SIGN',
+              acl_stamp: '⬡B:sign.portal:RECORD:' + recordId + ':' + day() + '⬡',
+              stamp_type: 'RECORD',
+              source: 'sign.portal.contractor_agreement',
+              spawned_by: 'sign.portal.' + ((process.env.HAM_UID || '').toUpperCase() || 'UNBOUND'),
+              importance: 8,
+              summary: '[SIGNED] ' + fullLegalName + ' executed the ' + signPdf.AGREEMENT_TITLE,
+              content: JSON.stringify({
+                record_id: recordId, agreement_key: signPdf.AGREEMENT_KEY,
+                full_legal_name: fullLegalName, entity_name: entityName || null,
+                email: email, phone: phone,
+                signed_at: signedAt.toISOString(),
+                agreement_sha256: agreementSha, pdf_sha256: pdfSha,
+                stored_in: 'memory_bank.signing_records'
+              })
+            })
+          });
+          memoried = beadIns.ok ? { ok: true } : { ok: false, reason: 'bead_insert_failed_' + beadIns.status };
+        } catch (eBead) {
+          memoried = { ok: false, reason: 'bank_unreachable' };
         }
       }
 
@@ -427,11 +490,73 @@ module.exports = function mountSignRoutes(app) {
         ok: true,
         recordId: recordId,
         recorded: recorded,
+        memoried: memoried,
         emailed: emailed.ok === true ? { ok: true, messageId: emailed.messageId || null } : { ok: false, reason: emailed.reason || 'unknown' },
         pdf_base64: pdf.toString('base64')
       });
     } catch (e) {
       res.status(500).json({ ok: false, reason: 'submit_failed', message: 'Something went wrong while signing. Please try again.', detail: String(e.message || '').slice(0, 200) });
+    }
+  });
+
+  // THE FOUNDER'S RECORD ROOM. Both doors sit behind the same exact full
+  // sign-in founder authority every irreversible door in this world uses
+  // (core/founder.session.gate.js), never a portal-local password. The list
+  // never carries signature bytes; the per-record door rebuilds the executed
+  // PDF from the stored snapshot and says whether it matches the recorded hash.
+  app.get('/sign/records', async function (req, res) {
+    var founder = await require('../core/founder.session.gate.js').requireFounder(req, res);
+    if (!founder) return;
+    if (!bankUrl() || !bankKey()) return res.status(503).json({ ok: false, reason: 'bank_not_configured' });
+    try {
+      var r = await fetch(bankUrl() + '/rest/v1/signing_records'
+        + '?select=id,agreement_key,signer,agreement_sha256,pdf_sha256,ip,user_agent,signed_at,email_receipt,created_at'
+        + '&order=signed_at.desc&limit=100', { headers: bankHeaders(false) });
+      if (!r.ok) return res.status(502).json({ ok: false, reason: 'bank_read_failed_' + r.status });
+      var rows = await r.json();
+      res.json({ ok: true, count: rows.length, records: rows });
+    } catch (e) {
+      res.status(502).json({ ok: false, reason: 'bank_unreachable' });
+    }
+  });
+
+  app.get('/sign/records/:id/pdf', async function (req, res) {
+    var founder = await require('../core/founder.session.gate.js').requireFounder(req, res);
+    if (!founder) return;
+    if (!bankUrl() || !bankKey()) return res.status(503).json({ ok: false, reason: 'bank_not_configured' });
+    var id = String(req.params.id || '').trim();
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ ok: false, reason: 'record_id_invalid' });
+    try {
+      var r = await fetch(bankUrl() + '/rest/v1/signing_records?id=eq.' + encodeURIComponent(id) + '&limit=1',
+        { headers: bankHeaders(false) });
+      if (!r.ok) return res.status(502).json({ ok: false, reason: 'bank_read_failed_' + r.status });
+      var rows = await r.json();
+      if (!rows.length) return res.status(404).json({ ok: false, reason: 'record_not_found' });
+      var row = rows[0], s = row.signer || {};
+      var pdf = signPdf.buildExecutedPdf({
+        fill: {
+          contractorName: s.full_legal_name, entityName: s.entity_name || '',
+          street: s.street, cityStateZip: s.city_state_zip, email: s.email, phone: s.phone,
+          companyState: s.company_state || '', entityType: s.company_entity_type || '',
+          governingState: s.governing_law_state || ''
+        },
+        signatureJpegBase64: row.signature_jpeg_base64 || null,
+        typedSignature: row.typed_signature || null,
+        signedAtIso: row.signed_at,
+        signedAtDate: s.signed_at_date || String(row.signed_at || '').slice(0, 10),
+        recordId: row.id, ip: row.ip, userAgent: row.user_agent,
+        agreementSha256: row.agreement_sha256
+      });
+      var sha = crypto.createHash('sha256').update(pdf).digest('hex');
+      res.set('Content-Type', 'application/pdf');
+      res.set('Content-Disposition', 'attachment; filename="signed_' + row.id + '.pdf"');
+      // Truth about the rebuild, carried in headers rather than silently: an
+      // exact match proves the bytes equal what was emailed on signing day.
+      res.set('X-Pdf-Sha256', sha);
+      res.set('X-Pdf-Matches-Record', String(sha === row.pdf_sha256));
+      res.send(pdf);
+    } catch (e) {
+      res.status(502).json({ ok: false, reason: 'bank_unreachable' });
     }
   });
 
