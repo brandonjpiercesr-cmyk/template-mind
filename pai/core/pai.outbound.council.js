@@ -3255,20 +3255,34 @@ async function defaultAnuExpressionStage(ctx) {
       meaning.receipt.content.final_human_output.bytes;
     var finalBytesBound = releasedDigest === digestText(output) &&
       releasedBytes === Buffer.byteLength(output,'utf8');
-    if (meaning && meaning.ok === true && finalBytesBound) {
+    // SHADOW REBUILD 20260807 (founder order, tear down the veto): SHADOW reviews her
+    // choice and HOLDS only when the disagreement is CONSEQUENTIAL, a changed fact,
+    // number, date, commitment, authority, or identity. A tone, warmth, or ordinary
+    // wording nuance ships her voice with the shadow dissent recorded, never blanked.
+    // Never ship dark: only a proven consequential meaning break, or a PAM leak, holds.
+    // The old code blanked her output on ANY non-AGREE verdict, silencing her replies.
+    // That was cold code vetoing her meaning, the exact nasty cough the doctrine forbids.
+    var meaningRanBound = !!(meaning && finalBytesBound);
+    var meaningConsequentialBreak = !!(meaning && meaning.decision === 'DISAGREE' &&
+      meaning.consequential === true);
+    if (meaningRanBound && !meaningConsequentialBreak) {
       finalPam = await defaultPamStage(Object.assign({},ctx,{answer:output}));
       if (!finalPam || finalPam.ok !== true || finalPam.answer !== output) output = '';
     } else output = '';
   } else output = '';
+  var meaningConsequentialBreakOuter = !!(meaning && meaning.decision === 'DISAGREE' &&
+    meaning.consequential === true);
+  var meaningDissent = !!(meaning && meaning.decision && meaning.decision !== 'AGREE');
   var meaningReason = meaning && meaning.ok === true && !finalBytesBound
     ? 'writ_meaning_shadow_final_bytes_unbound' : (meaning && meaning.reason ||
       (packetBound ? 'writ_meaning_shadow_not_run' : 'writ_meaning_shadow_packet_unbound'));
   return {
     ok: !!(result && result.blocked === false && output.trim().length > 0 &&
-      meaning && meaning.ok === true && finalPam && finalPam.ok === true),
+      finalPam && finalPam.ok === true && !meaningConsequentialBreakOuter),
     answer: output,
     reason: result && result.blocked ? 'anu_expression_blocked' :
-      (output.trim().length > 0 ? 'ANU_EXPRESSION_PASS' : meaningReason),
+      (output.trim().length > 0 ? (meaningDissent
+        ? 'ANU_EXPRESSION_PASS_SHADOW_DISSENT' : 'ANU_EXPRESSION_PASS') : meaningReason),
     evidence: { channel: result && result.channel, blocked: !!(result && result.blocked),
       exact_transport:result && result.output === ctx.answer,
       meaning_shadow:meaning ? {ok:meaning.ok === true,reason:meaning.reason || null,
