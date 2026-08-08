@@ -2897,11 +2897,13 @@ async function healAnswer(answer, reason, stage, input, deps) {
   }
   var reasonGuidance = /action_claim_unreceipted/.test(String(reason || ''))
     ? 'A receipts judge held this because it claims a past-tense action (sent, checked, booked, deployed, confirmed) that no tool trace or banked receipt of this turn supports. Rewrite every such claim into one of the two honest forms: intention speech ("I will check that this wake and report what I find") or plain admission ("I have not done that yet"). Never state an action as already done, never invent a receipt, and keep everything the evidence actually supports.'
-    : (/internal_system_leak/.test(String(reason || ''))
+    : (/writ_meaning_shadow_/.test(String(reason || ''))
+      ? 'A second reader compared what you meant with the exact words that were about to be sent, and could not confirm the two say the same thing. Say the same true thing again, plainly enough that the two readings cannot come apart: one meaning per sentence, every fact, number, date, name, and commitment stated straight, nothing implied that you would not say outright, no hedge that could be read two ways. Add no new facts and drop none of the real ones. It stays yours and it stays warm; it just stops being ambiguous.'
+      : (/internal_system_leak/.test(String(reason || ''))
       ? 'A leak judge held this because it names internal machinery to someone standing outside the house. Say the same true thing in the words an ordinary person uses, with none of that internal vocabulary in it. Keep every real fact, every number, and every commitment exactly as it stands; only the inside words go. Do not explain that anything was changed.'
       : (hollowHoldReason(reason) ? HOLLOW_HEAL_GUIDANCE
         : (boundarySpeechGuidance ? boundarySpeechGuidance.instruction
-          : (guidance[stage] || guidance.PAM))));
+          : (guidance[stage] || guidance.PAM)))));
   var worldBuilderRepairContext = {channel:input&&input.channel,
     context:input&&input.context,answer:answer};
   if (hamWorldBuilderDecisionContext(worldBuilderRepairContext)) {
@@ -4136,10 +4138,29 @@ async function runOutboundCouncil(input, injected) {
       // this fail-closed catches. Re-running a pure formatter on repaired input decides
       // nothing and changes no verdict, so it belongs in the healable set. STAMP stays
       // out: it is the durable commit preflight and must never be re-run on other bytes.
-      var _semanticFinalHold = (stage === 'ANU_EXPRESSION' &&
-        /^writ_meaning_shadow_/.test(String(normalized.reason || ''))) ||
-        (stage === 'WRIT' &&
-          /^writ_post_meta_/.test(String(normalized.reason || '')));
+      // ⬡B:core.pai_outbound_council:FIX:a_meaning_hold_heals_and_resubmits_on_a_reminted_packet:20260808⬡
+      // FOUNDER LAW 20260719, JUDGES ARE HEALERS NOT KILLERS, applied to the one hold that
+      // was exempt from it. A meaning-shadow hold used to be listed as a semantic FINAL hold,
+      // so it got zero repair attempts and killed the turn on ONE probabilistic no. That is
+      // exactly the judge-as-killer the law forbids, and it cost the founder the first real
+      // message he ever relayed to her: her words existed and the gate deleted them.
+      // Why it was exempt, and why the exemption is now unnecessary: the meaning packet is
+      // BYTE-BOUND and CONSUMED. defaultAnuExpressionStage requires
+      // packet.post_meta_candidate === ctx.answer, requires the packet be unconsumed, and
+      // requires SHADOW's receipt to bind the exact released bytes. A healed answer has
+      // different bytes, so a naive resubmission could only ever hold again as
+      // writ_meaning_shadow_packet_unbound: a fix in shape and a lie in fact.
+      // The repair therefore RE-MINTS. The healed draft walks the same chain that produced
+      // the original packet, the real WRIT stage handler, which runs the voice law, runs the
+      // META privacy organ, and freezes a fresh packet bound to the healed bytes and to this
+      // run. ANU_EXPRESSION then formats those bytes and SHADOW judges the repaired answer
+      // honestly against a chain that actually describes it. Nothing is waived: the release
+      // gate is still the positive meaningCleared allowlist, UNCERTAIN still never releases,
+      // and a second disagreement still ends the turn. One repair, never a retry loop.
+      var _meaningRemintHold = stage === 'ANU_EXPRESSION' &&
+        /^writ_meaning_shadow_/.test(String(normalized.reason || ''));
+      var _semanticFinalHold = (stage === 'WRIT' &&
+        /^writ_post_meta_/.test(String(normalized.reason || '')));
       var _healableStage = !capabilityBinding.present && !_semanticFinalHold &&
         (stage === 'WRIT' || stage === 'SHADOW' ||
         stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL' ||
@@ -4153,11 +4174,66 @@ async function runOutboundCouncil(input, injected) {
       // this is a diagnostic field on an in-process receipt and touches no durable proof.
       var _healOutcome = !_healableStage ? 'stage_not_healable'
         : (!isHumanFacingAnswer(before) ? 'heal_input_not_human_facing' : null);
+      // var-scoped and therefore shared across stages in this loop: reset it per stage so a
+      // previous stage's re-mint can never decorate this stage's receipt.
+      var _remint = null;
       if (_healableStage && isHumanFacingAnswer(before)) {
         try {
           var _healed = await healAnswer(before, _healReason, stage, input, deps);
           _healOutcome = !_healed ? 'heal_no_usable_repair'
             : (_healed === before ? 'heal_returned_the_held_bytes' : null);
+          // The re-mint. Only a meaning hold needs it, and only when the mind actually
+          // returned different bytes. The healed draft is a PRE-WRIT draft again: it has
+          // never been through the voice law or the privacy organ in this shape, so it must
+          // walk them before anything can claim a packet describes it. Cold code composes
+          // none of it and judges none of it; it only carries the healed draft back to the
+          // stage that mints, and refuses to continue unless that stage passes on its own.
+          _remint = null;
+          if (_meaningRemintHold && _healed && typeof _healed === 'string' &&
+              _healed.trim() && isHumanFacingAnswer(_healed) && _healed !== before) {
+            _remint = { ok:false, outcome:'heal_remint_writ_handler_missing', reason:null };
+            var _remintHandler = deps.stages && deps.stages.WRIT;
+            if (typeof _remintHandler === 'function') {
+              var _remintNorm;
+              try {
+                _remintNorm = normalizeStageResult(await _remintHandler(buildStageContext(
+                  input, _healed, quillRequired, stages,
+                  { stage:'WRIT', healed:true, healedFrom:'writ_meaning_shadow_remint',
+                    runtime:stageRuntime }
+                )), _healed);
+              } catch (_remintErr) {
+                _remintNorm = { ok:false, answer:'', evidence:{},
+                  reason:'stage_threw:' + errorReason(_remintErr) };
+              }
+              var _remintPacket = _remintNorm && _remintNorm.internal &&
+                _remintNorm.internal.writ_meaning_packet;
+              if (!_remintNorm || _remintNorm.ok !== true ||
+                  typeof _remintNorm.answer !== 'string' || !_remintNorm.answer.trim() ||
+                  !isHumanFacingAnswer(_remintNorm.answer)) {
+                _remint = { ok:false, outcome:'heal_remint_writ_held',
+                  reason:(_remintNorm && _remintNorm.reason) || null };
+              } else if (!_remintPacket) {
+                _remint = { ok:false, outcome:'heal_remint_packet_missing',
+                  reason:(_remintNorm && _remintNorm.reason) || null };
+              } else if (_remintNorm.answer === before) {
+                // The repaired draft normalized straight back to the exact bytes SHADOW
+                // already read. Re-judging identical bytes is not a repair, it is a second
+                // roll of the same probabilistic die, so it stops here.
+                _remint = { ok:false, outcome:'heal_remint_returned_the_held_bytes',
+                  reason:(_remintNorm && _remintNorm.reason) || null };
+              } else {
+                stageRuntime.writ_meaning_packet = _remintPacket;
+                _remint = { ok:true, outcome:null,
+                  reason:(_remintNorm && _remintNorm.reason) || null,
+                  draft_digest:digestText(_healed), answer:_remintNorm.answer };
+                _healed = _remintNorm.answer;
+              }
+            }
+            if (!_remint.ok) {
+              _healOutcome = _remint.outcome;
+              _healed = null;
+            }
+          }
           if (_healed && typeof _healed === 'string' && _healed.trim() &&
               isHumanFacingAnswer(_healed) && _healed !== before) {
             var _reStarted = nowMs(deps);
@@ -4193,6 +4269,15 @@ async function runOutboundCouncil(input, injected) {
                   : hollowStageReason(_reNorm.answer, _reNorm.reason)),
               {
                 healed_from: _healReason,
+                // When the meaning chain was re-minted, the bytes resubmitted here are not
+                // the bytes the mind handed back: they are that draft after WRIT and META
+                // ran on it again. Both digests are on the receipt so nobody has to guess
+                // which one SHADOW judged.
+                meaning_remint: _remint && _remint.ok ? {
+                  remint: true,
+                  heal_draft_digest: _remint.draft_digest,
+                  writ_reason: _remint.reason || null
+                } : null,
                 healed_input_digest: digestText(_healed),
                 healed_input_bytes: Buffer.byteLength(_healed, 'utf8'),
                 stage_attempts: 2,
