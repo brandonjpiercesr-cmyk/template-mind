@@ -8416,6 +8416,111 @@ function _stampGrandmotherLedger(hamUid, message, channel, identity, result) {
     console.warn('[GRANDMOTHER] ledger unreachable:', eLedgerWire && eLedgerWire.message);
   }
 }
+// ⬡B:core.tool_loop:WIRE:shadow_property_one_runs_after_her_bytes_have_already_shipped:20260808⬡
+// SHADOW PROPERTY 1, wired. FOUNDER DOCTRINE, "I want the MEDAL doctrine pt 2", verbatim:
+// "Shadow got the exact same assignment." "First, you need to put together your plan of what
+// you would do. Plan out what you would do, how you would do it, what agents you would use.
+// This is how you roll point. Only difference is you're not allowed to touch anything. Once
+// you're done, you can then go and monitor and watch, and see if she did it better or worse
+// than you, and keep me up to date."
+//
+// core/shadow.independent.attempt.js has been green and CALLED BY NOTHING. This is the call.
+// It hangs off the same seam as the Grandmother ledger directly below it, and for the same
+// reason: runPAI is the ONE exit of the real turn, and the turn has ALREADY RETURNED by the
+// time this runs. That is the whole safety argument, and it is structural, not a promise:
+//   - it cannot blank her output, because her bytes left before this function was entered.
+//   - it cannot hold, veto, or delay her, because nothing awaits it and nothing reads it.
+//   - it cannot speak, because it has no channel and never returns into the turn. Only her
+//     gate speaks, through her full council, exactly as before.
+//   - it cannot be anchored on her work, because the packet carries the ASSIGNMENT ONLY and
+//     shadow.independent.attempt.js refuses any packet carrying one of its ANCHOR_FIELDS.
+// FOUNDER, same breath: "the only difference is you're not allowed to touch anything." The
+// verdict is counsel banked in the brain for her to read later. It is never a gate.
+//
+// LATENCY: zero on the human's clock, by construction. Running the attempt BEFORE her answer
+// would buy nothing (blindness here is informational, enforced by the anchor refusal, not
+// temporal) and would put a second model call in front of a person waiting on the one door
+// he talks to his assistant through. That trade is not close.
+//
+// MONEY is the real cost and it is not zero: two seat calls per qualifying turn. They are
+// billed to `c4_watch`, the watch seat, with its OWN named key and its OWN daily cap, and
+// deliberately NOT to `deliberation`. If SHADOW rode her ladder seat it could burn her
+// 25 dollar deliberation cap and take HER down, which is the exact opposite of a shadow.
+// Capped separately, the worst case is that SHADOW stops observing and she is untouched.
+// Default ON and monitored per the 20260807 ruling. Kill switch: SHADOW_INDEPENDENT=off.
+//
+// The run condition is a POSITIVE ALLOWLIST, per the 20260807 UNCERTAIN regression: this
+// fires only when every named fact is affirmatively true, never merely when nothing looked
+// broken. A channel this list does not name does not get a shadow pass.
+var _SHADOW_OBSERVED_CHANNELS = Object.freeze(['anu','blooio','cara','ccwa','email','iman',
+  'omi','portal','sms','text','vara','voice','budget']);
+function _shadowIndependentReview(hamUid, message, channel, identity, result,
+  cycleId, requestId, worldBuilderTurn, injected) {
+  try {
+    if (String(process.env.SHADOW_INDEPENDENT || 'on').toLowerCase() === 'off') return;
+    // A world builder turn installs an admission hook that REFUSES every provider call for
+    // that turn on purpose. Firing here would step around a deliberate refusal.
+    if (worldBuilderTurn === true) return;
+    if (_SHADOW_OBSERVED_CHANNELS.indexOf(String(channel || '').toLowerCase()) < 0) return;
+    if (!result || result.ok !== true) return;
+    var _hers = typeof result.answer === 'string' ? result.answer : '';
+    if (!_hers.trim()) return;
+    var _assignment = (identity && typeof identity.user_message === 'string'
+      && identity.user_message.trim()) ? identity.user_message : String(message || '');
+    if (!_assignment.trim()) return;
+    // The organ and the brain are resolved from the estate, NEVER from `identity`. identity
+    // is caller shaped and reaches this loop from routes; a brain or an organ taken from it
+    // would be an outside party choosing where SHADOW's receipts get banked. `injected` is a
+    // test-only seam, unreachable from any request.
+    var _shadow = (injected && injected.shadow) || require('./shadow.independent.attempt.js');
+    var _binding = {ham_uid:hamUid, request_id:requestId, cycle_id:cycleId};
+    var _opts = {seat:'c4_watch'};
+    if (injected && injected.brain) _opts.brain = injected.brain;
+    setImmediate(function () {
+      // ⬡B:core.tool_loop:FIX:a_synchronous_throw_inside_setImmediate_is_an_uncaught_exception:20260808⬡
+      // CAUGHT BY tests/shadow.independent.wired.test.js BEFORE IT SHIPPED. The outer
+      // try/catch does NOT cover this callback: it has already returned by the time the
+      // event loop runs this. So an organ that throws SYNCHRONOUSLY here (a bad require, a
+      // throwing property, a future refactor) raised an uncaughtException and would take the
+      // whole process down, which is the one door the founder talks to his assistant through.
+      // An observe-only organ is not allowed to be able to do that. This try/catch is the
+      // difference between "cannot affect her turn" as an argument and as a fact.
+      try {
+      // The packet is the assignment and the binding. Nothing of hers rides along, and the
+      // organ refuses the call outright if a future edit ever adds one.
+      Promise.resolve(_shadow.attempt(Object.assign({assignment:_assignment}, _binding), _opts))
+        .then(function (attempted) {
+          if (!attempted || attempted.ok !== true) {
+            console.warn('[SHADOW] independent attempt not sealed:',
+              (attempted && attempted.reason) || 'unknown');
+            return null;
+          }
+          return _shadow.compare(Object.assign({assignment:_assignment,
+            primary_output:_hers, attempt:attempted}, _binding), _opts);
+        })
+        .then(function (compared) {
+          if (!compared) return;
+          if (compared.ok !== true) {
+            console.warn('[SHADOW] independent comparison not recorded:',
+              compared.reason || 'unknown');
+            return;
+          }
+          console.log('[SHADOW] independent comparison ' + compared.verdict +
+            ' missed_by_primary=' + (compared.missed_by_primary || []).length +
+            ' observe_only=' + (compared.authority === 'OBSERVE_ONLY'));
+        })
+        .catch(function (eShadow) {
+          console.warn('[SHADOW] independent review threw:', eShadow && eShadow.message);
+        });
+      } catch (eShadowDeferred) {
+        console.warn('[SHADOW] independent review threw after the turn:',
+          eShadowDeferred && eShadowDeferred.message);
+      }
+    });
+  } catch (eShadowWire) {
+    console.warn('[SHADOW] independent review unreachable:', eShadowWire && eShadowWire.message);
+  }
+}
 async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) {
   var exactHam = String(hamUid || '').trim().toUpperCase();
   var cycleId = exactHam + '.' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
@@ -8473,6 +8578,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     catch (eFreestyleCollapse) {}
   }
   _stampGrandmotherLedger(hamUid, message, channel, identity, result);
+  // Her bytes are already gone. SHADOW plans the same assignment blind, then watches.
+  _shadowIndependentReview(hamUid, message, channel, identity, result,
+    cycleId, requestId, _worldBuilderTurn);
   return result;
 }
 // The hold is deliberate in-process state that must survive across calls inside one
@@ -8652,4 +8760,8 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEf
   reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
   paiReasoningSeat,paiCycleSeat,paiOwnerNodeId,callPaiLadderNetwork,
-  receiptReconsiderationFeedback,normalizeSubmitJobArgs}};
+  receiptReconsiderationFeedback,normalizeSubmitJobArgs,
+  // ⬡B:core.tool_loop:WIRE:the_shadow_wake_is_reachable_by_a_test_or_it_was_never_run:20260808⬡
+  // Same law as the bounds above. A wiring whose run condition no test can execute is a
+  // wiring nobody has proved. tests/shadow.independent.wired.test.js drives this directly.
+  _shadowIndependentReview,_SHADOW_OBSERVED_CHANNELS}};
