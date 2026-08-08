@@ -498,6 +498,50 @@ async function writCheck(text, context) {
     }
   }
 
+  // ⬡B:board.writ:PROPOSED-RG:the_dash_ruling_finally_sits_on_the_real_path:20260808⬡
+  // PROPOSED-RG pending founder conversion. CAUGHT BY CATHY (Codex) on #2045, P2:
+  // decideDashes and context.dashRuling had no production caller; the mind-ruling
+  // path for dashes was unreachable and the cold behavior it supersedes still ran
+  // untouched. This is the real WRIT flow (core/council.js, board/compose.js, the
+  // advisors, and core/pai.outbound.council.js all come through writCheck), so the
+  // ruling lives here now. Penny-hustled per the regex-wakes-mind-decides ruling:
+  // flagDashes is a free cold scan, and the mind wakes ONLY when a dash actually
+  // survived into the rendered text. KEEP is a reachable verdict, and on any
+  // failure the text ships unchanged with the flags on the receipt, never a cold
+  // rewrite. A caller that already holds a ruling passes context.dashRuling and
+  // spends nothing.
+  var dashRulingReceipt = null;
+  if (!isInternal) {
+    try {
+      var _dashMod = require('./dash.ruling.js');
+      var _dashScan = _dashMod.flagDashes(cleaned);
+      if (_dashScan.flags.length) {
+        if (context.dashRuling && Array.isArray(context.dashRuling.verdicts)) {
+          var _dashApplied = _dashMod.applyRuling(cleaned, _dashScan.flags, context.dashRuling);
+          cleaned = _dashApplied.text;
+          dashRulingReceipt = { ruled: _dashApplied.ruled, decider: _dashApplied.decider,
+            kept: _dashApplied.kept, replaced: _dashApplied.replaced,
+            unruled: _dashApplied.unruled, flagged: _dashScan.flags.length };
+        } else {
+          var _dashOut = await _dashMod.decideDashes(cleaned,
+            { deliberate: typeof context.deliberate === 'function' ? context.deliberate : null });
+          if (_dashOut && typeof _dashOut.text === 'string') cleaned = _dashOut.text;
+          dashRulingReceipt = { ruled: !!(_dashOut && _dashOut.ruled),
+            decider: (_dashOut && _dashOut.decider) || null,
+            kept: (_dashOut && _dashOut.kept) || 0,
+            replaced: (_dashOut && _dashOut.replaced) || 0,
+            unruled: (_dashOut && _dashOut.unruled) || 0,
+            failed_open: !!(_dashOut && _dashOut.failed_open),
+            flagged: _dashScan.flags.length };
+        }
+      }
+    } catch (eDash) {
+      // Fail open on taste, exactly like the quality organ above: a broken judge
+      // never rewrites her punctuation and never blocks the answer.
+      dashRulingReceipt = { ruled: false, failed_open: true, reason: 'dash_ruling_threw' };
+    }
+  }
+
   // WRIT owns the rendered bytes. Cold transport does not get a second editing
   // pass after the model has spoken because whitespace, punctuation, flags,
   // URLs, emoji, identifiers, and code can all carry meaning. Downstream Penny
@@ -538,6 +582,9 @@ async function writCheck(text, context) {
     // without re-deriving. Additive: they are HINTS, they never move the verdict.
     voiceHints: { greeting: _hintGreeting, rhythm: _hintChoppy,
       cta: _hintCTA, process_narration: _hintProc, filler: _hintBans, headers: _hintHeaders },
+    // The dash ruling's receipt: counts and the decider only, never answer bytes.
+    // null means no dash survived to be ruled on and no model was spent.
+    dash_ruling: dashRulingReceipt,
     emojis_removed: emoji.count,
     em_dashes_removed: dashCount,
     meta_removed: meta.removed,
