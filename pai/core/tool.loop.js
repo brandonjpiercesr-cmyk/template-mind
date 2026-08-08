@@ -4469,8 +4469,15 @@ function preWriteCouncilEligible(answerSelected, structuredReachPolicy, reachInc
   // post-write council before any bytes are authorized for TTS.
   var liveVoice = String(channel || '').toLowerCase() === 'voice' &&
     !!verifiedLiveVoiceContext(identity, hamUid);
+  // GMGU's signed lesson route already provides the learner, lesson, voice, privacy,
+  // and continuity context to its seated C3 tutor. The reader and voice organs also
+  // refuse GMGU without making a model call, but entering their async wrapper still
+  // creates two needless pre-write passes on every interactive lesson turn. Keep the
+  // same zero-prewrite policy at the canonical eligibility boundary, before either
+  // organ is entered. The complete ordered post-write council remains unchanged.
+  var gmguInteractiveTutor = String(channel || '').trim().toLowerCase() === 'gmgu';
   return !answerSelected && !structuredReachPolicy && !reachIncidentIntake &&
-    !internalDeliberation(identity) && !liveVoice;
+    !internalDeliberation(identity) && !liveVoice && !gmguInteractiveTutor;
 }
 
 function toolDefinitionsForTurn(tools, readOnlyNames, identity, flags) {

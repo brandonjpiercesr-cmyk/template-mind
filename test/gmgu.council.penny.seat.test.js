@@ -40,6 +40,15 @@ function gmguDeliberation(calls, response) {
   return bound;
 }
 
+test('GMGU skips both redundant pre-write drafting briefs before C3',function(){
+  assert.equal(loop._test.preWriteCouncilEligible(null,false,false,
+    {council_context:{mode:'learning'}},'gmgu','HAM.ONE'),false);
+  assert.equal(loop._test.preWriteCouncilEligible(null,false,false,
+    {council_context:{mode:'learning'}},' GMGU ','HAM.ONE'),false);
+  assert.equal(loop._test.preWriteCouncilEligible(null,false,false,
+    {council_context:{mode:'learning'}},'cara','HAM.ONE'),true);
+});
+
 test('GMGU mints an invisible server council function and pins every call to Penny',async function(){
   const calls=[];
   const context=gmguDeliberation(calls,'Penny rendered this answer.');
