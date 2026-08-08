@@ -285,7 +285,18 @@ async function tryRunPodGLM(system, user, opts) {
       var _rpContestantModel = _rpContestantSeat && _rpContestantSeat.model;
       _rpModel = _rpContestantModel && _rpContestantModel.replace(/^[^/]+\//, '');
     }
-    if (!_rpModel || !seatMap || (!_rpIsContestant && seatMap.isBannedProductionModel(_rpModel))) return null;
+    // ⬡B:core.model_ladder:PROPOSED-RG:runpod_rung_lost_in_silence_20260808⬡
+    // PROPOSED-RG pending founder conversion. CAUGHT BY CATHY (Codex) on #2045, P2: this
+    // rung and tryOrnith were the only runners that returned bare null on every failure,
+    // so a GLM_PROVIDER_ORDER=runpod turn reported a LATER rung's reason (key_missing on
+    // anthropic) as if it were this rung's, the exact ambiguous diagnosis the diagnostics
+    // channel was built to kill. Same vocabulary as the OpenRouter and Anthropic runners,
+    // shape only, never content, env var NAMES only, never values.
+    if (!_rpModel || !seatMap || (!_rpIsContestant && seatMap.isBannedProductionModel(_rpModel))) {
+      noteAttempt(opts, { rung: 'glm.runpod', answered: false, reason: 'rung_not_configured',
+        env: 'GLM_RUNPOD_MODEL' });
+      return null;
+    }
     var body = { model: _rpModel, messages: [{ role: 'system', content: _rpSystem }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.format = 'json';
     // A deadline exists only when the actual caller chose one. This rung used to invent a
@@ -293,12 +304,25 @@ async function tryRunPodGLM(system, user, opts) {
     // governed by a coder clock. Pass the caller's value through exactly, including no value.
     var timeout = opts.timeout;
     var runpodKey = seatMap && seatMap.sanitizeKey ? seatMap.sanitizeKey(process.env.GLM_RUNPOD_KEY) : String(process.env.GLM_RUNPOD_KEY || '').trim();
-    if (!runpodKey) return null;
+    var _rpNote = { rung: 'glm.runpod', model: _rpModel, via: 'runpod' };
+    if (!runpodKey) {
+      noteAttempt(opts, Object.assign({}, _rpNote, { answered: false, reason: 'key_missing',
+        env: 'GLM_RUNPOD_KEY' }));
+      return null;
+    }
     var r = await providerFetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runpodKey }, body: JSON.stringify(body), signal: requestSignal(opts, timeout) });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      noteAttempt(opts, Object.assign({}, _rpNote, { answered: false, status: r.status || null,
+        reason: 'provider_error' }));
+      return null;
+    }
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
-    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: _rpModel, via: 'runpod' } : null;
-  } catch (e) { rethrowAdmissionRefusal(e);return null; }
+    var _rpVerdict = noteAnswer(opts, _rpNote, c, finishReasonOf(d));
+    return _rpVerdict === 'accepted' ? { content: cleanModelContent(c, opts), model: _rpModel, via: 'runpod' } : null;
+  } catch (e) {
+    noteAttempt(opts, { rung: 'glm.runpod', answered: false,
+      reason: 'rung_threw:' + String((e && e.code) || (e && e.name) || 'error') });
+    rethrowAdmissionRefusal(e);return null; }
 }
 // Every OpenRouter rung resolves one exact functional seat. The seat supplies
 // both its model and its key, so one request cannot rotate through unrelated
@@ -482,8 +506,17 @@ async function tryOrnith(system, user, opts) {
     // with, mirroring the tryRunPodGLM fix just above, so the repo-wide guard
     // (tests/no.banned.production.model.literal.anywhere.test.js) has nothing to find
     // and nothing to refuse after the fact.
+    // ⬡B:core.model_ladder:PROPOSED-RG:ornith_rung_lost_in_silence_20260808⬡
+    // PROPOSED-RG pending founder conversion. Same finding as the RunPod rung above
+    // (CATHY on #2045, P2): every loss here was a bare null, so a
+    // LIFE_CLASSIFY_LADDER_ORDER that includes ornith reported a later rung's reason.
+    // Instrumented with the shared vocabulary, shape only, env NAMES only.
     var _ornithModel = process.env.ORNITH_MODEL;
-    if (!_ornithModel || !seatMap || seatMap.isBannedProductionModel(_ornithModel)) return null;
+    if (!_ornithModel || !seatMap || seatMap.isBannedProductionModel(_ornithModel)) {
+      noteAttempt(opts, { rung: 'ornith', answered: false, reason: 'rung_not_configured',
+        env: 'ORNITH_MODEL' });
+      return null;
+    }
     var body = Object.assign({ model: _ornithModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }] }, outputGuard.ornithSampling(opts.max_tokens, false));
     // Ornith is called through its OpenAI-compatible chat-completions surface.
     // response_format is that surface's compatible JSON-mode request; ordinary
@@ -492,10 +525,19 @@ async function tryOrnith(system, user, opts) {
     var ornithKey = seatMap && seatMap.sanitizeKey
       ? seatMap.sanitizeKey(process.env.ORNITH_LADDER_API_KEY)
       : String(process.env.ORNITH_LADDER_API_KEY || '').trim();
-    if (!ornithKey) return null;
+    var _ornithNote = { rung: 'ornith', model: _ornithModel, via: process.env.ORNITH_VIA || 'openrouter' };
+    if (!ornithKey) {
+      noteAttempt(opts, Object.assign({}, _ornithNote, { answered: false, reason: 'key_missing',
+        env: 'ORNITH_LADDER_API_KEY' }));
+      return null;
+    }
     var r = await providerFetch(full, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + ornithKey },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      noteAttempt(opts, Object.assign({}, _ornithNote, { answered: false, status: r.status || null,
+        reason: 'provider_error' }));
+      return null;
+    }
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
     // ⬡B:core.model_ladder:AMEND:ornith_via_reflects_real_host_not_hardcoded_runpod:20260721⬡
     // Ornith moved off RunPod to a managed API; the via label is env-driven so cost
@@ -508,8 +550,12 @@ async function tryOrnith(system, user, opts) {
     // accepted rather than falling through, but returning it raw would have
     // handed that CJK reasoning trace straight to a human. Scrubbed like every
     // other rung, not a new behaviour, a missed one.
-    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: _ornithModel, via: process.env.ORNITH_VIA || 'openrouter' } : null;
-  } catch (e) { rethrowAdmissionRefusal(e);return null; }
+    var _ornithVerdict = noteAnswer(opts, _ornithNote, c, finishReasonOf(d));
+    return _ornithVerdict === 'accepted' ? { content: cleanModelContent(c, opts), model: _ornithModel, via: process.env.ORNITH_VIA || 'openrouter' } : null;
+  } catch (e) {
+    noteAttempt(opts, { rung: 'ornith', answered: false,
+      reason: 'rung_threw:' + String((e && e.code) || (e && e.name) || 'error') });
+    rethrowAdmissionRefusal(e);return null; }
 }
 // The seat's declared failover rung. Named `qwen` because that is what the default
 // deliberation seat's failover has always been on the wire, and renaming a rung would

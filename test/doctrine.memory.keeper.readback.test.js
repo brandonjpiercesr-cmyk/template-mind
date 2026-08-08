@@ -275,9 +275,21 @@ test('ordinary user-facing success requires the exact turn record readback, not 
   assert.equal(loopTest.memoryTurnRequired('turn', {council_context:{mode:'conversation'}},
     {blockedFallback:true}), true,
   'a human-facing working-limit answer must prove the full request was kept before claiming it');
-  for (const channel of ['guide', 'wake', 'reach', 'reach_incident_intake',
-    'anew_action', 'autonomous']) {
+  for (const channel of ['guide', 'wake', 'reach', 'reach_incident_intake']) {
     assert.equal(loopTest.memoryTurnRequired(channel,
       {council_context:{mode:'internal_deliberation'}}, {}), false, channel);
+  }
+  // SUPERSEDED 20260808 (founder order, anew docs/RULINGS.md): 'anew_action' and
+  // 'autonomous' left the channel exclusion on the anew side, and this template inherits
+  // the same paired tool.loop bytes. A background cycle that may hand its conclusion to
+  // the reach engine keeps a durable record of the turn that concluded it. This case had
+  // kept the pre-restore expectation and held the parity gate red against the mirrored
+  // code; the sister case in anew tests/memory.keeper.turn.test.js pins the same split.
+  for (const channel of ['anew_action', 'autonomous']) {
+    assert.equal(loopTest.memoryTurnRequired(channel,
+      {council_context:{mode:'internal_deliberation'}}, {}), true, channel);
+    assert.equal(loopTest.memoryTurnRequired(channel,
+      {council_context:{mode:'proposed_action_dispatch'}}, {}), false,
+      channel + ' dispatch mode stays out of the gate');
   }
 });
