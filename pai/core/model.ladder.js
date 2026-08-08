@@ -101,6 +101,60 @@ function hasAcceptedContent(content, opts) {
 }
 
 
+// ⬡B:core.model_ladder:PROPOSED-RG:a_null_return_destroyed_the_only_evidence_of_why:20260808⬡
+// PROPOSED-RG pending founder conversion.
+// FOUND 20260808 on the life ingest door. deliberate() returned exactly `null` whenever a
+// rung's answer failed hasAcceptedContent(), so a caller could not tell a missing seat key
+// from an HTTP 429 from a provider that answered fluent prose under a strict JSON contract.
+// The life classify wonder therefore reported every one of those as the single blanket
+// reason `wonder_did_not_answer`, and a live run showed that reason with no way to act on
+// it. This is the diagnosis channel: a caller may pass `opts.diagnostics` as an array, and
+// every rung appends one plain fact about what it attempted and how it lost. The return
+// contract is unchanged, so no existing caller behaves differently, and a caller that does
+// not pass the array pays nothing.
+//
+// IT NEVER CARRIES CONTENT. A classification wall is built from a person's own life files,
+// so the model's answer is life material by association. An entry records the SHAPE of the
+// answer (its length, the verdict on it, the finish reason, the HTTP status) and never one
+// byte of the answer itself.
+function noteAttempt(opts, entry) {
+  if (!opts || !Array.isArray(opts.diagnostics)) return entry;
+  opts.diagnostics.push(entry);
+  return entry;
+}
+
+// The one place a rejection is given its real name. hasAcceptedContent() answers only true
+// or false, which is the right shape for a gate and the wrong shape for a receipt, so this
+// asks the same questions in the same order and returns which one said no.
+function contentVerdict(content, opts) {
+  if (typeof content !== 'string') return 'empty_answer';
+  var stripped = stripReasoningTrace(content);
+  if (!stripped) return 'empty_answer';
+  if (outputGuard.containsCjk(stripped)) return 'non_english_answer';
+  if (!opts || opts.json !== true) return 'accepted';
+  return hasAcceptedContent(content, opts) ? 'accepted' : 'non_json_answer';
+}
+
+// One rung's answered attempt, recorded whatever the verdict. `answered:true` means the
+// provider returned HTTP 200 and a content field; it does not mean the answer was usable.
+function noteAnswer(opts, base, content, finishReason) {
+  var verdict = contentVerdict(content, opts);
+  noteAttempt(opts, Object.assign({}, base, {
+    answered: true,
+    status: 200,
+    finishReason: finishReason == null ? null : String(finishReason),
+    contentChars: typeof content === 'string' ? content.length : 0,
+    verdict: verdict,
+    reason: verdict === 'accepted' ? null : verdict
+  }));
+  return verdict;
+}
+
+function finishReasonOf(payload) {
+  var choice = ((payload && payload.choices) || [])[0] || {};
+  return choice.finish_reason || choice.finishReason || null;
+}
+
 function cleanModelContent(content, opts) {
   if (typeof content !== 'string') return content;
   // ⬡B:core.model_ladder:911:plain_mode_never_scrubbed_the_reasoning_trace:20260726⬡
@@ -171,7 +225,8 @@ async function tryRunPodGLM(system, user, opts) {
   // Ollama, model glm4:9b), isolated, scale-to-zero, exactly the same pattern as
   // Ornith. This is the TRUE first step, not Together/OpenRouter, which are only
   // the fallback when the RunPod GPU is unreachable.
-  var url = process.env.GLM_RUNPOD_URL; if (!url) return null;
+  var url = process.env.GLM_RUNPOD_URL;
+  if (!url) { noteAttempt(opts, { rung: 'glm.runpod', answered: false, reason: 'rung_not_configured' }); return null; }
   try {
     var base = url.replace(/\/+$/, '');
     var full = /\/(chat\/)?completions$/.test(base) ? base : (/\/openai\/v1$/.test(base) ? base + '/chat/completions' : base + '/openai/v1/chat/completions');
@@ -320,6 +375,25 @@ function openRouterCandidate(seatName, useFallback) {
   return key ? { key:key,model:s.model,via:'openrouter:' + s.seat,seat:s.seat } : null;
 }
 
+// ⬡B:core.model_ladder:PROPOSED-RG:an_unfunded_rung_used_to_be_indistinguishable_from_a_bad_answer:20260808⬡
+// PROPOSED-RG pending founder conversion. openRouterCandidate() returns null for three
+// unrelated facts: no seat map, a seat that is not an OpenRouter seat, and a seat whose
+// named key is not set. Only the third is a credential problem, which is the one an
+// operator can actually fix, so the three are told apart here rather than collapsed.
+// The `keyEnv` it returns is the NAME of the env var a seat reads, never a value, so an
+// operator is told exactly which variable to set. Same vocabulary seat.map.js's own
+// keyMissingReason() already uses, so one fault has one name across the estate.
+function unfundedReason(seatName, useFallback) {
+  if (!seatMap) return { reason: 'seat_map_unavailable' };
+  var name = String(seatName || '');
+  var s = null;
+  try { s = useFallback === true ? seatMap.fallback(name) : null; } catch (eF) { s = null; }
+  if (!s) { try { s = seatMap.seat(name); } catch (eS) { s = null; } }
+  if (!s) return { reason: 'seat_unavailable' };
+  if (s.provider !== 'openrouter') return { reason: 'seat_not_on_this_rung' };
+  return { reason: 'key_missing', keyEnv: s.keyEnv || null, seat: s.seat || name };
+}
+
 function ladderSeatName(opts) {
   return String((opts && opts.seat) || process.env.MODEL_LADDER_SEAT || 'deliberation');
 }
@@ -339,7 +413,17 @@ async function tryOpenRouterGLM(system, user, opts) {
   // General ladder work belongs to one exact named seat. A failed or missing
   // key stops this rung instead of rotating through CANON, mind, or organ money.
   var candidate = openRouterCandidate(ladderSeatName(opts));
-  if (!candidate || alreadyAttempted(opts, candidate)) return null;
+  if (!candidate) {
+    noteAttempt(opts, Object.assign({ rung: 'glm', seat: ladderSeatName(opts), answered: false },
+      unfundedReason(ladderSeatName(opts), false)));
+    return null;
+  }
+  if (alreadyAttempted(opts, candidate)) {
+    noteAttempt(opts, { rung: 'glm', seat: candidate.seat, model: candidate.model,
+      answered: false, reason: 'already_attempted' });
+    return null;
+  }
+  var note = { rung: 'glm', seat: candidate.seat, model: candidate.model, via: candidate.via };
   try {
         // ⬡B:core.model_ladder:911:glm_4.6_was_EIGHT_versions_old_now_5.2:20260718⬡
     // FOUNDER CAUGHT IT 20260718: this rung was hardcoded to z-ai/glm-4.6, EIGHT
@@ -367,17 +451,26 @@ async function tryOpenRouterGLM(system, user, opts) {
     // requires usable content before this rung can win.
     var r = await providerFetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      noteAttempt(opts, Object.assign({}, note, { answered: false, status: r.status || null,
+        reason: 'provider_error' }));
+      return null;
+    }
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    var verdict = noteAnswer(opts, note, c, finishReasonOf(d));
     // The receipt names the model that was actually called. It used to say 'glm-5.2'
     // whatever left the process, which is a false receipt the moment a seat funds
     // anything else, and after the re-seat above every seat can.
-    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts),
+    return verdict === 'accepted' ? { content: cleanModelContent(c, opts),
       model:glmModel,model_slug:glmModel,via:candidate.via } : null;
-  } catch (e) { rethrowAdmissionRefusal(e);return null; }
+  } catch (e) {
+    noteAttempt(opts, Object.assign({}, note, { answered: false,
+      reason: 'rung_threw:' + String((e && e.code) || (e && e.name) || 'error') }));
+    rethrowAdmissionRefusal(e);return null; }
 }
 async function tryOrnith(system, user, opts) {
-  var url = process.env.ORNITH_URL; if (!url) return null;
+  var url = process.env.ORNITH_URL;
+  if (!url) { noteAttempt(opts, { rung: 'ornith', answered: false, reason: 'rung_not_configured' }); return null; }
   try {
     var base = url.replace(/\/+$/, '');
     var full = /\/(chat\/)?completions$/.test(base) ? base : (/\/openai\/v1$/.test(base) ? base + '/chat/completions' : base + '/openai/v1/chat/completions');
@@ -425,8 +518,22 @@ async function tryOrnith(system, user, opts) {
 // and the seat's own primary when the seat declares no failover, so a caller that pins
 // this single rung by name still gets a funded model rather than a literal.
 async function tryQwen(system, user, opts) {
+  // Called inline, exactly as the standing guard in tests/the.ladder.honors.the.seat.it
+  // .resolved.test.js reads it out of this source. A local alias for the seat name would
+  // read the same to a person and stop that guard from proving the rule, so the diagnosis
+  // below resolves the name a second time rather than restating this line.
   var candidate = openRouterCandidate(ladderSeatName(opts), true);
-  if (!candidate || alreadyAttempted(opts, candidate)) return null;
+  if (!candidate) {
+    noteAttempt(opts, Object.assign({ rung: 'qwen', seat: ladderSeatName(opts), answered: false },
+      unfundedReason(ladderSeatName(opts), true)));
+    return null;
+  }
+  if (alreadyAttempted(opts, candidate)) {
+    noteAttempt(opts, { rung: 'qwen', seat: candidate.seat, model: candidate.model,
+      answered: false, reason: 'already_attempted' });
+    return null;
+  }
+  var note = { rung: 'qwen', seat: candidate.seat, model: candidate.model, via: candidate.via };
   try {
     // Same rule as the GLM rung above: this rung sends the model its resolved seat funds.
     // `openRouterCandidate(name, true)` already asked seat.map for this seat's DECLARED
@@ -439,15 +546,23 @@ async function tryQwen(system, user, opts) {
     // content still loses this rung and the ladder continues.
     var r = await providerFetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: requestSignal(opts, opts.timeout) });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      noteAttempt(opts, Object.assign({}, note, { answered: false, status: r.status || null,
+        reason: 'provider_error' }));
+      return null;
+    }
     var d = await r.json(); var c = (((d.choices || [])[0] || {}).message || {}).content;
+    var verdict = noteAnswer(opts, note, c, finishReasonOf(d));
     // Its sibling has always run the accepted content through the scrubber and this rung
     // handed back the raw string. A provider that honours neither passthrough still returns
     // reasoning residue, so the rung that is most likely to think is the one that most needs
     // cleaning, and it was the one without it.
-    return hasAcceptedContent(c, opts) ? {content:cleanModelContent(c, opts),model:qwenModel,
+    return verdict === 'accepted' ? {content:cleanModelContent(c, opts),model:qwenModel,
       model_slug:qwenModel,via:candidate.via} : null;
-  } catch (e) { rethrowAdmissionRefusal(e);return null; }
+  } catch (e) {
+    noteAttempt(opts, Object.assign({}, note, { answered: false,
+      reason: 'rung_threw:' + String((e && e.code) || (e && e.name) || 'error') }));
+    rethrowAdmissionRefusal(e);return null; }
 }
 // ⬡B:core.model_ladder:FIX:anthropic_backup_floor_kills_no_answer:20260721⬡
 // The gaslight cycle, root cause found live: the ladder's open-weight rungs (GLM on
@@ -461,7 +576,7 @@ async function tryQwen(system, user, opts) {
 // not. A configured named key makes the floor reachable without a second off switch.
 async function tryAnthropicBackup(system, user, opts) {
   var key = process.env.ANTHROPIC_LADDER_API_KEY;
-  if (!key) return null;
+  if (!key) { noteAttempt(opts, { rung: 'anthropic', answered: false, reason: 'key_missing' }); return null; }
   // Anthropic's Messages API literally requires max_tokens. The ladder will not manufacture
   // one. If a caller explicitly chooses this provider, that caller must choose the value too.
   if (!Number.isSafeInteger(Number(opts.max_tokens)) || Number(opts.max_tokens) < 1) return null;
@@ -479,11 +594,19 @@ async function tryAnthropicBackup(system, user, opts) {
         temperature: typeof opts.temperature === 'number' ? opts.temperature : 0.4,
         system: outputGuard.englishSystem(system), messages: [{ role: 'user', content: user }] }),
       signal: requestSignal(opts, opts.timeout) });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      noteAttempt(opts, { rung: 'anthropic', model: model, via: 'anthropic', answered: false,
+        status: r.status || null, reason: 'provider_error' });
+      return null;
+    }
     var d = await r.json();
     var c = (d.content || []).map(function (b) { return b.text || ''; }).join('');
-    return hasAcceptedContent(c, opts) ? { content: cleanModelContent(c, opts), model: model, via: 'anthropic' } : null;
-  } catch (e) { rethrowAdmissionRefusal(e);return null; }
+    var verdict = noteAnswer(opts, { rung: 'anthropic', model: model, via: 'anthropic' }, c, d && d.stop_reason);
+    return verdict === 'accepted' ? { content: cleanModelContent(c, opts), model: model, via: 'anthropic' } : null;
+  } catch (e) {
+    noteAttempt(opts, { rung: 'anthropic', model: model, via: 'anthropic', answered: false,
+      reason: 'rung_threw:' + String((e && e.code) || (e && e.name) || 'error') });
+    rethrowAdmissionRefusal(e);return null; }
 }
 // ⬡B:core.model_ladder:CLEANUP:groq_runner_deleted_stack_spotless:20260717⬡
 // The Groq floor is gone. GROQ_API_KEY is off every service, the fetch boundary
