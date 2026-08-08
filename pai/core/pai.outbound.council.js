@@ -3780,6 +3780,73 @@ function makeStageReceipt(stage, index, required, executed, ok, before, after, s
   };
 }
 
+// ⬡B:core.pai_outbound_council:FIX:the_remint_writ_proves_the_bytes_it_blessed:20260808⬡
+// BLIND CRITIC SEV-4, an AUDIT HOLE, not a crash. On a successful meaning re-mint the WRIT
+// stage handler really ran TWICE and durably banked a second WRIT verdict bead and a second
+// META verdict bead, but the WRIT stage receipt still recorded input=out=the FIRST draft,
+// with no healed flag, no stage_attempts, and a verdict_bank.source_digest pointing at the
+// FIRST bead. The bytes actually released to the human came from the SECOND run. So no
+// receipt anywhere asserted that WRIT or the META privacy organ had ever judged the bytes
+// the person received. The only breadcrumb was meaning_remint.writ_reason, a bare string
+// with no bank source, no output digest, no hard_fails and no organ_decider.
+// WHY THAT IS NOT COSMETIC: defaultWritStage deliberately permits a FAILED-OPEN META organ
+// to pass (metaUnavailableProven). A bare 'WRIT_PASS' string therefore cannot distinguish
+// "the privacy organ read the healed bytes and blessed them" from "the privacy organ was
+// unreachable and failed open" on the exact organ call that blessed the released bytes.
+// This estate treats an unprovable claim as a fake receipt, so the evidence has to carry it.
+//
+// THE CONVENTION DECISION, made deliberately. The seam has an existing shape for a healed
+// stage: re-stamp the SAME ordinal in place, span the original input to the retry output,
+// and carry healed_from / healed_input_digest / healed_input_bytes / stage_attempts /
+// initial_attempt inside the one receipt. The estate's law is upgrade the ground, never
+// twin it, so this mirrors that shape rather than inventing a new one. It does NOT emit a
+// second top-level WRIT entry in `stages`, and it does NOT re-stamp the existing WRIT
+// receipt, for one hard reason: the seven-stage digest chain is verified link by link, and
+// the WRIT receipt's output_digest must equal the ANU_EXPRESSION receipt's input_digest.
+// The re-mint happens INSIDE the ANU_EXPRESSION heal, after that link was already forged.
+// Re-stamping WRIT to span before -> healed would make its output_digest the re-minted
+// bytes while ANU_EXPRESSION's own receipt still spans before -> healed, so WRIT's output
+// would no longer chain into ANU_EXPRESSION's input and the chain would break. Appending an
+// eighth stage would break the fixed seven-stage order for the same reason.
+// So the retry-shaped receipt rides INSIDE the healed ANU_EXPRESSION receipt's evidence,
+// built by the very same makeStageReceipt, stamped with the SAME ordinal as the first WRIT,
+// carrying the same healed / stage_attempts / initial_attempt fields the seam already uses.
+// An auditor reads evidence.meaning_remint.writ_receipt and gets a receipt shaped exactly
+// like the WRIT stage receipt it should be compared against, with the full WRIT evidence:
+// verdict, hard_fails, organ_decider, failed_open, verdict_bank.source_digest for the SECOND
+// bead, and post_writ_meta with the META organ's own organ_decider / decider / failed_open /
+// receipt_state / banked. Model-decided and failed-open are now told apart on the record.
+// Evidence only. This function reads receipts and returns a receipt: it decides no release,
+// changes no pass or hold outcome, and never touches the answer bytes.
+function remintWritReceipt(stages, healedDraft, remintNorm, startedMs, endedMs) {
+  var first = null;
+  for (var s = 0; s < stages.length; s++) {
+    if (stages[s] && stages[s].stage === 'WRIT') first = stages[s];
+  }
+  var ordinal = first && Number.isFinite(first.ordinal) ? first.ordinal : stages.length + 1;
+  var receipt = makeStageReceipt('WRIT', ordinal - 1, true, true,
+    !!(remintNorm && remintNorm.ok === true), healedDraft,
+    (remintNorm && typeof remintNorm.answer === 'string') ? remintNorm.answer : '',
+    startedMs, endedMs, (remintNorm && remintNorm.reason) || null,
+    (remintNorm && remintNorm.evidence) || {});
+  receipt.healed = true;
+  receipt.healed_from = 'writ_meaning_shadow_remint';
+  receipt.healed_input_digest = digestText(healedDraft);
+  receipt.healed_input_bytes = Buffer.byteLength(String(healedDraft || ''), 'utf8');
+  receipt.stage_attempts = 2;
+  receipt.initial_attempt = first ? {
+    ok: first.ok,
+    reason: first.reason,
+    input_digest: first.input_digest,
+    output_digest: first.output_digest,
+    started_at: first.started_at,
+    ended_at: first.ended_at,
+    ms: first.ms,
+    evidence_digest: digestObject(first.evidence || {})
+  } : null;
+  return receipt;
+}
+
 function failureResult(reason, blockedBy, stages, input, currentAnswer) {
   return {
     ok: false,
@@ -4244,6 +4311,7 @@ async function runOutboundCouncil(input, injected) {
             var _remintHandler = deps.stages && deps.stages.WRIT;
             if (typeof _remintHandler === 'function') {
               var _remintNorm;
+              var _remintStarted = nowMs(deps);
               try {
                 _remintNorm = normalizeStageResult(await _remintHandler(buildStageContext(
                   input, _healed, quillRequired, stages,
@@ -4254,6 +4322,7 @@ async function runOutboundCouncil(input, injected) {
                 _remintNorm = { ok:false, answer:'', evidence:{},
                   reason:'stage_threw:' + errorReason(_remintErr) };
               }
+              var _remintEnded = nowMs(deps);
               var _remintPacket = _remintNorm && _remintNorm.internal &&
                 _remintNorm.internal.writ_meaning_packet;
               if (!_remintNorm || _remintNorm.ok !== true ||
@@ -4274,7 +4343,9 @@ async function runOutboundCouncil(input, injected) {
                 stageRuntime.writ_meaning_packet = _remintPacket;
                 _remint = { ok:true, outcome:null,
                   reason:(_remintNorm && _remintNorm.reason) || null,
-                  draft_digest:digestText(_healed), answer:_remintNorm.answer };
+                  draft_digest:digestText(_healed), answer:_remintNorm.answer,
+                  writ_receipt:remintWritReceipt(stages, _healed, _remintNorm,
+                    _remintStarted, _remintEnded) };
                 _healed = _remintNorm.answer;
               }
             }
@@ -4325,7 +4396,14 @@ async function runOutboundCouncil(input, injected) {
                 meaning_remint: _remint && _remint.ok ? {
                   remint: true,
                   heal_draft_digest: _remint.draft_digest,
-                  writ_reason: _remint.reason || null
+                  writ_reason: _remint.reason || null,
+                  // BLIND CRITIC SEV-4. writ_reason alone is a bare string: it names no bank
+                  // source, no output digest, no hard_fails and no organ_decider, so it could
+                  // not prove WRIT or the META privacy organ ever judged the bytes that
+                  // shipped, nor tell a model blessing apart from a failed-open outage. The
+                  // retry-shaped WRIT receipt for the re-mint rides here. See remintWritReceipt
+                  // for why it lives inside this receipt instead of re-stamping the WRIT stage.
+                  writ_receipt: _remint.writ_receipt || null
                 } : null,
                 healed_input_digest: digestText(_healed),
                 healed_input_bytes: Buffer.byteLength(_healed, 'utf8'),
