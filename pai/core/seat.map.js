@@ -530,7 +530,46 @@ function sanitizeKey(raw) {
 
 function resolveKey(s, runtime) {
   if (!s) return '';
-  return sanitizeKey((runtime || process.env)[s.keyEnv]);
+  var key = sanitizeKey((runtime || process.env)[s.keyEnv]);
+  // Ruling 20260808: a missing wallet says its own name. A seat whose named key env is
+  // absent used to fail closed in SILENCE here; every caller then surfaced only its own
+  // generic symptom (wonder_did_not_answer, no_answer) and a day burned finding the
+  // unnamed dead wallet. The refusal itself is unchanged, and the key VALUE is never
+  // printed, only the env var NAME.
+  if (!key && s.keyEnv) recordKeyRefusal(s.seat, s.keyEnv);
+  return key;
+}
+
+// ⬡B:core.seat_map:FIX:a_missing_wallet_says_its_own_name:20260808⬡
+// The one reason token every caller of a keyless seat should surface, e.g.
+// 'seat_key_missing:OR_KEY_C2_ORGAN'. Callers pass the resolved seat (or anything
+// carrying keyEnv); the token names the env var, never a value. Same detect-and-wake
+// shape as recordBanRefusal above (ruling 20260807): cold code flags loudly, a woken
+// reader decides what it means.
+function keyMissingReason(s) {
+  return 'seat_key_missing:' + String(s && s.keyEnv || 'unknown_key_env');
+}
+var KEY_REFUSAL_CAP = 50;
+var recentKeyRefusals = [];
+var warnedKeyEnvs = Object.create(null);
+function recordKeyRefusal(seatName, keyEnv) {
+  var entry = {
+    at: new Date().toISOString(),
+    seat: String(seatName || 'unknown'),
+    keyEnv: String(keyEnv || 'unknown_key_env'),
+    reason: keyMissingReason({keyEnv: keyEnv})
+  };
+  recentKeyRefusals.push(entry);
+  if (recentKeyRefusals.length > KEY_REFUSAL_CAP) recentKeyRefusals.shift();
+  // One console line per key env per process, so a hot loop over a dead seat does not
+  // drown the log that names it. The ring buffer records every refusal regardless.
+  if (!warnedKeyEnvs[entry.keyEnv]) {
+    warnedKeyEnvs[entry.keyEnv] = true;
+    console.warn('[seat.map] SEAT KEY MISSING (loud by ruling 20260808): seat "' +
+      entry.seat + '" has no usable key in env ' + entry.keyEnv +
+      '. Calls on this seat will refuse; set the env var to fund the wallet.');
+  }
+  return entry;
 }
 
 function seatNames(runtime) {
@@ -624,6 +663,11 @@ function safeModelOverride(envValue, safeDefault, seatName) {
 
 module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
   isBannedProductionModel: isBannedProductionModel, safeModelOverride: safeModelOverride,
+  // Ruling 20260808, a missing wallet says its own name: the reason token builder and the
+  // live record of every keyless-seat refusal (capped ring buffer, newest last). Never a
+  // key value, only seat name + env var name. Callers surface keyMissingReason(seat)
+  // instead of a generic no-answer symptom.
+  keyMissingReason: keyMissingReason, recentKeyRefusals: recentKeyRefusals,
   // Ruling 20260807, detect-and-wake: the live record of every banned-model refusal this
   // process has made (capped ring buffer, newest last). The overseer reads this to explain
   // WHY a seat is not running the model an operator wired, instead of leaving a silent
