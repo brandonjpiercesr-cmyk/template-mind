@@ -4157,8 +4157,36 @@ async function runOutboundCouncil(input, injected) {
       // honestly against a chain that actually describes it. Nothing is waived: the release
       // gate is still the positive meaningCleared allowlist, UNCERTAIN still never releases,
       // and a second disagreement still ends the turn. One repair, never a retry loop.
+      // ⬡B:core.pai_outbound_council:FIX:only_a_verdict_is_healable_never_a_broken_chain:20260808⬡
+      // BLIND CRITIC SEV-1, caught within the hour of the re-mint landing. The trigger was
+      // the prefix /^writ_meaning_shadow_/, and that prefix does NOT mean "SHADOW disagreed."
+      // It also matches writ_meaning_shadow_unavailable, _packet_unbound, _not_run,
+      // _packet_invalid, _binding_invalid, _invalid_verdict, _receipt_readback_mismatch,
+      // _receipt_unverified, _attempt_unverified and _final_bytes_unbound. Exactly one of
+      // those is a probabilistic no. Every other one means the MEANING CHAIN ITSELF IS
+      // BROKEN, and each was deliberately fail-closed.
+      // Reproduced by the critic: with the first WRIT minting no packet, SHADOW never ran at
+      // all, and the old trigger still healed, shipped the model's rewrite, and returned
+      // ok:true. It also handed the mind guidance saying a second reader compared her meaning
+      // and could not confirm it, which was simply false, because no second reader had run.
+      // Worse than shipping once: a broken chain that heals around itself never holds again,
+      // so nobody would ever find it. That is a fail-closed integrity gate quietly converted
+      // into a self-healing one, which is the exact shape of defect this estate calls a
+      // nasty cough.
+      // A REPAIR IS ONLY EVER OFFERED FOR A REAL VERDICT ON REAL BYTES. Named allowlist, not
+      // a prefix: a disagreement is a craft problem the mind can fix by rewriting. A dead
+      // organ, an unbound packet or a failed receipt readback is not, and rewriting the
+      // sentence cannot cure any of them. Those stay hard holds exactly as they were.
+      // THE LINE, stated precisely: did SHADOW actually RUN and render a verdict ON THE REAL
+      // BYTES? DISAGREE and UNCERTAIN both mean yes, so both are craft problems a rewrite can
+      // genuinely cure, and both still have to clear the positive meaningCleared allowlist on
+      // resubmission, which UNCERTAIN can never do. Every other reason means SHADOW did not
+      // get a real look, and no amount of rewriting the sentence cures a dead organ, an
+      // unbound packet or a failed receipt readback.
+      var _MEANING_HEALABLE_REASONS = ['writ_meaning_shadow_disagreement',
+        'writ_meaning_shadow_uncertain'];
       var _meaningRemintHold = stage === 'ANU_EXPRESSION' &&
-        /^writ_meaning_shadow_/.test(String(normalized.reason || ''));
+        _MEANING_HEALABLE_REASONS.indexOf(String(normalized.reason || '')) !== -1;
       var _semanticFinalHold = (stage === 'WRIT' &&
         /^writ_post_meta_/.test(String(normalized.reason || '')));
       var _healableStage = !capabilityBinding.present && !_semanticFinalHold &&
