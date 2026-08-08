@@ -197,7 +197,40 @@ function transformOutsideFences(content, transform) {
   return output.join('\n');
 }
 
+// ⬡B:board.writ:BUILD:dash_ruling_channel_so_a_mind_can_keep_one:20260808⬡
+// THE RULING CHANNEL. Until today there was no way for anything, model or human,
+// to decide that a dash belonged: removeEmDash below rewrote every one of them to
+// a comma with no mind anywhere in the loop. That is a NASTY C by this repo's own
+// definition (docs/NASTY_C_AUDIT.md: "cold code that makes a real judgment... with
+// no model"), and it contradicts the only three things the founder is recorded
+// saying about em dashes, all three of which put the call with an LLM:
+//   "no C O L D C O D E that checks for E M dashes is running by itself. It just
+//    flags and alerts the L O M so they can make intelligent decisions."
+//   "one master one looking at the master thing and saying yes, no, actually we
+//    needed to have a EM dash in this"
+// Pass context.dashRuling (see board/writ/dash.ruling.js) and the mind's verdicts
+// decide, KEEP included. Pass nothing and the legacy cold rewrite still runs, so
+// no existing caller changes behavior on a shared branch. That legacy default is
+// NOT converted and should not be cited as founder law: a search of 96 unique
+// transcripts found zero occurrences of any sentence banning em dashes. Converting
+// the default is the founder's call, not a coder's, which is why this is a door
+// and not a demolition.
 function applyVoiceLaw(content, context) {
+  var ruling = context && context.dashRuling;
+  if (ruling && Array.isArray(ruling.verdicts)) {
+    var dashRuling = require('./dash.ruling.js');
+    var scan = dashRuling.flagDashes(content);
+    var applied = dashRuling.applyRuling(content, scan.flags, ruling);
+    // Whitespace normalization still runs; the dashes are now the mind's business.
+    return transformOutsideFences(applied.text, function (proseContent) {
+      return proseContent.split('\n').map(function (line) {
+        var cr = line.endsWith('\r') ? '\r' : '';
+        var raw = cr ? line.slice(0, -1) : line;
+        var lead = (raw.match(/^[ \t]*/) || [''])[0];
+        return lead + raw.slice(lead.length).replace(/[ \t]+/g, ' ').replace(/[ \t]+$/, '') + cr;
+      }).join('\n');
+    });
+  }
   var preserveAsciiDoubleDash = isInternalContext(context);
   // ⬡B:board.writ:FIX:preserve_multiline_coding_structure:20260715⬡
   // Voice cleanup is horizontal and prose-only. Newlines and leading indentation
