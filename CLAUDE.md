@@ -26,6 +26,13 @@ harness into this session - read it before you touch anything. One board, all co
 - **Never fake a connection or mimic A'NU.** Only her real gate speaks for her (`POST /cara/chat`); `ok:false` over anything hollow.
 - **IDENTITY IS ENV-ONLY, NEVER A LITERAL (founder law, 20260722, non-negotiable).** This repo is the mind-template every world inherits, so it must be a TRUE ZERO: never hardcode a real person, no email, no phone, no HAM UID, no child's or family member's name, not even as a fallback default. A hardcoded person is a real human leaked into every stranger's deploy. Identity comes from env or the brain, never a literal. The `no-founder-pii` CI gate keeps this repo at zero and WILL fail your build. CODA, CATHY, CLAIR: you are on notice. Do not do this again.
 
+## THE NIKE PROTOCOL (founder, 20260807)
+His creative-mode standing order, preauthorizing any action that passes ALL THREE criteria:
+honors the system's laws, requires the least involvement from him, and is verifiable done
+without him. Pass all three and that is the authorization, just do it; fail any one and you
+rework the plan until it passes, never asking him to bless the broken version. Full text and
+lineage: `docs/NIKE_PROTOCOL_20260807.md` in this repo.
+
 ## FOUNDER STANDING ORDERS
 Source of record (one source, never twinned): the `anew` repo's own `CLAUDE.md`, the
 "FOUNDER STANDING ORDERS" section near the top. Read it there before you start here too - his
