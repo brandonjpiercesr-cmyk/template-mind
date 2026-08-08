@@ -1509,6 +1509,7 @@ function cachedSummary() {
 
 module.exports = {TABLE:TABLE,SCHEMA:SCHEMA,prepare:prepare,claimIntent:claimIntent,
   JS_SAFE_INTEGER_MAX:JS_SAFE_INTEGER_MAX,
+  strictNumber:strictNumber,
   writeTerminal:writeTerminal,terminalFromResponse:terminalFromResponse,
   captureTerminalResponse:captureTerminalResponse,
   recoverOpenRouterUsage:recoverOpenRouterUsage,
