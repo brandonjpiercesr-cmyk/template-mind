@@ -275,9 +275,12 @@ test('ordinary user-facing success requires the exact turn record readback, not 
   assert.equal(loopTest.memoryTurnRequired('turn', {council_context:{mode:'conversation'}},
     {blockedFallback:true}), true,
   'a human-facing working-limit answer must prove the full request was kept before claiming it');
-  for (const channel of ['guide', 'wake', 'reach', 'reach_incident_intake',
-    'anew_action', 'autonomous']) {
+  for (const channel of ['guide', 'wake', 'reach', 'reach_incident_intake']) {
     assert.equal(loopTest.memoryTurnRequired(channel,
       {council_context:{mode:'internal_deliberation'}}, {}), false, channel);
+  }
+  for (const channel of ['anew_action', 'autonomous']) {
+    assert.equal(loopTest.memoryTurnRequired(channel,
+      {council_context:{mode:'internal_deliberation'}}, {}), true, channel);
   }
 });
