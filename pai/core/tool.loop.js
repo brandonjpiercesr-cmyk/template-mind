@@ -4505,6 +4505,27 @@ function callPaiLadderNetwork(system, user, options) {
     Object.assign({},opts,{seat:opts.seat}));
 }
 
+// GMG University's tutor draft belongs to the C3 synthesis mind, while the ordered
+// outbound council belongs to the Penny Hustle judging seat. Keep that distinction in
+// server-owned process state. A browser can submit JSON council context, but JSON cannot
+// mint this function, observe it through serialization, or choose its seat. The server
+// replaces any same-named caller value for GMGU before the council starts.
+function bindGmguCouncilDeliberation(channel, context, deliberate) {
+  var councilContext = context && typeof context === 'object' ? context : {};
+  if (String(channel || '').trim().toLowerCase() !== 'gmgu') return councilContext;
+  if (typeof deliberate !== 'function') throw new Error('gmgu_council_deliberation_required');
+  Object.defineProperty(councilContext, 'deliberate', {
+    enumerable:false,
+    configurable:false,
+    writable:false,
+    value:function (system, user, options) {
+      return deliberate(system, user,
+        Object.assign({}, options || {}, {seat:'c1_cellm'}));
+    }
+  });
+  return councilContext;
+}
+
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
@@ -7682,6 +7703,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return {name:String(fn.name || ''),description:String(fn.description || '')};
     }).filter(function (hand) { return hand.name && hand.description; });
   _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
+  _councilContext = bindGmguCouncilDeliberation(channel, _councilContext,
+    _callPaiLadder);
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
   var _worldBuilderDraftBytes=_worldBuilderMachine?finalAns:null;
   if (await _turnCancelled(true)) return _turnCancelledResult('before_council');
@@ -8827,6 +8850,7 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEf
   reachHandoffEligible,hamWorldBuilderMachineMode,
   preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
   paiReasoningSeat,paiCycleSeat,paiOwnerNodeId,callPaiLadderNetwork,
+  bindGmguCouncilDeliberation,
   receiptReconsiderationFeedback,normalizeSubmitJobArgs,
   // ⬡B:core.tool_loop:WIRE:the_shadow_wake_is_reachable_by_a_test_or_it_was_never_run:20260808⬡
   // Same law as the bounds above. A wiring whose run condition no test can execute is a

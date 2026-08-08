@@ -2201,6 +2201,8 @@ async function defaultShadowStage(ctx, injected) {
   var structuredPolicy = structuredReachPolicyContext(ctx);
   var boardShadow = injected.boardShadow || require('../board/shadow.js');
   var modelLadder = injected.modelLadder || require('./model.ladder.js');
+  var deliberate = ctx.context && typeof ctx.context.deliberate === 'function'
+    ? ctx.context.deliberate : modelLadder.deliberate;
   // \u2b21B:core.pai_outbound_council:WIRE:shadow_receives_deliberation_evidence:20260716\u2b21
   // The factual board receives only authentic successful read bytes minted at
   // execution or exact-HAM memory-read time. User text, tool arguments, caller
@@ -2438,7 +2440,7 @@ async function defaultShadowStage(ctx, injected) {
     // ship regardless of SHADOW's opinion. Do not buy a model judgment on those exact
     // bytes. Other deterministic findings remain evidence for SHADOW to reason over;
     // cold code does not replace the Wonder's judgment.
-    judgment = await modelLadder.deliberate(system, user, {
+    judgment = await deliberate(system, user, {
       max_tokens: 240,
       temperature: 0,
       timeout: voiceRealtime ? 1800 : shadowDecisionTimeoutMs(injected.env || process.env),
@@ -2495,7 +2497,7 @@ async function defaultShadowStage(ctx, injected) {
       },
       bound_review: JSON.parse(user)
     });
-    reviewJudgment = await modelLadder.deliberate(reviewSystem, reviewUser, {
+    reviewJudgment = await deliberate(reviewSystem, reviewUser, {
       max_tokens: 240,
       temperature: 0,
       timeout: voiceRealtime ? 1800 : shadowDecisionTimeoutMs(injected.env || process.env),
@@ -2750,7 +2752,9 @@ async function defaultMetaCommentaryStage(ctx) {
   var result = await metaCommentary.handle({
     intent: ctx.question || '',
     channel: ctx.channel || 'unknown',
-    hamUid: ctx.hamUid
+    hamUid: ctx.hamUid,
+    deliberate:ctx.context && ctx.context.deliberate,
+    brain:ctx.context && ctx.context.brain
   }, state);
   var output = result && typeof result.pendingOutbound === 'string' ? result.pendingOutbound : '';
   // ⬡B:core.pai_outbound_council:BOUNDARY:meta_meaning_owned_by_the_organ:20260725⬡
@@ -2854,6 +2858,9 @@ async function defaultQuillStage(ctx) {
 // empty is still rejected and the turn still fails closed. Silence over hollow.
 async function healAnswer(answer, reason, stage, input, deps) {
   var modelLadder = (deps && deps.modelLadder) || require('./model.ladder.js');
+  var deliberate = input && input.context &&
+    typeof input.context.deliberate === 'function'
+    ? input.context.deliberate : modelLadder.deliberate;
   var guidance = {
     SHADOW: 'A factual-integrity judge held this. Remove or soften only the specific unsupported claim; keep everything the bound evidence supports. Do not add new facts.',
     WRIT: 'A voice/format judge held this. Fix the writing (no em dashes, no emojis, no meta-commentary) while keeping the exact meaning and every real fact, and say it in YOUR voice, the one above, not a generic clean one.',
@@ -2917,7 +2924,7 @@ async function healAnswer(answer, reason, stage, input, deps) {
       why_held:String(reason||'').slice(0,400)});
     for (var worldRepairAttempt=0;worldRepairAttempt<2;worldRepairAttempt++) {
       try {
-        var worldRepair = await modelLadder.deliberate(worldRepairSystem,worldRepairUser,
+        var worldRepair = await deliberate(worldRepairSystem,worldRepairUser,
           {max_tokens:900,temperature:0,timeout:12000,tightTimeout:true,json:true,
             signal:input&&input.signal});
         var canonicalWorldRepair = hamWorldBuilderContract.canonicalize(
@@ -2977,7 +2984,7 @@ async function healAnswer(answer, reason, stage, input, deps) {
 
   async function healOnce(systemText) {
     try {
-      var out = await modelLadder.deliberate(systemText, user, {
+      var out = await deliberate(systemText, user, {
         max_tokens: healTokens, temperature: 0.3,
         timeout: healTimeout,
         tightTimeout: true, json: false, signal: input && input.signal
@@ -5413,6 +5420,7 @@ module.exports = {
     shadowEvidenceMaxBytes:shadowEvidenceMaxBytes,
     shadowDecisionTimeoutMs:shadowDecisionTimeoutMs,
     defaultShadowStage: defaultShadowStage,
+    defaultMetaCommentaryStage:defaultMetaCommentaryStage,
     defaultWritStage: defaultWritStage,
     defaultAnuExpressionStage:defaultAnuExpressionStage,
     meaningCleared:meaningCleared,
