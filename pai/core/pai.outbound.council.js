@@ -3219,6 +3219,27 @@ async function defaultWritStage(ctx) {
 // UNCERTAIN is never a clearance. The shadow's own prompt reserves it for "the comparison
 // cannot be made honestly," and an unverifiable meaning is precisely what must not ship.
 // consequential must be the literal boolean false; a missing, null, or truthy value holds.
+// ⬡B:core.pai_outbound_council:FIX:a_different_byte_is_not_a_repair:20260808⬡
+// BLIND CRITIC SEV-2. The re-mint's stop guard was exact byte equality, so a one-character
+// edit counted as a repair and bought a second roll of the same die. Proven: a heal that
+// changed "when you are ready." to "when you are ready!" survived normalization, compared
+// unequal, and was re-judged on materially identical content. Bounded to one extra roll, so
+// never a retry loop, but "a repair" and "a different byte" are not the same thing and the
+// code only checked the second.
+// SHADOW judges MEANING. If the substance did not move, a rewrite has not answered the
+// disagreement, and re-submitting is gambling on a probabilistic seat rather than repairing
+// anything. So the comparison is on substance: case folded, whitespace collapsed, and
+// non-alphanumeric characters dropped. Punctuation, capitalisation and spacing changes are
+// exactly the edits that cannot cure a meaning verdict, which is why they must not buy one.
+// Deliberately NOT a similarity score: no threshold to tune and no partial credit. Either
+// the letters and digits moved or they did not.
+function _meaningSubstance(text) {
+  return String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+function _meaningSameSubstance(a, b) {
+  return _meaningSubstance(a) === _meaningSubstance(b);
+}
+
 function meaningCleared(meaning) {
   if (!meaning || typeof meaning !== 'object') return false;
   if (meaning.decision === 'AGREE') return true;
@@ -4243,7 +4264,7 @@ async function runOutboundCouncil(input, injected) {
               } else if (!_remintPacket) {
                 _remint = { ok:false, outcome:'heal_remint_packet_missing',
                   reason:(_remintNorm && _remintNorm.reason) || null };
-              } else if (_remintNorm.answer === before) {
+              } else if (_meaningSameSubstance(_remintNorm.answer, before)) {
                 // The repaired draft normalized straight back to the exact bytes SHADOW
                 // already read. Re-judging identical bytes is not a repair, it is a second
                 // roll of the same probabilistic die, so it stops here.
