@@ -57,6 +57,13 @@ test('GMGU mints an invisible server council function and pins every call to Pen
   assert.equal(calls.length,1);
   assert.equal(calls[0].options.seat,'c1_cellm');
   assert.equal(calls[0].options.max_tokens,240);
+  assert.deepEqual(calls[0].options.reasoning,{effort:'none',exclude:true});
+  assert.deepEqual(calls[0].options.chat_template_kwargs,{enable_thinking:false});
+  assert.deepEqual(calls[0].options.provider,{sort:'latency',require_parameters:true});
+  const normalized=await context.deliberate('judge','draft',{seat:'c3_mind',maxTokens:900});
+  assert.equal(normalized.content,'Penny rendered this answer.');
+  assert.equal(calls[1].options.max_tokens,640);
+  assert.equal(Object.hasOwn(calls[1].options,'maxTokens'),false);
   const ordinary={};
   assert.equal(loop._test.bindGmguCouncilDeliberation('cara',ordinary,
     async function(){}),ordinary);
@@ -123,7 +130,9 @@ test('the production source carries the server seam into every intended council 
   const writ=fs.readFileSync(
     path.join(__dirname,'..','pai','board','writ','writ.js'),'utf8');
   assert.match(toolLoop,/bindGmguCouncilDeliberation\(channel, _councilContext,[\s\S]{0,80}_callPaiLadder\)/);
-  assert.match(toolLoop,/Object\.assign\(\{\}, options \|\| \{\}, \{seat:'c1_cellm'\}\)/);
+  assert.match(toolLoop,/Object\.assign\(\{\}, opts, \{seat:'c1_cellm'\}\)/);
+  assert.match(toolLoop,/opts\.reasoning=\{effort:'none',exclude:true\}/);
+  assert.match(toolLoop,/opts\.provider=\{sort:'latency',require_parameters:true\}/);
   assert.match(outbound,/judgment = await deliberate\(system, user,/);
   assert.match(outbound,/reviewJudgment = await deliberate\(reviewSystem, reviewUser,/);
   assert.match(outbound,/hamUid: ctx\.hamUid,[\s\S]{0,100}deliberate:ctx\.context && ctx\.context\.deliberate/);

@@ -542,6 +542,28 @@ async function tryQwen(system, user, opts) {
     var qwenModel = candidate.model;
     var body = { model: qwenModel, messages: [{ role: 'system', content: outputGuard.englishSystem(system) }, { role: 'user', content: user }], max_tokens: opts.max_tokens, temperature: opts.temperature };
     if (opts.json) body.response_format = { type: 'json_object' };
+    if (opts.reasoning && typeof opts.reasoning === 'object' && !Array.isArray(opts.reasoning)) {
+      var effort=String(opts.reasoning.effort||'').toLowerCase();
+      var reasoning={};
+      if(['none','minimal','low','medium','high','xhigh','max'].indexOf(effort)!==-1)
+        reasoning.effort=effort;
+      if(typeof opts.reasoning.exclude==='boolean')reasoning.exclude=opts.reasoning.exclude;
+      if(typeof opts.reasoning.enabled==='boolean')reasoning.enabled=opts.reasoning.enabled;
+      if(Object.keys(reasoning).length)body.reasoning=reasoning;
+    }
+    if(opts.chat_template_kwargs&&typeof opts.chat_template_kwargs==='object'&&
+        !Array.isArray(opts.chat_template_kwargs)&&
+        typeof opts.chat_template_kwargs.enable_thinking==='boolean'){
+      body.chat_template_kwargs={enable_thinking:opts.chat_template_kwargs.enable_thinking};
+    }
+    if(opts.provider&&typeof opts.provider==='object'&&!Array.isArray(opts.provider)){
+      var provider={};
+      if(['latency','throughput','price'].indexOf(String(opts.provider.sort||''))!==-1)
+        provider.sort=String(opts.provider.sort);
+      if(typeof opts.provider.require_parameters==='boolean')
+        provider.require_parameters=opts.provider.require_parameters;
+      if(Object.keys(provider).length)body.provider=provider;
+    }
     // Keep the failover model's native reasoning available too. Empty or unusable
     // content still loses this rung and the ladder continues.
     var r = await providerFetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { Authorization: 'Bearer ' + candidate.key, 'Content-Type': 'application/json' },

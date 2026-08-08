@@ -47,6 +47,7 @@ var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
 var shadowDecisionDialogue = require('./shadow.decision.dialogue.js');
 var outputGuard = require('./model.output.guard.js');
 var LIVE_VOICE_SESSION = Symbol.for('anew.verified.live.voice.session');
+var gmguNativeTutorMarker = require('./gmgu/native.tutor.marker.js');
 
 // The verified route attaches this proof through a symbol. Object.assign carries
 // the symbol through the World Builder identity clone, while JSON serialization
@@ -1112,6 +1113,17 @@ function applyProviderThinkingPolicy(providerBody, model) {
     delete target.reasoning;
     delete target.chat_template_kwargs;
   }
+  return target;
+}
+
+function applyGmguTutorProviderPolicy(providerBody, channel) {
+  var target=providerBody||{};
+  if(String(channel||'').trim().toLowerCase()!=='gmgu')return target;
+  target.max_tokens=640;
+  target.reasoning={effort:'minimal',exclude:true};
+  delete target.chat_template_kwargs;
+  target.provider=Object.assign({},target.provider||{},
+    {sort:'latency',require_parameters:true});
   return target;
 }
 
@@ -4482,7 +4494,8 @@ function preWriteCouncilEligible(answerSelected, structuredReachPolicy, reachInc
 
 function toolDefinitionsForTurn(tools, readOnlyNames, identity, flags) {
   var state = flags || {};
-  if (state.reachIncidentIntake === true || state.roomSafeVoice === true) return [];
+  if (state.reachIncidentIntake === true || state.roomSafeVoice === true ||
+      state.gmguNativeTutor === true) return [];
   var readOnly = !!(identity && (identity.outbound_finalize === true ||
     identity._conversationOnly === true || identity._worldBuilderRestricted === true));
   if (!readOnly) return tools;
@@ -4526,8 +4539,17 @@ function bindGmguCouncilDeliberation(channel, context, deliberate) {
     configurable:false,
     writable:false,
     value:function (system, user, options) {
+      var opts=Object.assign({},options||{});
+      var requested=opts.max_tokens!==undefined?Number(opts.max_tokens):
+        (opts.maxTokens!==undefined?Number(opts.maxTokens):640);
+      opts.max_tokens=Number.isSafeInteger(requested)&&requested>0
+        ?Math.min(requested,640):640;
+      delete opts.maxTokens;
+      opts.reasoning={effort:'none',exclude:true};
+      opts.chat_template_kwargs={enable_thinking:false};
+      opts.provider={sort:'latency',require_parameters:true};
       return deliberate(system, user,
-        Object.assign({}, options || {}, {seat:'c1_cellm'}));
+        Object.assign({}, opts, {seat:'c1_cellm'}));
     }
   });
   return councilContext;
@@ -5562,7 +5584,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda',
     'look_at_page'];
   var _turnToolDefinitions = toolDefinitionsForTurn(TOOLS, _readOnlyToolNames, identity, {
-    reachIncidentIntake:_reachIncidentIntake, roomSafeVoice:_roomSafeVoice
+    reachIncidentIntake:_reachIncidentIntake, roomSafeVoice:_roomSafeVoice,
+    gmguNativeTutor:gmguNativeTutorMarker.verify(identity,hamUid)
   });
   // ⬡COLD:decide:become:VOICE_CONVERSATION_WONDER:20260723⬡
   // COLD-ANEW-VOICE-0061 stamped, needs-live-verification. ans is initialized from the signed
@@ -6150,6 +6173,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _providerCandidate&&_providerCandidate.seat.model||'');
     applyProviderThinkingPolicy(_providerBody,
       _providerCandidate&&_providerCandidate.seat.model||'');
+    applyGmguTutorProviderPolicy(_providerBody,channel);
     if(_structuredReachPolicy){
       var _policyFormat=_structuredReachResponseFormat();
       if(_policyFormat)_providerBody.response_format=_policyFormat;
@@ -8824,7 +8848,8 @@ function normalizeSubmitJobArgs(input) {
 }
 
 module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
-  primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
+  primaryProviderBody,applyProviderThinkingPolicy,applyGmguTutorProviderPolicy,
+  prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   isPureConversationalContinuation,
@@ -8855,7 +8880,8 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEf
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
-  preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
+  preWriteCouncilEligible,toolDefinitionsForTurn,
+  unavailableShadowDecisionFailure,
   paiReasoningSeat,paiCycleSeat,paiOwnerNodeId,callPaiLadderNetwork,
   bindGmguCouncilDeliberation,
   receiptReconsiderationFeedback,normalizeSubmitJobArgs,
