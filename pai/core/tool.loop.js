@@ -4365,6 +4365,39 @@ function delegatedTestStamp(identity, requestCandidate) {
 // was missing. Keep the ordinary inbound set in one predicate and keep machine-owned re-entry
 // lanes out explicitly. In particular, delivery.external is NOT an exclusion: OMI and signed
 // voice arrivals carry that marker even though they are still the person's live conversation.
+// ⬡B:core.tool_loop:SUPERSEDE:one_machine_lane_taxonomy_never_two_hand_copies:20260808⬡
+// PROPOSED-RG, pending founder conversion. House law: supersede, never twin. The set of
+// council MODES that mean "this cycle is a machine-owned re-entry, not a person's turn"
+// was written out by hand in TWO places, memoryTurnRequired() and reachHandoffEligible(),
+// with two different spellings of the same idea. Two hand-maintained copies drift, and a
+// coder who fixes one leaves the other lying. There is now ONE taxonomy here and both
+// predicates compose from it, so a lane added or removed lands in both by construction.
+// Boundary-anchored on purpose: every real council mode in this repo is `outbound_*` or
+// `outreach_*` (grepped 20260808), so the anchor changes no live behavior and it stops
+// an unrelated future mode that merely STARTS with those letters from being swallowed.
+var MACHINE_LANE_MODES = {
+  // Loop prevention: a cycle already composing or dispatching an outbound effect must
+  // never recurse into REACH, and never counts as the person's own conversation turn.
+  outbound_reentry:/^(?:outbound|outreach)(?:_|$)/,
+  proposed_action_dispatch:/^proposed_action_dispatch$/,
+  // Memory-record-only lanes: a REACH deliberation, a background/autonomous mode, and a
+  // blocked lane are machine-owned turns with their own records, but they are NOT
+  // reach-ineligible. This is exactly the line the 20260808 restore drew.
+  reach_deliberation:/^reach(?:_|$)/,
+  autonomous_mode:/^autonomous$/,
+  blocked_lane:/^blocked(?:_|$)/
+};
+function machineLaneMode(mode, lanes) {
+  var normalized = String(mode || '').trim().toLowerCase();
+  if (!normalized) return false;
+  return lanes.some(function (lane) { return MACHINE_LANE_MODES[lane].test(normalized); });
+}
+// The re-entry lanes that must never recurse into REACH. Named once, used by both callers.
+var REACH_REENTRY_LANES = ['outbound_reentry', 'proposed_action_dispatch'];
+// Everything above, plus the lanes that keep their own turn record another way.
+var MEMORY_EXCLUDED_LANES = REACH_REENTRY_LANES.concat(
+  ['reach_deliberation', 'autonomous_mode', 'blocked_lane']);
+
 function memoryTurnRequired(channel, identity, state) {
   var normalizedChannel = String(channel || '').trim().toLowerCase();
   var context = identity && identity.council_context || {};
@@ -4375,10 +4408,17 @@ function memoryTurnRequired(channel, identity, state) {
   if (flags.structuredReachPolicy === true || flags.reachIncidentIntake === true) return false;
   if (identity && identity.outbound_finalize === true) return false;
   if (context.outbound_finalize === true || context.internal_deliberation === true) return false;
-  if (/^(?:guide|wake|anew_action|autonomous|system|reach(?:_.*)?|outbound(?:_.*)?|outreach(?:_.*)?)$/.test(normalizedChannel)) {
+  // ⬡B:core.tool_loop:SUPERSEDE:autonomous_channels_keep_their_own_turn_record:20260808⬡
+  // Founder order 20260808 ("ship default on, never dark"): 'anew_action' and 'autonomous'
+  // are no longer excluded by CHANNEL here. A background cycle that can now hand its
+  // conclusion to the reach engine (reachHandoffEligible below, same order) keeps a durable
+  // record of the turn that produced that conclusion. Machine-lane MODES (outbound,
+  // outreach, proposed_action_dispatch, blocked) still exclude on the mode line below, so
+  // finalizer and dispatch re-entries are unchanged. Guard: the founder-guardrail CI test.
+  if (/^(?:guide|wake|system|reach(?:_.*)?|outbound(?:_.*)?|outreach(?:_.*)?)$/.test(normalizedChannel)) {
     return false;
   }
-  if (/^(?:reach(?:_|$)|outbound(?:_|$)|outreach(?:_|$)|proposed_action_dispatch$|autonomous$|blocked(?:_|$))/.test(mode)) {
+  if (machineLaneMode(mode, MEMORY_EXCLUDED_LANES)) {
     return false;
   }
   return true;
@@ -4395,12 +4435,24 @@ function internalDeliberation(identity) {
 function codaInternalDeliberation(identity) {
   return internalDeliberation(identity) && identity.council_context.mode === 'coding';
 }
+// ⬡B:core.tool_loop:SUPERSEDE:a_background_cycle_may_hand_its_conclusion_to_reach:20260808⬡
+// Founder order 20260808, superseding the 20260722 cost-audit exclusion (never deleted:
+// its story stays at the call site below). The 'anew_action'/'autonomous' CHANNEL test
+// that made every background cycle reach-ineligible is removed: a background/autonomous
+// cycle CAN hand its committed conclusion to the reach engine. This is ELIGIBILITY only,
+// never a bypass: the handoff still crosses core/reach/cycle.handoff.js, and the reach
+// engine downstream keeps the attempt floor, quiet gap, kill switch, and SHADOW review.
+// What stays excluded stays for loop-prevention, exactly as before: outbound finalizers,
+// external delivery, outbound/outreach modes, and proposed_action_dispatch, so REACH can
+// never recursively trigger itself. Guard: the founder-guardrail CI test; removable only
+// by the founder's own stamped ruling in docs/RULINGS.md.
+// The mode half of this predicate reads the ONE taxonomy above (MACHINE_LANE_MODES),
+// never its own hand-written copy: supersede, never twin.
 function reachHandoffEligible(channel,identity) {
-  var autonomous = /^(anew_action|autonomous)$/.test(String(channel||'').toLowerCase());
   var mode = String(identity&&identity.council_context&&identity.council_context.mode||'');
-  return personalIntentEligible(identity) && !autonomous && !internalDeliberation(identity) && !(identity&&(
+  return personalIntentEligible(identity) && !internalDeliberation(identity) && !(identity&&(
     identity.outbound_finalize || identity.delivery&&identity.delivery.external ||
-    /^(outbound|outreach)/.test(mode) || mode==='proposed_action_dispatch'));
+    machineLaneMode(mode, REACH_REENTRY_LANES)));
 }
 
 // The reader and voice briefs exist to prepare words for a human. Buying them for CODA's own
@@ -7601,6 +7653,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // council/killswitch/presence gauntlet) is the ONLY thing that wakes him. So an
   // autonomous/action turn is no longer reach-eligible. Real inbound/user turns keep
   // full reach; the action itself (a reminder/calendar) is its own effect.
+  // ⬡B:core.tool_loop:SUPERSEDE:the_20260722_channel_exclusion_is_lifted:20260808⬡
+  // SUPERSEDED 20260808 by founder order, story kept per house law: the channel-based
+  // half of that exclusion is lifted in reachHandoffEligible() so a background cycle
+  // can hand a committed conclusion to the reach engine; the mode-based loop guards
+  // (outbound/outreach/proposed_action_dispatch/finalizer) all stand, and the reach
+  // engine's own attempt floor, quiet gap, kill switch, and SHADOW review still gate
+  // every actual send. See docs/RULINGS.md 20260808.
   var _reachHandoffEligible = reachHandoffEligible(channel,identity);
   // This flag is committed inside the canonical CYCLE_RECEIPT/STAMP pair. If
   // the later candidate append loses its response or fails, the queue scanner
