@@ -197,6 +197,88 @@ function transformOutsideFences(content, transform) {
   return output.join('\n');
 }
 
+// The fence walk again, but returning the pieces instead of transforming in place, so an
+// ASYNC judge (the dash mind) can rule over prose segments and the fenced bytes are
+// reassembled untouched. Same fence grammar as transformOutsideFences above; one grammar,
+// two consumers, no drift.
+function segmentFences(content) {
+  var lines = String(content).split('\n');
+  var segments = [];
+  var buffer = [];
+  var bufferProse = true;
+  var fence = null;
+  function flush() {
+    if (buffer.length) segments.push({ prose: bufferProse, text: buffer.join('\n') });
+    buffer = [];
+  }
+  lines.forEach(function (line) {
+    var bare = line.endsWith('\r') ? line.slice(0, -1) : line;
+    var marker = bare.match(/^[ \t]*(`{3,}|~{3,})/);
+    if (!fence && marker) {
+      if (bufferProse) { flush(); bufferProse = false; }
+      fence = { character: marker[1][0], length: marker[1].length };
+      buffer.push(line);
+      return;
+    }
+    if (fence) {
+      buffer.push(line);
+      var trimmed = bare.trim();
+      var isMatchingClose = trimmed.length >= fence.length &&
+        trimmed.split('').every(function (character) { return character === fence.character; });
+      if (isMatchingClose) { fence = null; flush(); bufferProse = true; }
+      return;
+    }
+    if (!bufferProse) { flush(); bufferProse = true; }
+    buffer.push(line);
+  });
+  flush();
+  return segments;
+}
+
+function joinSegments(segments) {
+  return segments.map(function (seg) { return seg.text; }).join('\n');
+}
+
+function applyDashRulingOutsideFences(dashMod, segments, ruling) {
+  var totals = { ruled: false, decider: null, kept: 0, replaced: 0, unruled: 0 };
+  var out = segments.map(function (seg) {
+    if (!seg.prose) return seg;
+    var scan = dashMod.flagDashes(seg.text);
+    if (!scan.flags.length) return seg;
+    var applied = dashMod.applyRuling(seg.text, scan.flags, ruling);
+    totals.ruled = totals.ruled || applied.ruled;
+    totals.decider = totals.decider || applied.decider;
+    totals.kept += applied.kept || 0;
+    totals.replaced += applied.replaced || 0;
+    totals.unruled += applied.unruled || 0;
+    return { prose: true, text: applied.text };
+  });
+  totals.text = joinSegments(out);
+  return totals;
+}
+
+async function decideDashesOutsideFences(dashMod, segments, opts) {
+  var totals = { ruled: false, decider: null, kept: 0, replaced: 0, unruled: 0,
+    failed_open: false };
+  var out = [];
+  for (var i = 0; i < segments.length; i++) {
+    var seg = segments[i];
+    if (!seg.prose) { out.push(seg); continue; }
+    var scan = dashMod.flagDashes(seg.text);
+    if (!scan.flags.length) { out.push(seg); continue; }
+    var ruled = await dashMod.decideDashes(seg.text, opts);
+    totals.ruled = totals.ruled || !!(ruled && ruled.ruled);
+    totals.decider = totals.decider || (ruled && ruled.decider) || null;
+    totals.kept += (ruled && ruled.kept) || 0;
+    totals.replaced += (ruled && ruled.replaced) || 0;
+    totals.unruled += (ruled && ruled.unruled) || 0;
+    totals.failed_open = totals.failed_open || !!(ruled && ruled.failed_open);
+    out.push({ prose: true, text: (ruled && typeof ruled.text === 'string') ? ruled.text : seg.text });
+  }
+  totals.text = joinSegments(out);
+  return totals;
+}
+
 // ⬡B:board.writ:BUILD:dash_ruling_channel_so_a_mind_can_keep_one:20260808⬡
 // THE RULING CHANNEL. Until today there was no way for anything, model or human,
 // to decide that a dash belonged: removeEmDash below rewrote every one of them to
@@ -514,16 +596,25 @@ async function writCheck(text, context) {
   if (!isInternal) {
     try {
       var _dashMod = require('./dash.ruling.js');
-      var _dashScan = _dashMod.flagDashes(cleaned);
+      // FENCES ARE NOT PROSE. The whole-text scan used to flag the double hyphen in a
+      // fenced shell command like a git flag, and a replace verdict would then mutate
+      // bytes inside the fence, handing a human a broken command. The voice law below
+      // already refuses to transform inside fences; the ruling obeys the same line. The
+      // scan and any ruling run over the prose segments only, and fenced content is
+      // reassembled byte for byte.
+      var _dashSplit = segmentFences(cleaned);
+      var _dashProse = _dashSplit.filter(function (seg) { return seg.prose; })
+        .map(function (seg) { return seg.text; }).join('\n');
+      var _dashScan = _dashMod.flagDashes(_dashProse);
       if (_dashScan.flags.length) {
         if (context.dashRuling && Array.isArray(context.dashRuling.verdicts)) {
-          var _dashApplied = _dashMod.applyRuling(cleaned, _dashScan.flags, context.dashRuling);
+          var _dashApplied = applyDashRulingOutsideFences(_dashMod, _dashSplit, context.dashRuling);
           cleaned = _dashApplied.text;
           dashRulingReceipt = { ruled: _dashApplied.ruled, decider: _dashApplied.decider,
             kept: _dashApplied.kept, replaced: _dashApplied.replaced,
             unruled: _dashApplied.unruled, flagged: _dashScan.flags.length };
         } else {
-          var _dashOut = await _dashMod.decideDashes(cleaned,
+          var _dashOut = await decideDashesOutsideFences(_dashMod, _dashSplit,
             { deliberate: typeof context.deliberate === 'function' ? context.deliberate : null });
           if (_dashOut && typeof _dashOut.text === 'string') cleaned = _dashOut.text;
           dashRulingReceipt = { ruled: !!(_dashOut && _dashOut.ruled),
@@ -682,6 +773,8 @@ async function writCheckAndBank(hamUid, text, context, options) {
 }
 
 module.exports = { writCheck: writCheck, writCheckAndBank: writCheckAndBank,
+  _test: { segmentFences: segmentFences, decideDashesOutsideFences: decideDashesOutsideFences,
+    applyDashRulingOutsideFences: applyDashRulingOutsideFences },
   removeEmDash: removeEmDash, coffeeshopTest: coffeeshopTest,
   writHoldCauses: writHoldCauses,
   checkColdGreeting: checkColdGreeting, approximateChoppyDensity: approximateChoppyDensity,
