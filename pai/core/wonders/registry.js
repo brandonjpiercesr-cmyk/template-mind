@@ -745,6 +745,42 @@ const NODES = [
       doctrine:'personal political detail stays in beads in the HAM own world, never in code; the station must run unchanged for any HAM with their own political world'}
   },
   {
+    // ⬡B:core.wonders.registry:BUILD:life_modules_finally_have_a_seat:20260808⬡
+    // FOUNDER DIRECT, My Resolve doctrine pt 1, 20260808: "you know how many life modules you
+    // could have built into her if you were to go back and deep dive into my doctrine the way
+    // you're supposed to deep dive into it, the way I keep begging you to deep dive." Measured
+    // the same day: "life module" occurs 54 times across 15 of his doctrines and 0 times in
+    // this codebase. Nothing could summon one because nothing named one.
+    //
+    // WHY THIS KIND. His own sentence decides it, not a preference: "Life modules and life
+    // modes all become independent thinking sections. Every single thing is an independent
+    // thinking section." So a life module is not a new contract kind; it is a station.
+    //
+    // WHAT IT IS, in his words: "Life modules are simply worlds that are created... these are
+    // basically wonders and worlds that she creates as she oversees. She puts them up out of
+    // the chain, and they have wonders who are watching them and reporting in on them." Each
+    // harvested module in core/life/modules.registry.js names its own watcher, and this seat
+    // is the runner that works one of them a single move at a time.
+    //
+    // AUTHORITY, deliberately narrow. It chooses a move and records it. surface_to_reach
+    // returns a REQUEST for the reach team and the Overseer; this seat opens no channel and
+    // wears no voice. Ships OFF behind LIFE_MODULE_WONDER.
+    id:'station.life_modules', display_name:'LIFE MODULES', kind:'independent_thinking_station', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Work one harvested life module for the calling HAM: resolve the module world from the roster, backdate its planner from the dated occasion, read what has already been done, run the cold gate and the autonomy seatbelt for free, then let a woken mind pick exactly one move from the declared menu (research, plan, summon_mode, surface_to_reach, rest) and record it as one ACL-stamped bead. An unreadable verdict is a rest, never a default move. Reaches nobody and speaks to no human.',
+    product_role:"Her life modules: the bounded worlds she and the HAM build together, each with modes underneath it and a wonder watching it, worked a milestone at a time instead of remembered once in a transcript.",
+    cycle:{triggers:['life.module.wake','schedule.domain.cadence'],coordinator:'station.pai'},
+    context_policy:'context.life_module.world.v1',
+    authority_policy:'authority.draft_only.overseer_clears_reach.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{wiring:[wire('core/wonders/life.module.wonder.js#decide'),
+      wire('core/wonders/life.module.wonder.js#record'),
+      wire('core/life/modules.registry.js'),
+      wire('docs/wonders/LIFE_MODULES.md',
+        'doc')],
+      doctrine:'a life module is a world with modes underneath it and a watcher above it; the HAM can take one out of the settings at any time, and a module he removed is silent and free'}
+  },
+  {
     // ⬡B:core.wonders.registry:WIRE:guide_food_place_wonder_seat:20260728⬡
     // Doctrine audit finding (NYC 53rd Street Doctrine pt4, "@guide does not bypass anything"):
     // core/guide.js runs the full compliant wonder pattern, ATMOSPHERE identity gate, cold-code
@@ -828,6 +864,307 @@ const NODES = [
     cycle:{triggers:['builder.result'],coordinator:'station.pai'},
     context_policy:'context.clair.command_center.v1', authority_policy:'authority.gate.read_only.v1',
     return_gate:'gate.ham.active_channel', metadata:{wiring:[wire('routes/three-ray.routes.js')]}
+  },
+  // ⬡B:core.wonders.registry:BUILD:seating_the_written_down_but_unsummonable_wonders:20260808⬡
+  // THE DOCUMENT-ONLY GAP, closed for every wonder that already has real code.
+  // Measured 20260808 against docs/wonders/00_BUILD_PRIORITY_20260807.md: that ranking holds
+  // 46 wonder rows (22 BUILT, 18 HALF, 6 GAP), and only 21 of the 46 had their own node here.
+  // The other 25 were markdown a cycle could not summon by name, which is the same lie as a
+  // wonder that was never built: real code sitting behind no seat reads to the roster as absent.
+  // These nodes are NAMES FOR CODE THAT ALREADY RUNS. Not one of them invents a capability.
+  // Every wiring target below was verified to exist on disk before the node was written, and the
+  // six true GAP rows (HINDSIGHT HARRY, PEEK, ORBIT, WORD, WRITES, and the unbuilt counterpart
+  // half of THE RESEARCHER) are deliberately NOT seated: a seat over nothing is the exact
+  // fabrication this block exists to end. They stay listed as honestly unbuilt in the ranking.
+  // Ordered life-facing first, on purpose. The founder's Tier 4 (the tier that touches his
+  // actual life) was the emptiest and the coding department was the fullest, which is backwards
+  // from his own doctrine.
+
+  // ---- TIER 4, THE LIFE-FACING TIER ----
+  {
+    // The factory every inherited world's advisor rides (advisors/domain.advisor.js#create):
+    // full cycle, exact-HAM firewall, birth gate, meeting position. It shipped as a function
+    // nobody could name, so every instance it built was summonable and the thing building them
+    // was not. HALF in the ranking, and honestly so: the ACW schema is still thin. Half is not
+    // absent, and a thin seat that says what is thin beats no seat at all.
+    id:'wonder.client_advisor_template', display_name:'The Client-Advisor Template',
+    kind:'wonder', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.advisors', ham_scope:'dynamic',
+    technical_role:'Build one domain advisor seat for one resolved world from a spec: bind the exact-HAM firewall, read that world evidence only, hold the birth gate until a mind rules the seat ready for this specific person, and return the employment brief the instance wakes on. Never acts on a life itself.',
+    product_role:'The generic advisor every inherited world starts from, so a new world gets a real advisor instead of an empty chair.',
+    cycle:{triggers:['advisor.instance.requested','world.birth'],coordinator:'station.advisors'},
+    context_policy:'context.advisor.world.v1',
+    authority_policy:'authority.client_advisor_template.build_and_gate_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{universal:true, one_source:true, build_state:'half',
+      build_gap:'ACW schema (relationship map, per-client voice register, deliverable history) is still thin; no factory seat shades its own deadline yet.',
+      wiring:[wire('advisors/domain.advisor.js#create'),
+        wire('advisors/domain.advisor.js#readWorldEvidence'),
+        wire('advisors/domain.advisor.js#hasReadySkillDossier'),
+        wire('advisors/registry.js')]}
+  },
+  {
+    // SOUL. The ranking calls this one a cold impostor to supersede, and it is right: the live
+    // door is real (routes/os.api.routes.js GET /os/soul/:hamUid, read by agents/dawn.js) but
+    // the pick is a Math.random shuffle over a hardcoded table with no per-ham faith. Seating it
+    // does NOT bless that. A named seat is what makes the impostor addressable enough to be
+    // superseded by a real cycle; unseated, it just kept running unnamed. build_gap says the
+    // quiet part in the roster itself so nobody reads this node as done.
+    id:'wonder.soul', display_name:'SOUL', kind:'wonder', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'dynamic',
+    technical_role:'Serve one resolved world spiritual surface: return the verbatim passage from the source API byte-for-byte, stamp what was shown so the same thing is not served twice, and stay silent for a world that has declared no faith. The choosing judgment belongs to the cycle, never to this surface.',
+    product_role:"A spiritual companion that knows the person's life, which a content app structurally cannot be.",
+    cycle:{triggers:['soul.requested','schedule.daily.world'],coordinator:'station.pai'},
+    context_policy:'context.ham.faith.v1',
+    authority_policy:'authority.soul.serve_verbatim_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'half',
+      build_gap:'The daily pick is a Math.random shuffle over a hardcoded table, not a cycle ruling: no cycleId or seat on the rotation bead, and no per-ham faith read, so a no-faith or non-Christian world is not yet honored. Supersede the picker, keep the door.',
+      wiring:[wire('routes/os.api.routes.js#GET /os/soul/:hamUid'),
+        wire('agents/dawn.js#brief'), wire('routes/face/more.surfaces.routes.js')]}
+  },
+
+  // ---- TIER 2, THE MOUTHS AND THE GATES THAT SERVE THE PERSON DIRECTLY ----
+  {
+    // CARA, the chat mouth. BUILT and live (POST /cara/chat is the founder's own named gate in
+    // CLAUDE.md) and it had no node, so the one door the whole estate points at was unnamed on
+    // the roster it belongs to.
+    id:'wonder.cara', display_name:'CARA', kind:'wonder', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'dynamic',
+    technical_role:'Answer one chat turn on the live gate: resolve the HAM before any memory is read, run the identical governed cycle a consult runs, and return one voice with its cycle receipt. Never answers cold and never one-shots.',
+    product_role:'The chat mouth: where a person actually talks to her.',
+    cycle:{triggers:['chat.turn'],coordinator:'station.pai'},
+    context_policy:'context.anu.full.v1', authority_policy:'authority.cara.cycle_bound_reply.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'built',
+      wiring:[wire('routes/cara.routes.js'), wire('routes/cara.hub.routes.js'),
+        wire('core/tool.loop.js#runPAI')]}
+  },
+  {
+    // OMI, the ears. Webhook, identity binding, and the attempt ledger are all real.
+    id:'wonder.omi', display_name:'OMI', kind:'wonder', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'dynamic',
+    technical_role:'Take spoken capture inbound, bind it to a resolved identity before anything is banked, log every attempt including the failed ones, and hand the transcript to the cycle. Never decides what was meant.',
+    product_role:'Her ears: what the person said out loud, carried in without being interpreted at the door.',
+    cycle:{triggers:['omi.capture'],coordinator:'station.pai'},
+    context_policy:'context.omi.capture.v1', authority_policy:'authority.omi.intake_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'built',
+      wiring:[wire('routes/omi.routes.js'), wire('core/omi.attempt.log.js')]}
+  },
+  {
+    // PAM. One of the most complete wonders in the estate and it had no node. A privacy gate is
+    // a guardian, not a station: it refuses, it does not deliberate on the person's behalf.
+    // NOTE: this node NAMES core/privacy/* as its wiring and changes nothing inside it.
+    id:'guardian.pam', display_name:'PAM', kind:'guardian', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Hold the cold credential and cross-world redaction wall on everything outbound: refuse a leak rather than trim it, and say what was refused and why. Classification of a human meaning is never this seat.',
+    product_role:"The privacy gate: nothing about one person's world ever reaches another person's.",
+    cycle:{triggers:['outbound.compose','memory.read'],coordinator:'station.pai'},
+    context_policy:'context.pam.outbound.v1', authority_policy:'authority.pam.refuse_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'built',
+      wiring:[wire('core/privacy'), wire('core/privacy.WONDER.classification.20260726.js')]}
+  },
+  {
+    // CORNY, the anti-corny warmth lens. Real detector, real code, named by the founder, no node.
+    id:'agent.corny', display_name:'CORNY', kind:'wonder_agent', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.meta_commentary', ham_scope:'inherited',
+    technical_role:'Run the corny and over-narration scan over composed prose and raise a named flag with the offending line. Flags only: the demote-or-keep ruling belongs to the woken organ, never to this scan.',
+    product_role:'The warmth lens that keeps her from sounding like a greeting card.',
+    cycle:{triggers:['outbound.compose'],coordinator:'station.meta_commentary'},
+    context_policy:'context.corny.draft.v1', authority_policy:'authority.corny.flag_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'built',
+      wiring:[wire('core/prose.quality.js'), wire('core/veer/veer.director.js'),
+        wire('core/pai.outbound.council.js')]}
+  },
+  {
+    // THE END-USER-IN-MIND THINKER. The founder's own front-end law as a pre-write pass.
+    id:'agent.end_user_in_mind', display_name:'The End-User-In-Mind Thinker',
+    kind:'wonder_agent', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.meta_commentary', ham_scope:'inherited',
+    technical_role:'Before anything is written for a person to read, produce the reader brief: who reads this, and what can they DO with it. Hands the brief to the composing seat and never writes the copy itself.',
+    product_role:'The pass that makes her words serve the person reading them instead of the coder who built them.',
+    cycle:{triggers:['outbound.compose'],coordinator:'station.meta_commentary'},
+    context_policy:'context.reader_brief.pre_write.v1',
+    authority_policy:'authority.end_user_in_mind.brief_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'half',
+      build_gap:'The pre-write reader.brief pass exists and is wired into the council, but no choke point guarantees every reader-facing surface passes through it, so a new surface can still ship coder-facing words.',
+      wiring:[wire('core/reader.voice.js'), wire('core/pai.outbound.council.js'),
+        wire('scripts/checks/reader-copy-hints.js')]}
+  },
+
+  // ---- TIER 1, THE SPINE OF THOUGHT ----
+  {
+    // STAMP. buildStamp / validateStamp and the FORGED quarantine are the ACL law in code, and
+    // the law had no seat. Cold on purpose: a stamper that reasoned about its own stamp would be
+    // the forgery it exists to catch.
+    id:'agent.stamp', display_name:'STAMP', kind:'wonder_agent', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Build and validate every ACL stamp to the six-part law, and quarantine a malformed or forged stamp instead of banking it. Zero model calls: this seat checks format and provenance, never meaning.',
+    product_role:'The stamper: every memory in the estate carries a mark that says where it came from.',
+    cycle:{triggers:['bead.write','bead.read'],coordinator:'station.pai'},
+    context_policy:'context.stamp.format.v1', authority_policy:'authority.stamp.format_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'built',
+      wiring:[wire('core/brain.client.js#buildStamp'),
+        wire('core/brain.client.js#validateStamp'),
+        wire('core/newworld/stamp.validate.js')]}
+  },
+  {
+    // LOGFUL. A whole directory (ledger, ledger mind, FIELD, gate, hunch) and no node.
+    id:'station.logful', display_name:'LOGFUL', kind:'independent_thinking_station',
+    lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Own the six-field ledger end to end: bank what happened, read it back against the live roster, enrich it, and let the ledger mind rule on what a row means. An owner it cannot resolve on the real roster is refused, never invented.',
+    product_role:'The memory backbone: the record of what actually happened, that can be read back later.',
+    cycle:{triggers:['cycle.complete','ledger.read'],coordinator:'station.pai'},
+    context_policy:'context.logful.ledger.v1', authority_policy:'authority.logful.bank_and_rule.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'half',
+      build_gap:'The ledger, ledger mind, FIELD, self-read, enrich and hunch passes are live; the standing whole-estate backfill and a proven cross-world read cadence are not.',
+      wiring:[wire('logful/index.js'), wire('logful/ledger.mind.js'), wire('logful/field.js'),
+        wire('logful/gate.js'), wire('logful/hunch.js')]}
+  },
+  {
+    // THE KEEPER. Two-pass consult plus the verifyExcerpts anti-ventriloquism leash. The leash is
+    // the reason this is a seat and not a search box: it is what stops doctrine being put in the
+    // founder's mouth. granddaddy-911 holds: the Keeper feeds the wonder, it never speaks.
+    id:'station.keeper', display_name:'The Keeper', kind:'independent_thinking_station',
+    lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Ingest and catalog doctrine, run the two-pass consult, and hold the verifyExcerpts leash so every quoted line is proven to exist in the source before it is returned. Returns doctrine to the cycle and never addresses a person.',
+    product_role:"The librarian: what the founder actually said, quoted only when it can be proven he said it.",
+    cycle:{triggers:['doctrine.consult','doctrine.ingest'],coordinator:'station.pai'},
+    context_policy:'context.keeper.corpus.v1',
+    authority_policy:'authority.keeper.consult_and_catalog_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'built',
+      wiring:[wire('core/keeper.js'), wire('core/keeper.journey.js'),
+        wire('scripts/checks/doctrine-first.js')]}
+  },
+
+  // ---- TIER 0, THE ALWAYS-UP SPINE ----
+  {
+    // NOW. Its own packet names the missing piece as "no station.now choke point". This node IS
+    // that choke point's name. The math (core/ham.timezone.js, core/context.fusion.js) is real,
+    // DST-correct, and already right; what was missing was a seat that owns it.
+    id:'station.now', display_name:'NOW', kind:'independent_thinking_station', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'dynamic',
+    technical_role:"Own the person's clock: resolve their IANA zone, recenter every time-bearing string from the server clock to their local wall time DST-correctly, and carry the resolved zone on the receipt. The math stays cold; learning an unknown zone or reading an ambiguous time expression wakes a mind.",
+    product_role:'The recentering seat, so tomorrow means their tomorrow and not the server\'s.',
+    cycle:{triggers:['outbound.compose','reminder.schedule','ham.turn'],coordinator:'station.pai'},
+    context_policy:'context.now.ham_zone.v1', authority_policy:'authority.now.recenter_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'half',
+      build_gap:'The recenter math is real and DST-correct, but nothing yet forces every time-bearing outbound string through this seat, so a new output surface can still speak the server clock.',
+      wiring:[wire('core/ham.timezone.js'), wire('core/context.fusion.js')]}
+  },
+  {
+    // THE TWO LUNGS. routes/air.routes.js and its sisters are live and C0 cold.
+    id:'station.two_lungs', display_name:'The Two Lungs',
+    kind:'independent_thinking_station', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'system',
+    technical_role:'Probe each lung own version door and report every field MEASURED as breathing, unhealthy, suspended, or the literal unknown with a reason, never asserted; cross-tap a lung on request and stamp which one moved last. Zero model calls.',
+    product_role:'The breathing check: whether she is actually up, measured rather than claimed.',
+    cycle:{triggers:['air.status','air.start','schedule.tick'],coordinator:'station.pai'},
+    context_policy:'context.air.lungs.v1', authority_policy:'authority.air.probe_and_tap.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'half',
+      build_gap:'The left lung breathes and the probes are honest, but both lungs sit on one provider and the right lung reads suspended, so this is one failure domain, not two.',
+      wiring:[wire('routes/air.routes.js'), wire('routes/air.health.routes.js'),
+        wire('routes/air.lung.routes.js')]}
+  },
+  {
+    // SHADOW. The failover twin. Real wired failover exists for several seats and the cook-off
+    // executor is live and evidence-only. The seat that names it was missing, which is how a
+    // shadow that had never once run went unnoticed until the founder caught it himself.
+    id:'agent.shadow', display_name:'SHADOW', kind:'wonder_agent', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'system',
+    technical_role:'Carry the named redundant twin for a seat and fail over to it when the primary returns empty, refused, or non-JSON. Evidence only: a second opinion is never auto-promoted, and a consequential unresolved disagreement escalates rather than deciding.',
+    product_role:'The twin that keeps her thinking when one model stops answering.',
+    cycle:{triggers:['seat.primary_failed','second_opinion.requested'],coordinator:'station.pai'},
+    context_policy:'context.shadow.seat_failover.v1',
+    authority_policy:'authority.shadow.evidence_only_never_promote.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'half',
+      build_gap:'Failover is wired for several seats and honestly marked NOT WIRED on the rest; most twins still ride one OpenRouter account, so today this is largely a model twin rather than a true different-provider twin.',
+      wiring:[wire('core/model.shadow.executor.js'), wire('core/coda/shadow.cycle.js')]}
+  },
+
+  // ---- TIER 3, THE JUDGES (one seat: this tier was already the fullest) ----
+  {
+    // THE STANDING JUDGE. Shared machinery the cook-off, the Wonder Games, and the LIVENESS
+    // double advocate all convene, with no node of its own. It is the one seat in this whole
+    // block that belongs to the coding department, and it is here because three seated stations
+    // already call it by name and could not resolve it.
+    id:'station.judge', display_name:'The Standing Judge',
+    kind:'independent_thinking_station', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Convene one grounded verdict between named contestants on stated evidence, return the winner with the reason and the evidence it rode on, and refuse to return a verdict at all when the evidence does not support one. Never mutates anything it judges.',
+    product_role:'The judge every contest in the estate convenes, so a winner is a ruling and not a preference.',
+    cycle:{triggers:['judge.requested','cookoff.verdict','games.verdict'],coordinator:'station.pai'},
+    context_policy:'context.judge.evidence_packet.v1',
+    authority_policy:'authority.judge.verdict_only_never_mutate.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'built',
+      wiring:[wire('core/judge.js'), wire('core/wonder.games.js'),
+        wire('routes/cookoff.routes.js')]}
+  },
+
+  // ---- TIER 5, THE WATCHERS ----
+  {
+    // THE OVERSEER. A whole directory (essence cycle, exit space, exit tool, last contact
+    // watcher, confidence validator) plus two mounted route files, and no node.
+    id:'station.overseer', display_name:'The Overseer', kind:'independent_thinking_station',
+    lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Watch the exit of the cycle: validate the confidence of what is about to leave, hold the exit space, and clear or refuse an outbound before it reaches a person. Clears; it does not compose and it never speaks in her voice.',
+    product_role:'The last look before anything reaches the person.',
+    cycle:{triggers:['cycle.exit','outbound.pending'],coordinator:'station.pai'},
+    context_policy:'context.overseer.exit.v1',
+    authority_policy:'authority.overseer.clear_or_refuse_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'built',
+      wiring:[wire('core/overseer/essence.cycle.js'), wire('core/overseer/exit.space.js'),
+        wire('core/overseer/exit.tool.js'),
+        wire('core/overseer/confidence.validator.js'),
+        wire('core/overseer/last.contact.watcher.js'),
+        wire('routes/overseer.exit.routes.js')]}
+  },
+  {
+    // A'NEW DOWNTIME (PAI Senior). Real code, no node, and it is the seat that is supposed to be
+    // working when nobody is watching, which is exactly the kind of seat that goes dark unnamed.
+    id:'station.downtime', display_name:"A'NEW Downtime", kind:'independent_thinking_station',
+    lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Run the background shift between turns: digest what happened, carry unfinished work forward, and bank findings for the next waking cycle. Produces findings for a mind to rule on and never reaches a person on its own.',
+    product_role:'What she does while nobody is talking to her.',
+    cycle:{triggers:['schedule.idle','cycle.complete'],coordinator:'station.pai'},
+    context_policy:'context.downtime.background.v1',
+    authority_policy:'authority.downtime.bank_findings_never_reach.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'half',
+      build_gap:'The digest and the downtime cycle exist, but there is no proven standing cadence, so the background shift runs when something calls it rather than on its own clock.',
+      wiring:[wire('core/anu.downtime.js'),
+        wire('core/downtime.WONDER.digest.20260722.js'),
+        wire('core/wonder.selfmark.js')]}
+  },
+  {
+    // THE DECODER. core/decoder.js plus a mounted route, and no node.
+    id:'agent.decoder', display_name:'The Decoder', kind:'wonder_agent', lifecycle:'active',
+    owner_wonder_id:'wonder.anu', reports_to:'station.pai', ham_scope:'inherited',
+    technical_role:'Decode an ACL stamp back to its provenance: what wrote this, in which world, under what authority, and when. Returns the reading and never rules on whether the provenance is acceptable.',
+    product_role:'The seat that can answer where a given piece of her memory actually came from.',
+    cycle:{triggers:['provenance.requested'],coordinator:'station.pai'},
+    context_policy:'context.decoder.stamp.v1',
+    authority_policy:'authority.decoder.read_provenance_only.v1',
+    return_gate:'gate.ham.active_channel',
+    metadata:{build_state:'half',
+      build_gap:'The cipher and the door are real; the estate-wide provenance sweep that would read every banked stamp back is not built.',
+      wiring:[wire('core/decoder.js'), wire('routes/decoder.routes.js')]}
   }
 ];
 
@@ -1002,8 +1339,11 @@ const SEAT_LEGS = {
       never: ['Never let an internal seat name reach a person.', 'Never answer from memory you did not verify belongs to this world.'] },
     goals: ['Every turn ends with the person further along than they started.', 'No turn ever leaks another world.'],
     toolbelt: ['tool.cycle.pai', 'tool.brain.find', 'tool.reach.active_channel'],
-    may_summon: ['station.ham_world_builder', 'station.pai', 'station.coda', 'wonder.inbox_zero', 'wonder.guide', 'agent.graphic_designer', 'station.political_advisor'],
-    may_recommend: ['guardian.clair'], wakes: ['station.pai'], hands_to: ['gate.ham.active_channel']
+    // The life-facing seats she can pull in herself are named here on purpose: the tier that
+    // touches the person's actual life was the emptiest on the roster, and a seat A'NU cannot
+    // summon is a seat the person never gets.
+    may_summon: ['station.ham_world_builder', 'station.pai', 'station.coda', 'wonder.inbox_zero', 'wonder.guide', 'agent.graphic_designer', 'station.political_advisor', 'wonder.cara', 'wonder.soul', 'station.now', 'station.keeper', 'station.overseer'],
+    may_recommend: ['guardian.clair', 'guardian.pam'], wakes: ['station.pai'], hands_to: ['gate.ham.active_channel']
   },
   'station.agent_find': {
     persona: { differentia: 'You are the decoder navigator at the door of every seated mind. You run first, read the wall exactly, hand each seat its own employment record, and refuse to turn an unavailable read into an empty world.', temperament: 'Attentive, discreet, fast, literal, and exact about provenance.' },
@@ -1061,7 +1401,12 @@ const SEAT_LEGS = {
       never: ['Never let a one-shot bypass the cycle.', 'Never return a result with no receipt behind it.'] },
     goals: ['Every governed turn leaves a receipt that can be read back later.', 'No model call inside this cycle runs without a seat behind it.'],
     toolbelt: ['tool.cycle.pai', 'tool.brain.find', 'tool.model.ladder'],
-    may_summon: ['station.tim', 'station.coda', 'station.wonder_games', 'station.cookoff', 'wonder.knowledge_compiler', 'wonder.guide', 'wonder.inbox_zero', 'wonder.client_roster', 'agent.graphic_designer', 'station.political_advisor', 'agent.grit', 'agent.penny_shadow', 'wonder.veer', 'wonder.birth', 'wonder.iman', 'wonder.tap', 'wonder.vara', 'wonder.wren'],
+    // ⬡B:core.wonders.registry:WIRE:the_cycle_can_reach_everything_that_actually_exists:20260808⬡
+    // The cycle is where a seat gets pulled in, so every wonder seated on 20260808 is listed
+    // here unless a nearer owner already reaches it (CORNY and the reader brief hang off
+    // station.meta_commentary; the advisor factory hangs off station.advisors). Before this,
+    // real running code sat behind names no cycle could call.
+    may_summon: ['station.tim', 'station.coda', 'station.wonder_games', 'station.cookoff', 'wonder.knowledge_compiler', 'wonder.guide', 'wonder.inbox_zero', 'wonder.client_roster', 'agent.graphic_designer', 'station.political_advisor', 'agent.grit', 'agent.penny_shadow', 'wonder.veer', 'wonder.birth', 'wonder.iman', 'wonder.tap', 'wonder.vara', 'wonder.wren', 'wonder.client_advisor_template', 'wonder.cara', 'wonder.soul', 'wonder.omi', 'station.now', 'station.keeper', 'station.logful', 'station.judge', 'station.overseer', 'station.downtime', 'station.two_lungs', 'agent.stamp', 'agent.decoder', 'agent.shadow', 'guardian.pam'],
     may_recommend: ['station.ham_world_builder', 'guardian.clair', 'sensor.always_on'], wakes: ['station.coda'], hands_to: ['gate.ham.active_channel']
   },
   'agent.penny_shadow': {
@@ -1090,7 +1435,12 @@ const SEAT_LEGS = {
       never: ['Never let a phrase matcher decide the prose.', 'Never speak to a person or send an artifact.', 'Never shrink a warm answer into a cold fragment.'] },
     goals: ['No internal process narration reaches a person.', 'Every rewrite keeps the concrete substance the reader needs.'],
     toolbelt: ['tool.brain.find', 'tool.model.ladder'],
-    may_summon: [], may_recommend: ['station.writ'], wakes: ['station.writ'], hands_to: ['station.writ']
+    // ⬡B:core.wonders.registry:WIRE:the_two_lenses_are_reachable_from_the_gate_that_runs_them:20260808⬡
+    // CORNY and the End-User-In-Mind Thinker are both passes of this station's own job. They had
+    // real code and no seat, and now that they have seats they must be reachable FROM here, or
+    // they are the same lie in a different shape: a name on a roster that nothing can call.
+    may_summon: ['agent.corny', 'agent.end_user_in_mind'],
+    may_recommend: ['station.writ'], wakes: ['station.writ'], hands_to: ['station.writ']
   },
   'station.writ': {
     persona: { differentia: 'You are the last writing room before Reach. You hear the sentence out loud, keep every concrete anchor, and make the words feel like one real person wrote them for one real reader.', temperament: 'Natural, warm, precise, and protective of meaning.' },
@@ -1432,6 +1782,22 @@ const SEAT_LEGS = {
     toolbelt: ['tool.brain.find', 'tool.model.ladder'],
     may_summon: ['agent.graphic_designer'], may_recommend: ['wonder.inbox_zero'], wakes: [], hands_to: ['gate.ham.active_channel']
   },
+  // ⬡B:core.wonders.registry:BUILD:the_legs_the_life_module_seat_stands_on:20260808⬡
+  // The employment record for station.life_modules. It may SUMMON the research seat, because
+  // "research" is one of the five moves and a module that cannot look anything up is a module
+  // that guesses. It may only RECOMMEND the advisor station and the reach wake: a life module
+  // asks for a human to be reached, it never reaches one, and the Overseer is the seat that
+  // clears a reach. Cold code never decides to reach a human at all.
+  'station.life_modules': {
+    persona: { differentia: 'You hold one bounded world inside somebody actual life, and you move it forward one honest step at a time. You would rather rest than manufacture a step that was not there.', temperament: 'Patient, concrete, allergic to busywork.' },
+    jd: { summary: 'Work one life module for the calling HAM: read its world and its history, and choose exactly one next move from the declared menu.',
+      duties: ['Backdate the planner from the dated occasion before deciding anything.', 'Summon only a mode the module itself declares.', 'Record every move as one stamped bead so the watcher has something real to report.'],
+      never: ['Never reach a human; ask the reach team and let the Overseer clear it.', 'Never work a module the HAM has taken out of his settings.', 'Never treat an unreadable verdict as a move.'] },
+    goals: ['A life the HAM described once keeps moving without him having to run it.',
+      'No module ever spends a cycle on a day when resting was the honest answer.'],
+    toolbelt: ['tool.brain.find', 'tool.brain.write', 'tool.model.ladder'],
+    may_summon: ['agent.grit'], may_recommend: ['station.advisors', 'station.overseer'], wakes: [], hands_to: ['gate.ham.active_channel']
+  },
   'wonder.guide': {
     persona: { differentia: 'You know the ground: where to eat, how to get there, what it feels like on the way. You return a finding and you let her be the one who says it out loud.', temperament: 'Grounded, specific, never speaks for herself.' },
     jd: { summary: 'Recommend which real place best serves this person goals, and guide the route with grounded landmarks and pacing memory.',
@@ -1480,6 +1846,175 @@ const SEAT_LEGS = {
       never: ['Never decide anything.', 'Never expose one world data on another world view.'] },
     goals: ['A builder can always see what happened without being able to change it.'],
     toolbelt: [], may_summon: [], may_recommend: [], wakes: [], hands_to: ['gate.ham.active_channel']
+  },
+
+  // ⬡B:core.wonders.registry:BUILD:legs_for_the_newly_seated_wonders:20260808⬡
+  // A node without legs is not a seat. The contract requires all eight on an active lifecycle,
+  // so every seat added above carries its own persona differentia, duties, hard nevers, goals,
+  // toolbelt, and destinations here. Written from each wonder's own packet in docs/wonders/,
+  // not invented: the nevers in particular are that packet's stated boundary.
+  'wonder.client_advisor_template': {
+    persona: { differentia: 'You are the shape every inherited advisor starts as. You are careful about whose life you are about to touch, and you would rather hold a seat unborn than let it act on the wrong person.', temperament: 'Methodical, boundaried, unwilling to guess whose world this is.' },
+    jd: { summary: 'Build one domain advisor seat for one resolved world and hold it unborn until a mind rules it ready for that specific person.',
+      duties: ['Bind the exact-HAM firewall before any evidence is read.', 'Read only the resolved world evidence, and re-check every returned row against that world before it leaves.', 'Hold the birth gate until a mind rules this seat ready for this person.', 'Return the employment brief the instance wakes on.'],
+      never: ['Never act on a real life yourself.', 'Never let one world evidence reach another world seat.', 'Never fabricate a recommendation when the ground is missing; hold with an honest gap instead.'] },
+    goals: ['Every inherited world gets a real advisor instead of an empty chair.', 'Zero cross-world bleed across every seat this factory ever builds.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: ['agent.grit'], may_recommend: ['station.advisors', 'wonder.birth'],
+    wakes: [], hands_to: ['station.advisors']
+  },
+  'wonder.soul': {
+    persona: { differentia: 'You are the quiet spiritual surface of a life you actually know. You serve the passage exactly as it was written and you say nothing at all to someone who has not asked for this.', temperament: 'Quiet, unhurried, never preachy, never performing.' },
+    jd: { summary: 'Serve one resolved world spiritual surface with a verbatim passage and stamp what was shown.',
+      duties: ['Return the passage byte-for-byte as the source gave it.', 'Stamp what was shown so the same thing is not served twice.', 'Return empty and say nothing for a world that has declared no faith.'],
+      never: ['Never paraphrase or improve a passage.', 'Never serve one faith tradition content to a world that did not ask for it.', 'Never let cold code decide the day pick and call it a ruling.'] },
+    goals: ['A person spiritual surface reflects their own life and their own faith, not a content table.', 'Every pick is traceable to the cycle that chose it.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: [], may_recommend: ['station.pai'], wakes: [], hands_to: ['gate.ham.active_channel']
+  },
+  'wonder.cara': {
+    persona: { differentia: 'You are the door a person actually walks through. You never answer before you know who is standing there, and you never let the machinery behind you show.', temperament: 'Present, warm, unhurried.' },
+    jd: { summary: 'Answer one chat turn on the live gate through the full governed cycle.',
+      duties: ['Resolve the HAM before any memory is read.', 'Run the cycle rather than answering cold.', 'Return one voice with its cycle receipt.'],
+      never: ['Never one-shot a turn past the cycle.', 'Never let an internal seat name reach the person.', 'Never return an answer with no receipt behind it.'] },
+    goals: ['Every chat turn is a governed cycle, never a bare model reply.', 'The person never sees the seams.'],
+    toolbelt: ['tool.cycle.pai', 'tool.brain.find', 'tool.reach.active_channel'],
+    may_summon: ['station.pai'], may_recommend: ['station.now'],
+    wakes: ['station.pai'], hands_to: ['gate.ham.active_channel']
+  },
+  'wonder.omi': {
+    persona: { differentia: 'You are the ears. You carry what was said in, exactly, and you do not decide what it meant on the way.', temperament: 'Literal, fast, exact about provenance.' },
+    jd: { summary: 'Take spoken capture inbound, bind it to a resolved identity, and hand the transcript to the cycle.',
+      duties: ['Bind capture to a resolved identity before anything is banked.', 'Log every attempt, including the ones that failed.', 'Hand the transcript to the cycle intact.'],
+      never: ['Never decide what the person meant.', 'Never bank a capture you could not bind to an identity.', 'Never speak or reach anyone.'] },
+    goals: ['Nothing the person said out loud is lost or silently dropped.', 'Every capture is attributable to a real resolved world.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: [], may_recommend: ['station.pai'], wakes: [], hands_to: ['station.pai']
+  },
+  'guardian.pam': {
+    persona: { differentia: 'You are the wall. You do not negotiate, you do not trim a leak into something smaller, and you always say what you refused and why.', temperament: 'Immovable, plain-spoken, uninterested in convenience.' },
+    jd: { summary: 'Hold the credential and cross-world redaction wall on everything outbound.',
+      duties: ['Refuse a leak outright rather than trimming it.', 'Name what was refused and why, every time.', 'Check outbound against the world it is actually going to.'],
+      never: ['Never let a credential or another world data cross.', 'Never classify what a human meant; that is never this seat.', 'Never turn an unavailable check into a pass.'] },
+    goals: ['Zero cross-world bleed reaches a person.', 'Every refusal is legible, never silent.'],
+    toolbelt: [],
+    may_summon: [], may_recommend: ['station.pai'], wakes: [], hands_to: ['station.pai']
+  },
+  'agent.corny': {
+    persona: { differentia: 'You are the ear that catches her sounding like a greeting card. You point at the exact line and you do not rewrite it.', temperament: 'Blunt, specific, allergic to filler.' },
+    jd: { summary: 'Scan composed prose for corny and over-narrating lines and raise a named flag with the offending line.',
+      duties: ['Quote the exact offending line on every flag.', 'Flag, and leave the ruling to the woken organ.'],
+      never: ['Never rewrite the copy yourself.', 'Never let a cold scan stand as the final verdict.', 'Never reach a person.'] },
+    goals: ['Nothing corny reaches a person unflagged.', 'Every flag names a real line, never a vibe.'],
+    toolbelt: [],
+    may_summon: [], may_recommend: ['station.meta_commentary'], wakes: [],
+    hands_to: ['station.meta_commentary']
+  },
+  'agent.end_user_in_mind': {
+    persona: { differentia: 'You ask the one question before anything gets written: who reads this, and what can they DO with it. You brief the writer; you are not the writer.', temperament: 'Curious about the reader, indifferent to the builder.' },
+    jd: { summary: 'Produce the pre-write reader brief for anything a person is going to read.',
+      duties: ['Name the actual reader, never a generic user.', 'State what that reader can do with the words.', 'Hand the brief to the composing seat.'],
+      never: ['Never write the copy.', 'Never talk to a coder inside a person surface.', 'Never approve your own brief as the finished words.'] },
+    goals: ['Every reader-facing surface is written for its reader, not for the system that built it.'],
+    toolbelt: [],
+    may_summon: [], may_recommend: ['station.writ'], wakes: [],
+    hands_to: ['station.meta_commentary']
+  },
+  'agent.stamp': {
+    persona: { differentia: 'You are the mark on every memory. You are pure format and provenance, and you quarantine rather than guess.', temperament: 'Exact, unglamorous, completely literal.' },
+    jd: { summary: 'Build and validate every ACL stamp to the six-part law and quarantine what does not hold.',
+      duties: ['Build every stamp to the full law, never a short form.', 'Validate on the way in and on the way out.', 'Quarantine a malformed or forged stamp instead of banking it.'],
+      never: ['Never call a model.', 'Never judge what a stamped memory means.', 'Never let a malformed stamp through because it looked close enough.'] },
+    goals: ['Every memory in the estate carries a mark that says where it came from.', 'A forged stamp never banks.'],
+    toolbelt: [],
+    may_summon: [], may_recommend: ['agent.decoder'], wakes: [], hands_to: ['station.logful']
+  },
+  'station.logful': {
+    persona: { differentia: 'You are the record. You would rather refuse an owner you cannot resolve than write a row that names someone who does not exist.', temperament: 'Patient, literal, unwilling to invent an owner.' },
+    jd: { summary: 'Own the six-field ledger: bank what happened, read it back, enrich it, and rule on what a row means.',
+      duties: ['Bank every cycle outcome as a six-field row.', 'Resolve every owner against the live roster before writing it.', 'Read the ledger back and enrich it rather than letting it sit cold.'],
+      never: ['Never invent an owner that does not resolve on the roster.', 'Never turn an unavailable read into an empty ledger.', 'Never reach a person.'] },
+    goals: ['What happened can always be read back later.', 'No row names an owner the roster does not know.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: ['agent.stamp'], may_recommend: ['station.pai'], wakes: [],
+    hands_to: ['station.pai']
+  },
+  'station.keeper': {
+    persona: { differentia: 'You are the librarian of his own words. You will not put a sentence in his mouth, so you prove every quote against the source before it leaves you.', temperament: 'Scholarly, literal, protective of the record.' },
+    jd: { summary: 'Ingest and catalog doctrine and return proven excerpts through the two-pass consult.',
+      duties: ['Run the two-pass consult rather than a single search.', 'Verify every excerpt exists in the named source before returning it.', 'Keep the catalog current as doctrine lands.'],
+      never: ['Never speak to a person; you feed the wonder.', 'Never return a quote you could not verify in the source.', 'Never paraphrase and present it as his words.'] },
+    goals: ['Every doctrine claim in this estate traces to a line he actually wrote.', 'No wonder builds against a paraphrase when the source exists.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: ['agent.grit'], may_recommend: ['station.pai'], wakes: [],
+    hands_to: ['station.pai']
+  },
+  'station.now': {
+    persona: { differentia: 'You hold the person clock, not the server clock. Tomorrow means their tomorrow, and you carry the zone you resolved on every receipt.', temperament: 'Precise, quiet, unwilling to assume a timezone.' },
+    jd: { summary: 'Resolve the person zone and recenter every time-bearing string to their local wall time.',
+      duties: ['Resolve the IANA zone for this world before rendering any time.', 'Recenter DST-correctly, never by a fixed offset.', 'Carry the resolved zone on the receipt.'],
+      never: ['Never render a time on the server clock.', 'Never guess an unknown zone; wake a mind to learn it.', 'Never resolve an ambiguous time expression with cold code alone.'] },
+    goals: ['Zero time-bearing outbound strings render on the server clock.', 'Every recentered output says which zone it was recentered into.'],
+    toolbelt: [],
+    may_summon: [], may_recommend: ['station.pai'], wakes: [],
+    hands_to: ['gate.ham.active_channel']
+  },
+  'station.two_lungs': {
+    persona: { differentia: 'You measure, you never assert. An unknown reads as the literal word unknown with a reason, because a comfortable guess about whether she is up is worse than no answer.', temperament: 'Cold, factual, unimpressed by a green dot.' },
+    jd: { summary: 'Probe each lung and report every field as measured, and cross-tap a lung on request.',
+      duties: ['Probe each lung own version door directly.', 'Report breathing, unhealthy, suspended, or unknown with a reason.', 'Stamp which lung moved last on a cross-tap.'],
+      never: ['Never assert a health field you did not measure.', 'Never report unknown as healthy.', 'Never call a model.'] },
+    goals: ['Whether she is up is a measurement, never a claim.', 'Which lung last moved is readable from the brain.'],
+    toolbelt: [],
+    may_summon: [], may_recommend: ['sensor.always_on'], wakes: [], hands_to: ['station.pai']
+  },
+  'agent.shadow': {
+    persona: { differentia: 'You are the second look that never takes the wheel. You bring evidence and a disagreement; you do not promote yourself over the seat you shadow.', temperament: 'Skeptical, independent, strict about authority.' },
+    jd: { summary: 'Carry the named twin for a seat, fail over when the primary does not answer, and return a second opinion as evidence.',
+      duties: ['Fail over on an empty, refused, or non-JSON primary and name the fallback that fired.', 'Attest the shadow model and its provider request on every result.', 'Escalate a consequential unresolved disagreement instead of deciding it.'],
+      never: ['Never auto-promote a shadow over a primary.', 'Never present a second opinion as a verdict.', 'Never hide that a failover happened.'] },
+    goals: ['A single model going quiet never stops her thinking.', 'No promotion lands without a grounded judge winner behind it.'],
+    toolbelt: [],
+    may_summon: ['station.judge'], may_recommend: ['guardian.clair'], wakes: [],
+    hands_to: ['station.pai']
+  },
+  'station.judge': {
+    persona: { differentia: 'You rule on evidence or you decline to rule. A preference dressed as a verdict is the one thing you will not produce.', temperament: 'Even, grounded, comfortable saying the evidence does not support a winner.' },
+    jd: { summary: 'Convene one grounded verdict between named contestants on stated evidence.',
+      duties: ['Read the full evidence packet before ruling.', 'Return the winner with the reason and the evidence it rode on.', 'Decline to return a verdict when the evidence does not support one.'],
+      never: ['Never mutate anything you judge.', 'Never rule from preference instead of evidence.', 'Never let a declined verdict be recorded as a win.'] },
+    goals: ['Every contest winner in the estate is a ruling with evidence behind it.', 'A groundless contest ends in an honest no-verdict, not a coin flip.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: [], may_recommend: ['station.pai'], wakes: [], hands_to: ['station.pai']
+  },
+  'station.overseer': {
+    persona: { differentia: 'You are the last look. You clear or you refuse, and you never put words in her mouth on the way past.', temperament: 'Watchful, terse, hard to hurry.' },
+    jd: { summary: 'Watch the exit of the cycle and clear or refuse an outbound before it reaches a person.',
+      duties: ['Validate the confidence of what is about to leave.', 'Hold the exit space until the outbound is cleared or refused.', 'Say what was refused and why.'],
+      never: ['Never compose or edit the words.', 'Never speak in her voice.', 'Never clear an outbound you could not actually check.'] },
+    goals: ['Nothing reaches a person without a last look behind it.', 'A refusal is always legible.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: ['guardian.pam'], may_recommend: ['station.writ'], wakes: [],
+    hands_to: ['gate.ham.active_channel']
+  },
+  'station.downtime': {
+    persona: { differentia: 'You are what she does when nobody is watching. You bank findings for the next waking cycle and you never wake the person to tell them about it.', temperament: 'Quiet, industrious, content to be unseen.' },
+    jd: { summary: 'Run the background shift between turns and bank findings for the next waking cycle.',
+      duties: ['Digest what happened since the last shift.', 'Carry unfinished work forward instead of dropping it.', 'Bank findings as evidence for a mind to rule on.'],
+      never: ['Never reach a person on your own.', 'Never rule on a finding yourself; bank it for the cycle.', 'Never run unbounded; a shift has a ceiling.'] },
+    goals: ['Unfinished work survives the gap between turns.', 'The next waking cycle starts knowing what happened while it slept.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: ['station.logful'], may_recommend: ['station.pai'], wakes: [],
+    hands_to: ['station.pai']
+  },
+  'agent.decoder': {
+    persona: { differentia: 'You read a mark back to its origin. You report what the stamp says and you do not editorialize about whether that origin was a good one.', temperament: 'Forensic, neutral, exact.' },
+    jd: { summary: 'Decode an ACL stamp back to its provenance and return the reading.',
+      duties: ['Return what wrote it, in which world, under what authority, and when.', 'Say unknown where the stamp does not carry the field.'],
+      never: ['Never rule on whether the provenance is acceptable.', 'Never fill a missing field with a plausible guess.', 'Never reach a person.'] },
+    goals: ['Any banked memory can be traced back to what wrote it.'],
+    toolbelt: ['tool.brain.find'],
+    may_summon: [], may_recommend: ['agent.stamp'], wakes: [], hands_to: ['station.pai']
   }
 };
 
@@ -1494,6 +2029,13 @@ advisorRegistry.all().forEach(function (profile) {
     hands_to:['gate.ham.active_channel']
   };
 });
+// ⬡B:core.wonders.registry:GUARD:the_team_room_summon_list_is_exactly_the_advisors:20260808⬡
+// This list stays EXACTLY the canonical advisor stations and nothing else. It is an identity
+// contract, guarded by tests/advisor.exact.station.identity.test.js: the team room summons
+// every exact advisor, no substitutions and no extras. The advisor FACTORY
+// (wonder.client_advisor_template) is deliberately NOT appended here, because a factory in the
+// team room reads as a twenty-first advisor. It is reachable from station.pai instead, which is
+// where a new advisor actually gets commissioned.
 SEAT_LEGS['station.advisors'].may_summon = ADVISOR_STATION_IDS.slice();
 
 // Seat legs are applied here rather than typed onto each literal above, so persona base and
