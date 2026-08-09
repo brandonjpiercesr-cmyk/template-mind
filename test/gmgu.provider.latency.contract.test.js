@@ -28,9 +28,9 @@ test('the final C3 fetch preserves the GMGU contract on primary and fallback',as
   const fallback={seat:{seat:'c3_mind.fallback',
     model:'qwen/qwen3-235b-a22b-2507'},key:'fallback-test-key'};
 
-  await toolLoop._test.fetchPaiSeatCandidate(request,primary,'gmgu',signal,fetchImpl,
+  await toolLoop._test.fetchPaiSeatCandidate(request,primary,'gmgu',{signal:signal},fetchImpl,
     {SELF_BASE_URL:'https://mind.example.test'});
-  await toolLoop._test.fetchPaiSeatCandidate(request,fallback,'gmgu',signal,fetchImpl,
+  await toolLoop._test.fetchPaiSeatCandidate(request,fallback,'gmgu',{signal:signal},fetchImpl,
     {SELF_BASE_URL:'https://mind.example.test'});
 
   assert.deepEqual(calls.map(function(call){return call.body.model;}),
