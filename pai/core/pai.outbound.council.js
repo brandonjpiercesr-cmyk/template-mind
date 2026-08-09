@@ -3295,7 +3295,8 @@ async function defaultAnuExpressionStage(ctx) {
     var meaningWonder = require('./writ.meaning.shadow.wonder.js');
     meaning = await meaningWonder.judge(Object.assign({},packet,{final_human_output:output}),{
       brain:ctx.context && ctx.context.brain,
-      chatSeat:ctx.context && ctx.context.meaningShadowChatSeat
+      chatSeat:ctx.context && ctx.context.meaningShadowChatSeat,
+      signal:ctx.signal || null
     });
     var releasedDigest = meaning && meaning.receipt && meaning.receipt.content &&
       meaning.receipt.content.final_human_output &&
