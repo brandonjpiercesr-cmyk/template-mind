@@ -1127,7 +1127,7 @@ function applyGmguTutorProviderPolicy(providerBody, channel) {
   return target;
 }
 
-function fetchPaiSeatCandidate(requestBody, candidate, channel, signal, fetchImpl, runtime) {
+function fetchPaiSeatCandidate(requestBody, candidate, channel, options, fetchImpl, runtime) {
   if (!candidate || !candidate.seat || !candidate.seat.model || !candidate.key) {
     throw new Error('pai_seat_candidate_invalid');
   }
@@ -1146,7 +1146,7 @@ function fetchPaiSeatCandidate(requestBody, candidate, channel, signal, fetchImp
     headers:{Authorization:'Bearer ' + candidate.key,'Content-Type':'application/json',
       'HTTP-Referer':env.SELF_BASE_URL||env.AIBEBASE_URL||'https://aibebase.onrender.com',
       'X-Title':'ANEW Envolve'},
-    body:JSON.stringify(providerBody),signal:signal
+    body:JSON.stringify(providerBody),signal:options && options.signal
   });
 }
 
@@ -4840,7 +4840,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       var startProvider=function(){
         if(_worldBuilderMachine)_worldBuilderProviderCalls++;
         return fetchPaiSeatCandidate(requestBody,candidate,channel,
-          _providerAttemptSignal(candidate));
+          {signal:_providerAttemptSignal(candidate)});
       };
       var response;
       if(_providerAdmissionRequired){
