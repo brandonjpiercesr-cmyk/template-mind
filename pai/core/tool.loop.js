@@ -49,6 +49,11 @@ var outputGuard = require('./model.output.guard.js');
 var LIVE_VOICE_SESSION = Symbol.for('anew.verified.live.voice.session');
 var gmguNativeTutorMarker = require('./gmgu/native.tutor.marker.js');
 
+function verifiedGmguTutorTurn(channel, identity, hamUid) {
+  return String(channel || '').trim().toLowerCase() === 'gmgu' &&
+    gmguNativeTutorMarker.verify(identity, hamUid);
+}
+
 // The verified route attaches this proof through a symbol. Object.assign carries
 // the symbol through the World Builder identity clone, while JSON serialization
 // cannot leak the provider authorization into prompts or durable receipts.
@@ -95,6 +100,7 @@ var CANONICAL_ASSISTANT_NAME = "A'NU";
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
 function shouldIncludeWorldContext(channel, identity, hamUid, question) {
+  if (verifiedGmguTutorTurn(channel, identity, hamUid)) return false;
   if (String(channel || '').toLowerCase() !== 'voice') return true;
   if (voiceRoomSafe.isAuthorized(identity)) return false;
   if (identity && identity.council_context &&
@@ -4439,6 +4445,12 @@ function memoryTurnRequired(channel, identity, state) {
   var mode = String(context.mode || '').trim().toLowerCase();
   var flags = state || {};
   if (!normalizedChannel) return false;
+  // The signed tutor already writes and reads back its exact learner, cohort,
+  // lesson, and request-bound dialogue through core/gmgu/tutor.continuity.js.
+  // Copying the same private lesson into general PAI minutes would create a
+  // second history lane that other apps could later retrieve.
+  if (verifiedGmguTutorTurn(normalizedChannel, identity,
+      identity && identity.uid)) return false;
   if (!personalIntentEligible(identity)) return false;
   if (flags.structuredReachPolicy === true || flags.reachIncidentIntake === true) return false;
   if (identity && identity.outbound_finalize === true) return false;
@@ -4596,6 +4608,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // WeakSet. A JSON field named room_safe is never sufficient to close a world.
   var _roomSafeVoice=String(channel||'').toLowerCase()==='voice' &&
     voiceRoomSafe.isAuthorized(identity);
+  // This proof is attached only by the signed GMGU route after exact HAM,
+  // cohort membership, learner profile, and curriculum resolution. A client
+  // field with the same words cannot create it.
+  var _gmguNativeTutorTurn=verifiedGmguTutorTurn(channel,identity,hamUid);
   // Server-owned machine intake is candidate-eligible, but it is not a general
   // face turn. The route constructs this non-JSON identity marker after HMAC and
   // exact-HAM validation; no caller field is copied into the marker.
@@ -5053,7 +5069,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _peopleTiers = require('./privacy/people.tier.js');
   var _readAuthority = {tier:_peopleTiers.STRICTEST,source:'closed_world'};
   if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn &&
-      !_roomSafeVoice && !_internalCodaTurn) {
+      !_roomSafeVoice && !_internalCodaTurn && !_gmguNativeTutorTurn) {
     try { _readAuthority = await _peopleTiers.resolveReadTier(identity, hamUid); }
     catch (eReadTier) { _readAuthority = {tier:_peopleTiers.STRICTEST,source:'unresolved'}; }
   }
@@ -5069,8 +5085,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (!Number.isFinite(_isolatedHamTier)) _isolatedHamTier = 0;
   var _nativeVoicePreparation = _nativeLiveVoiceTurn
     ? nativeLiveVoicePreparation(identity, hamUid) : null;
+  var _gmguTutorPreparation = _gmguNativeTutorTurn
+    ? gmguNativeTutorMarker.closedWorldPreparation(identity, hamUid) : null;
   var fcw = (_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
-      _roomSafeVoice || _internalCodaTurn) ? {
+      _roomSafeVoice || _internalCodaTurn || _gmguNativeTutorTurn) ?
+    (_gmguTutorPreparation || {
     ok:true, system_prompt:_reachIncidentIntake ? _reachIncidentSystemPrompt
       : (_signedVoiceClosedTurn ? _signedVoiceSystemPrompt
         : (_roomSafeVoice ? _roomSafeSystemPrompt
@@ -5082,7 +5101,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       available:true, ham_uid:String(hamUid||'').toUpperCase(), subjects:[],
       records:[], count:0, ms:0 },
     contributors:null, contributorsResolved:0, contributorsTotal:0, ms:0
-  } : (_nativeVoicePreparation || await buildMemoryBank(hamUid,channel,message,identity,_readAuthority,{
+  }) : (_nativeVoicePreparation || await buildMemoryBank(hamUid,channel,message,identity,_readAuthority,{
     agentFindWake:{ham_uid:hamUid,cycle_id:_cycleId,request_id:_requestId,
       channel:channel,seat_name:_paiSeatName(),seat_node_id:_agentFindSeatNodeId(),
       observed_at:new Date().toISOString()}
@@ -5139,7 +5158,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     require('./freestyle.chatter.js').emitInterim({hamUid:hamUid, channel:channel,
       cycleId:_cycleId, fcw:fcw, prompted:!!String(message||'').trim(),
       closedWorld:!!(_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
-        _nativeLiveVoiceTurn || _roomSafeVoice || _internalCodaTurn || _worldBuilderMachine)});
+        _nativeLiveVoiceTurn || _roomSafeVoice || _internalCodaTurn ||
+        _gmguNativeTutorTurn || _worldBuilderMachine)});
   } catch (eFreestyleRide) {}
   // A structured REACH policy is a closed-world decision over one exact
   // candidate packet. Ambient recent rows, contributors, prior turns, screen
@@ -5201,7 +5221,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // proof-shaped current-turn asks in the transactional release invariant so the
   // model never mistakes its pre-commit vantage point for a failed cycle.
   var _proofQuestion = _exactUserMessage;
-  if (!_structuredReachPolicy && !_reachIncidentIntake) {
+  // The GMGU curator already supplies the complete learner-facing teaching
+  // frame. Generic cycle-proof narration is another product's context and may
+  // not enter a lesson reply.
+  if (!_structuredReachPolicy && !_reachIncidentIntake && !_gmguNativeTutorTurn) {
     systemPrompt += currentTurnProofGuard.systemInstruction(_proofQuestion, {
       // CODA's own machine-internal deliberation uses phrases such as "this cycle",
       // "proof", and "closure receipts" as fields in its operating contract. It is
@@ -5212,7 +5235,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     });
   }
   var _currentPreferenceQuestion = !_structuredReachPolicy && !_reachIncidentIntake &&
-    currentAssistantPreferenceRequest(_exactUserMessage);
+    !_gmguNativeTutorTurn && currentAssistantPreferenceRequest(_exactUserMessage);
   if (_currentPreferenceQuestion) {
     // ⬡B:core.tool_loop:WIRE:fresh_preference_inside_full_pai:20260715⬡
     // A current preference is a live A'NU judgment, not a fabricated memory.
@@ -5303,7 +5326,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // currently open, so the base prompt now carries it unconditionally: she commands
   // the glass through update_screen; if no screen is live the TOOL says so and she
   // says the screen is not open -- she never again claims she lacks the ability.
-  if (!_structuredReachPolicy && !_reachIncidentIntake) {
+  if (!_structuredReachPolicy && !_reachIncidentIntake && !_gmguNativeTutorTurn) {
     systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if its read finds nothing on today, say plainly that the read found nothing on today, and do not fall back to an old find_in_brain stamp to fill the gap. A calendar_read event carries is_today, is_now and is_past: an event with is_today true whose date is an EARLIER day is a multi-day span they are already inside, so say they are on it right now and never call it upcoming or still ahead of them.';
     try { systemPrompt += require('./stream/screen.awareness.js')
       .promptAddendum(hamUid, uiPortal); } catch (eScr) {}
@@ -5447,7 +5470,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // occurred. The system instruction above provides attention without falsifying
     // the transcript. Only real tool results and exact-HAM rows become evidence.
   }
-  var _identityLookupCount = _structuredReachPolicy || _reachIncidentIntake ? 0
+  var _identityLookupCount = _structuredReachPolicy || _reachIncidentIntake ||
+    _gmguNativeTutorTurn ? 0
     : injectIdentityProvenanceEvidence(msgs, _identityVerifiedEvidence, fcw,
       hamUid, _namedEvidenceQuestion, _identityEvidenceProof);
   if (_identityLookupCount > 0) {
@@ -5456,6 +5480,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // FCW already read these rows. Carry them as labeled server evidence without
   // inventing a model request or completed tool exchange.
   var _namedLookupCount = _structuredReachPolicy || _reachIncidentIntake ||
+    _gmguNativeTutorTurn ||
     _identityLookupCount > 0 ? 0
     : injectNamedAgentEvidence(msgs, _namedAgentVerifiedEvidence, fcw, hamUid);
   if (_namedLookupCount > 0) {
@@ -8879,6 +8904,7 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEf
   verifiedVoiceCallContext,verifiedNativeVoiceSessionContext,verifiedLiveVoiceContext,
   nativeLiveVoicePreparationEligible,nativeLiveVoicePreparation,
   bindVerifiedLiveVoiceSession,voiceCallContextSatisfiesTurn,
+  verifiedGmguTutorTurn,
   verifiedVoiceCallPurposeAnswer,voiceHearingContextSatisfiesTurn,
   verifiedVoiceHearingAnswer,voiceFarewellContextSatisfiesTurn,
   verifiedVoiceFarewellAnswer,voiceConversationalNoGenericLookup,
