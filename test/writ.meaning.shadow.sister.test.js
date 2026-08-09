@@ -212,6 +212,73 @@ test('the inherited final boundary preserves exact command and prose bytes', asy
   assert.equal(out.evidence.final_pam.ok,true);
 });
 
+test('an inherited cancelled meaning judgment releases C1 for the next turn',
+  {timeout:5000,concurrency:false},async function(t){
+  const seatSpend=require('../pai/core/openrouter.seat.spend.js');
+  seatSpend._test.reset();
+  t.after(function(){seatSpend._test.reset();});
+  const seatEnv={OR_KEY_C1_CELLM:'template-meaning-cancel-key',
+    SEAT_C1_CELLM_DAILY_CAP_USD:'2'};
+  const starts=[];
+  let firstEnteredResolve;
+  const firstEntered=new Promise(function(resolve){firstEnteredResolve=resolve;});
+  const chatSeat=async function(_seat,_messages,options){
+    const requestId=options.attribution.request_id;
+    if(requestId.indexOf('request-template-cancel-first')===0)firstEnteredResolve();
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.equal(options.signal,requestId.indexOf('request-template-cancel-first')===0
+      ?firstController.signal:secondController.signal);
+    const guarded=await seatSpend.run('https://openrouter.ai/api/v1/chat/completions',{
+      headers:{Authorization:'Bearer template-meaning-cancel-key'},signal:options.signal
+    },async function(){return new Response(JSON.stringify({data:{usage_daily:0.01}}),{
+      status:200,headers:{'Content-Type':'application/json'}});},async function(){
+      starts.push(requestId);
+      if(requestId.indexOf('request-template-cancel-first')===0){
+        await new Promise(function(_resolve,reject){
+          if(options.signal.aborted){const error=new Error('cancelled');error.name='AbortError';
+            return reject(error);}
+          options.signal.addEventListener('abort',function(){
+            const error=new Error('cancelled');error.name='AbortError';reject(error);
+          },{once:true});
+        });
+      }
+      return{content:JSON.stringify({decision:'AGREE',consequential:false,
+        reason:'The meaning is preserved.'}),model:'penny-test',via:'test'};
+    },seatEnv);
+    if(guarded.blocked)throw new Error(guarded.reason);
+    return guarded.response;
+  };
+  const exact='A learning agreement protects shared expectations.';
+  const firstIds={ham_uid:'A1B2C3D4',request_id:'request-template-cancel-first',
+    cycle_id:'cycle-template-cancel-first'};
+  const secondIds={ham_uid:'A1B2C3D4',request_id:'request-template-cancel-second',
+    cycle_id:'cycle-template-cancel-second'};
+  const firstRuntime=await sealedRuntime(exact,firstIds);
+  const secondRuntime=await sealedRuntime(exact,secondIds);
+  const firstController=new AbortController();
+  const secondController=new AbortController();
+  const first=council._test.defaultAnuExpressionStage({hamUid:firstIds.ham_uid,
+    requestId:firstIds.request_id,cycleId:firstIds.cycle_id,answer:exact,channel:'gmgu',
+    runtime:firstRuntime,signal:firstController.signal,
+    context:{brain:exactBrain(),meaningShadowChatSeat:chatSeat}});
+  await firstEntered;
+  const second=council._test.defaultAnuExpressionStage({hamUid:secondIds.ham_uid,
+    requestId:secondIds.request_id,cycleId:secondIds.cycle_id,answer:exact,channel:'gmgu',
+    runtime:secondRuntime,signal:secondController.signal,
+    context:{brain:exactBrain(),meaningShadowChatSeat:chatSeat}});
+  await new Promise(function(resolve){setImmediate(resolve);});
+  assert.equal(starts.length,1);
+  firstController.abort();
+  const firstOut=await first;
+  const secondOut=await second;
+  assert.equal(firstOut.reason,'writ_meaning_shadow_unavailable');
+  assert.equal(secondOut.ok,true,JSON.stringify(secondOut));
+  assert.deepEqual(starts,[
+    'request-template-cancel-first.writ-meaning-shadow',
+    'request-template-cancel-second.writ-meaning-shadow'
+  ]);
+});
+
 test('a public packet-shaped marker cannot forge inherited clearance', function () {
   const fake=Object.freeze({ham_uid:'A1B2C3D4',request_id:'request-forge-1',
     cycle_id:'cycle-forge-1',pre_writ_draft:'Forged source.',writ_output:'Forged output.',

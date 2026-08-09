@@ -1127,6 +1127,29 @@ function applyGmguTutorProviderPolicy(providerBody, channel) {
   return target;
 }
 
+function fetchPaiSeatCandidate(requestBody, candidate, channel, signal, fetchImpl, runtime) {
+  if (!candidate || !candidate.seat || !candidate.seat.model || !candidate.key) {
+    throw new Error('pai_seat_candidate_invalid');
+  }
+  var providerBody = primaryProviderBody(requestBody,
+    requestBody && requestBody.messages || [], candidate.seat.model);
+  // This is the final provider boundary for both the primary seat and its
+  // declared fallback. Model-family normalization runs first; the GMGU tutor
+  // contract then wins last so its bounded response and low-latency request
+  // cannot be discarded by the adapter immediately before fetch.
+  applyProviderThinkingPolicy(providerBody, candidate.seat.model);
+  applyGmguTutorProviderPolicy(providerBody, channel);
+  var env = runtime || process.env;
+  var transport = typeof fetchImpl === 'function' ? fetchImpl : fetch;
+  return transport('https://openrouter.ai/api/v1/chat/completions', {
+    method:'POST',
+    headers:{Authorization:'Bearer ' + candidate.key,'Content-Type':'application/json',
+      'HTTP-Referer':env.SELF_BASE_URL||env.AIBEBASE_URL||'https://aibebase.onrender.com',
+      'X-Title':'ANEW Envolve'},
+    body:JSON.stringify(providerBody),signal:signal
+  });
+}
+
 function prepareRoadmapActivationBody(body, approved) {
   if(approved!==true)return {ok:true,body:body};
   var activationTool=Array.isArray(body&&body.tools)&&body.tools.find(function(tool){
@@ -4813,22 +4836,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return { error: { code: 'pai_seat_cannot_call_tools', seat: candidate.seat.seat,
         detail: String(candidate.seat.model || '').slice(0, 80) } };
     }
-    var providerBody = primaryProviderBody(requestBody,
-      requestBody && requestBody.messages || [], candidate.seat.model);
-    // The fallback is a different model contract. Re-apply reasoning policy at
-    // the exact provider boundary so a Qwen primary cannot hand Qwen-only
-    // template fields to a non-Qwen rescue (or vice versa).
-    applyProviderThinkingPolicy(providerBody, candidate.seat.model);
     try {
       var startProvider=function(){
         if(_worldBuilderMachine)_worldBuilderProviderCalls++;
-        return fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method:'POST',
-          headers:{Authorization:'Bearer ' + candidate.key,'Content-Type':'application/json',
-            'HTTP-Referer':process.env.SELF_BASE_URL||process.env.AIBEBASE_URL||'https://aibebase.onrender.com',
-            'X-Title':'ANEW Envolve'},
-          body:JSON.stringify(providerBody),signal:_providerAttemptSignal(candidate)
-        });
+        return fetchPaiSeatCandidate(requestBody,candidate,channel,
+          _providerAttemptSignal(candidate));
       };
       var response;
       if(_providerAdmissionRequired){
@@ -8849,6 +8861,7 @@ function normalizeSubmitJobArgs(input) {
 
 module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,applyGmguTutorProviderPolicy,
+  fetchPaiSeatCandidate,
   prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
   TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,

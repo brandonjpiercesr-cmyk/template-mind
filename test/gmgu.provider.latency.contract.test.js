@@ -2,6 +2,7 @@
 
 const test=require('node:test');
 const assert=require('node:assert/strict');
+const toolLoop=require('../pai/core/tool.loop.js');
 
 function freshLadder(){
   const path=require.resolve('../pai/core/model.ladder.js');
@@ -12,6 +13,37 @@ function freshLadder(){
 function response(content){
   return {ok:true,status:200,async json(){return {choices:[{message:{content:content}}]};}};
 }
+
+test('the final C3 fetch preserves the GMGU contract on primary and fallback',async function(){
+  const calls=[];
+  const signal=new AbortController().signal;
+  const fetchImpl=async function(url,init){
+    calls.push({url:url,init:init,body:JSON.parse(init.body)});
+    return response('bounded tutor answer');
+  };
+  const request={messages:[{role:'user',content:'Teach this lesson.'}],temperature:0.2,
+    reasoning:{enabled:false},chat_template_kwargs:{enable_thinking:false},
+    provider:{require_parameters:false}};
+  const primary={seat:{seat:'c3_mind',model:'x-ai/grok-4.5'},key:'primary-test-key'};
+  const fallback={seat:{seat:'c3_mind.fallback',
+    model:'qwen/qwen3-235b-a22b-2507'},key:'fallback-test-key'};
+
+  await toolLoop._test.fetchPaiSeatCandidate(request,primary,'gmgu',signal,fetchImpl,
+    {SELF_BASE_URL:'https://mind.example.test'});
+  await toolLoop._test.fetchPaiSeatCandidate(request,fallback,'gmgu',signal,fetchImpl,
+    {SELF_BASE_URL:'https://mind.example.test'});
+
+  assert.deepEqual(calls.map(function(call){return call.body.model;}),
+    ['x-ai/grok-4.5','qwen/qwen3-235b-a22b-2507']);
+  calls.forEach(function(call){
+    assert.equal(call.url,'https://openrouter.ai/api/v1/chat/completions');
+    assert.equal(call.init.signal,signal);
+    assert.equal(call.body.max_tokens,640);
+    assert.deepEqual(call.body.reasoning,{effort:'minimal',exclude:true});
+    assert.equal(Object.hasOwn(call.body,'chat_template_kwargs'),false);
+    assert.deepEqual(call.body.provider,{sort:'latency',require_parameters:true});
+  });
+});
 
 test('the Qwen rung forwards the bounded GMGU Penny latency contract to OpenRouter',async function(){
   const previous=global.fetch;

@@ -255,7 +255,8 @@ async function judge(input, options) {
     raw = await chatSeat('c1_cellm',[
       {role:'system',content:system},{role:'user',content:user}
     ],{temperature:0,maxTokens:320,reasoning:{effort:'none',exclude:true},
-      requireParameters:true,attribution:{component:'writ.meaning.shadow',
+      requireParameters:true,signal:opts.signal || undefined,
+      attribution:{component:'writ.meaning.shadow',
       ham_uid:bound.ham_uid,request_id:bound.request_id + '.writ-meaning-shadow',
       cycle_id:bound.cycle_id,seat:'c1_cellm',owner_node_id:'agent.penny_shadow',
       target_wonder_id:'agent.penny_shadow'}});
