@@ -374,6 +374,31 @@ function authorizeGmguRequest(req) {
     expiresAt:verified.expiresAt };
 }
 
+// One GMGU identity boundary for every learner-owned provider door. The signed
+// credential is the only identity input. Atmosphere may add world context, but
+// it may not rename the signed learner before membership, storage, or provider
+// work begins.
+async function authorizeExactGmguRequest(req, deps) {
+  const session = requireGmguTier(authorizeGmguRequest(req));
+  if (!session || !session.ok) {
+    return session || { ok:false, status:401, reason:'ham_session_required' };
+  }
+  const signedHamUid = normalizeHamUid(session.hamUid);
+  if (!signedHamUid) return { ok:false, status:401, reason:'identity_unresolved' };
+  const resolveAtmosphere = deps && deps.resolveAtmosphere
+    || require('./atmosphere.gate.js').resolveAtmosphere;
+  let envelope;
+  try { envelope = await resolveAtmosphere({ hamUid:signedHamUid }); }
+  catch (error) { return { ok:false, status:503, reason:'atmosphere_unavailable' }; }
+  const resolvedHamUid = normalizeHamUid(envelope && envelope.ham_uid);
+  if (!resolvedHamUid) return { ok:false, status:401, reason:'identity_unresolved' };
+  if (resolvedHamUid !== signedHamUid) {
+    return { ok:false, status:403, reason:'ham_identity_mismatch' };
+  }
+  return { ok:true, hamUid:signedHamUid, kind:session.kind, via:session.via,
+    expiresAt:session.expiresAt, envelope:envelope };
+}
+
 function authorizeHamRequest(req, expectedHamUid) {
   const expected = normalizeHamUid(expectedHamUid);
   if (!expected) return { ok:false, status:400, reason:'valid_ham_uid_required' };
@@ -1181,6 +1206,7 @@ module.exports = {
   forwardSessionHeaders,
   authorizeSessionRequest,
   authorizeGmguRequest,
+  authorizeExactGmguRequest,
   authorizeHamRequest,
   authorizeExactHamRequest,
   internalSessionHeaders,
