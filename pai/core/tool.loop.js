@@ -3637,11 +3637,25 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     // hardcode); an advisor that is not real for this HAM returns a clean, honest miss
     // with the actual available list, never a fabricated brief.
     try {
+      var _normalizeConsultHam = require('./ham.session.authorization.js').normalizeHamUid;
+      var _activeConsultHam = _normalizeConsultHam(hamUid);
+      var _requestedConsultPresent = !!(args
+        && Object.prototype.hasOwnProperty.call(args,'ham_uid')
+        && String(args.ham_uid || '').trim());
+      var _requestedConsultHam = _requestedConsultPresent
+        ? _normalizeConsultHam(args.ham_uid) : _activeConsultHam;
+      if (!_activeConsultHam) {
+        return JSON.stringify({ok:false,reason:'valid_active_ham_uid_required'});
+      }
+      if (!_requestedConsultHam || _requestedConsultHam !== _activeConsultHam) {
+        return JSON.stringify({ok:false,reason:'ham_uid_mismatch',
+          bound_ham_uid:_activeConsultHam});
+      }
       var _ar = require('../advisors/advisor-router.js');
       var _station = typeof _ar.resolveStation === 'function'
         ? _ar.resolveStation(args.advisor)
         : String(args.advisor||'').toLowerCase().replace(/[^a-z_]/g,'');
-      var _cHam = args.ham_uid || hamUid;
+      var _cHam = _activeConsultHam;
       if (!_station || !_cHam) return JSON.stringify({ok:false,reason:'need advisor and ham_uid'});
       var _worlds = await _ar.discoverStations(_cHam);
       if (_worlds.indexOf(_station) === -1) return JSON.stringify({ok:false,reason:'no_such_advisor',advisor:_station,available:_worlds});
