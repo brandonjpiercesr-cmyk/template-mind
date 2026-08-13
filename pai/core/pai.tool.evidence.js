@@ -9,6 +9,7 @@ var minted = new WeakSet();
 var serverPrefetchMinted = new WeakSet();
 var serverPrefetchGrants = new WeakSet();
 var memoryMinted = new WeakSet();
+var effectReceiptMinted = new WeakSet();
 
 var READ_TOOLS = Object.freeze({
   consult_mace:true,
@@ -44,6 +45,7 @@ function resultMaxBytes(tool) {
   if (String(tool || '') === 'read_current_capabilities') {
     return boundedInteger(process.env.TOOL_CAPABILITY_EVIDENCE_MAX, 4096, 2000, 12000);
   }
+  if (String(tool || '') === 'reach_current_person') return 12000;
   return itemMaxBytes();
 }
 
@@ -391,6 +393,165 @@ function verifyMemory(item, expected) {
   return true;
 }
 
+// Post-effect presentation facts are neither a read result nor model-authored
+// tool evidence. They are minted only after the exact effect hand returns and
+// are bound to the same HAM/request/cycle. SHADOW
+// can therefore judge lifecycle language against typed facts instead of raw
+// prompt prose or a generic successful tool name.
+function mintEffectReceipt(input) {
+  input=input||{};
+  var ham=String(input.hamUid||'').trim().toUpperCase();
+  var requestId=String(input.requestId||'').trim();
+  var cycleId=String(input.cycleId||'').trim();
+  var parentRequestId=String(input.parentRequestId||'').trim();
+  var packet=input.packet;
+  var claimReadback=input.claimReadback;
+  var hand=require('./reach.self.hand.js');
+  var readbackClient=require('./reach.four-channel.presentation.client.js');
+  var privatePacket=packet&&hand.verifyPresentationPacket(packet);
+  var recoveredPacket=packet&&claimReadback&&
+    readbackClient.verifyAuthenticatedReadback(claimReadback)===true&&
+    ['CLAIMED','RECOVERED'].indexOf(claimReadback.state)>=0&&
+    claimReadback.presentation_facts_state==='SETTLED'&&claimReadback.packet===packet&&
+    claimReadback.packet_digest===packet.packet_digest&&
+    hand._test.presentationPacketShapeExact(packet);
+  if(!ham||!requestId||!cycleId||!parentRequestId||!packet||
+      typeof packet!=='object'||Array.isArray(packet)||
+      (!privatePacket&&!recoveredPacket)||
+      packet.schema!=='anew.reach-self.presentation-facts.v1'||
+      !Array.isArray(packet.results)||
+      !/^[a-f0-9]{64}$/.test(String(packet.packet_digest||'')))return null;
+  var packetBody=Object.assign({},packet);delete packetBody.packet_digest;
+  if(packet.packet_digest!==digest(stableStringify(packetBody))||
+      packet.ham_uid_digest!==digest(ham)||
+      packet.parent_request_digest!==digest(parentRequestId)||
+      packet.parent_cycle_digest!==digest(cycleId)||
+      !/^[a-f0-9]{64}$/.test(String(packet.air_session_ref_digest||''))||
+      requestId!==parentRequestId)return null;
+  var result=stableStringify({schema:'anew.pai.effect-receipt-evidence.v1',
+    packet_digest:packet.packet_digest,monitor_requested:packet.monitor_requested===true,
+    world_digest:packet.world_digest,air_session_ref_digest:packet.air_session_ref_digest,
+    inbound_monitor:packet.inbound_monitor,
+    results:packet.results});
+  var sourceResultDigest=digest(result);
+  var claimReadbackDigest=claimReadback&&
+    /^sha256:[a-f0-9]{64}$/.test(String(claimReadback.claim_readback_receipt_id||''))
+      ? String(claimReadback.claim_readback_receipt_id).slice('sha256:'.length) : null;
+  if(Buffer.byteLength(result,'utf8')>resultMaxBytes('reach_current_person')||
+      sourceResultDigest===packet.packet_digest||claimReadbackDigest===packet.packet_digest||
+      claimReadbackDigest===sourceResultDigest)return null;
+  var item={schema:'anew.pai.effect-receipt-evidence.v1',
+    evidence_kind:'verified_effect_receipt',provenance:'pai.current_turn.effect_receipt',
+    tool:'reach_current_person',ham_uid:ham,request_id:requestId,cycle_id:cycleId,
+    parent_request_id:parentRequestId,packet_digest:packet.packet_digest,result:result,
+    source_result_digest:sourceResultDigest};
+  item.result_digest=digest(stableStringify(item));
+  if(item.result_digest===packet.packet_digest||
+      item.result_digest===item.source_result_digest||
+      item.result_digest===claimReadbackDigest)return null;
+  Object.freeze(item);effectReceiptMinted.add(item);return item;
+}
+
+// A recovered pre-effect plan proves that A'NU selected exact artifacts, but
+// proves no provider outcome. Only an authenticated New World floor readback
+// may mint this evidence. Every lifecycle field remains null so living SHADOW
+// can reject completion claims without cold code interpreting A'NU's words.
+function mintUnknownEffectReceipt(input) {
+  input=input||{};
+  var ham=String(input.hamUid||'').trim().toUpperCase();
+  var requestId=String(input.requestId||'').trim();
+  var cycleId=String(input.cycleId||'').trim();
+  var readback=input.readback;
+  var readbackClient=require('./reach.four-channel.presentation.client.js');
+  if(!ham||!requestId||!cycleId||!readback||
+      readbackClient.verifyAuthenticatedReadback(readback)!==true||
+      readback.ok!==true||readback.state!=='EFFECT_UNKNOWN'||
+      readback.schema!=='anew.reach.four-channel-presentation-readback.v1'||
+      readback.presentation_facts_state!=='EFFECT_UNKNOWN'||
+      readback.ham_uid!==ham||readback.parent_request_id!==requestId||
+      readback.parent_cycle_id!==cycleId||readback.provider_effect_execution_authorized!==false||
+      readback.provider_effect_replay_authorized!==false||readback.packet!==null||
+      readback.packet_digest!==null||readback.provider_effect!==null||
+      readback.human_effect!==null||
+      !/^sha256:[a-f0-9]{64}$/.test(String(readback.plan_readback_receipt_id||''))||
+      !Array.isArray(readback.selected_artifacts)||
+      !readback.selected_artifacts.length)return null;
+  var results=[];
+  for(var index=0;index<readback.selected_artifacts.length;index++){
+    var artifact=readback.selected_artifacts[index];
+    if(!artifact||typeof artifact!=='object'||
+        !/^[a-f0-9]{64}$/.test(String(artifact.artifact_digest||''))||
+        !Number.isInteger(artifact.artifact_bytes)||artifact.artifact_bytes<1)return null;
+    results.push({channel:artifact.channel,selected:true,
+      artifact_digest:artifact.artifact_digest,artifact_bytes:artifact.artifact_bytes,
+      effect_unknown:true,attempted:null,provider_accepted:null,message_created:null,
+      call_created:null,delivery:null,recipient_read:null,reached:null,lived:null,
+      persisted:null,readback_verified:null,provider_acceptance_receipt_ref:null,
+      message_created_receipt_ref:null,call_created_receipt_ref:null,
+      delivery_receipt_ref:null,recipient_read_receipt_ref:null,
+      reached_receipt_ref:null,lived_receipt_ref:null,persisted_receipt_ref:null,
+      readback_receipt_ref:null,
+      reason:'effect_outcome_unknown_provider_replay_refused'});
+  }
+  var facts={schema:'anew.pai.effect-unknown-evidence.v1',effect_unknown:true,
+    monitor_requested:readback.monitor_requested===true,inbound_monitor:{requested:
+      readback.monitor_requested===true,attempted:null,seated:null,active:null,
+      receipt_ref:null,reason:'effect_outcome_unknown'},results:results,
+    plan_readback_receipt_id:readback.plan_readback_receipt_id};
+  var result=stableStringify(facts);
+  if(Buffer.byteLength(result,'utf8')>resultMaxBytes('reach_current_person'))return null;
+  var packetDigest=digest(result);
+  var item={schema:'anew.pai.effect-receipt-evidence.v1',
+    evidence_kind:'verified_effect_receipt',provenance:'anew.world.effect_unknown_readback',
+    tool:'reach_current_person',ham_uid:ham,request_id:requestId,cycle_id:cycleId,
+    parent_request_id:requestId,packet_digest:packetDigest,result:result,
+    source_result_digest:digest(result)};
+  item.result_digest=digest(stableStringify(item));
+  Object.freeze(item);effectReceiptMinted.add(item);return item;
+}
+
+// The private effect-plan council must not consume the parent request source,
+// because the post-effect A'NU expression is the only parent-facing result.
+// This identifier is a source coordinate only. It never selects or executes a
+// hand and stays inside the same parent cycle.
+function effectPlanRequestId(input){
+  input=input||{};
+  var parentRequestId=String(input.parentRequestId||'').trim();
+  var cycleId=String(input.cycleId||'').trim();
+  var effects=Array.isArray(input.pendingEffects)?input.pendingEffects:null;
+  if(!parentRequestId||!cycleId||!effects||!effects.length||effects.length>20)return null;
+  var canonical=[];
+  for(var index=0;index<effects.length;index++){
+    var effect=effects[index];
+    if(!effect||typeof effect!=='object'||Array.isArray(effect)||
+        !/^[A-Za-z0-9._:-]{1,160}$/.test(String(effect.name||''))||
+        !effect.args||typeof effect.args!=='object'||Array.isArray(effect.args))return null;
+    var encoded;
+    try{encoded=stableStringify(effect.args);}catch(_error){return null;}
+    if(Buffer.byteLength(encoded,'utf8')>64000)return null;
+    try{canonical.push({name:String(effect.name),args:JSON.parse(encoded)});}
+    catch(_parseError){return null;}
+  }
+  return 'pai.presentation.plan.'+digest(stableStringify({
+    parent_request_id:parentRequestId,parent_cycle_id:cycleId,
+    pending_effects:canonical})).slice(0,32);
+}
+
+function verifyEffectReceipt(item,expected){
+  expected=expected||{};
+  if(!item||!effectReceiptMinted.has(item)||Object.isFrozen(item)!==true||
+      item.schema!=='anew.pai.effect-receipt-evidence.v1'||
+      item.evidence_kind!=='verified_effect_receipt'||
+      ['pai.current_turn.effect_receipt','anew.world.effect_unknown_readback']
+        .indexOf(item.provenance)<0||
+      String(item.ham_uid||'').toUpperCase()!==String(expected.hamUid||'').toUpperCase()||
+      item.request_id!==expected.requestId||item.cycle_id!==expected.cycleId||
+      !item.parent_request_id||!/^[a-f0-9]{64}$/.test(String(item.packet_digest||''))||
+      item.source_result_digest!==digest(item.result))return false;
+  var unsigned=Object.assign({},item);delete unsigned.result_digest;
+  return item.result_digest===digest(stableStringify(unsigned));
+}
+
 module.exports = {
   append:append,
   mint:mint,
@@ -400,6 +561,10 @@ module.exports = {
   mintMemory:mintMemory,
   verify:verify,
   verifyMemory:verifyMemory,
+  mintEffectReceipt:mintEffectReceipt,
+  mintUnknownEffectReceipt:mintUnknownEffectReceipt,
+  verifyEffectReceipt:verifyEffectReceipt,
+  effectPlanRequestId:effectPlanRequestId,
   countMax:countMax,
   digest:digest,
   itemMaxBytes:itemMaxBytes,
