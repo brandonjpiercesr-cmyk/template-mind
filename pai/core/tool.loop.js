@@ -434,8 +434,25 @@ function pendingEffectSetCheck(councilResult,effects){
     return{name:effect&&effect.name,args:effect&&
       Object.prototype.hasOwnProperty.call(effect,'args')?effect.args:{}};
   });
-  var binding=createPendingEffectsBinding(exact);
   var proof=compactCouncilProof(councilResult);
+  if(exact.length===0){
+    if(!proof)return{ok:false,reason:'pending_effect_set_receipt_mismatch',proof:proof};
+    var emptyBinding=typeof createPendingEffectsBinding==='function'
+      ?createPendingEffectsBinding([]):null;
+    var exactEmpty=emptyBinding
+      ?proof.pending_effects_count===emptyBinding.count&&
+        proof.pending_effects_digest===emptyBinding.digest
+      :proof.pending_effects_count===0&&
+        /^[a-f0-9]{64}$/.test(String(proof.pending_effects_digest||''));
+    if(!exactEmpty){
+      return{ok:false,reason:'pending_effect_set_receipt_mismatch',proof:proof};
+    }
+    return{ok:true,binding:emptyBinding||{count:0,digest:proof.pending_effects_digest},proof:proof};
+  }
+  if(typeof createPendingEffectsBinding!=='function'){
+    return{ok:false,reason:'pending_effect_binding_unavailable',proof:proof};
+  }
+  var binding=createPendingEffectsBinding(exact);
   if(!binding)return{ok:false,reason:'pending_effect_set_invalid'};
   if(!proof||proof.pending_effects_count!==binding.count||
       proof.pending_effects_digest!==binding.digest){
@@ -1482,8 +1499,18 @@ var TOOLS = [
     properties:{repo:{type:'string'},path:{type:'string'},content:{type:'string'},reason:{type:'string'}}}}},
   {type:'function',function:{name:'trigger_deploy',description:'Trigger a Render deploy after fixing a file.',
     parameters:{type:'object',required:['service_id'],properties:{service_id:{type:'string'}}}}},
-  {type:'function',function:{name:'notify_ham',description:'Text a HAM via iMessage. Use to reach the HAM named in ham_uid when something is fixed or needs attention.',
+  {type:'function',function:{name:'notify_ham',description:'Text a HAM through the governed text provider. Use to reach the HAM named in ham_uid when something is fixed or needs attention. A provider acceptance is not delivery or read proof.',
     parameters:{type:'object',required:['ham_uid','message'],properties:{ham_uid:{type:'string'},message:{type:'string'}}}}},
+  {type:'function',function:{name:'reach_current_person',description:'Reach the current signed person through one or more channels now, using the exact natural artifacts you author for each selected channel. This is the self-reach hand for text, email, phone, and the Clear Command Center. Choose it only when the person has authorized real outreach in this turn. It resolves the current person from the signed HAM session, never from model-authored contact data. Each channel returns its own factual receipt. Provider acceptance never means delivered, read, reached, answered, or lived. One unavailable channel does not erase successful siblings.',
+    parameters:{type:'object',required:['channels'],properties:{
+      channels:{type:'array',minItems:1,maxItems:4,uniqueItems:true,items:{type:'string',enum:['text','email','phone','command_center']}},
+      text_message:{type:'string',description:'The exact A\'NU-authored text when text is selected.'},
+      email_subject:{type:'string',description:'The exact A\'NU-authored subject when email is selected.'},
+      email_body:{type:'string',description:'The exact A\'NU-authored body when email is selected.'},
+      phone_opening:{type:'string',description:'The exact A\'NU-authored first spoken words when phone is selected.'},
+      command_center_message:{type:'string',description:'The exact A\'NU-authored Clear Command Center message when command_center is selected.'},
+      monitor_inbound:{type:'boolean',description:'True when the person also asked A\'NU to watch inbound lifecycle evidence after the action. This requests factual reporting only and never invents a webhook.'}
+    }}}},
   {type:'function',function:{name:'get_budget_upcoming',description:'Get the HAM\'s real upcoming Buy Now Pay Later payments (Zip, Afterpay, Klarna, Sezzle) with exact due dates and amounts. '
     +'Use for any question about what money is due soon, what is coming up, or pay-later balances.',
     parameters:{type:'object',properties:{ham_uid:{type:'string'},days:{type:'number',description:'How many days ahead to look, default 45'}}}}},
@@ -1752,6 +1779,7 @@ function toolSelectionBoundary(name) {
     email_send: 'USE WHEN: the person explicitly authorizes this exact email or reply in the current turn. DO NOT USE WHEN: they ask to read email, draft without sending, discuss wording, or have not authorized the exact send.',
     contact_send: 'USE WHEN: the person explicitly authorizes this exact text to this exact resolved third party. DO NOT USE WHEN: they mention a person, ask for contact details, brainstorm wording, or have not authorized the exact send.',
     notify_ham: 'USE WHEN: an authorized system workflow must send a real status text to the HAM. DO NOT USE WHEN: answering the HAM in the current conversation is sufficient, or for third-party messaging.',
+    reach_current_person: 'USE WHEN: after reading the whole request, you decide the current signed person explicitly authorized you to reach them now by text, email, phone, Clear Command Center, or several of those channels together. Author the exact natural artifact for every selected channel. DO NOT USE WHEN: ordinary conversational reply is enough, the person asked for a draft only, the target is somebody else, or real outreach was not authorized in this turn. Acknowledge no action as complete until this hand returns factual channel receipts.',
     // ⬡B:core.tool_loop:FIX:the_boundary_told_the_capture_path_to_stand_down:20260726⬡
     // This line used to read "DO NOT USE WHEN: reading memory, ANSWERING CONVERSATIONALLY, or
     // saving unsupported inferences as facts", while the Memory Bank prompt in the same turn
@@ -2184,6 +2212,7 @@ var POST_COUNCIL_TOOLS = Object.freeze({
   fix_file_in_github:true,
   trigger_deploy:true,
   notify_ham:true,
+  reach_current_person:true,
   create_reminder:true,
   calendar_book:true,
   propose_working_session:true,
@@ -4392,6 +4421,42 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       runtime && runtime.councilResult, args._resolved_notify_phone,
       effectCancellation(runtime) || {}));
   }
+  if (name === 'reach_current_person') {
+    var selfReachCancelled=await cancelBeforeEffect(name,runtime);
+    if(selfReachCancelled)return selfReachCancelled;
+    var selfReachInput={
+      hamUid:hamUid,args:args,requestId:runtime&&runtime.parentRequestId,
+      cycleId:runtime&&runtime.parentCycleId,councilResult:runtime&&runtime.councilResult,
+      pendingEffects:runtime&&runtime.pendingEffects,world:runtime&&runtime.world,
+      airSessionRef:runtime&&runtime.airSessionRef,
+      signal:runtime&&runtime.abortSignal
+    };
+    // World Builder's signed machine mode never receives this hand. Keep its
+    // static require graph hand-free too: the ordinary personal cycle seats
+    // these existing edge owners only after the model selected the offered
+    // composite and the parent council committed.
+    var selfReachHand=require(['.','/reach.self.hand.js'].join(''));
+    var selfReachModule=function(parts){return require(parts.join(''));};
+    var selfReachParentEffect={name:'reach_current_person',args:args,
+      pendingEffects:runtime&&runtime.pendingEffects};
+    return JSON.stringify(await selfReachHand.commit(selfReachInput,{
+      getContact:selfReachModule(['..','/agents/ham-contact.js']).getContact,
+      sendText:async function(phone,words){return notifyHam(hamUid,words,
+        runtime&&runtime.councilResult,phone,{signal:runtime&&runtime.abortSignal,
+          authorizedParentEffect:selfReachParentEffect});},
+      sendEmail:async function(email,words,authorization,signedWorld){
+        return selfReachModule(['..','/reach/iman.js']).sendCommittedToHam(hamUid,email,words,
+          signedWorld,{councilResult:runtime&&runtime.councilResult,
+            councilProof:authorization&&authorization.proof,
+            parentEffect:selfReachParentEffect},{signal:runtime&&runtime.abortSignal});},
+      placeCall:async function(phone,words,_authorization,signedWorld){return selfReachModule(['.','/outreach.js'])
+        .placeCall(phone,words,runtime&&runtime.councilResult,{voiceMode:'conversation',
+          world:signedWorld,openerText:words,signal:runtime&&runtime.abortSignal,
+          parentEffect:selfReachParentEffect});},
+      inspectWebhook:async function(){return selfReachModule(['..','/reach/wren/',
+        'blooio.webhook.js']).inspectWebhook(process.env);}
+    }));
+  }
   return JSON.stringify({ok:false,error:'unknown:'+name});
 }
 // ⬡B:core.tool_loop:WIRE:gate_envelope_through:20260701⬡
@@ -5027,6 +5092,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _voiceTurnId = String(identity && identity.council_context &&
     identity.council_context.mode === 'voice' &&
     identity.council_context.turn_id || '').slice(0, 160);
+  // The Reach presentation floor rejoins the already-seated session. CARA's
+  // conversation id is resolved by its signed route before runPAI; voice uses
+  // its signed session id. The reach hand never creates a replacement session.
+  var _airSessionRef = _voiceSessionId || String(identity && identity.council_context &&
+    identity.council_context.conversation_id || '').slice(0, 220);
   // ⬡COLD:remember:become:PAI_CYCLE_OBSERVABILITY_WONDER:20260724⬡
   // COLD-SUPABASE-IO-0167 stamped, needs-live-verification. These per-step CYCLE_STEP rows are
   // fire-and-forget operational telemetry inside the canonical mind and are read live by
@@ -5091,6 +5161,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // See _abandonMemoryKeeperTurn just below _memoryKeeperRun for the other exit this reaches:
   // post_council_effect_failed, the one abandonment path that does not go through here.
   function _turnCancelledResult(stage) {
+    _discardPendingSelfReachPresentation();
     _stampStep('cycle_end_silent', 'voice_turn_cancelled');
     _abandonMemoryKeeperTurn('cancelled:' + String(stage || 'unknown').slice(0, 60));
     return { ok:false, reason:'voice_turn_cancelled', blocked_by:'CANCELLED',
@@ -5100,6 +5171,19 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       tools_used:Array.isArray(tools) ? tools : [],
       iterations:Number.isInteger(iter) ? iter : 0,
       ms:Date.now()-t0 };
+  }
+  function _discardPendingSelfReachPresentation() {
+    if (!Array.isArray(_effectResults)) return false;
+    var row = _effectResults.find(function (candidate) {
+      return candidate && candidate.name === 'reach_current_person' &&
+        candidate.result && candidate.result.presentation_packet;
+    });
+    if (!row) return false;
+    try {
+      return require(['.','/reach.self.hand.js'].join('')).discardPresentationPacket(
+        row.result.presentation_packet,{hamUid:hamUid,requestId:_requestId,
+          cycleId:_cycleId,airSessionRef:_airSessionRef});
+    } catch (_discardError) { return false; }
   }
   // ⬡B:core.tool_loop:FIX:the_one_place_that_asks_the_keeper_to_demote_its_own_row:20260803⬡
   // A no-op until _memoryKeeperRun exists (every call before the council commits below sees
@@ -5857,6 +5941,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var _closingReason = null;               // set only by A'NU plus PENNY SHADOW judgment
   var _closingPassRan = false;
   var _toolTextRejectedOnce = false;       // one corrective pass per turn, never two
+  var _actionDecisionRetryUsed = false;
+  var _noHandPreparedCandidate = null;
   var _exactRoutedWords = (_exactUserMessage && _exactUserMessage.trim())
     ? _exactUserMessage : message;
   var _explicitRequiredActionTool = null;
@@ -7040,6 +7126,57 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         continue;
       }
     }
+    // A no-hand answer is a living choice, not permission for a cold keyword
+    // router to execute something. When the composite reach hand was actually
+    // in this pass's armory, PENNY SHADOW reviews that choice from the whole
+    // request. A disagreement goes back to A'NU inside this same while loop,
+    // request, cycle, and seated provider path. No tool is forced. An absent or
+    // malformed review leaves ordinary conversation unchanged.
+    var _reachHandWasOffered = Array.isArray(body.tools) && body.tools.some(
+      function (tool) { return tool && tool.function &&
+        tool.function.name === 'reach_current_person'; });
+    if (ans && tools.length === 0 && _effectRuntime.pendingEffects.length === 0 &&
+        _reachHandWasOffered) {
+      // Prepare the draft before asking SHADOW to judge the no-hand choice. A draft that
+      // already fails the one outbound repair contract must enter that repair first. It
+      // cannot spend a second ladder call and then make the real repair look like a retry.
+      _noHandPreparedCandidate={input:String(ans),result:_prepareHumanAnswerOnce(ans)};
+    }
+    if (ans && !_actionDecisionRetryUsed && _noHandPreparedCandidate &&
+        _noHandPreparedCandidate.result.ok === true && tools.length === 0 &&
+        _effectRuntime.pendingEffects.length === 0 && _reachHandWasOffered) {
+      var _noHandReview=await shadowDecisionDialogue.reviewNoHand({hamUid:hamUid,
+        requestId:_requestId,cycleId:_cycleId,request:_exactUserMessage,
+        answer:ans,availableHands:(body.tools||[]).map(function(tool){return{
+          name:String(tool&&tool.function&&tool.function.name||''),
+          description:String(tool&&tool.function&&tool.function.description||'')};})},{
+          deliberate:_callPaiLadder});
+      if (await _turnCancelled(true)) return _turnCancelledResult('after_no_hand_shadow_review');
+      if (_noHandReview && _noHandReview.ok === true &&
+          (_noHandReview.decision_approved === false ||
+            typeof _noHandReview.raw_counsel === 'string')) {
+        var _livingCounsel = typeof _noHandReview.raw_counsel === 'string'
+          ? _noHandReview.raw_counsel : [
+            'SHADOW independently disagreed with the no-hand draft.',
+            'Reason: '+String(_noHandReview.reason||''),
+            'Suggested hand: '+String(_noHandReview.recommended_hand||'none named')
+          ].join('\n');
+        _actionDecisionRetryUsed=true;
+        ans='';
+        msgs.push({role:'system',content:[
+          'LIVING SHADOW COUNSEL FOR THIS EXACT REQUEST FOLLOWS.',
+          'This is advisory. You remain A\'NU, the decision maker.',
+          'Read it in full. You may call any offered hand, call no hand, or stand by your answer.',
+          'Do not claim an effect unless its real hand returns a factual result.',
+          _livingCounsel
+        ].join('\n')});
+        _stampStep('shadow_action_decision_reconsidered_same_run',
+          'living_counsel_returned_same_cycle');
+        continue;
+      } else {
+        _stampStep('shadow_no_hand_review',_noHandReview&&_noHandReview.reason||'approved');
+      }
+    }
     // ⬡B:core.tool.loop:WIRE:diagnostic_no_tool_visibility:20260704⬡
     // CLAIR wiring, licensed and diagnostic only, not the fix itself. A
     // founder-voice task asked for exactly this and gave up twice with no
@@ -7650,7 +7787,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     finalAns=_preparedWorldDecision.text;
   } else {
-    var _preparedHuman = _prepareHumanAnswerOnce(finalAns);
+    var _preparedHuman = _noHandPreparedCandidate &&
+      _noHandPreparedCandidate.input === finalAns
+      ? _noHandPreparedCandidate.result : _prepareHumanAnswerOnce(finalAns);
     if (!_preparedHuman.ok && !_preCouncilHumanRepairUsed) {
       _stampStep('preparation_answer_healing', _preparedHuman.reason);
       var _lateRepair = await _repairHumanOnce(finalAns, _preparedHuman.reason);
@@ -7850,7 +7989,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // the later candidate append loses its response or fails, the queue scanner
   // can reconstruct exactly this ordinary cycle. Finalizer/external cycles are
   // explicitly false and can never recurse into REACH.
-  _councilContext.reach_handoff_eligible = _reachHandoffEligible;
+  var _selfReachPlanPending = _effectRuntime.pendingEffects.some(
+    function (effect) { return effect && effect.name === 'reach_current_person'; });
+  _councilContext.reach_handoff_eligible = _selfReachPlanPending
+    ? false : _reachHandoffEligible;
   var _councilDeliveryTarget = _councilContext.delivery_target;
   delete _councilContext.delivery_target;
   _councilContext.identity_provenance = _structuredReachPolicy
@@ -7877,8 +8019,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     reason:'reach_incident_claim_lost',blocked_by:'REACH_INCIDENT_FENCE',ham:hamObj,
     cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
     ms:Date.now()-t0};
+  var _mainCouncilRequestId = _selfReachPlanPending
+    ? paiToolEvidence.effectPlanRequestId({parentRequestId:_requestId,
+      cycleId:_cycleId,pendingEffects:_councilContext.pending_effects}) : _requestId;
+  if (!_mainCouncilRequestId) return {ok:false,reason:'effect_plan_request_binding_failed',
+    blocked_by:'STAMP',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+    tools_used:tools,iterations:iter,ms:Date.now()-t0};
   var _council = await runOutboundCouncil({
-    hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
+    hamUid:hamUid,requestId:_mainCouncilRequestId,cycleId:_cycleId,question:_exactUserMessage,
     deliberationInput:String(message||''),
     answer:finalAns,channel:channel,activeWorld:_activeWorld,
     delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext,
@@ -7887,7 +8035,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   });
   if (await _turnCancelled(true)) return _turnCancelledResult('after_council');
   var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
-  var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
+  var _mainCouncilExpected = {hamUid:hamUid,requestId:_mainCouncilRequestId,cycleId:_cycleId,
     question:_exactUserMessage,deliberationInput:String(message||''),
     answer:_currentCapabilityAnswerBinding ? finalAns : (_council&&_council.answer),
     pendingEffects:_councilContext.pending_effects};
@@ -7931,7 +8079,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // code selects no hand and executes nothing. A second receipt hold stops honestly.
     var _receiptClaimHeld = !_structuredReachPolicy && !_worldBuilderMachine &&
       String(_blockedCouncilCodes || '').indexOf('action_claim_unreceipted') >= 0;
-    if (_receiptClaimHeld &&
+    var _sameRunNoHandReconsidered = _actionDecisionRetryUsed === true &&
+      _reachHandWasOffered === true;
+    if (_receiptClaimHeld && !_sameRunNoHandReconsidered &&
         !(_decisionReconsideration && _decisionReconsideration.round >= 1)) {
       _stampStep('anu_receipt_reconsideration_opened','unreceipted_effect_claim');
       var _receiptFeedback=receiptReconsiderationFeedback(_council,{
@@ -8066,6 +8216,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     if (_decisionDialogue.outcome === 'RECONSIDER' &&
         !(_decisionReconsideration && _decisionReconsideration.round >= 1)) {
       _stampStep('shadow_decision_reconsidered','anu_retains_decision');
+      var _selfReachPendingAtDecision = _councilContext.pending_effects.some(
+        function (effect) { return effect && effect.name === 'reach_current_person'; });
+      // The legacy generic reconsideration starts runPAI again. A selected
+      // composite Reach hand may never cross that second-cycle seam. Keep its
+      // committed plan private and hold locally before any sibling effect. The
+      // earlier no-hand review is the same-run path that can reopen the live
+      // model loop; this later disagreement is factual proof that effects must
+      // remain uncommitted, not authority to recurse or choose another hand.
+      if (_selfReachPendingAtDecision) {
+        return {ok:false,reason:'reach_self_shadow_reconsideration_held_same_cycle',
+          blocked_by:'SHADOW',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+          pending_effects_committed:false,side_effects:[],tools_used:tools,
+          iterations:iter,ms:Date.now()-t0};
+      }
       var _reconsiderIdentity = Object.assign({},identity || {},{
         _shadow_reconsideration:{round:1,context:_decisionDialogue.context,
           prior_cycle_id:_cycleId,prior_request_id:_requestId}});
@@ -8107,11 +8271,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // again be the one that forgot. Placed AFTER the council receipt and STAMP readback and
   // INSIDE the cycle's own spend attribution, which is exactly what the 20260725 removal
   // required: no detached model call, no detached brain write, nothing escaping the cycle.
-  // It is started here so its bounded mind call overlaps the post-council effects, and it is
-  // settled at the exit below. On every ordinary user-facing turn, its independently read-back
-  // conversation record is part of success and is verified before any queued effect can run.
+  // It is started and settled here before post-council effects. On every ordinary user-facing
+  // turn, including a selected Reach hand, its independently read-back conversation record is
+  // part of success and is verified before any queued effect can run.
   var _memoryKeeperRun = null;
   var _memoryKeeper = null;
+  var _selfReachPresentationRequired = _effectRuntime.pendingEffects.some(
+    function (effect) { return effect && effect.name === 'reach_current_person'; });
+  var _selfReachFloorClient = null;
+  var _selfReachPlanRequest = null;
+  var _selfReachPlanReadback = null;
+  var _selfReachPlanProof = null;
+  var _selfReachRecoveredUnknown = false;
+  var _selfReachRecoveredSettled = false;
+  var _selfReachRecoveredClaimReadback = null;
+  var _selfReachProvenance = String(identity&&identity.council_context&&
+    identity.council_context.provenance||'').toUpperCase();
+  if(_selfReachPresentationRequired&&
+      ['LIVE','MIMIC','TEST'].indexOf(_selfReachProvenance)<0){
+    return{ok:false,reason:'reach_four_channel_provenance_unverified',
+      blocked_by:'A\'NEW',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+      pending_effects_committed:false,side_effects:[],tools_used:tools,
+      iterations:iter,ms:Date.now()-t0};
+  }
+  if(_selfReachPresentationRequired&&_selfReachProvenance==='TEST'){
+    return{ok:false,reason:'reach_four_channel_test_egress_unseated',
+      blocked_by:'TEST_PROVIDER_SINK',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+      pending_effects_committed:false,side_effects:[],tools_used:tools,
+      iterations:iter,ms:Date.now()-t0};
+  }
   var _memoryTurnRequired = memoryTurnRequired(channel, identity, {
     structuredReachPolicy:_structuredReachPolicy,
     reachIncidentIntake:_reachIncidentIntake,
@@ -8172,7 +8360,80 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       councilProof:compactCouncilProof(_council),side_effects:[],tools_used:tools,
       iterations:iter,ms:Date.now()-t0};
   }
-  for (var _effectIndex = 0; _effectIndex < _effectRuntime.pendingEffects.length; _effectIndex++) {
+  // Before the first selected provider hand moves, A'NEW durably represents
+  // A'NU's exact structural plan. A lost process can therefore recover the
+  // selected artifact digests and report EFFECT_UNKNOWN without replaying any
+  // provider. Only a newly represented PLANNED readback authorizes this run to
+  // cross the provider boundary.
+  if (_selfReachPresentationRequired) {
+    var _selfReachHandForPlan=require(['.','/reach.self.hand.js'].join(''));
+    var _selfReachPendingPlan=_effectRuntime.pendingEffects.find(function(effect){
+      return effect&&effect.name==='reach_current_person';});
+    var _selfReachStructuralPlan=_selfReachHandForPlan.presentationPlan(
+      _selfReachPendingPlan&&_selfReachPendingPlan.args);
+    _selfReachPlanProof=compactCouncilProof(_council);
+    _selfReachFloorClient=identity&&identity._fourChannelPresentationClient;
+    if(!_selfReachFloorClient||typeof _selfReachFloorClient.planAndReadBack!=='function'||
+        typeof _selfReachFloorClient.claimAndReadBack!=='function'||
+        typeof _selfReachFloorClient.acknowledgeAndReadBack!=='function'){
+      _selfReachFloorClient=require(['.','/reach.four-channel.presentation.client.js'].join(''))
+        .createFourChannelPresentationClient({env:process.env,fetch:fetch});
+    }
+    if(!_selfReachStructuralPlan||_selfReachStructuralPlan.ok!==true||
+        !_selfReachFloorClient||_selfReachFloorClient.ok===false||
+        typeof _selfReachFloorClient.planAndReadBack!=='function'){
+      return{ok:false,reason:_selfReachStructuralPlan&&_selfReachStructuralPlan.reason||
+        _selfReachFloorClient&&_selfReachFloorClient.reason||
+        'reach_four_channel_plan_client_unseated',blocked_by:'A\'NEW',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,pending_effects_committed:false,
+        side_effects:[],tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    _selfReachPlanRequest={schema:'anew.reach.four-channel-presentation-plan.v1',
+      ham_uid:hamUid,provenance:_selfReachProvenance,
+      world:_activeWorld||identity&&identity.world||'',air_session_ref:_airSessionRef,
+      parent_request_id:_requestId,parent_cycle_id:_cycleId,
+      parent_council_source:_selfReachPlanProof&&_selfReachPlanProof.final_source,
+      parent_council_receipt_digest:_selfReachPlanProof&&
+        _selfReachPlanProof.receipt_digest,wall_stream_proven:false,
+      wall_stream_source:null,wall_stream_receipt_digest:null,
+      monitor_requested:_selfReachStructuralPlan.monitor_requested,
+      selected_artifacts:_selfReachStructuralPlan.selected_artifacts};
+    try{_selfReachPlanReadback=await _selfReachFloorClient.planAndReadBack(
+      _selfReachPlanRequest);}catch(_selfReachPlanError){_selfReachPlanReadback=null;}
+    if(!exactFourChannelPlanReadback(_selfReachPlanReadback,_selfReachPlanRequest)){
+      return{ok:false,reason:_selfReachPlanReadback&&_selfReachPlanReadback.reason||
+        (_selfReachPlanReadback&&_selfReachPlanReadback.state==='RECOVERED'
+          ?'reach_four_channel_plan_effect_unknown':'reach_four_channel_plan_readback_unverified'),
+        blocked_by:'A\'NEW',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        pending_effects_committed:false,presentation_recovery:
+          'anew_world_four_channel_plan_readable_without_provider_replay',
+        side_effects:[],tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    if(_selfReachPlanReadback.state==='RECOVERED'){
+      var _selfReachUnknownReadRequest=Object.assign({},_selfReachPlanRequest,{
+        schema:'anew.reach.four-channel-presentation-read.v1',packet_digest:null});
+      delete _selfReachUnknownReadRequest.monitor_requested;
+      delete _selfReachUnknownReadRequest.selected_artifacts;
+      try{_selfReachPlanReadback=await _selfReachFloorClient.readAndReadBack(
+        _selfReachUnknownReadRequest);}catch(_selfReachUnknownReadError){
+        _selfReachPlanReadback=null;
+      }
+      if(exactFourChannelSettledReadback(_selfReachPlanReadback,
+          _selfReachPlanRequest,_selfReachFloorClient)){
+        _selfReachRecoveredSettled=true;
+        _selfReachRecoveredClaimReadback=_selfReachPlanReadback;
+      }else if(!exactFourChannelUnknownReadback(_selfReachPlanReadback,
+          _selfReachPlanRequest,_selfReachFloorClient)){
+        return{ok:false,reason:_selfReachPlanReadback&&_selfReachPlanReadback.reason||
+          'reach_four_channel_unknown_readback_unverified',blocked_by:'A\'NEW',ham:hamObj,
+          cycleId:_cycleId,requestId:_requestId,pending_effects_committed:false,
+          side_effects:[],tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      }
+      if(!_selfReachRecoveredSettled)_selfReachRecoveredUnknown=true;
+    }
+  }
+  for (var _effectIndex = 0; !_selfReachRecoveredUnknown && !_selfReachRecoveredSettled &&
+      _effectIndex < _effectRuntime.pendingEffects.length; _effectIndex++) {
     _effectSetCheck=pendingEffectSetCheck(_council,_effectRuntime.pendingEffects);
     if(!_effectSetCheck.ok){
       _stampStep('post_council_effect_set_held',_effectSetCheck.reason);
@@ -8367,6 +8628,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           var _effectRaw = await executeTool(_effect.name, _effectArgs, hamUid, message,
             Object.assign({ phase:'commit', councilResult:_effectCouncilResult, parentCycleId:_cycleId,
               parentRequestId:_requestId, userMessage:message,
+              pendingEffects:_effectRuntime.pendingEffects,
+              world:_activeWorld || identity && identity.world || null,
+              airSessionRef:_airSessionRef,
               viewerTier:_effectiveViewerTier, readAuthority:_readAuthority,
               abortSignal:_turnAbortSignal || null, isCancelled:_turnCancelled },
             { caraContext:identity && identity.council_context || {},
@@ -8400,6 +8664,241 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _effectResults.push({ name:_effect.name, ok:false, reason:eEffect.message });
     }
   }
+  // A composite self-reach turn has two living expressions inside this same PAI
+  // invocation. The first authorizes A'NU's exact artifacts. Only after every
+  // effect returns do immutable structural facts go back to the already-seated
+  // A'NU model for the words a person will actually read. No tool is offered on
+  // this continuation, and it never calls runPAI or creates another mind cycle.
+  if (_selfReachPresentationRequired) {
+    var _selfReachEffect = _effectResults.find(function (row) {
+      return row && row.name === 'reach_current_person';
+    });
+    var _selfReachHand = require(['.','/reach.self.hand.js'].join(''));
+    var _selfReachPacket = _selfReachEffect && _selfReachEffect.result &&
+      _selfReachEffect.result.presentation_packet;
+    if(_selfReachRecoveredSettled){
+      _selfReachPacket=_selfReachRecoveredClaimReadback.packet;
+    }
+    if(!_selfReachRecoveredUnknown&&!_selfReachRecoveredSettled){
+      _selfReachPacket=_selfReachHand.rehydratePresentationPacket(_selfReachPacket,{
+        hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
+        airSessionRef:_airSessionRef});
+    }
+    if (!_selfReachRecoveredUnknown && !_selfReachPacket) {
+      _discardPendingSelfReachPresentation();
+      _stampStep('reach_self_presentation_held','presentation_packet_unverified');
+      return {ok:false,reason:'reach_self_presentation_packet_unverified',
+        blocked_by:'REACH_PRESENTATION',ham:hamObj,cycleId:_cycleId,
+        requestId:_requestId,side_effects:_effectResults,tools_used:tools,
+        iterations:iter,ms:Date.now()-t0};
+    }
+    if(!_selfReachFloorClient||_selfReachFloorClient.ok===false||
+        typeof _selfReachFloorClient.claimAndReadBack!=='function'){
+      return{ok:false,reason:_selfReachFloorClient&&_selfReachFloorClient.reason||
+        'reach_four_channel_client_unseated',blocked_by:'A\'NEW',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,presentation_recovery:
+          'anew_world_four_channel_floor_unseated',side_effects:_effectResults,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    var _selfReachClaimRequest={
+      schema:'anew.reach.four-channel-presentation-claim.v1',ham_uid:hamUid,
+      provenance:_selfReachProvenance,world:_activeWorld||identity&&identity.world||'',
+      air_session_ref:_airSessionRef,parent_request_id:_requestId,
+      parent_cycle_id:_cycleId,parent_council_source:_selfReachPlanProof&&
+        _selfReachPlanProof.final_source,parent_council_receipt_digest:_selfReachPlanProof&&
+        _selfReachPlanProof.receipt_digest,wall_stream_proven:false,
+      wall_stream_source:null,wall_stream_receipt_digest:null,packet:_selfReachPacket};
+    var _selfReachClaimReadback;
+    if(_selfReachRecoveredSettled){
+      _selfReachClaimReadback=_selfReachRecoveredClaimReadback;
+    }else if(!_selfReachRecoveredUnknown){
+      try{_selfReachClaimReadback=await _selfReachFloorClient.claimAndReadBack(
+        _selfReachClaimRequest);}catch(_selfReachClaimError){_selfReachClaimReadback=null;}
+    }
+    if(!_selfReachRecoveredUnknown&&
+        !exactFourChannelClaimReadback(_selfReachClaimReadback,_selfReachClaimRequest)){
+      return{ok:false,reason:_selfReachClaimReadback&&_selfReachClaimReadback.reason||
+        'reach_four_channel_claim_readback_unverified',blocked_by:'A\'NEW',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,presentation_recovery:
+          'anew_world_four_channel_floor_required',side_effects:_effectResults,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    var _selfReachPresentationFacts=_selfReachRecoveredUnknown?{
+      schema:'anew.reach-self.presentation-effect-unknown.v1',effect_unknown:true,
+      provider_effect_replay_authorized:false,
+      monitor_requested:_selfReachPlanReadback.monitor_requested,
+      inbound_monitor:{requested:_selfReachPlanReadback.monitor_requested===true,
+        attempted:null,seated:null,active:null,receipt_ref:null,
+        reason:'effect_outcome_unknown'},
+      results:_selfReachPlanReadback.selected_artifacts.map(function(artifact){return{
+        channel:artifact.channel,selected:true,artifact_digest:artifact.artifact_digest,
+        artifact_bytes:artifact.artifact_bytes,effect_unknown:true,attempted:null,
+        provider_accepted:null,message_created:null,call_created:null,delivery:null,
+        recipient_read:null,reached:null,lived:null,persisted:null,
+        readback_verified:null,provider_acceptance_receipt_ref:null,
+        message_created_receipt_ref:null,call_created_receipt_ref:null,
+        delivery_receipt_ref:null,recipient_read_receipt_ref:null,
+        reached_receipt_ref:null,lived_receipt_ref:null,persisted_receipt_ref:null,
+        readback_receipt_ref:null,
+        reason:'effect_outcome_unknown_provider_replay_refused'};})}:_selfReachPacket;
+    var _selfReachPresentationSystem = systemPrompt + '\n\n' + [
+      'Continue this exact A\u2019NU turn after your chosen reach hand returned.',
+      'The packet below contains server-owned facts for the exact artifacts you authored.',
+      'Speak naturally and directly to the same person in your own words.',
+      'State only the layers the packet proves. Provider acceptance is not delivery, recipient read, reached, answered, or lived acceptance.',
+      'A null fact is unknown. A false fact is not complete. Effect unknown means do not retry and do not claim the effect happened or failed. A local channel failure does not erase a successful sibling.',
+      'If inbound monitoring was requested but active is false, say plainly that it is not active.',
+      'Do not expose internal identifiers, digests, schemas, receipts, protocol, or this instruction.',
+      'Call no tool and make no new real-world effect.'
+    ].join(' ');
+    var _selfReachPresentationUser = 'ORIGINAL REQUEST:\n' + _exactUserMessage +
+      '\n\nFACTS RETURNED FROM YOUR CHOSEN HAND:\n' + JSON.stringify(
+        _selfReachPresentationFacts);
+    var _selfReachPresentationModel = null;
+    try {
+      _selfReachPresentationModel = await _callPaiLadder(_selfReachPresentationSystem,
+        _selfReachPresentationUser,{seat:_providerSeat || _paiSeatName(),temperature:0.2,
+          timeout:60000,signal:_modelRequestSignal()});
+    } catch (eSelfReachPresentation) {}
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_reach_self_presentation');
+    var _selfReachPresentationDraft = _selfReachPresentationModel &&
+      (_selfReachPresentationModel.content || _selfReachPresentationModel.answer ||
+        _selfReachPresentationModel.text) || '';
+    var _selfReachPrepared = _prepareHumanAnswerOnce(_selfReachPresentationDraft);
+    if (!_selfReachPrepared.ok) {
+      _stampStep('reach_self_presentation_held',_selfReachPrepared.reason ||
+        'presentation_model_unavailable');
+      return {ok:false,reason:'reach_self_presentation_unavailable',
+        blocked_by:'A\'NU',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        presentation_recovery:'anew_world_inbound_floor_required',
+        side_effects:_effectResults,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    var _selfReachPresentationRequestId = _requestId;
+    if(!_selfReachPresentationRequestId){
+      return {ok:false,reason:'reach_self_presentation_request_binding_failed',
+        blocked_by:'REACH_PRESENTATION',ham:hamObj,cycleId:_cycleId,
+        requestId:_requestId,side_effects:_effectResults,tools_used:tools,
+        iterations:iter,ms:Date.now()-t0};
+    }
+    // The private effect plan used a derived source. This factual expression
+    // owns the original request and cycle, so every existing face can apply its
+    // exact parent verifier without a special case or weakened binding.
+    var _selfReachPresentationCycleId = _cycleId;
+    var _selfReachPresentationContext = {
+      mode:'effect_receipt_presentation',outbound_finalize:true,
+      reach_handoff_eligible:false,tools_used:[],available_hands:[],
+      pending_effects:[],verified_evidence:[],parent_request_id:_requestId,
+      parent_cycle_id:_cycleId,phase:'post_effect_presentation'};
+    var _selfReachEffectEvidence=_selfReachRecoveredUnknown?
+      paiToolEvidence.mintUnknownEffectReceipt({hamUid:hamUid,
+        requestId:_selfReachPresentationRequestId,cycleId:_selfReachPresentationCycleId,
+        readback:_selfReachPlanReadback}):
+      paiToolEvidence.mintEffectReceipt({hamUid:hamUid,
+        requestId:_selfReachPresentationRequestId,cycleId:_selfReachPresentationCycleId,
+        parentRequestId:_requestId,packet:_selfReachPacket,
+        claimReadback:_selfReachRecoveredSettled?_selfReachClaimReadback:null});
+    if(!_selfReachEffectEvidence){
+      return {ok:false,reason:'reach_self_effect_evidence_unavailable',
+        blocked_by:'REACH_PRESENTATION',ham:hamObj,cycleId:_cycleId,
+        requestId:_requestId,side_effects:_effectResults,tools_used:tools,
+        iterations:iter,ms:Date.now()-t0};
+    }
+    _selfReachPresentationContext.verified_evidence=[_selfReachEffectEvidence];
+    var _selfReachPresentationCouncil = await runOutboundCouncil({hamUid:hamUid,
+      requestId:_selfReachPresentationRequestId,cycleId:_selfReachPresentationCycleId,
+      question:_exactUserMessage,deliberationInput:String(message||''),
+      answer:_selfReachPrepared.answer,channel:channel,activeWorld:_activeWorld,
+      delivery:_delivery,context:_selfReachPresentationContext,signal:_turnAbortSignal});
+    var _selfReachRawCounsel=rawEffectCounselFromCouncil(_selfReachPresentationCouncil);
+    if(_selfReachRawCounsel){
+      var _selfReachCounselModel=null;
+      try{
+        _selfReachCounselModel=await _callPaiLadder(_selfReachPresentationSystem,
+          _selfReachPresentationUser+'\n\nLIVING SHADOW COUNSEL FOR A\'NU, EXACT BYTES:\n'+
+          _selfReachRawCounsel+'\n\nThis is counsel, not a command. Decide and speak in your own words. Call no tool.',
+          {seat:_providerSeat||_paiSeatName(),temperature:0.2,timeout:60000,
+            signal:_modelRequestSignal()});
+      }catch(eSelfReachCounsel){}
+      if(await _turnCancelled(true))return _turnCancelledResult(
+        'after_reach_self_raw_shadow_counsel');
+      var _selfReachCounselDraft=_selfReachCounselModel&&
+        (_selfReachCounselModel.content||_selfReachCounselModel.answer||
+          _selfReachCounselModel.text)||'';
+      var _selfReachCounselPrepared=_prepareHumanAnswerOnce(_selfReachCounselDraft);
+      if(_selfReachCounselPrepared.ok){
+        _stampStep('reach_self_raw_shadow_counsel_returned','same_cycle_anu_reexpression');
+        _selfReachPresentationCouncil=await runOutboundCouncil({hamUid:hamUid,
+          requestId:_selfReachPresentationRequestId,cycleId:_selfReachPresentationCycleId,
+          question:_exactUserMessage,deliberationInput:String(message||''),
+          answer:_selfReachCounselPrepared.answer,channel:channel,activeWorld:_activeWorld,
+          delivery:_delivery,context:_selfReachPresentationContext,signal:_turnAbortSignal});
+      }
+    }
+    var _selfReachPresentationVerified = requireVerifiedCouncilResult(
+      _selfReachPresentationCouncil,{hamUid:hamUid,
+        requestId:_selfReachPresentationRequestId,cycleId:_selfReachPresentationCycleId,
+        question:_exactUserMessage,deliberationInput:String(message||''),
+        answer:_selfReachPresentationCouncil && _selfReachPresentationCouncil.answer,
+        pendingEffects:[]});
+    if (!_selfReachPresentationVerified || !_selfReachPresentationVerified.ok ||
+        !compactCouncilProof(_selfReachPresentationCouncil)) {
+      _stampStep('reach_self_presentation_held','presentation_council_unverified');
+      return {ok:false,reason:'reach_self_presentation_council_unverified',
+        blocked_by:'STAMP',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
+        presentation_recovery:'anew_world_inbound_floor_required',
+        side_effects:_effectResults,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    var _selfReachPresentationProof=compactCouncilProof(_selfReachPresentationCouncil);
+    var _selfReachAckRequest={schema:_selfReachRecoveredUnknown?
+        'anew.reach.four-channel-presentation-unknown-ack.v1':
+        'anew.reach.four-channel-presentation-ack.v1',
+      ham_uid:hamUid,provenance:_selfReachProvenance,
+      world:_selfReachPlanRequest.world,air_session_ref:_airSessionRef,
+      parent_request_id:_requestId,parent_cycle_id:_cycleId,
+      parent_council_source:_selfReachPlanRequest.parent_council_source,
+      parent_council_receipt_digest:_selfReachPlanRequest.parent_council_receipt_digest,
+      wall_stream_proven:_selfReachPlanRequest.wall_stream_proven,
+      wall_stream_source:_selfReachPlanRequest.wall_stream_source,
+      wall_stream_receipt_digest:_selfReachPlanRequest.wall_stream_receipt_digest,
+      anu_presentation_source:_selfReachPresentationProof&&
+        _selfReachPresentationProof.final_source,
+      anu_presentation_receipt_digest:_selfReachPresentationProof&&
+        _selfReachPresentationProof.receipt_digest,
+      anu_output_sha256:_crypto.createHash('sha256').update(Buffer.from(
+        String(_selfReachPresentationCouncil.answer||''),'utf8')).digest('hex'),
+      anu_output_byte_length:Buffer.byteLength(String(
+        _selfReachPresentationCouncil.answer||''),'utf8')};
+    if(_selfReachRecoveredUnknown){
+      _selfReachAckRequest.plan_readback_receipt_id=
+        _selfReachPlanReadback.plan_readback_receipt_id;
+    }else{
+      _selfReachAckRequest.packet_digest=_selfReachPacket.packet_digest;
+      _selfReachAckRequest.claim_readback_receipt_id=
+        _selfReachClaimReadback.claim_readback_receipt_id;
+    }
+    var _selfReachAckReadback;
+    try{_selfReachAckReadback=await (_selfReachRecoveredUnknown?
+      _selfReachFloorClient.acknowledgeUnknownAndReadBack(_selfReachAckRequest):
+      _selfReachFloorClient.acknowledgeAndReadBack(_selfReachAckRequest));}
+    catch(_selfReachAckError){_selfReachAckReadback=null;}
+    if(!(_selfReachRecoveredUnknown?
+        exactFourChannelUnknownAckReadback(_selfReachAckReadback,_selfReachAckRequest,
+          _selfReachFloorClient):
+        exactFourChannelAckReadback(_selfReachAckReadback,_selfReachAckRequest))){
+      return{ok:false,reason:_selfReachAckReadback&&_selfReachAckReadback.reason||
+        'reach_four_channel_ack_readback_unverified',blocked_by:'A\'NEW',ham:hamObj,
+        cycleId:_cycleId,requestId:_requestId,presentation_recovery:
+          'anew_world_four_channel_claimed_unacknowledged',side_effects:_effectResults,
+        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    finalAns = _selfReachPresentationCouncil.answer;
+    _council = _selfReachPresentationCouncil;
+    _committedCouncil = _selfReachPresentationVerified;
+    _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
+    _stampProof = _committedCouncil.stamp_proof;
+    _stampStep('reach_self_presentation_committed',_selfReachRecoveredUnknown?
+      'effect_unknown_acknowledged':_selfReachPacket.packet_digest);
+  }
   function _isQueuedScreenHold(effectResult) {
     return !!(effectResult&&effectResult.name==='update_screen'&&effectResult.ok!==true&&
       effectResult.result&&(effectResult.result.reason==='kill_switch_active'||
@@ -8408,7 +8907,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   var _queuedScreenHolds = _effectResults.filter(_isQueuedScreenHold);
   var _failedEffect = _effectResults.find(function (effectResult) {
-    return (!effectResult || effectResult.ok !== true) && !_isQueuedScreenHold(effectResult);
+    return (!effectResult || effectResult.ok !== true) &&
+      !(effectResult && effectResult.name === 'reach_current_person') &&
+      !_isQueuedScreenHold(effectResult);
   });
   if (_failedEffect) {
     _stampStep('post_council_effect_failed', _failedEffect.name + ': '
@@ -8572,7 +9073,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // decision, reuse committed bytes) is REACH_CYCLE_HANDOFF, a live capability not present in source.
   // Changing the epilogue here alters the proactive-reach hot path and cannot be verified from here,
   // so it is contained by stamp only.
-  if (_reachHandoffEligible) {
+  if (_reachHandoffEligible && !_selfReachPresentationRequired) {
     var _reachHandoff;
     try {
       var _reachModule=require('./reach/cycle.handoff.js');
@@ -8943,6 +9444,153 @@ function receiptReconsiderationFeedback(result, trace) {
   };
 }
 
+// A raw SHADOW answer is living counsel, not malformed transport and not a
+// factual clearance. Carry its exact bytes back to A'NU only from the failed
+// SHADOW receipt for this in-process presentation. No keyword, regex, or cold
+// parser decides what the counsel means.
+function rawEffectCounselFromCouncil(result){
+  var stages=result&&Array.isArray(result.stages)?result.stages:[];
+  for(var index=stages.length-1;index>=0;index--){
+    var stage=stages[index];
+    if(!stage||String(stage.stage||'').toUpperCase()!=='SHADOW'||stage.ok!==false)continue;
+    var roots=[stage.evidence,stage.evidence&&stage.evidence.resubmission&&
+      stage.evidence.resubmission.evidence].filter(function(value){return value&&
+        typeof value==='object';});
+    for(var rootIndex=roots.length-1;rootIndex>=0;rootIndex--){
+      var judgment=roots[rootIndex].judgment;
+      var raw=judgment&&judgment.judgment_status==='RAW_COUNSEL'&&
+        typeof judgment.raw_counsel==='string'?judgment.raw_counsel:'';
+      if(raw.trim()&&Buffer.byteLength(raw,'utf8')<=12000)return raw;
+    }
+    return null;
+  }
+  return null;
+}
+
+function exactFourChannelClaimReadback(value,request){
+  if(!value||value.ok!==true||
+      ['CLAIMED','RECOVERED','ACKNOWLEDGED'].indexOf(value.state)<0||
+      value.schema!=='anew.reach.four-channel-presentation-readback.v1'||
+      value.ham_uid!==request.ham_uid||value.provenance!==request.provenance||
+      value.world!==request.world||value.air_session_ref!==request.air_session_ref||
+      value.parent_request_id!==request.parent_request_id||
+      value.parent_cycle_id!==request.parent_cycle_id||
+      value.parent_council_source!==request.parent_council_source||
+      value.parent_council_receipt_digest!==request.parent_council_receipt_digest||
+      value.wall_stream_proven!==request.wall_stream_proven||
+      value.wall_stream_source!==request.wall_stream_source||
+      value.wall_stream_receipt_digest!==request.wall_stream_receipt_digest||
+      value.packet_digest!==request.packet.packet_digest||
+      !/^sha256:[a-f0-9]{64}$/.test(String(value.claim_readback_receipt_id||''))||
+      value.provider_effect!==null||value.human_effect!==null)return false;
+  try{return paiToolEvidence.stableStringify(value.packet)===
+    paiToolEvidence.stableStringify(request.packet);}catch(_error){return false;}
+}
+
+function exactFourChannelPlanReadback(value,request){
+  if(!value||value.ok!==true||['PLANNED','RECOVERED'].indexOf(value.state)<0||
+      value.schema!=='anew.reach.four-channel-presentation-readback.v1'||
+      value.ham_uid!==request.ham_uid||value.provenance!==request.provenance||
+      value.world!==request.world||value.air_session_ref!==request.air_session_ref||
+      value.parent_request_id!==request.parent_request_id||
+      value.parent_cycle_id!==request.parent_cycle_id||
+      value.parent_council_source!==request.parent_council_source||
+      value.parent_council_receipt_digest!==request.parent_council_receipt_digest||
+      value.wall_stream_proven!==request.wall_stream_proven||
+      value.wall_stream_source!==request.wall_stream_source||
+      value.wall_stream_receipt_digest!==request.wall_stream_receipt_digest||
+      value.monitor_requested!==request.monitor_requested||
+      !/^sha256:[a-f0-9]{64}$/.test(String(value.plan_readback_receipt_id||''))||
+      value.provider_effect_replay_authorized!==false||value.provider_effect!==null||
+      value.human_effect!==null)return false;
+  if(value.state==='PLANNED'&&(value.presentation_facts_state!=='PLANNED'||
+      value.provider_effect_execution_authorized!==true))return false;
+  if(value.state==='RECOVERED'&&(value.presentation_facts_state!=='EFFECT_UNKNOWN'||
+      value.provider_effect_execution_authorized!==false))return false;
+  try{return paiToolEvidence.stableStringify(value.selected_artifacts)===
+    paiToolEvidence.stableStringify(request.selected_artifacts);}
+  catch(_error){return false;}
+}
+
+function exactFourChannelUnknownReadback(value,request,client){
+  if(!value||value.ok!==true||value.state!=='EFFECT_UNKNOWN'||
+      value.presentation_facts_state!=='EFFECT_UNKNOWN'||
+      value.provider_effect_execution_authorized!==false||
+      value.provider_effect_replay_authorized!==false||value.packet!==null||
+      value.packet_digest!==null||value.claim_readback_receipt_id!==null||
+      !exactFourChannelPlanReadback(Object.assign({},value,{state:'RECOVERED'}),request)||
+      value.provider_effect!==null||value.human_effect!==null)return false;
+  return true;
+}
+
+function exactFourChannelSettledReadback(value,request,client){
+  if(!value||value.ok!==true||value.state!=='RECOVERED'||
+      value.presentation_facts_state!=='SETTLED'||
+      value.provider_effect_replay_authorized!==false||
+      !value.packet||typeof value.packet!=='object'||
+      value.packet_digest!==value.packet.packet_digest||
+      !/^sha256:[a-f0-9]{64}$/.test(String(value.claim_readback_receipt_id||''))||
+      value.ham_uid!==request.ham_uid||value.provenance!==request.provenance||
+      value.world!==request.world||value.air_session_ref!==request.air_session_ref||
+      value.parent_request_id!==request.parent_request_id||
+      value.parent_cycle_id!==request.parent_cycle_id||
+      value.parent_council_source!==request.parent_council_source||
+      value.parent_council_receipt_digest!==request.parent_council_receipt_digest||
+      value.wall_stream_proven!==request.wall_stream_proven||
+      value.wall_stream_source!==request.wall_stream_source||
+      value.wall_stream_receipt_digest!==request.wall_stream_receipt_digest||
+      value.provider_effect!==null||value.human_effect!==null||!client||
+      typeof client.verifyAuthenticatedReadback!=='function'||
+      client.verifyAuthenticatedReadback(value)!==true)return false;
+  try{
+    const hand=require('./reach.self.hand.js');
+    if(!hand._test.presentationPacketShapeExact(value.packet))return false;
+    const selected=value.packet.results.map(function(row){return{
+      channel:row.channel,artifact_digest:row.artifact_digest,
+      artifact_bytes:row.artifact_bytes};});
+    return paiToolEvidence.stableStringify(selected)===
+      paiToolEvidence.stableStringify(request.selected_artifacts)&&
+      value.packet.monitor_requested===request.monitor_requested;
+  }catch(_error){return false;}
+}
+
+function exactFourChannelAckReadback(value,request){
+  return !!(value&&value.ok===true&&value.state==='ACKNOWLEDGED'&&
+    value.schema==='anew.reach.four-channel-presentation-readback.v1'&&
+    value.ham_uid===request.ham_uid&&value.provenance===request.provenance&&
+    value.world===request.world&&value.air_session_ref===request.air_session_ref&&
+    value.parent_request_id===request.parent_request_id&&
+    value.parent_cycle_id===request.parent_cycle_id&&
+    value.parent_council_source===request.parent_council_source&&
+    value.parent_council_receipt_digest===request.parent_council_receipt_digest&&
+    value.wall_stream_proven===request.wall_stream_proven&&
+    value.wall_stream_source===request.wall_stream_source&&
+    value.wall_stream_receipt_digest===request.wall_stream_receipt_digest&&
+    value.packet_digest===request.packet_digest&&
+    value.claim_readback_receipt_id===request.claim_readback_receipt_id&&
+    /^sha256:[a-f0-9]{64}$/.test(String(value.acknowledgement_readback_receipt_id||''))&&
+    value.provider_effect===null&&value.human_effect===null);
+}
+
+function exactFourChannelUnknownAckReadback(value,request,client){
+  return !!(value&&value.ok===true&&value.state==='ACKNOWLEDGED'&&
+    value.presentation_facts_state==='EFFECT_UNKNOWN'&&
+    value.schema==='anew.reach.four-channel-presentation-readback.v1'&&
+    value.ham_uid===request.ham_uid&&value.provenance===request.provenance&&
+    value.world===request.world&&value.air_session_ref===request.air_session_ref&&
+    value.parent_request_id===request.parent_request_id&&
+    value.parent_cycle_id===request.parent_cycle_id&&
+    value.parent_council_source===request.parent_council_source&&
+    value.parent_council_receipt_digest===request.parent_council_receipt_digest&&
+    value.wall_stream_proven===request.wall_stream_proven&&
+    value.wall_stream_source===request.wall_stream_source&&
+    value.wall_stream_receipt_digest===request.wall_stream_receipt_digest&&
+    value.plan_readback_receipt_id===request.plan_readback_receipt_id&&
+    /^sha256:[a-f0-9]{64}$/.test(String(value.acknowledgement_readback_receipt_id||''))&&
+    value.provider_effect_replay_authorized===false&&value.provider_effect===null&&
+    value.human_effect===null);
+}
+
 // OpenAI-compatible providers occasionally serialize an array argument as a markdown list.
 // Preserve the model-authored words and repair only that transport shape before the pending
 // effect reaches council. Validation still owns subject, detail, item count, and urgency.
@@ -9022,7 +9670,8 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,
   unavailableShadowDecisionFailure,
   paiReasoningSeat,paiCycleSeat,paiOwnerNodeId,callPaiLadderNetwork,
   bindGmguCouncilDeliberation,
-  receiptReconsiderationFeedback,normalizeSubmitJobArgs,
+  receiptReconsiderationFeedback,rawEffectCounselFromCouncil,
+  exactFourChannelClaimReadback,exactFourChannelAckReadback,normalizeSubmitJobArgs,
   // ⬡B:core.tool_loop:WIRE:the_shadow_wake_is_reachable_by_a_test_or_it_was_never_run:20260808⬡
   // Same law as the bounds above. A wiring whose run condition no test can execute is a
   // wiring nobody has proved. tests/shadow.independent.wired.test.js drives this directly.
