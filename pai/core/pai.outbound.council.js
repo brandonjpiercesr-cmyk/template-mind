@@ -2029,6 +2029,8 @@ function verifiedFactEvidenceText(ctx) {
       question:ctx.question
     }, { requireRead:true });
     var authenticMemory = paiToolEvidence.verifyMemory(item, { hamUid:ctx.hamUid });
+    var authenticEffect = paiToolEvidence.verifyEffectReceipt(item, {
+      hamUid:ctx.hamUid,requestId:ctx.requestId,cycleId:ctx.cycleId});
     // An authentic executed result that is not read-classified still entered the
     // transcript the mind deliberated from; it grounds only after args masking.
     var authenticExecution = !authenticRead && !authenticMemory &&
@@ -2036,7 +2038,7 @@ function verifiedFactEvidenceText(ctx) {
         hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId,
         question:ctx.question
       });
-    if (!authenticRead && !authenticMemory && !authenticExecution) continue;
+    if (!authenticRead && !authenticMemory && !authenticExecution && !authenticEffect) continue;
     var contributed = authenticExecution
       ? maskModelAuthoredFigures(item.result || '', item.args || '')
       : (item.result || '');
@@ -2249,6 +2251,9 @@ async function defaultShadowStage(ctx, injected) {
         verified_evidence: actionReceiptEvidence
       })
     : { hold: false, reason: null, claims: [] };
+  var effectReceipt = actionReceiptEvidence.find(function(item){
+    return paiToolEvidence.verifyEffectReceipt(item,{hamUid:ctx.hamUid,
+      requestId:ctx.requestId,cycleId:ctx.cycleId});});
   var actionClaimFlags = actionClaimFinding.hold
     ? actionClaimFinding.claims.map(function (found) {
         return { reason: actionClaimHold.REASON, claim: found.claim, verb: found.verb };
@@ -2392,9 +2397,21 @@ async function defaultShadowStage(ctx, injected) {
     'Named context evidence was deterministically extracted from the bound deliberation input; reject any answer that denies or contradicts it. ' +
     'Identity provenance is deterministic: stored memory and current bound role context may not be collapsed into one identity claim. ' +
     'A current self-preference must name a choice and state whether it is a fresh judgment or stored preference. ' +
-    'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise factual-integrity sentence","claim":"when approved is false, the exact contiguous text copied verbatim from the proposed answer that the bound evidence contradicts or cannot support; empty string when approved is true","decision_approved":true|false,"decision_reason":"one concise explanation of whether the chosen hand or no-hand decision fits the whole request","recommended_hand":"a named available hand, no_hand, or empty string","escalate":true|false}.';
+    (effectReceipt
+      ? 'For this exact effect receipt, you may use the structured verdict shape or speak your natural counsel directly. Raw living counsel remains valid and will return to A\'NU unchanged. It does not by itself claim factual clearance.'
+      : 'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise factual-integrity sentence","claim":"when approved is false, the exact contiguous text copied verbatim from the proposed answer that the bound evidence contradicts or cannot support; empty string when approved is true","decision_approved":true|false,"decision_reason":"one concise explanation of whether the chosen hand or no-hand decision fits the whole request","recommended_hand":"a named available hand, no_hand, or empty string","escalate":true|false}.');
   if (structuredPolicy) {
     system += ' STRUCTURED REACH POLICY RULE: the exact deliberation_evidence is the complete closed-world authority for this candidate. Every factual claim in reason and message, and the selected action and channel, must be supported by and relevant to that same candidate evidence. Treat policy copied from an older or different event as unsupported even if it would be plausible or operationally available.';
+  }
+  if (effectReceipt) {
+    system += ' AUTHENTIC EFFECT RECEIPT RULE: verified_evidence contains the exact selected '
+      + 'channels and a separate factual row for each one, plus distinct provider acceptance, '
+      + 'creation, persistence, delivery, recipient read, reached, lived, and inbound monitor '
+      + 'layers. Compare the meaning of every action or lifecycle statement in proposed_answer '
+      + 'against every requested row. One successful sibling cannot support a claim about all '
+      + 'channels. Clear Command Center needs its own created, persisted, and read-back facts. '
+      + 'Phone needs call_created. Text and email each need their own message_created. Judge '
+      + 'paraphrases by meaning. Do not infer a later lifecycle layer from an earlier one.';
   }
   var user = JSON.stringify({
     binding: { ham_uid:ctx.hamUid, request_id:ctx.requestId, cycle_id:ctx.cycleId },
@@ -2445,17 +2462,21 @@ async function defaultShadowStage(ctx, injected) {
       temperature: 0,
       timeout: voiceRealtime ? 1800 : shadowDecisionTimeoutMs(injected.env || process.env),
       tightTimeout: !voiceRealtime,
-      json: true,
+      json: effectReceipt ? false : true,
       realtime: voiceRealtime,
       signal:ctx.signal
     });
     parsed = judgment && parseStrictJsonObject(judgment.content);
   }
+  var rawEffectCounsel = effectReceipt && judgment && !parsed &&
+    typeof judgment.content === 'string' && judgment.content.trim() &&
+    Buffer.byteLength(judgment.content,'utf8') <= 12000 ? judgment.content : null;
   var modelPassed = !!(parsed && parsed.approved === true && isNonEmpty(parsed.reason));
   var hasRealDecisionJudgment = !!(parsed &&
     typeof parsed.decision_approved === 'boolean' && isNonEmpty(parsed.decision_reason));
-  var requiresRealDecisionJudgment = !!(boardPassed && ctx.healed === true &&
-    namedCauseIn(ctx.healedFrom, [actionClaimHold.REASON]));
+  var requiresRealEffectJudgment = !!effectReceipt;
+  var requiresRealDecisionJudgment = requiresRealEffectJudgment || !!(boardPassed &&
+    ctx.healed === true && namedCauseIn(ctx.healedFrom, [actionClaimHold.REASON]));
   // ⬡B:core.pai_outbound_council:REBUILD:shadow_is_a_wonder_not_a_nasty_c:20260718⬡
   // FOUNDER LAW: the verdict belongs to the WONDER; deterministic proofs are
   // evidence it weighs, never cold overrides. Applied at the graft SOURCE so
@@ -2551,8 +2572,9 @@ async function defaultShadowStage(ctx, injected) {
   // fabrication either trips the deterministic board or is quotable-verifiable within the slice; a
   // starved judge never gets to silence her voice from what it could not see.
   var judgeWasBlindfolded = !!(deliberationEvidence && deliberationEvidence.truncated === true);
+  var shadowEffectRawCounselHold = !!rawEffectCounsel;
   var shadowDecisionUnavailableHold = !!(requiresRealDecisionJudgment &&
-    !hasRealDecisionJudgment);
+    !hasRealDecisionJudgment && !shadowEffectRawCounselHold);
   var shadowFailOpenCleanBoard = !!(boardPassed && deterministicFindings.length === 0 &&
     !modelPassed && (!shadowHasQuotableFalseClaim || judgeWasBlindfolded) &&
     !(attemptedRelayEvidence && (!judgment || !parsed)) && !shadowDecisionUnavailableHold);
@@ -2566,14 +2588,17 @@ async function defaultShadowStage(ctx, injected) {
   // verified relay overrides a flaky model rejection on an otherwise clean board. This does NOT
   // apply when the judge never ran at all (relayUnavailableHold owns that case) or when the
   // board itself is not clean (boardPassed required).
-  var exactRelayOverridesJudgment = !!(boardPassed && exactRelay && judgment && parsed);
-  var shadowPassed = !relayUnavailableHold && !shadowDecisionUnavailableHold && boardPassed &&
+  var exactRelayOverridesJudgment = !!(!requiresRealEffectJudgment && boardPassed &&
+    exactRelay && judgment && parsed);
+  var shadowPassed = !relayUnavailableHold && !shadowDecisionUnavailableHold &&
+    !shadowEffectRawCounselHold && boardPassed &&
     (exactRelayOverridesJudgment || modelPassed || wonderUnavailableCleanPass || shadowFailOpenCleanBoard);
 
   return {
     ok: shadowPassed,
     answer: ctx.answer,
     reason: deterministicVoicePassReason ||
+      (shadowEffectRawCounselHold ? 'shadow_effect_raw_counsel' :
       (shadowDecisionUnavailableHold ? 'shadow_decision_judgment_unavailable' :
       (relayUnavailableHold ? 'shadow_model_unavailable' :
       (exactRelayOverridesJudgment ? 'SHADOW_PASS_VERIFIED_EVIDENCE_RELAY' :
@@ -2593,7 +2618,7 @@ async function defaultShadowStage(ctx, injected) {
               // so downstream code and the founder can tell a real evidenced hold from an
               // ambiguous one. wren/reply.js already retries on both labels identically, so this
               // does not change retry behavior, only the accuracy of the reason string.
-              'shadow_model_hold'))))))),
+              'shadow_model_hold')))))))),
     evidence: {
       deterministic: {
         verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length || actionClaimFlags.length || threeSourceFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
@@ -2613,7 +2638,7 @@ async function defaultShadowStage(ctx, injected) {
         model_skipped: true,
         overridden_by_exact_named_evidence_relay: false
       } : judgment ? {
-        judgment_status: 'AVAILABLE',
+        judgment_status: rawEffectCounsel ? 'RAW_COUNSEL' : 'AVAILABLE',
         approved: parsed && parsed.approved === true,
         reason: parsed && parsed.reason,
         claim: _verbatimClaimFound(parsed) ? String(parsed.claim) : null,
@@ -2627,6 +2652,7 @@ async function defaultShadowStage(ctx, injected) {
         model: judgment.model,
         via: judgment.via,
         response_digest: digestText(judgment.content || ''),
+        raw_counsel: rawEffectCounsel,
         deterministic_proofs_given_to_wonder: { exact_relay: !!exactRelay, runtime_identity: !!runtimeIdentity },
         overridden_by_exact_named_evidence_relay: exactRelayOverridesJudgment
       } : { judgment_status:'UNAVAILABLE', approved:false, reason:'no_real_judgment',
@@ -3544,7 +3570,9 @@ function createDefaultDependencies(overrides) {
 }
 
 function buildSources(cycleId, requestId) {
-  var base = 'pai.cycle.' + cycleId;
+  var presentation = /^pai\.presentation\./.test(String(requestId || ''))
+    ? '.presentation.' + digestText(String(requestId)).slice(0,24) : '';
+  var base = 'pai.cycle.' + cycleId + presentation;
   return {
     requestSource: 'pai.request.' + requestId,
     cycleSource: base,
@@ -4285,7 +4313,10 @@ async function runOutboundCouncil(input, injected) {
         _MEANING_HEALABLE_REASONS.indexOf(String(normalized.reason || '')) !== -1;
       var _semanticFinalHold = (stage === 'WRIT' &&
         /^writ_post_meta_/.test(String(normalized.reason || '')));
+      var _rawEffectCounsel = stage === 'SHADOW' &&
+        String(normalized.reason || '') === 'shadow_effect_raw_counsel';
       var _healableStage = !capabilityBinding.present && !_semanticFinalHold &&
+        !_rawEffectCounsel &&
         (stage === 'WRIT' || stage === 'SHADOW' ||
         stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL' ||
         stage === 'ANU_EXPRESSION');
@@ -5150,6 +5181,38 @@ function requireVerifiedCouncilDelivery(result, deliveryTarget, expectedAnswer) 
   });
 }
 
+// A composite hand can resolve several exact same-HAM destinations only after
+// the parent cycle commits. It cannot bind one council receipt to four delivery
+// targets. This verifier proves the complete pending-effect set and one exact
+// A'NU-authored effect artifact instead. Each provider edge still resolves and
+// binds its actual target independently before its at-most-once claim.
+function requireVerifiedCouncilPendingEffect(result, pendingEffects, effectName, effectArgs) {
+  var receipt = result && (result.council_receipt || result.councilReceipt);
+  var canonical = canonicalPendingEffects(pendingEffects);
+  if (!receipt || !canonical || typeof effectName !== 'string' ||
+      !effectName.trim() || !effectArgs || typeof effectArgs !== 'object' ||
+      Array.isArray(effectArgs)) {
+    return {ok:false,reason:'council_pending_effect_invalid'};
+  }
+  var expectedBinding = createPendingEffectsBinding(canonical);
+  if (!expectedBinding || receipt.pending_effects_count !== expectedBinding.count ||
+      receipt.pending_effects_digest !== expectedBinding.digest) {
+    return {ok:false,reason:'council_pending_effect_set_mismatch'};
+  }
+  var wanted = stableStringify(effectArgs);
+  var matches = canonical.filter(function (effect) {
+    return effect.name === effectName && stableStringify(effect.args) === wanted;
+  });
+  if (matches.length !== 1) {
+    return {ok:false,reason:'council_pending_effect_item_mismatch'};
+  }
+  return requireVerifiedCouncilResult(result, {
+    hamUid:receipt.ham_uid,requestId:receipt.request_id,cycleId:receipt.cycle_id,
+    question:receipt.question,deliberationInput:receipt.deliberation_input,
+    answer:result.answer,pendingEffects:canonical
+  });
+}
+
 function compactCouncilProof(result) {
   if (!result || result.ok !== true || typeof result.answer !== 'string') return null;
   var receipt = result.council_receipt || result.councilReceipt;
@@ -5345,6 +5408,7 @@ module.exports = {
   verifyCommittedCouncil: verifyCommittedCouncil,
   requireVerifiedCouncilResult: requireVerifiedCouncilResult,
   requireVerifiedCouncilDelivery: requireVerifiedCouncilDelivery,
+  requireVerifiedCouncilPendingEffect: requireVerifiedCouncilPendingEffect,
   compactCouncilProof: compactCouncilProof,
   councilSources:buildSources,
   reconstructCommittedCouncil:reconstructCommittedCouncil,
