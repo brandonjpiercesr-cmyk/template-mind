@@ -294,8 +294,9 @@ async function planWallEvidence(input, options) {
             prior.score = Math.max(prior.score, facts.score);
             return;
           }
-          const entry = {id:row.id,contributors:[facts.contributor],reasons:facts.reasons,
-            score:facts.score,created_at:row.created_at || null,source:row.source || null};
+          const entry = {id:row.id,ham_uid:hamUid,contributors:[facts.contributor],
+            reasons:facts.reasons,score:facts.score,created_at:row.created_at || null,
+            source:row.source || null};
           entry.compact_bytes = Buffer.byteLength(stableStringify(entry), 'utf8');
           selected.set(key, entry);
           compactOmitted.delete(key);
@@ -320,7 +321,8 @@ async function planWallEvidence(input, options) {
   }
   const selection = Array.from(selected.values()).sort(compareCandidates);
   const expanded = await finder.expandFcwEvidence(selection, value.viewer_tier, {
-    signal:opts.signal,max_bytes:budgets.fcw_bytes
+    signal:opts.signal,max_bytes:budgets.fcw_bytes,
+    last_air_fact_sink:opts.last_air_fact_sink
   });
   heapHighWater = Math.max(heapHighWater, process.memoryUsage().heapUsed);
   if (!expanded || expanded.ok !== true || expanded.available !== true) return expanded;
@@ -357,6 +359,9 @@ async function planWallEvidence(input, options) {
     compact_omitted:compactOmissions,
     continuations:Array.isArray(scan.continuations) ? scan.continuations : [],
     full_history_expansion_available:typeof finder.walkFcwEvidence === 'function',
+    last_air_cycle:expanded.last_air_cycle || null,
+    last_air_cycle_progressive:expanded.last_air_cycle_progressive === true,
+    last_air_cycle_sink:expanded.last_air_cycle_sink || null,
     heap_start_bytes:heapStart,heap_high_water_bytes:heapHighWater,
     contributors:contributors,scan:scan};
 }
