@@ -281,7 +281,8 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       named_agents:_namedAgentGlobals,include_preferences:_isPreferenceQ,
       include_wonder_games:_isWonderGamesQ,
       compact_byte_budget:options && options.agentFindCompactByteBudget,
-      fcw_byte_budget:options && options.agentFindFcwByteBudget});
+      fcw_byte_budget:options && options.agentFindFcwByteBudget}, {
+      last_air_fact_sink:options && options.agentFindProgressiveSink});
     if (!_evidencePlan || _evidencePlan.ok !== true) {
       return {ok:false,available:false,reason:String(_evidencePlan && _evidencePlan.reason ||
         'agent_find_evidence_plan_unavailable'),agent_find:_evidencePlan || null,

@@ -15,6 +15,7 @@
 // order:asc capability and the findContext/findPersonProfile work). Restoration of
 // lost code, zero new behavior.
 'use strict';
+var crypto = require('node:crypto');
 // ⬡B:core.find:WIRE:funneled_20260713⬡
 function _bu(){return process.env.MEMORY_BANK_URL||process.env.AIBE_BRAIN_URL;}
 function _bk(){return process.env.MEMORY_BANK_KEY||process.env.AIBE_BRAIN_KEY;}
@@ -22,6 +23,52 @@ function _memorySelected(){return !!(process.env.MEMORY_BANK_URL||process.env.ME
 function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_brain');}
 function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 var identityProvenance = require('./identity.provenance.js');
+
+var LAST_AIR_CYCLE_SCHEMA = 'anew.find.last-air-cycle-readback.v1';
+var LAST_AIR_STREAM_MODE = 'DURABLE_READBACK_NOT_LIVE_STREAM';
+var LAST_AIR_CHUNK_SCHEMA = 'anew.find.last-air-cycle-context-chunk.v1';
+var LAST_AIR_PROGRESSIVE_FACT_SCHEMA = 'anew.find.last-air-cycle-progressive-fact.v1';
+var LAST_AIR_CHUNK_BYTES = 4096;
+
+function plainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parsedObject(value) {
+  if (plainObject(value)) return value;
+  try {
+    var parsed = JSON.parse(value || 'null');
+    return plainObject(parsed) ? parsed : null;
+  } catch (error) { return null; }
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  Object.keys(value).forEach(function (key) { deepFreeze(value[key]); });
+  return value;
+}
+
+function stableStringify(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return '[' + value.map(function (item) {
+    return item === undefined ? 'null' : stableStringify(item);
+  }).join(',') + ']';
+  if (typeof value === 'object') {
+    return '{' + Object.keys(value).filter(function (key) {
+      return value[key] !== undefined;
+    }).sort().map(function (key) {
+      return JSON.stringify(key) + ':' + stableStringify(value[key]);
+    }).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+
+function digestText(value) {
+  return crypto.createHash('sha256').update(Buffer.from(String(value), 'utf8')).digest('hex');
+}
+
+function digestObject(value) { return digestText(stableStringify(value)); }
 
 // The deployed legacy table predates these columns. Sending even one unknown column in a
 // PostgREST select or predicate rejects the entire read with HTTP 400, which used to make every
@@ -203,6 +250,391 @@ async function walkAllPages(query, pathBuilder, reader, onPage) {
         cursor:null};
     }
   }
+}
+
+function lastAirFailure(reason) {
+  return deepFreeze({schema:LAST_AIR_CYCLE_SCHEMA,ok:false,available:false,
+    reason:String(reason || 'last_air_cycle_unavailable'),mode:LAST_AIR_STREAM_MODE,
+    producer_completeness_certified:false,provider_effect:null,human_effect:null});
+}
+
+function lastAirSuccessfulEmpty() {
+  return deepFreeze({schema:LAST_AIR_CYCLE_SCHEMA,ok:true,available:true,empty:true,
+    reason:'last_air_cycle_successful_empty',mode:LAST_AIR_STREAM_MODE,
+    producer_completeness_certified:false,provider_effect:null,human_effect:null});
+}
+
+function exactHam(value) { return String(value || '').trim().toUpperCase(); }
+function rowContent(value) { return parsedObject(value && value.content); }
+function rowIdentity(value) { return String(value && value.id == null ? '' : value.id); }
+
+function exactCycleSource(source, cycleSource) {
+  var value = String(source || '');
+  return value === cycleSource || value === cycleSource + '.receipt' ||
+    value.indexOf(cycleSource + '.stage.') === 0;
+}
+
+function canonicalObservedRow(row) {
+  var content = rowContent(row);
+  return {id:row.id,ham_uid:row.ham_uid,source:row.source,stamp_type:row.stamp_type,
+    agent_global:row.agent_global == null ? null : row.agent_global,
+    acl_stamp:row.acl_stamp == null ? null : row.acl_stamp,
+    importance:row.importance == null ? null : Number(row.importance),
+    created_at:row.created_at == null ? null : row.created_at,
+    summary:row.summary == null ? null : row.summary,
+    content:content === null ? row.content : content,
+    edges:row.edges == null ? null : row.edges};
+}
+
+function compareObservedRows(left, right) {
+  var created = String(left && left.created_at || '').localeCompare(
+    String(right && right.created_at || ''));
+  if (created) return created;
+  var source = String(left && left.source || '').localeCompare(String(right && right.source || ''));
+  if (source) return source;
+  var stamp = String(left && left.stamp_type || '').localeCompare(
+    String(right && right.stamp_type || ''));
+  return stamp || rowIdentity(left).localeCompare(rowIdentity(right));
+}
+
+function canonicalSourceStream(rows) {
+  var text = '';
+  var spans = [];
+  var byteOffset = 0;
+  (rows || []).forEach(function (row, index) {
+    var encoded = stableStringify(canonicalObservedRow(row));
+    var bytes = Buffer.byteLength(encoded, 'utf8');
+    text += (index ? '\n' : '') + encoded;
+    if (index) byteOffset += 1;
+    spans.push({row_id:row.id,source:row.source,stamp_type:row.stamp_type,
+      line_start:index + 1,line_end:index + 1,byte_start:byteOffset,
+      byte_end:byteOffset + bytes,raw_sha256:digestText(encoded)});
+    byteOffset += bytes;
+  });
+  return {text:text,spans:spans,bytes:byteOffset,sha256:digestText(text)};
+}
+
+function latestTurnPath(hamUid, viewerTier) {
+  var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
+  return evidenceQueryPath({source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid,
+    stamp_type:contract.TURN_STAMP_TYPE,
+    importance_gte:contract.READER_IMPORTANCE_FLOOR,viewer_tier:viewerTier,
+    select:evidenceSelect(true)}, {limit:1});
+}
+
+async function readLastAirCycleCandidate(input, options) {
+  var value = input || {};
+  var opts = options || {};
+  var hamUid = exactHam(value.ham_uid);
+  if (!hamUid) return lastAirFailure('last_air_cycle_ham_uid_required');
+  var reader = typeof opts.read_latest === 'function'
+    ? opts.read_latest : function (path) { return bq(path, opts.signal); };
+  var read;
+  try { read = await reader(latestTurnPath(hamUid, value.viewer_tier)); }
+  catch (error) { return lastAirFailure('last_air_cycle_anchor_read_failed'); }
+  if (!read || read.ok !== true || read.available !== true) {
+    return lastAirFailure(String(read && read.reason || 'last_air_cycle_anchor_unavailable'));
+  }
+  var rows = Array.isArray(read.rows) ? read.rows
+    : Array.isArray(read.beads) ? read.beads : [];
+  if (!rows.length) return lastAirSuccessfulEmpty();
+  if (rows.length !== 1) return lastAirFailure('last_air_cycle_anchor_ambiguous');
+  var anchor = rows[0];
+  var content = rowContent(anchor);
+  var entrance = content && content.entrance;
+  var exit = content && content.exit;
+  var cycleId = String(entrance && entrance.cycle_id || '').trim();
+  var requestId = String(entrance && entrance.request_id || '').trim();
+  var receiptSource = String(entrance && entrance.receipt_source || '').trim();
+  var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
+  var council = require('./pai.outbound.council.js');
+  var sources = cycleId && requestId ? council.councilSources(cycleId, requestId) : null;
+  if (exactHam(anchor && anchor.ham_uid) !== hamUid || anchor.stamp_type !==
+      contract.TURN_STAMP_TYPE || String(anchor.source || '').indexOf(
+        contract.TURN_SOURCE_PREFIX + hamUid + '.') !== 0 ||
+      Number(anchor.importance) < contract.READER_IMPORTANCE_FLOOR ||
+      !content || content.schema !== 'anew.memory.turn.v1' || !plainObject(entrance) ||
+      !plainObject(exit) || !cycleId || !requestId || !receiptSource || !sources ||
+      receiptSource !== sources.finalSource || !rowIdentity(anchor)) {
+    return lastAirFailure('last_air_cycle_anchor_invalid');
+  }
+  return {ok:true,available:true,ham_uid:hamUid,cycle_id:cycleId,request_id:requestId,
+    receipt_source:receiptSource,anchor:anchor,tools_used:Array.isArray(exit.tools_used)
+      ? exit.tools_used.slice() : []};
+}
+
+function reconstructCouncilPair(finalRow, stampRow, council) {
+  var finalContent = rowContent(finalRow);
+  var receipt = finalContent && finalContent.receipt;
+  var stampContent = rowContent(stampRow);
+  if (!receipt || !stampContent || finalContent.schema !== council.RECEIPT_SCHEMA ||
+      finalContent.receipt_digest !== receipt.receipt_digest ||
+      finalRow.stamp_type !== 'CYCLE_RECEIPT' || stampRow.stamp_type !== 'PAI_STAGE') {
+    return {ok:false,reason:'last_air_cycle_commit_rows_invalid'};
+  }
+  var sources = council.councilSources(receipt.cycle_id, receipt.request_id);
+  if (finalRow.source !== sources.finalSource ||
+      stampRow.source !== sources.stageSources[council.STAGE_ORDER.length - 1]) {
+    return {ok:false,reason:'last_air_cycle_commit_sources_invalid'};
+  }
+  var stage = stampContent.stage;
+  var endedAt = stage && stage.ended_at;
+  if (!endedAt || !Number.isFinite(Date.parse(endedAt))) {
+    return {ok:false,reason:'last_air_cycle_stamp_time_invalid'};
+  }
+  var proofCore = {schema:council.STAMP_PROOF_SCHEMA,ok:true,ham_uid:receipt.ham_uid,
+    request_id:receipt.request_id,cycle_id:receipt.cycle_id,
+    request_source:receipt.request_source,question_bytes:receipt.question_bytes,
+    question_digest:receipt.question_digest,
+    deliberation_input_bytes:receipt.deliberation_input_bytes,
+    deliberation_input_digest:receipt.deliberation_input_digest,
+    answer_digest:receipt.answer_digest,
+    identity_provenance_required:receipt.identity_provenance_required,
+    identity_evidence_receipt:receipt.identity_evidence_receipt,
+    stamp_source:sources.stageSources[council.STAGE_ORDER.length - 1],
+    stamp_row_id:stampRow.id,final_source:sources.finalSource,
+    final_receipt_row_id:finalRow.id,final_receipt_content_digest:digestObject(finalContent),
+    prepared_receipt_digest:receipt.receipt_digest,stage:stage,commit:stampContent.commit,
+    stamp_content_digest:digestObject(stampContent),readback_verified:true,
+    read_back_at:new Date(Date.parse(endedAt)).toISOString()};
+  ['pending_effects_count','pending_effects_digest','delivery_target_bytes',
+    'delivery_target_digest'].forEach(function (key) {
+    if (Object.prototype.hasOwnProperty.call(receipt, key)) proofCore[key] = receipt[key];
+  });
+  var proof = Object.assign({}, proofCore, {proof_digest:digestObject(proofCore)});
+  var expected = {hamUid:receipt.ham_uid,requestId:receipt.request_id,
+    cycleId:receipt.cycle_id,question:receipt.question,
+    deliberationInput:receipt.deliberation_input,answer:receipt.answer};
+  if (!council.verifyCommittedCouncil(receipt, proof, expected)) {
+    return {ok:false,reason:'last_air_cycle_commit_pair_invalid'};
+  }
+  return {ok:true,council_receipt:receipt,stamp_proof:proof};
+}
+
+async function readLastCompletedAirCycle(input, options) {
+  var value = input || {};
+  var opts = options || {};
+  var hamUid = exactHam(value.ham_uid);
+  if (!hamUid) return lastAirFailure('last_air_cycle_ham_uid_required');
+  var candidate = await readLastAirCycleCandidate(value, opts);
+  if (!candidate || candidate.ok !== true) return candidate;
+  if (candidate.empty === true) return candidate;
+  var anchor = candidate.anchor;
+  var exit = rowContent(anchor).exit;
+  var council = require('./pai.outbound.council.js');
+  var sources = council.councilSources(candidate.cycle_id, candidate.request_id);
+  var observed = [];
+  var seenRows = Object.create(null);
+  function keepObserved(page, allowed) {
+    (page || []).forEach(function (row) {
+      if (!row || exactHam(row.ham_uid) !== hamUid || !allowed(row)) {
+        throw new Error('last_air_cycle_row_scope_mismatch');
+      }
+      var id = rowIdentity(row);
+      if (!id) throw new Error('last_air_cycle_row_identity_missing');
+      var digest = digestObject(canonicalObservedRow(row));
+      if (seenRows[id] && seenRows[id] !== digest) {
+        throw new Error('last_air_cycle_row_identity_collision');
+      }
+      if (!seenRows[id]) { seenRows[id] = digest; observed.push(row); }
+    });
+  }
+  var walkQuery = typeof opts.walk_query === 'function' ? opts.walk_query
+    : function (query, onPage) {
+      return walkAllPages(query, evidenceQueryPath,
+        function (path) { return bq(path, opts.signal); }, onPage);
+    };
+  try {
+    var cycleRead = await walkQuery({source_prefix:sources.cycleSource,ham_uid:hamUid,
+      viewer_tier:value.viewer_tier,select:evidenceSelect(true)}, function (rows) {
+      keepObserved(rows, function (row) {
+        return exactCycleSource(row.source, sources.cycleSource);
+      });
+    });
+    if (!cycleRead || cycleRead.ok !== true || cycleRead.available !== true) {
+      return lastAirFailure(String(cycleRead && cycleRead.reason ||
+        'last_air_cycle_rows_unavailable'));
+    }
+    var requestRead = await walkQuery({source:sources.requestSource,ham_uid:hamUid,
+      viewer_tier:value.viewer_tier,select:evidenceSelect(true)}, function (rows) {
+      keepObserved(rows, function (row) { return row.source === sources.requestSource; });
+    });
+    if (!requestRead || requestRead.ok !== true || requestRead.available !== true) {
+      return lastAirFailure(String(requestRead && requestRead.reason ||
+        'last_air_request_row_unavailable'));
+    }
+    keepObserved([anchor], function (row) { return row === anchor; });
+  } catch (error) {
+    return lastAirFailure(String(error && error.message || 'last_air_cycle_rows_rejected'));
+  }
+  var finalRows = observed.filter(function (row) { return row.source === sources.finalSource; });
+  var stampRows = observed.filter(function (row) {
+    return row.source === sources.stageSources[council.STAGE_ORDER.length - 1];
+  });
+  if (finalRows.length !== 1 || stampRows.length !== 1) {
+    return lastAirFailure('last_air_cycle_commit_pair_missing');
+  }
+  var recovered = reconstructCouncilPair(finalRows[0], stampRows[0], council);
+  if (!recovered || recovered.ok !== true || recovered.council_receipt.ham_uid !== hamUid ||
+      recovered.council_receipt.cycle_id !== candidate.cycle_id ||
+      recovered.council_receipt.request_id !== candidate.request_id ||
+      recovered.council_receipt.persistence.final_source !== candidate.receipt_source) {
+    return lastAirFailure(String(recovered && recovered.reason ||
+      'last_air_cycle_commit_pair_invalid'));
+  }
+  var requiredSources = [sources.requestSource].concat(
+    recovered.council_receipt.persistence.stage_sources || [], [sources.finalSource]);
+  var sourceCounts = Object.create(null);
+  observed.forEach(function (row) {
+    sourceCounts[String(row.source)] = (sourceCounts[String(row.source)] || 0) + 1;
+  });
+  if (requiredSources.some(function (source) { return sourceCounts[source] !== 1; })) {
+    return lastAirFailure('last_air_cycle_structural_rows_incomplete');
+  }
+  observed.sort(compareObservedRows);
+  var stream = canonicalSourceStream(observed);
+  return deepFreeze({schema:LAST_AIR_CYCLE_SCHEMA,ok:true,available:true,
+    mode:LAST_AIR_STREAM_MODE,ham_uid:hamUid,cycle_id:candidate.cycle_id,
+    request_id:candidate.request_id,
+    anchor:{row_id:anchor.id,source:anchor.source,created_at:anchor.created_at || null,
+      receipt_source:candidate.receipt_source},
+    council:{final_receipt_row_id:finalRows[0].id,stamp_row_id:stampRows[0].id,
+      final_source:candidate.receipt_source,
+      receipt_digest:recovered.council_receipt.receipt_digest,
+      committed:true,readback_verified:true},
+    source_stream_utf8:stream.text,source_stream_sha256:stream.sha256,
+    source_stream_bytes:stream.bytes,source_spans:stream.spans,
+    observed_row_count:observed.length,
+    tools_used:Array.isArray(exit.tools_used) ? exit.tools_used.slice() : [],
+    producer_completeness_certified:false,
+    producer_completeness_reason:'cycle_step_writes_are_fire_and_forget',
+    effect_truth:{find_live_stream_proven:false,supabase_live_microhop_proven:false,
+      provider_effect:null,human_effect:null},provider_effect:null,human_effect:null});
+}
+
+function splitUtf8(value) {
+  var input = String(value || '');
+  var chunks = [];
+  var current = '';
+  var bytes = 0;
+  var start = 0;
+  for (var index = 0; index < input.length;) {
+    var symbol = String.fromCodePoint(input.codePointAt(index));
+    var symbolBytes = Buffer.byteLength(symbol, 'utf8');
+    if (bytes && bytes + symbolBytes > LAST_AIR_CHUNK_BYTES) {
+      chunks.push({utf8:current,byte_start:start,byte_end:start + bytes});
+      start += bytes; current = ''; bytes = 0;
+    }
+    current += symbol; bytes += symbolBytes; index += symbol.length;
+  }
+  if (bytes || !chunks.length) chunks.push({utf8:current,byte_start:start,byte_end:start + bytes});
+  return chunks;
+}
+
+function lastAirContextRows(observation) {
+  if (!observation || observation.ok !== true || observation.schema !== LAST_AIR_CYCLE_SCHEMA ||
+      observation.mode !== LAST_AIR_STREAM_MODE ||
+      observation.producer_completeness_certified !== false ||
+      !observation.effect_truth || observation.effect_truth.find_live_stream_proven !== false ||
+      observation.effect_truth.supabase_live_microhop_proven !== false ||
+      !Array.isArray(observation.source_spans) ||
+      observation.source_spans.length !== observation.observed_row_count) {
+    return {ok:false,reason:'last_air_cycle_context_contract_invalid'};
+  }
+  var stream = String(observation.source_stream_utf8 || '');
+  var streamBytes = Buffer.from(stream, 'utf8');
+  if (streamBytes.length !== observation.source_stream_bytes ||
+      digestText(stream) !== observation.source_stream_sha256) {
+    return {ok:false,reason:'last_air_cycle_context_stream_invalid'};
+  }
+  var rows = [];
+  observation.source_spans.forEach(function (span, lineIndex) {
+    var prior = lineIndex ? observation.source_spans[lineIndex - 1] : null;
+    if (!span || !Number.isInteger(span.byte_start) || !Number.isInteger(span.byte_end) ||
+        span.byte_start < 0 || span.byte_end < span.byte_start ||
+        span.byte_end > streamBytes.length || span.line_start !== lineIndex + 1 ||
+        span.line_end !== lineIndex + 1 ||
+        (prior ? span.byte_start !== prior.byte_end + 1 : span.byte_start !== 0)) {
+      throw new Error('last_air_cycle_context_span_invalid');
+    }
+    var raw = streamBytes.subarray(span.byte_start, span.byte_end).toString('utf8');
+    if (digestText(raw) !== span.raw_sha256) {
+      throw new Error('last_air_cycle_context_span_digest_invalid');
+    }
+    var parts = splitUtf8(raw);
+    parts.forEach(function (part, partIndex) {
+      var payload = {schema:LAST_AIR_CHUNK_SCHEMA,mode:LAST_AIR_STREAM_MODE,
+        ham_uid:observation.ham_uid,cycle_id:observation.cycle_id,
+        request_id:observation.request_id,
+        source_stream_sha256:observation.source_stream_sha256,
+        source_stream_bytes:observation.source_stream_bytes,
+        line_index:lineIndex + 1,line_count:observation.source_spans.length,
+        row_id:span.row_id,row_source:span.source,row_stamp_type:span.stamp_type,
+        row_raw_sha256:span.raw_sha256,part_index:partIndex + 1,part_count:parts.length,
+        byte_start:span.byte_start + part.byte_start,
+        byte_end:span.byte_start + part.byte_end,chunk_sha256:digestText(part.utf8),
+        chunk_utf8:part.utf8,producer_completeness_certified:false,
+        effect_truth:{find_live_stream_proven:false,supabase_live_microhop_proven:false,
+          provider_effect:null,human_effect:null}};
+      var suffix = String(lineIndex + 1).padStart(8, '0') + '.' +
+        String(partIndex + 1).padStart(6, '0');
+      rows.push(deepFreeze({id:'last-air:' + observation.source_stream_sha256 + ':' + suffix,
+        ham_uid:observation.ham_uid,agent_global:'FIND',stamp_type:'FIND_READBACK_CHUNK',
+        source:'anew.find.last-air-cycle.chunk.' + observation.source_stream_sha256 + '.' + suffix,
+        summary:'[LAST AIR OBSERVED FACT CHUNK; durable readback, not live stream; '
+          + 'producer completeness uncertified] ' + stableStringify(payload),
+        content:stableStringify({schema:LAST_AIR_CHUNK_SCHEMA,
+          source_stream_sha256:observation.source_stream_sha256,
+          line_index:lineIndex + 1,part_index:partIndex + 1}),
+        importance:7,created_at:observation.anchor.created_at || null,superseded_by:null}));
+    });
+  });
+  var manifest = {schema:'anew.find.last-air-cycle-context-manifest.v1',
+    mode:LAST_AIR_STREAM_MODE,ham_uid:observation.ham_uid,cycle_id:observation.cycle_id,
+    request_id:observation.request_id,source_stream_sha256:observation.source_stream_sha256,
+    source_stream_bytes:observation.source_stream_bytes,
+    observed_row_count:observation.observed_row_count,
+    source_span_count:observation.source_spans.length,context_chunk_count:rows.length,
+    producer_completeness_certified:false,
+    producer_completeness_reason:observation.producer_completeness_reason,
+    effect_truth:observation.effect_truth,provider_effect:null,human_effect:null};
+  rows.unshift(deepFreeze({id:'last-air:' + observation.source_stream_sha256 + ':manifest',
+    ham_uid:observation.ham_uid,agent_global:'FIND',stamp_type:'FIND_READBACK_MANIFEST',
+    source:'anew.find.last-air-cycle.manifest.' + observation.source_stream_sha256,
+    summary:'[LAST COMPLETED AIR CYCLE FACTUAL READBACK MANIFEST] ' +
+      stableStringify(manifest),content:stableStringify(manifest),importance:7,
+    created_at:observation.anchor.created_at || null,superseded_by:null}));
+  return {ok:true,rows:rows,manifest:deepFreeze(manifest)};
+}
+
+async function streamLastAirProjection(projection, sink) {
+  var rows = projection && Array.isArray(projection.rows) ? projection.rows : [];
+  if (typeof sink !== 'function') {
+    return deepFreeze({ok:false,available:false,
+      reason:'last_air_cycle_progressive_sink_unseated',facts_total:rows.length,
+      facts_accepted:0,facts_failed:0,failures:[],provider_effect:null,human_effect:null});
+  }
+  var accepted = 0;
+  var failures = [];
+  var chain = digestText('');
+  for (var index = 0; index < rows.length; index += 1) {
+    var row = rows[index];
+    var rowDigest = digestObject(row);
+    var fact = deepFreeze({schema:LAST_AIR_PROGRESSIVE_FACT_SCHEMA,
+      fact_ordinal:index,fact_count:rows.length,row_sha256:rowDigest,row:row,
+      provider_effect:null,human_effect:null});
+    try {
+      await sink(fact);
+      accepted += 1;
+      chain = digestObject({prior_sha256:chain,fact_ordinal:index,row_sha256:rowDigest});
+    } catch (error) {
+      failures.push({fact_ordinal:index,reason:'last_air_cycle_progressive_sink_rejected'});
+    }
+  }
+  return deepFreeze({ok:failures.length === 0,available:true,
+    reason:failures.length ? 'last_air_cycle_progressive_sink_partial' : null,
+    facts_total:rows.length,facts_accepted:accepted,facts_failed:failures.length,
+    accepted_chain_sha256:chain,failures:failures,provider_effect:null,human_effect:null});
 }
 
 // ⬡B:core.find:GUARD:identity_read_availability_is_explicit:20260715⬡
@@ -562,9 +994,34 @@ async function scanFcwEvidence(input, options) {
   var totalPages = 0;
   var failures = [];
   var continuations = [];
+  var candidateReader = typeof opts.read_last_air_candidate === 'function'
+    ? opts.read_last_air_candidate : readLastAirCycleCandidate;
+  var lastAirCandidate;
+  try {
+    lastAirCandidate = await candidateReader(input, {signal:opts.signal,
+      read_latest:opts.read_latest});
+  } catch (candidateError) {
+    lastAirCandidate = lastAirFailure('last_air_cycle_candidate_read_failed');
+  }
+  if (lastAirCandidate && lastAirCandidate.ok === true && lastAirCandidate.anchor) {
+    var compactAnchor = Object.assign({}, lastAirCandidate.anchor, {
+      summary:'[LAST COMPLETED AIR CYCLE CANDIDATE] exact durable turn anchor; '
+        + 'receipt and observed source rows verify during same-wake expansion'});
+    totalRows += 1;
+    totalPages += 1;
+    await opts.onPage([compactAnchor], {contributor:'context',query_index:-1,page:0,
+      cursor:null,last_air_cycle_candidate:true});
+  } else if (!(lastAirCandidate && lastAirCandidate.ok === true &&
+      lastAirCandidate.empty === true)) {
+    failures.push({contributor:'context',query_index:-1,optional_effect:'last_air_cycle',
+      reason:String(lastAirCandidate && lastAirCandidate.reason ||
+        'last_air_cycle_candidate_unavailable')});
+  }
   for (var index = 0; index < queries.length; index += 1) {
     var query = queries[index];
-    var result = await bq(evidenceQueryPath(query, {limit:query.limit}), opts.signal);
+    var compactReader = typeof opts.read_compact === 'function'
+      ? opts.read_compact : function (path) { return bq(path, opts.signal); };
+    var result = await compactReader(evidenceQueryPath(query, {limit:query.limit}));
     if (!result || result.ok !== true || result.available !== true) {
       failures.push({contributor:query.contributor,query_index:index,
         reason:String(result && result.reason || 'brain_read_unavailable')});
@@ -583,10 +1040,11 @@ async function scanFcwEvidence(input, options) {
       }
     }
   }
-  var available=failures.length < queries.length;
+  var ordinaryFailures=failures.filter(function(failure){return failure.query_index>=0;});
+  var available=ordinaryFailures.length < queries.length;
   var unavailableReason=null;
   if(!available){
-    unavailableReason=failures.length&&failures.every(function(failure){
+    unavailableReason=ordinaryFailures.length&&ordinaryFailures.every(function(failure){
       return failure.reason==='brain_unconfigured';
     })?'memory_bank_unavailable':'agent_find_compact_scan_unavailable';
   }
@@ -595,8 +1053,8 @@ async function scanFcwEvidence(input, options) {
     partial:failures.length > 0 || continuations.length > 0 || !activeTruthEnforced,
     active_truth_enforced:activeTruthEnforced,
     storage_limitations:activeTruthEnforced?[]:['legacy_supersession_unavailable'],failures:failures,
-    continuations:continuations,queries_total:queries.length,pages:totalPages,
-    rows_seen:totalRows};
+    continuations:continuations,queries_total:queries.length + 1,pages:totalPages,
+    rows_seen:totalRows,last_air_cycle_state:lastAirCandidate};
 }
 
 async function walkFcwEvidence(input, options) {
@@ -641,11 +1099,65 @@ async function expandFcwEvidence(selections, viewerTier, options) {
   var rows = [];
   var omitted = [];
   var retainedBytes = 0;
+  var candidateSelections = selected.filter(function (entry) {
+    return entry && Array.isArray(entry.contributors) &&
+      entry.contributors.indexOf('context') >= 0 && Array.isArray(entry.reasons) &&
+      entry.reasons.indexOf('contributor_anchor') >= 0 &&
+      String(entry.source || '').indexOf('pai.minutes.') === 0;
+  });
+  var lastAirCycle = null;
+  var lastAirProjection = null;
+  var lastAirSinkReceipt = null;
+  if (candidateSelections.length === 1) {
+    var candidateSelection = candidateSelections[0];
+    var candidateHamUid = exactHam(candidateSelection.ham_uid);
+    var fullReader = typeof opts.read_last_air_cycle === 'function'
+      ? opts.read_last_air_cycle : readLastCompletedAirCycle;
+    try {
+      lastAirCycle = candidateHamUid
+        ? await fullReader({ham_uid:candidateHamUid,viewer_tier:viewerTier},
+          {signal:opts.signal,read_latest:opts.read_latest,walk_query:opts.walk_query})
+        : lastAirFailure('last_air_cycle_ham_uid_required');
+    } catch (lastAirError) {
+      lastAirCycle = lastAirFailure('last_air_cycle_expansion_failed');
+    }
+    if (lastAirCycle && lastAirCycle.ok === true &&
+        exactHam(lastAirCycle.ham_uid) === candidateHamUid &&
+        String(lastAirCycle.anchor.row_id) === String(candidateSelection.id) &&
+        lastAirCycle.anchor.source === candidateSelection.source) {
+      try { lastAirProjection = lastAirContextRows(lastAirCycle); }
+      catch (projectionError) {
+        lastAirCycle = lastAirFailure(String(projectionError && projectionError.message ||
+          'last_air_cycle_context_projection_failed'));
+      }
+    } else if (lastAirCycle && lastAirCycle.ok === true) {
+      lastAirCycle = lastAirFailure('last_air_cycle_anchor_changed_during_expansion');
+    }
+  }
+  var factualBytes = 0;
+  if (lastAirProjection && lastAirProjection.ok === true) {
+    lastAirSinkReceipt = await streamLastAirProjection(lastAirProjection,
+      opts.last_air_fact_sink);
+    lastAirProjection.rows.forEach(function (row) {
+      var bytes = Buffer.byteLength(JSON.stringify(row), 'utf8');
+      factualBytes += bytes;
+      var reasons = [row.stamp_type === 'FIND_READBACK_MANIFEST'
+        ? 'last_air_cycle_exact_manifest' : 'last_air_cycle_exact_chunk'];
+      if (retainedBytes + bytes > maxBytes) {
+        omitted.push({id:row.id,contributors:['context'],reasons:reasons,
+          reason:'last_air_cycle_fcw_byte_envelope_reached',bytes:bytes});
+        return;
+      }
+      retainedBytes += bytes;
+      rows.push({row:row,contributors:['context'],reasons:reasons,bytes:bytes});
+    });
+  }
   for (var offset = 0; offset < ids.length; offset += 50) {
     var batch = ids.slice(offset, offset + 50);
-    var read = await bq(evidenceQueryPath({ids:batch,viewer_tier:viewerTier,
-      select:evidenceSelect(true)},
-      {limit:batch.length}), opts.signal);
+    var evidenceReader = typeof opts.read_evidence === 'function'
+      ? opts.read_evidence : function (path) { return bq(path, opts.signal); };
+    var read = await evidenceReader(evidenceQueryPath({ids:batch,viewer_tier:viewerTier,
+      select:evidenceSelect(true)}, {limit:batch.length}));
     if (!read || read.ok !== true || read.available !== true) {
       return {ok:false,available:false,reason:String(read && read.reason ||
         'agent_find_evidence_expansion_failed'),rows:[],by_contributor:{}};
@@ -654,6 +1166,9 @@ async function expandFcwEvidence(selections, viewerTier, options) {
       .forEach(function (row) {
       var entry = byId[String(row.id)];
       if (!entry) return;
+      if (lastAirProjection && lastAirProjection.ok === true &&
+          String(lastAirCycle.anchor.row_id) === String(row.id) &&
+          lastAirCycle.anchor.source === row.source) return;
       var bytes = Buffer.byteLength(JSON.stringify(row), 'utf8');
       if (retainedBytes + bytes > maxBytes) {
         omitted.push({id:row.id,contributors:entry.contributors,
@@ -677,7 +1192,14 @@ async function expandFcwEvidence(selections, viewerTier, options) {
     active_truth_enforced:activeTruthEnforced,
     storage_limitations:activeTruthEnforced?[]:['legacy_supersession_unavailable'],
     retained_bytes:retainedBytes,max_bytes:maxBytes,envelope_reached:omitted.length > 0,
-    omitted:omitted};
+    omitted:omitted,last_air_cycle:lastAirProjection && lastAirProjection.ok === true
+      ? lastAirProjection.manifest : lastAirCycle,
+    last_air_cycle_progressive:!!(lastAirProjection && lastAirProjection.ok === true &&
+      lastAirSinkReceipt && lastAirSinkReceipt.ok === true),
+    last_air_cycle_sink:lastAirSinkReceipt,
+    last_air_cycle_factual_bytes:factualBytes,
+    last_air_cycle_chunk_count:lastAirProjection && lastAirProjection.ok === true
+      ? lastAirProjection.manifest.context_chunk_count : 0};
 }
 
 // Named FIND patterns used by the Memory Bank builder
@@ -1102,11 +1624,15 @@ async function _tierColumnReachable(tier) {
 }
 
 module.exports = { find, findForWorld, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findDoctrinePage, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
+  readLastCompletedAirCycle:readLastCompletedAirCycle,
   scanFcwEvidence:scanFcwEvidence,walkFcwEvidence:walkFcwEvidence,
   expandFcwEvidence:expandFcwEvidence,
   _test:{ bq:bq, identityBq:identityBq, identityQueryPath:identityQueryPath,
     readAllPages:readAllPages,walkAllPages:walkAllPages,evidenceQueryPath:evidenceQueryPath,
+    readLastAirCycleCandidate:readLastAirCycleCandidate,
+    canonicalObservedRow:canonicalObservedRow,canonicalSourceStream:canonicalSourceStream,
+    lastAirContextRows:lastAirContextRows,
     fcwEvidenceQueries:fcwEvidenceQueries,doctrinePagePath:doctrinePagePath,
     normalizeDoctrineQuery:normalizeDoctrineQuery,encodeDoctrineCursor:encodeDoctrineCursor,
     decodeDoctrineCursor:decodeDoctrineCursor,
-    providerPageSize:PROVIDER_PAGE_SIZE } };
+    providerPageSize:PROVIDER_PAGE_SIZE,lastAirCycleSchema:LAST_AIR_CYCLE_SCHEMA } };
