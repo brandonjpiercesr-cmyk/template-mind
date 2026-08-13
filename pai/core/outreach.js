@@ -29,6 +29,7 @@ function ymd() { return new Date().toISOString().slice(0,10).replace(/-/g,''); }
 const { buildMemoryBank } = require('./fcw.builder.js'); // Memory Bank (BIND doctrine)
 const { tapSend } = require('./wren/reply.js');
 const crypto = require('node:crypto');
+const spendGuard = require('./spend.guard.js');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const voiceProviderAcceptance = require('./voice.provider.acceptance.js');
 const reachContext = new AsyncLocalStorage();
@@ -91,11 +92,19 @@ function voiceDigest(value) {
   return crypto.createHash('sha256').update(String(value), 'utf8').digest('hex');
 }
 
-function voiceSessionBindingMessage(attemptSource, attemptDigest) {
+function canonicalVoiceMode(value) {
+  return ['copresent', 'founder_copresent'].includes(
+    String(value || '').trim().toLowerCase())
+    ? 'founder_copresent' : 'conversation';
+}
+
+function voiceSessionBindingMessage(attemptSource, attemptDigest, voiceMode) {
   var source = typeof attemptSource === 'string' ? attemptSource : '';
   var digest = typeof attemptDigest === 'string' ? attemptDigest : '';
-  if (!source && !digest) return 'voice_session_bind';
-  return JSON.stringify(['voice_session_bind', source, digest]);
+  var mode = canonicalVoiceMode(voiceMode);
+  if (!source && !digest && mode === 'conversation') return 'voice_session_bind';
+  if (mode === 'conversation') return JSON.stringify(['voice_session_bind', source, digest]);
+  return JSON.stringify(['voice_session_bind', source, digest, mode]);
 }
 
 function voiceAutonomousAttemptShape(input) {
@@ -284,13 +293,27 @@ async function persistVoiceAutonomousAttempt(input) {
 // same env vars now added to this service too, so this is not starting cold.
 const ORNITH_URL = process.env.ORNITH_URL;
 const RUNPOD_KEY = process.env.RUNPOD_API_KEY;
-const ORNITH_MODEL = process.env.ORNITH_MODEL || 'maxwell1500/ornith-35b:Q4_K_M';
+// ⬡B:core.outreach:FIX:ornith_is_a_founder_banned_family_by_name_now:20260729⬡
+// Founder ban 20260729: Ornith is a named banned family on any transport, no
+// wonder-games exemption for this caller. No banned literal
+// ('maxwell1500/ornith-35b...') is ever constructed as a default here now, mirroring
+// the same fix in core/model.ladder.js's tryOrnith and core/ornith.client.js; the
+// prior fix only checked the literal AFTER building it, which the repo-wide guard
+// (tests/no.banned.production.model.literal.anywhere.test.js) still flagged as a
+// live literal sitting right there.
+const ORNITH_MODEL = process.env.ORNITH_MODEL || '';
 
 async function callOrnith(system, userContent, maxTokens) {
   // ⬡B:core.outreach:KILL:ornith_retired_founder_911:20260722⬡ FOUNDER 911: Ornith
   // retired, RunPod out. Null falls to the next provider exactly like a timeout.
   if (process.env.ORNITH_ENABLED !== 'on') return null;
   if (!ORNITH_URL || !RUNPOD_KEY) return null;
+  // ⬡B:core.outreach:FIX:ornith_is_banned_even_when_explicitly_opted_back_in:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1. Founder ban 20260729: no Ornith
+  // as a production pick, no wonder-games exemption for this caller. The ORNITH_ENABLED
+  // opt-in above predates tonight and was never meant to override a later ban; this
+  // function's only model IS Ornith, so an explicit re-enable now correctly refuses too.
+  if (!ORNITH_MODEL || require('./seat.map.js').isBannedProductionModel(ORNITH_MODEL)) return null;
   try {
     const payload = { input: { mode: 'chat', model: ORNITH_MODEL,
       options: { num_predict: maxTokens || 1500, temperature: 0.3 },
@@ -324,16 +347,37 @@ async function callOrnith(system, userContent, maxTokens) {
 // callOrnith(), never touched by that fix, called on the two most
 // frequently-fired judgment steps in the whole system (real-time outreach
 // judgment and the daily digest). Same real fix, same reason: RunPod bills
-// GPU wall-clock time per call, GLM-5.2 (Together, hosted, token-billed)
-// costs a fraction of a cent for the same call. GLM tried first now, Ornith
-// stays as the real fallback, not removed.
+// GPU wall-clock time per call, GLM-5.2 costs a fraction of a cent for the
+// same call. GLM tried first now, Ornith stays as the real fallback, not
+// removed.
+// ⬡B:core.outreach:FIX:a_hardcoded_together_glm_call_bypassed_the_seat_map_and_the_ban:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1. This call hardcoded
+// 'zai-org/GLM-5.2' on a raw Together fetch, invisible to core/seat.map.js's
+// production-model guard entirely (it never touched the seat map at all) and
+// doubly non-compliant: Together was already retired from every load-bearing
+// seat by founder ruling 20260724 (see core/seat.map.js's own header), and
+// GLM-5.2 is now banned as a production pick outright. Migrated to the C2
+// organ seat on OpenRouter, the same per-function key/model pattern every
+// other production caller in the estate now uses; the "cheap, fast, frequent
+// judgment" intent behind the original pick is preserved, since c2_organ is
+// exactly the everyday, penny-hustle seat, not a heavier one.
 async function callGLM(system, userContent, maxTokens) {
-  const key = process.env.TOGETHER_API_KEY;
+  const seatMap = require('./seat.map.js');
+  const seat = seatMap.seat('c2_organ');
+  const key = seatMap.resolveKey(seat);
   if (!key) return null;
   try {
-    const r = await fetch('https://api.together.xyz/v1/chat/completions', {
+    // ⬡B:core.outreach:FIX:qwen_thought_the_output_budget_away:20260729⬡
+    // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1: the C2 organ seat's Qwen 3.5 is
+    // a hybrid reasoning model that thinks by default (core/model.ladder.js's own 20260726
+    // finding); left to think, it spends the whole max_tokens budget on reasoning and
+    // returns empty content, which this function reads as null, same disease already fixed
+    // on routes/voice.turndetect.routes.js. Both passthrough shapes, since OpenRouter
+    // providers differ in which they honor.
+    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'zai-org/GLM-5.2', max_tokens: maxTokens || 3000, temperature: 0.3,
+      body: JSON.stringify({ model: seat.model, max_tokens: maxTokens || 8000, temperature: 0.3,
+        chat_template_kwargs: { enable_thinking: false }, reasoning: { enabled: false },
         messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }] })
     });
     if (!r.ok) return null;
@@ -342,11 +386,58 @@ async function callGLM(system, userContent, maxTokens) {
   } catch (e) { return null; }
 }
 
+// ⬡B:core.outreach:FIX:grounding_checks_only_ever_authenticated_through_the_retired_key:20260729⬡
+// CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1: judgeAndCompose()'s and
+// composeDigest()'s grounding checks (the safety gate that catches a drafted message
+// inventing facts) both called Together directly with GROQ, never the migrated C2
+// organ seat. In the newly supported C2-only configuration (no TOGETHER_API_KEY), the
+// message-side check was gated on `&& GROQ` and silently never ran at all -- the exact
+// "a safety gate that can fail silently is not a safety gate" failure this file's own
+// 20260705 fix was written to prevent, just from a different cause -- and the digest-
+// side check correctly failed CLOSED but with no usable rung, permanently blocking the
+// digest on an otherwise fully working seat. Both now try the C2 seat first (through
+// callGLM, so the thinking-disable fix above covers this call too), Together only as
+// the same last-resort fallback the main compose calls already use.
+async function groundingCheckText(system, user, maxTokens) {
+  const out = await callGLM(system, user, maxTokens);
+  if (out) return out;
+  if (!GROQ) return null;
+  try {
+    const gr = await fetch('https://api.together.xyz/v1/chat/completions', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: (require('./seat.map.js').safeModelOverride(process.env.TOGETHER_MODEL, 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8')), max_tokens: maxTokens, temperature: 0,
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }] })
+    });
+    if (!gr.ok) return null;
+    const gd = await gr.json();
+    return (gd.choices && gd.choices[0] && gd.choices[0].message && gd.choices[0].message.content) || null;
+  } catch (e) { return null; }
+}
+
 // ⬡B:core.outreach:WIRE:real_phone_call:20260702⬡
 // Founder, verbatim: "she still never calls me." Reach was text-only. Now: when her
-// judgment says importance >= 9, she CALLS through the owned Pipecat worker:
-// telephony carries media, Deepgram hears, PAI judges, and ElevenLabs renders TTS.
-// Below 9, a text. A provider receipt ID is required before a call is accepted.
+// judgment says importance >= 9, she calls through the ElevenLabs native Twilio
+// transport. ElevenLabs owns audio transport while A'NEW remains the only thinking
+// owner through the custom LLM door. A provider receipt pair is required before a
+// call is accepted.
+function voiceProviderReceiptKey() {
+  return String(process.env.VOICE_PROVIDER_RECEIPT_KEY || '').trim();
+}
+
+function voiceCallProviderAttribution(hamUid, providerProof, env) {
+  var runtime = env || process.env;
+  return {
+    component:'outreach.voice_call',
+    intent_source:providerProof.request_id,
+    ham_uid:String(hamUid || '').trim().toUpperCase(),
+    cycle_id:providerProof.cycle_id,
+    request_id:providerProof.request_id,
+    owner_node_id:'station.vara',
+    target_wonder_id:'wonder.anu.voice',
+    service_id:String(runtime.RENDER_SERVICE_ID || runtime.ANEW_SERVICE_ID || '').trim()
+  };
+}
+
 async function placeCall(toPhone, callReason, councilResult, options) {
   // ⬡B:core.outreach:GUARD:provider_call_requires_full_council_pair:20260715⬡
   // This exported provider boundary used to accept any caller-supplied words.
@@ -368,8 +459,14 @@ async function placeCall(toPhone, callReason, councilResult, options) {
   }
   try {
     var outboundCouncil = require('./pai.outbound.council.js');
-    committedDelivery = outboundCouncil.requireVerifiedCouncilDelivery(councilResult,
-      { kind:'phone', value:toPhone }, callReason);
+    var parentEffect=options&&options.parentEffect;
+    committedDelivery=parentEffect&&parentEffect.name==='reach_current_person'&&
+      require('./reach.self.hand.js').authorizedArtifact(
+        parentEffect.args,'phone',callReason)
+      ?outboundCouncil.requireVerifiedCouncilPendingEffect(councilResult,
+        parentEffect.pendingEffects,'reach_current_person',parentEffect.args)
+      :outboundCouncil.requireVerifiedCouncilDelivery(councilResult,
+        { kind:'phone', value:toPhone }, callReason);
     providerProof = committedDelivery && committedDelivery.ok
       ? outboundCouncil.compactCouncilProof(councilResult) : null;
   } catch (eProof) { providerProof = null; }
@@ -378,6 +475,7 @@ async function placeCall(toPhone, callReason, councilResult, options) {
     return { ok:false, reason:'pai_council_result_required' };
   }
   options = options || {};
+  var voiceMode = canonicalVoiceMode(options.voiceMode);
   var isAutonomousReach =
     options.autonomousVoiceCapability === AUTONOMOUS_VOICE_ATTEMPT_CAPABILITY;
   var autonomousAttemptInput = null;
@@ -394,6 +492,25 @@ async function placeCall(toPhone, callReason, councilResult, options) {
     }
     if (killState.active) return { ok:false, reason:'kill_switch_active' };
   } catch (eKill) { return { ok:false, reason:'kill_switch_unverified' }; }
+  // \u2b21B:core.outreach:WIRE:travel_mode_is_read_before_she_dials:20260726\u2b21
+  // TRAVEL MODE, the read side, third egress edge. The hold had a real mind-parsed write
+  // side (routes/directive.hold.routes.js) and no reader anywhere in six repos, so a
+  // standing "everything comes to me only" stopped a call exactly as much as it stopped an
+  // email: not at all. A ringing phone is the loudest thing this system can do next to a
+  // client. Same seat as the kill switch recheck above, same stance on uncertainty, and the
+  // withheld intent is kept durably so it comes to him instead of vanishing.
+  try {
+    var _travelHold = await require('./directive.hold.read.js').guardOutbound({
+      hamUid: recipientEnvelope.ham_uid,
+      world: (options && options.world) || recipientEnvelope.world || null,
+      scope: 'outbound', channel: 'voice',
+      target: recipientEnvelope.phone || recipientEnvelope.ham_uid,
+      text: (options && options.openerText) || null });
+    if (_travelHold.held) {
+      return { ok:false, reason:_travelHold.reason, directive_hold:_travelHold.hold,
+        withheld_receipt:_travelHold.withheld_receipt === true };
+    }
+  } catch (eTravelHold) { return { ok:false, reason:'directive_hold_unverified' }; }
   // \u2b21B:core.outreach:FIX:outbound_call_carries_atmosphere:20260702\u2b21
   // Founder screenshot: three missed calls, every voicemail "I need to verify who
   // you are first." Root cause read directly from this function: the outbound body
@@ -410,6 +527,13 @@ async function placeCall(toPhone, callReason, councilResult, options) {
     ham_name: recipientEnvelope.name || 'there',
     trust_level: String(recipientEnvelope.trust_level != null ? recipientEnvelope.trust_level : 0),
     world: recipientEnvelope.world || 'guest' };
+  if (voiceMode === 'founder_copresent') {
+    var configuredFounder = String(process.env.FOUNDER_HAM_UID || '').trim().toUpperCase();
+    if (!configuredFounder || configuredFounder !== String(dv.ham_uid).trim().toUpperCase()) {
+      return { ok:false, reason:'founder_copresent_identity_required' };
+    }
+  }
+  dv.voice_mode = voiceMode;
   // ⬡B:core.outreach:FIX:call_reason_threaded_to_live_turn:20260703⬡
   // Founder finding, live on a real call tonight: he was called for a real
   // reason, real judgment, real receipts, and when he asked mid-call "was
@@ -421,10 +545,11 @@ async function placeCall(toPhone, callReason, councilResult, options) {
   // call alongside it closes the gap without inventing a new mechanism.
   if (callReason) {
     var handoffSessionId = 'vara.handoff.' + crypto.randomUUID();
-    // Keep the exact-call lease valid for a real conversation, not only for a
-    // short demo. Twilio's canonical media stream can remain open for 60
-    // minutes; the five-minute setup margin matches the authorization cap.
-    var handoffExpiresAt = Date.now() + 65 * 60 * 1000;
+    // This is an authorization ceiling, not a carrier/media lifetime promise.
+    // It keeps a still-connected call authorized for up to two hours plus five
+    // bounded setup/final-delivery minutes; Twilio, the media WebSocket, worker
+    // idle policy, or either human can still end the call earlier.
+    var handoffExpiresAt = Date.now() + 125 * 60 * 1000;
     var handoffNonce = crypto.randomUUID();
     var handoffInput = { hamUid:dv.ham_uid, message:String(callReason),
       receiptDigest:providerProof.receipt_digest,
@@ -449,7 +574,7 @@ async function placeCall(toPhone, callReason, councilResult, options) {
     dv.initial_message_nonce = handoffNonce;
 
     // Prepare the exact durable autonomous-attempt row before signing the
-    // Pipecat lease. The private Symbol above means only outreachPass can enter
+    // provider lease. The private Symbol above means only outreachPass can enter
     // this branch; a public/manual caller cannot manufacture autonomous origin
     // by choosing an outreach-looking request ID.
     if (isAutonomousReach) {
@@ -475,17 +600,17 @@ async function placeCall(toPhone, callReason, councilResult, options) {
       dv.autonomous_reach_attempt_digest = autonomousAttemptProof.digest;
     }
 
-    // ⬡B:core.outreach:GUARD:pipecat_voice_session_bound_to_exact_ham:20260716⬡
+    // ⬡B:core.outreach:GUARD:voice_session_bound_to_exact_ham:20260716⬡
     // The signed opener authorizes one exact sentence for one phone target; it
     // does not authorize later caller transcripts to select a HAM. Mint the
     // existing voice-session binding beside it, using the same verified council
     // receipt and logical call session but a HAM delivery target and independent
-    // nonce. Pipecat forwards these fields unchanged and /voice/pai-turn verifies
-    // them before any Memory Bank read or model call.
+    // nonce. ElevenLabs forwards these fields unchanged to the custom LLM, which
+    // verifies them before any Memory Bank read or model call.
     var voiceSessionNonce = crypto.randomUUID();
     var voiceSessionInput = { hamUid:dv.ham_uid,
       message:voiceSessionBindingMessage(dv.autonomous_reach_attempt_source,
-        dv.autonomous_reach_attempt_digest),
+        dv.autonomous_reach_attempt_digest, dv.voice_mode),
       receiptDigest:providerProof.receipt_digest,
       requestId:providerProof.request_id, cycleId:providerProof.cycle_id,
       deliveryTarget:{ kind:'ham', value:dv.ham_uid },
@@ -505,8 +630,13 @@ async function placeCall(toPhone, callReason, councilResult, options) {
       return { ok:false, reason:'voice_session_bind_unavailable' };
     }
   }
-  const pipecatUrl = String(process.env.PIPECAT_CALL_URL || '').replace(/\/$/, '');
-  if (!pipecatUrl) return { ok:false, reason:'provider_not_configured' };
+  const elevenLabsKey = String(process.env.ELEVENLABS_API_KEY || '').trim();
+  const elevenLabsAgentId = String(process.env.ELEVENLABS_AGENT_ID || '').trim();
+  const elevenLabsPhoneId = String(process.env.ELEVENLABS_PHONE_NUMBER_ID ||
+    process.env.ELEVENLABS_PHONE_ID || '').trim();
+  const providerReceiptKey = voiceProviderReceiptKey();
+  if (!elevenLabsKey || !elevenLabsAgentId || !elevenLabsPhoneId ||
+      !providerReceiptKey) return { ok:false, reason:'provider_not_configured' };
   // This read-back-verified row is the last internal step before the external
   // provider-attempt claim and provider seam. A crash after this write is
   // recoverable; a write/read race is held before the permanent effect claim,
@@ -528,8 +658,14 @@ async function placeCall(toPhone, callReason, councilResult, options) {
   });
   if (!effectClaim.ok) return { ok:false, reason:effectClaim.reason,
     effectKey:effectClaim.effectKey || null };
-  const pipecatHandoffBody = {
-    ham_uid:dv.ham_uid, ham_name:dv.ham_name, world:dv.world,
+  const nativeHandoff = {
+    ham_uid:dv.ham_uid, ham_name:dv.ham_name,
+    trust_level:dv.trust_level, world:dv.world,
+    // Floor control is an explicit signed call mode, not an identity side
+    // effect. A founder's ordinary one-to-one call must remain a conversation;
+    // only a founder-authorized co-present request enters open-room listening.
+    voice_mode:dv.voice_mode,
+    founder_copresent:dv.voice_mode === 'founder_copresent',
     initial_message:dv.initial_message || '', call_reason:dv.call_reason || '',
     request_id:providerProof.request_id, cycle_id:providerProof.cycle_id,
     receipt_digest:providerProof.receipt_digest,
@@ -556,68 +692,88 @@ async function placeCall(toPhone, callReason, councilResult, options) {
     autonomous_reach_attempt_source:dv.autonomous_reach_attempt_source || '',
     autonomous_reach_attempt_digest:dv.autonomous_reach_attempt_digest || ''
   };
-  // Pipecat is the only REACH conversation owner: telephony carries media,
-  // Deepgram is the ear, A'NEW/PAI owns every response, and ElevenLabs is TTS
-  // only inside the worker. Fail closed here instead of reviving ConvAI when
-  // the owned service is missing or rejects its route; a second conversation
-  // owner would make both identity and same-call proof ambiguous.
+  const initiationData = {
+    type:'conversation_initiation_client_data',
+    conversation_config_override:{ agent:{
+      first_message:nativeHandoff.initial_message || ''
+    } },
+    custom_llm_extra_body:nativeHandoff,
+    dynamic_variables:Object.assign({}, nativeHandoff, {
+      secret__ham_uid:nativeHandoff.ham_uid,
+      secret__trust_level:dv.trust_level
+    })
+  };
+  // ElevenLabs owns the live audio transport. The custom LLM URL remains the
+  // canonical A'NEW voice door, so every spoken turn still enters World Builder,
+  // PAI, council, and exact HAM isolation. There is no provider-side fallback.
   try {
-    const pipecatHeaders = { 'Content-Type':'application/json',
-      'Idempotency-Key':effectClaim.idempotencyKey };
-    if (process.env.PIPECAT_BRIDGE_KEY) {
-      pipecatHeaders.Authorization = 'Bearer ' + process.env.PIPECAT_BRIDGE_KEY;
+    const providerUrl = 'https://api.elevenlabs.io/v1/convai/twilio/outbound-call';
+    const providerResponse = await spendGuard.withAttribution(
+      voiceCallProviderAttribution(dv.ham_uid, providerProof, process.env),
+      function () {
+        return fetch(providerUrl, {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json', 'xi-api-key':elevenLabsKey,
+            'Idempotency-Key':effectClaim.idempotencyKey },
+          body:JSON.stringify({
+            agent_id:elevenLabsAgentId,
+            agent_phone_number_id:elevenLabsPhoneId,
+            to_number:toPhone,
+            conversation_initiation_client_data:initiationData
+          })
+        });
+      });
+    const providerBody = await providerResponse.json().catch(function(){ return {}; });
+    const conversationId = typeof providerBody.conversation_id === 'string' &&
+      /^[A-Za-z0-9._:-]{8,180}$/.test(providerBody.conversation_id)
+      ? providerBody.conversation_id : null;
+    const callSid = typeof providerBody.callSid === 'string' &&
+      /^CA[a-fA-F0-9]{32}$/.test(providerBody.callSid) ? providerBody.callSid : null;
+    if (!providerResponse.ok) {
+      return { ok:false, reason:providerResponse.status >= 500 ||
+        [408,425,429].indexOf(providerResponse.status) !== -1
+        ? 'provider_uncertain' : 'provider_rejected',
+      providerStatus:providerResponse.status };
     }
-    const pipecatResponse = await fetch(pipecatUrl + '/start', {
-      method:'POST', headers:pipecatHeaders,
-      body:JSON.stringify({ phone_number:toPhone, body:pipecatHandoffBody })
-    });
-    const pipecatBody = await pipecatResponse.json().catch(function(){ return {}; });
-    const pipecatDetail = pipecatBody && pipecatBody.detail &&
-      typeof pipecatBody.detail === 'object' ? pipecatBody.detail : {};
-    const pipecatReceipt = Object.assign({}, pipecatBody, pipecatDetail);
-    const pipecatId = pipecatReceipt.call_control_id || pipecatReceipt.call_sid || null;
-    const acceptance = pipecatId ? voiceProviderAcceptance.shape({
+    if (providerBody.success !== true || !conversationId || !callSid) {
+      return { ok:false, reason:'provider_unverified',
+        providerStatus:providerResponse.status };
+    }
+    const acceptance = voiceProviderAcceptance.shape({
+      version:voiceProviderAcceptance.VERSION,
       hamUid:dv.ham_uid, sessionId:dv.voice_session_id,
       requestId:providerProof.request_id, cycleId:providerProof.cycle_id,
       receiptDigest:providerProof.receipt_digest,
-      provider:pipecatReceipt.provider, providerCallId:pipecatId,
+      provider:'twilio', providerCallId:callSid,
+      providerConversationId:conversationId,
       providerEffectIdempotencyKey:effectClaim.idempotencyKey,
       autonomousReachAttemptSource:dv.autonomous_reach_attempt_source || '',
       autonomousReachAttemptDigest:dv.autonomous_reach_attempt_digest || ''
-    }) : null;
-    const acceptanceVerified = !!(acceptance &&
-      pipecatReceipt.provider_acceptance_readback_verified === true &&
-      pipecatReceipt.provider_acceptance_source === acceptance.source);
-    if (pipecatResponse.ok && pipecatId && acceptanceVerified) {
-      return { ok:true, via:'pipecat_' + (pipecatReceipt.provider || 'telephony'),
-        conversation_id:pipecatId, providerStatus:pipecatResponse.status };
-    }
-    const returnedAcceptanceSigned = !!(acceptance &&
-      pipecatReceipt.provider_acceptance_source === acceptance.source &&
-      voiceProviderAcceptance.verify(acceptance,
-        process.env.PIPECAT_BRIDGE_KEY || '',
-        pipecatReceipt.provider_acceptance_authorization));
-    if (pipecatId && returnedAcceptanceSigned) {
-      const recovered = await recordReturnedVoiceProviderAcceptance(Object.assign({},
-        pipecatHandoffBody, {
-          provider:pipecatReceipt.provider,
-          provider_call_id:pipecatId,
-          provider_acceptance_source:acceptance.source,
-          provider_acceptance_authorization:
-            pipecatReceipt.provider_acceptance_authorization
-        }));
-      if (recovered.ok) return { ok:true,
-        via:'pipecat_' + (pipecatReceipt.provider || 'telephony'),
-        conversation_id:pipecatId, providerStatus:pipecatResponse.status };
-    }
-    if (pipecatResponse.ok) return { ok:false, reason:'provider_unverified',
-      providerStatus:pipecatResponse.status };
-    return Object.assign({ ok:false, reason:pipecatResponse.status >= 500 ||
-      [408,425,429].indexOf(pipecatResponse.status) !== -1
-      ? 'provider_uncertain' : 'provider_rejected',
-      providerStatus:pipecatResponse.status }, pipecatId
-      ? { conversation_id:pipecatId } : {});
-  } catch (ePipecat) { return { ok:false, reason:'provider_uncertain' }; }
+    });
+    if (!acceptance) return { ok:false, reason:'provider_unverified',
+      providerStatus:providerResponse.status };
+    const acceptanceAuthorization = voiceProviderAcceptance.authorization(
+      acceptance, providerReceiptKey);
+    const recorded = await recordReturnedVoiceProviderAcceptance(Object.assign({},
+      nativeHandoff, {
+        version:voiceProviderAcceptance.VERSION,
+        provider:'twilio',
+        provider_conversation_id:conversationId,
+        conversation_id:conversationId,
+        provider_call_id:callSid,
+        provider_effect_idempotency_key:effectClaim.idempotencyKey,
+        provider_acceptance_source:acceptance.source,
+        provider_acceptance_authorization:acceptanceAuthorization
+      }));
+    if (!recorded.ok) return { ok:false,
+      reason:recorded.reason || 'provider_unverified',
+      providerStatus:providerResponse.status,
+      conversation_id:conversationId,
+      provider_call_id:callSid };
+    return { ok:true, via:'elevenlabs_twilio_native',
+      conversation_id:conversationId, provider_call_id:callSid,
+      call_sid:callSid, providerStatus:providerResponse.status };
+  } catch (eProvider) { return { ok:false, reason:'provider_uncertain' }; }
 }
 
 // A provider dial receipt proves that one call attempt was accepted. It does
@@ -635,6 +791,13 @@ function applyVoiceDialResult(result, callResult) {
   result.called = false;
   result.sent = false;
   result.call_receipt = callResult && callResult.conversation_id || null;
+  var providerCallId = callResult && (callResult.provider_call_id ||
+    callResult.call_sid) || null;
+  if (providerCallId) {
+    result.conversation_id = callResult.conversation_id;
+    result.provider_call_id = providerCallId;
+    result.call_sid = providerCallId;
+  }
   result.call_via = callResult && (callResult.via || callResult.reason) || null;
   if (dialed) result.reason = 'voice_dialed_pending_answer';
   return dialed;
@@ -642,13 +805,15 @@ function applyVoiceDialResult(result, callResult) {
 
 const BU = process.env.AIBE_BRAIN_URL;
 const BK = process.env.AIBE_BRAIN_KEY;
-const GROQ = process.env.GROQ_API_KEY;
+const GROQ = process.env.TOGETHER_API_KEY;
 
 function bh() { return { apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema() }; }
 function founderUid() { const c=reachContext.getStore(); return String(c&&c.hamUid || process.env.FOUNDER_HAM_UID || process.env.OVERSEER_HAM_UID || '').toUpperCase(); }
 function founderPhone() { const c=reachContext.getStore(); return c&&c.phone || process.env.FOUNDER_PHONE || process.env.BRANDON_PHONE || ''; }
 function founderEmail() { const c=reachContext.getStore(); return c&&c.email || process.env.FOUNDER_EMAIL || process.env.BRANDON_EMAIL || ''; }
-function minGapMs() { return parseInt(process.env.OUTREACH_MIN_GAP_MS || '', 10) || 4 * 60 * 60 * 1000; }
+// ⬡B:core.outreach:FIX:a_four_hour_coder_default_quiet_gap_was_never_his:20260802⬡
+// NWO pt 2: unset now means NO gap; OUTREACH_MIN_GAP_MS stays the founder's own knob.
+function minGapMs() { return parseInt(process.env.OUTREACH_MIN_GAP_MS || '', 10) || 0; }
 function gapHeldSinceSent(lastSent, nowMs) {
   if (!lastSent || !lastSent.created_at) return false;
   return ((nowMs == null ? Date.now() : nowMs) - new Date(lastSent.created_at).getTime()) < minGapMs();
@@ -1075,7 +1240,14 @@ async function lastExternalAttempt() {
   }
 }
 
-const HARD_EXTERNAL_ATTEMPT_FLOOR_MS = 60 * 60 * 1000;
+// ⬡B:core.outreach:CORRECTION:the_hour_floor_is_the_single_flight_guard_not_a_rate_mute:20260802⬡
+// The NWO pt 2 sweep first flipped this default to 0 as a cold-era rate cap. MEASURED against
+// tests/reach.delivery.truth.test.js before shipping and reverted in the same pass: with a 0
+// floor the atomic HAM attempt reservation admits TWO concurrent owners where one is the law
+// (2 !== 1, twice), which is the exact 20260706 ten-calls-in-minutes incident shape. This floor
+// is not a mute on her voice; it is the single-flight arbiter between replicas. It stays at one
+// hour by default and becomes the founder's own knob: OUTREACH_ATTEMPT_FLOOR_MS.
+const HARD_EXTERNAL_ATTEMPT_FLOOR_MS = parseInt(process.env.OUTREACH_ATTEMPT_FLOOR_MS || '', 10) || 60 * 60 * 1000;
 function externalAttemptFloorHeld(lastAttempt, nowMs) {
   if (!lastAttempt || !lastAttempt.created_at) return false;
   var attemptedAt = new Date(lastAttempt.created_at).getTime();
@@ -1388,6 +1560,10 @@ async function gatherDecisionFacts(sinceIso,throughIso){
   }).slice(0,12);
 }
 
+// ⬡COLD:dead:tag:REACH_RECOMMENDATION_WONDER:20260723⬡
+// CATHY.SHADOW cold-audit COLD-ANEW-REACH-0056. The gatherer that pulls pending station
+// REACH_RECOMMENDATION beads and hands them to the one decider. Cold read + dedup (already-ruled
+// check); it never itself decides to reach a human. Stamped, behavior unchanged.
 // ⬡B:core.outreach:WIRE:seer_advisor_handshake:20260711⬡
 // THE TIGHT HANDSHAKE. Independent thinking stations (starting with the SEER
 // advisor) submit REACH_RECOMMENDATION beads BACKWARD to this cycle. They are
@@ -1461,10 +1637,28 @@ function explicitCallRequestFact(facts) {
 }
 
 // Her judgment + her voice, on her real Memory Bank. Returns { reach, importance, message, reason }.
-async function judgeAndCompose(facts, gapHeld) {
-  if (!GROQ) return { reach: false, reason: 'no_groq_key' };
+async function judgeAndComposeScoped(facts, gapHeld) {
+  // ⬡B:core.outreach:FIX:the_retired_together_key_gated_the_migrated_seat_too:20260729⬡
+  // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1. This gate predates callGLM()'s
+  // migration off Together onto the C2 organ seat and was never updated with it: a
+  // world with a correctly configured OR_KEY_C2_ORGAN (or shared OPENROUTER_API_KEY)
+  // but no retired TOGETHER_API_KEY installed returned here before callGLM() ever ran.
+  // Together is only genuinely required at its own fallback attempt below, which
+  // already checks GROQ inline (a missing key 401s there and falls through, same as
+  // any other down provider); this entry gate now requires only that SOME real path
+  // exists, primary seat or last-resort Together, not Together specifically.
+  if (!require('./seat.map.js').resolveKey(require('./seat.map.js').seat('c2_organ')) && !GROQ) {
+    return { reach: false, reason: 'no_model_key' };
+  }
   const fcw = await buildMemoryBank(founderUid(), 'outreach', 'autonomous outreach check');
-  const sys = (fcw && fcw.ok ? fcw.system_prompt : 'You are A\u2019NU, a warm and direct life assistant.')
+  // ⬡B:core.outreach:GUARD:no_autonomous_reach_without_a_memory_wall:20260730⬡
+  // A newly honest FCW outage must not activate the old generic-assistant fallback. Autonomous
+  // outreach with no identity, history, doctrine, or stated plans is the dangerous path, so an
+  // unavailable wall holds the reach and names the reason without buying a model call.
+  if (!fcw || fcw.ok !== true || !fcw.system_prompt) {
+    return { reach:false, reason:String(fcw && fcw.reason || 'memory_bank_unavailable') };
+  }
+  const sys = fcw.system_prompt
     + '\n\nYou are deciding, on your own, whether anything below genuinely merits texting your founder right now.'
     + '\nHold the bar high: reach only for real progress, real problems, or something he would actually want to know now.'
     + (gapHeld ? '\nYou reached him recently. Only importance 9 or higher justifies reaching again this soon.' : '')
@@ -1496,13 +1690,13 @@ async function judgeAndCompose(facts, gapHeld) {
     ? 'Recent facts from your world:\n' + facts.map(formatReachFact).join('\n')
     : 'No high-importance facts in the window.';
   try {
-    let out = await callGLM(sys, user, 1200);
-    if (!out) out = await callOrnith(sys, user, 1200);
+    let out = await callGLM(sys, user, 8000);
+    if (!out) out = await callOrnith(sys, user, 8000);
     if (!out) {
-      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      const r = await fetch('https://api.together.xyz/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: (process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b'), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], max_tokens: 3000, temperature: 0.4 })
+        body: JSON.stringify({ model: (require('./seat.map.js').safeModelOverride(process.env.TOGETHER_MODEL, 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8')), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], max_tokens: 8000, temperature: 0.4 })
       });
       if (!r.ok) return { reach: false, reason: 'groq_http_' + r.status };
       const d = await r.json();
@@ -1523,21 +1717,36 @@ async function judgeAndCompose(facts, gapHeld) {
     // missing-gate shape as messages.index.js's old stub SHADOW, different file.
     // One real LLM call, same pattern already proven there: does this message
     // stay inside what the facts actually say.
-    if (reach && message && GROQ) {
+    // ⬡B:core.outreach:FIX:the_grounding_gate_was_hard_gated_on_the_retired_key_alone:20260729⬡
+    // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1: `&& GROQ` meant this check never
+    // even attempted to run on a C2-seat-only configuration, silently sending a drafted
+    // message unchecked, exactly the failure mode this file's own 20260705 fix names as
+    // unacceptable. groundingCheckText() tries the C2 seat first, Together only as the
+    // same last-resort fallback the compose call above already uses.
+    // ⬡B:core.outreach:FIX:an_absent_verdict_read_as_ok_never_as_fail:20260729⬡
+    // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1, fresh evidence beyond the fix
+    // above: groundingCheckText() returns null, not a thrown exception, when every rung
+    // it tries fails or answers empty, so the old `catch (eGround) {}` never even ran;
+    // `String(null || '')` is `''`, which matches neither `/^FAIL/`, so a total grounding
+    // failure fell straight through as an unchecked, silently allowed message, the exact
+    // opposite of what this gate exists for. Now fails CLOSED and stamps the gap, the
+    // same rule composeDigest()'s own grounding check already holds itself to.
+    if (reach && message) {
       try {
-        const gr = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST', headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: (process.env.GROQ_MODEL_C1 || 'openai/gpt-oss-20b'), max_tokens: 60, temperature: 0, messages: [
-            { role: 'system', content: 'Compare a drafted text message against the facts it claims to summarize. Reply EXACTLY: OK or FAIL, then a reason. FAIL only if the message states a specific capability, behavior, or detail that the facts do not support -- not for reasonable paraphrase or warmth.' },
-            { role: 'user', content: 'FACTS:\n' + user + '\n\nDRAFTED MESSAGE:\n' + message }
-          ] })
-        });
-        const gd = gr.ok ? await gr.json() : null;
-        const gout = gd?.choices?.[0]?.message?.content?.trim() || '';
+        const gout = String((await groundingCheckText(
+          'Compare a drafted text message against the facts it claims to summarize. Reply EXACTLY: OK or FAIL, then a reason. FAIL only if the message states a specific capability, behavior, or detail that the facts do not support -- not for reasonable paraphrase or warmth.',
+          'FACTS:\n' + user + '\n\nDRAFTED MESSAGE:\n' + message, 60)) || '').trim();
+        if (!gout) {
+          await stampGroundingCheckFailure('message_grounding_empty_response', message);
+          return { reach: false, reason: 'grounding_check_unavailable' };
+        }
         if (/^FAIL/i.test(gout)) {
           return { reach: false, reason: 'grounding_check_failed: ' + gout.replace(/^FAIL\s*/i, '').slice(0, 150) };
         }
-      } catch (eGround) { /* check failure never blocks -- fail open, matches every other gate tonight */ }
+      } catch (eGround) {
+        await stampGroundingCheckFailure('message_grounding_exception: ' + eGround.message, message);
+        return { reach: false, reason: 'grounding_check_unavailable' };
+      }
     }
     return { reach, importance: impM ? parseInt(impM[1], 10) : 0,
       reason: reasonM ? reasonM[1].trim() : '', message };
@@ -1646,7 +1855,7 @@ async function releaseOwnedReachClaim(claim){
 }
 
 function definitiveProviderPreflightFailure(reason){
-  return /^(?:provider_not_configured|no_text_channel_configured|autonomous_text_terminal_provider_unavailable|provider_truth_store_unavailable|nylas_terminal_webhook_unready|no_nylas_config_for_world:|email_world_unresolved|REACH_SEND_MODE is |kill_switch_(?:active|unavailable|uncertain|unverified)|recipient_|email_delivery_target_unverified|approved_email_(?:artifact_invalid|pam_hold|pam_uncertain)|voice_(?:provider|preflight|session_bind|autonomous_attempt|handoff_authorization)[a-z0-9_:-]*)/i.test(String(reason||''));
+  return /^(?:provider_not_configured|provider_effect_identity_unverified|no_text_channel_configured|autonomous_text_terminal_provider_unavailable|provider_truth_store_unavailable|nylas_terminal_webhook_unready|no_nylas_config_for_world:|email_world_unresolved|REACH_SEND_MODE is |kill_switch_(?:active|unavailable|uncertain|unverified)|recipient_|email_delivery_target_unverified|approved_email_(?:artifact_invalid|pam_hold|pam_uncertain)|voice_(?:provider|preflight|session_bind|autonomous_attempt|handoff_authorization)[a-z0-9_:-]*)/i.test(String(reason||''));
 }
 
 function ambiguousProviderOutcome(reason){
@@ -1668,7 +1877,11 @@ async function buildReachChannelAvailability(hamUid,contact,world){
   contact=contact||{};
   var phonePresent=typeof contact.phone==='string'&&contact.phone.trim().length>0;
   var emailPresent=typeof contact.email==='string'&&contact.email.trim().length>0;
-  var voiceProvider=String(process.env.PIPECAT_CALL_URL||'').trim().length>0;
+  var voiceProvider=[process.env.ELEVENLABS_API_KEY,process.env.ELEVENLABS_AGENT_ID,
+    process.env.ELEVENLABS_PHONE_NUMBER_ID||process.env.ELEVENLABS_PHONE_ID,
+    process.env.VOICE_PROVIDER_RECEIPT_KEY].every(function(value){
+      return String(value||'').trim().length>0;
+    });
   var textProvider=String(process.env.BLOOIO_API_KEY||'').trim().length>0;
   var voiceAvailable=phonePresent&&voiceProvider;
   var textAvailable=phonePresent&&textProvider;
@@ -1686,7 +1899,12 @@ async function buildReachChannelAvailability(hamUid,contact,world){
   // proves its grant and key belong to the production Nylas application.
   var productionApplication=!!(sender&&sender.ok===true);
   var providerConfigured=!!(productionApplication&&sender.grant&&sender.key);
-  var sendModeLive=(process.env.REACH_SEND_MODE||'PAUSED')==='LIVE';
+  // FOUNDER RULING 20260807: founder-test is REAL reach on every channel, scoped to him.
+  // Email under FOUNDER_TEST redirects to the founder's own address (reach/iman.js founderTest
+  // path), so it is a real safe test of Nylas alongside voice and text, never a fence. LIVE and
+  // FOUNDER_TEST both permit a send; only PAUSED (or any other mode) holds the channel.
+  var reachMode=String(process.env.REACH_SEND_MODE||'LIVE').toUpperCase();
+  var sendModeLive=(reachMode==='LIVE'||reachMode==='FOUNDER_TEST');
   var terminalTruthReady=false;
   var emailReadinessReason=availabilityReason([
     [emailPresent,'email_target_absent'],[worldResolved,'email_world_unresolved'],
@@ -1706,7 +1924,7 @@ async function buildReachChannelAvailability(hamUid,contact,world){
   return{version:1,ham_uid:uid,command_center:{available:true},
     voice:{target_present:phonePresent,provider_configured:voiceProvider,
       available:voiceAvailable,reason:voiceAvailable?'available':
-        phonePresent?'pipecat_not_configured':'phone_target_absent'},
+        phonePresent?'elevenlabs_native_not_configured':'phone_target_absent'},
     text:{target_present:phonePresent,provider_configured:textProvider,
       available:textAvailable,reason:textAvailable?'available':
         phonePresent?'blooio_not_configured':'phone_target_absent'},
@@ -1823,6 +2041,7 @@ async function outreachPass(force) {
     reason:'reach_channel_availability_failed'};}
   var governedDecision = await require('./reach/cycle.decision.js').decide({
     hamUid:founderUid(),candidate:cycleCandidate,facts:facts,gapHeld:gapHeld,
+    world:cycleCandidate&&cycleCandidate.world||passContext.world||null,
     quietGapEndsAt:quietGapEndsAt,presence:presence,
     channelAvailability:channelAvailability,
     mechanical:{kill_switch:killGate.kill_switch,
@@ -1867,6 +2086,13 @@ async function outreachPass(force) {
         finalSource:governedDecision.councilProof.final_source,
         receiptDigest:governedDecision.councilProof.receipt_digest} } };
 
+  // ⬡COLD:decide:become:REACH_RECOMMENDATION_WONDER:20260723⬡
+  // CATHY.SHADOW cold-audit COLD-ANEW-REACH-0055. The PROMOTE/DOWNGRADE ruling below is currently
+  // decided by a cold boolean (wellFormed) rather than compiled by the reach recommendation
+  // wonder inside the cycle. It is bounded and safe (importance<=6 nudge gate; a station can
+  // never force a send; PROMOTE only queues as ruled-ready and never reaches a human directly),
+  // but the ruling judgment belongs to the wonder. Deferred to the reach-wonder pass (live reach
+  // handshake; needs live verification); marked here so the cold decider is traceable.
   // THE HANDSHAKE: rule on every pending station recommendation. A'NEW is the
   // decider. It reads the station's draft and its own bar; a nudge stays a
   // nudge (routine, learner-facing), never inflated into a founder alarm.
@@ -2179,6 +2405,10 @@ async function outreachPass(force) {
     result.reason = repeatingSameAlert ? 'held_repeating_same_alert' : repeatingSameCondition ? 'held_repeating_same_condition_reworded' : (judgment.reach ? (gapHeld ? 'held_min_gap' : 'no_message_composed') : (judgment.reason || 'judged_hold'));
     if(result.reason==='held_min_gap')result.recheckAt=quietGapEndsAt;
   }
+  // ⬡COLD:speak:keep:REACH_WONDER:20260724⬡
+  // CATHY.SHADOW cold-audit COLD-ANEW-CLOCK-0102. The outreach cycle's terminal stamping and
+  // typed return. This is the reach wonder's own governed exit (real receipt or ok:false), the
+  // one correct place a reach outcome is recorded. Kept as-is.
   var finalStamp = await stampOutreach(result);
   if (!finalStamp.ok) {
     result.stampReason = finalStamp.reason;
@@ -2187,13 +2417,14 @@ async function outreachPass(force) {
   return { ok: true, ...result };
 }
 
-function startOutreach(intervalMs) {
-  const ms = intervalMs || parseInt(process.env.OUTREACH_INTERVAL_MS || '', 10) || 30 * 60 * 1000;
-  // Autonomous priority work now exists only as durable post-cycle candidates.
-  // The timer drains that queue; it cannot invent a candidate-less judgment.
-  const timer=require('./reach/cycle.handoff.js').startConsumer(ms);
-  console.log('[OUTREACH] durable REACH candidate consumer started, every', ms / 60000, 'minutes');
-  return timer;
+function startOutreach() {
+  // Autonomous priority work exists only as a durable post-cycle candidate.
+  // Its producer consumes it immediately. This worker performs one bounded,
+  // cursor-backed restart recovery pass and then becomes silent; there is no
+  // timer that repeatedly rereads immutable candidate history.
+  const worker=require('./reach/cycle.handoff.js').startConsumer();
+  console.log('[OUTREACH] durable REACH recovery worker armed in event-driven mode');
+  return worker;
 }
 
 // ANYHAM entry for the cycle handoff. AsyncLocalStorage keeps the extensive,
@@ -2241,11 +2472,12 @@ async function lastDigest(sentOnly) {
     const r = await fetch(_bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + founderUid()
       + '&agent_global=eq.ANEW'
       + stampFilter + deliveryFilter
-      + '&order=created_at.desc&limit=1&select=stamp_type,source,created_at,content', { headers: bh() });
+      + '&superseded_by=is.null&order=created_at.desc&limit=1&select=stamp_type,source,created_at,content,superseded_by', { headers: bh() });
     if (!r.ok) return null;
     const rows = await r.json();
-    if (!rows || !rows[0]) return null;
-    return Object.assign({}, rows[0], {
+    const active = (rows || []).filter(function (row) { return row && row.superseded_by == null; });
+    if (!active[0]) return null;
+    return Object.assign({}, active[0], {
       fact_watermark_at:null
     });
   } catch (e) { return null; }
@@ -2264,18 +2496,30 @@ async function gatherDigestFacts(sinceIso) {
   const url = _bu() + '/rest/v1/' + _tbl() + ''
     + '?ham_uid=eq.' + founderUid()
     + '&stamp_type=in.(CONTRIBUTION,RESULT,TASK_DONE)'
+    + '&superseded_by=is.null'
     + '&created_at=gte.' + encodeURIComponent(sinceIso)
-    + '&order=created_at.desc&limit=200&select=id,source,stamp_type,summary,created_at';
+    + '&order=created_at.desc&limit=200&select=id,source,stamp_type,summary,created_at,superseded_by';
   try {
     const r = await fetch(url, { headers: bh() });
     if (!r.ok) return [];
-    return await r.json();
+    const rows = await r.json();
+    return (Array.isArray(rows) ? rows : []).filter(function (row) {
+      return row && row.superseded_by == null;
+    });
   } catch (e) { return []; }
 }
 
-async function composeDigest(facts) {
-  if (!GROQ || !facts.length) return { ok: false, message: '' };
+async function composeDigestScoped(facts) {
+  // ⬡B:core.outreach:FIX:the_retired_together_key_gated_the_migrated_seat_too:20260729⬡
+  // Same fix as judgeAndCompose(): Together is only genuinely required at its own
+  // fallback attempt below, not to enter this function at all.
+  if ((!require('./seat.map.js').resolveKey(require('./seat.map.js').seat('c2_organ')) && !GROQ) || !facts.length) {
+    return { ok: false, message: '' };
+  }
   const fcw = await buildMemoryBank(founderUid(), 'outreach', 'daily digest');
+  if (!fcw || fcw.ok !== true || !fcw.system_prompt) {
+    return { ok:false, message:'', reason:String(fcw && fcw.reason || 'memory_bank_unavailable') };
+  }
   // ⬡B:core.outreach:FIX:quiet_day_recap_should_never_have_been_a_text:20260708⬡
   // Real, live incident, founder's own words: "still more reaching out for
   // nothing, how is this supposed to be intelligent or helpful at all."
@@ -2289,7 +2533,7 @@ async function composeDigest(facts) {
   // mere existence of routine activity. Real fix, mirrors the actionability
   // gate judgeAndCompose already has: a real REACH decision before MESSAGE,
   // not composing prose first and hoping NONE catches the quiet ones.
-  const sys = (fcw && fcw.ok ? fcw.system_prompt : 'You are A\u2019NU, a warm and direct life assistant.')
+  const sys = fcw.system_prompt
     + '\n\nDeciding whether today\'s real activity actually earns a text to your founder, or belongs in Command Center instead.'
     + '\nSTAY GROUNDED: state only what the facts below literally say. Do NOT invent or dramatize. Never turn a feature name, a label, or a roadmap item into a person. Never say anyone or anything "fired herself", "quit", "left", or "is out of the loop", and never attach a status, a motive, or an event that is not written in the fact itself. If a fact is cryptic or you are not sure what it refers to, either leave it out or say plainly that you are not certain what it means. Never build a story around it. (A real example of the failure to avoid: a roadmap feature named "Life Flex" got narrated as a team member who fired herself. That is exactly the invention that is banned.)'
     + '\nVOICE: write the way a warm, direct friend actually talks, in flowing sentences joined with commas, not clipped punchy fragments and not a headline. Never use an em dash or an en dash. No hollow phrases. Plain, grounded, and real.'
@@ -2301,17 +2545,22 @@ async function composeDigest(facts) {
     + '\nAnswer in EXACTLY this shape:\nREACH: YES or REACH: NO\nMESSAGE: if YES, the real update, in your own voice, as long as it actually requires. If NO, write CC_SUMMARY: a one-line real note of what happened, for Command Center only, never sent as a text.';
   const user = 'Real activity from the last 24 hours:\n' + facts.map(f => '[' + f.stamp_type + '] ' + (f.summary || '').slice(0, 140)).join('\n');
   try {
-    let out = await callGLM(sys, user, 1500);
-    if (!out) out = await callOrnith(sys, user, 1500);
+    let out = await callGLM(sys, user, 8000);
+    if (!out) out = await callOrnith(sys, user, 8000);
     if (!out) {
-      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      const r = await fetch('https://api.together.xyz/v1/chat/completions', {
         method: 'POST', headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: (process.env.GROQ_MODEL_C2 || 'openai/gpt-oss-120b'), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], max_tokens: 3000, temperature: 0.4 })
+        body: JSON.stringify({ model: (require('./seat.map.js').safeModelOverride(process.env.TOGETHER_MODEL, 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8')), messages: [{ role: 'system', content: sys }, { role: 'user', content: user }], max_tokens: 8000, temperature: 0.4 })
       });
       if (!r.ok) return { ok: false, message: '' };
       const d = await r.json();
       out = (d.choices && d.choices[0] && d.choices[0].message.content) || '';
     }
+    // ⬡COLD:speak:become:CHATTER_REPORT_WONDER:20260723⬡
+    // CATHY.SHADOW cold-audit COLD-ANEW-REPORT-0074. This interprets the model output into a
+    // spoken reach message or a Command Center digest. It runs inside the outreach cycle (not a
+    // cold one-shot), and a non-reach outcome routes to the CC note rather than interrupting the
+    // human. The chatter report's composition remains governed by the report wonder; marked here.
     const reachesFounder = /REACH:\s*YES/i.test(out);
     const msgM = out.match(/MESSAGE:\s*([\s\S]+)/i);
     let message = reachesFounder && msgM ? msgM[1].trim() : '';
@@ -2336,7 +2585,18 @@ async function composeDigest(facts) {
           var dq = await fetch(_bu() + '/rest/v1/' + _tbl() + '?stamp_type=eq.CORE_DIRECTIVE&order=created_at.desc&limit=1&select=summary', { headers: bh() }).then(function (r) { return r.ok ? r.json() : []; });
           if (dq && dq[0]) activeDirective = (dq[0].summary || '').replace(/^\[[^\]]*\]\s*/, '').slice(0, 60);
         } catch (eD) {}
-        var _rep = require('./chatterReport.js').buildReport({ name: 'Your day' }, { moved: movedFacts, sees: ccNote.slice(0, 80), count: facts.length, directive: activeDirective });
+        // ⬡B:core.outreach:WIRE:chatter_report_wonder_leashed_off_by_default:20260726⬡
+        // Prefer the CHATTER_REPORT wonder (core/chatterReport.js). It is DEFAULT OFF behind
+        // CHATTER_REPORT_WONDER_ENABLED, so with the flag unset composeReport returns the exact
+        // same cold buildReport line without ever calling a mind: zero spend, behavior identical.
+        // When armed, a mind composes the internal digest line from the same cold facts and the
+        // cold line is the honest floor. The mind is the outreach cycle's own bounded helpers,
+        // penny-hustled at a small token cap; the composed note still only feeds the CC note.
+        var _rep = await require('./chatterReport.js').composeReport(
+          { name: 'Your day' },
+          { moved: movedFacts, sees: ccNote.slice(0, 80), count: facts.length, directive: activeDirective },
+          { deliberate: async function (sys, usr) { return (await callGLM(sys, usr, 300)) || (await callOrnith(sys, usr, 300)); } }
+        );
         if (_rep && typeof _rep === 'string' && _rep.length > 10) ccNote = _rep.slice(0, 400);
         else if (_rep && _rep.line) ccNote = String(_rep.line).slice(0, 400);
       } catch (eRep) {}
@@ -2399,20 +2659,17 @@ async function composeDigest(facts) {
       // a real GAP_FLAGS bead on any check failure so a future silent miss is
       // at least visible, and fails CLOSED (holds the message) rather than
       // open, since this gate's whole job is exactly what just failed.
+      // ⬡B:core.outreach:FIX:digest_grounding_only_ever_authenticated_through_the_retired_key:20260729⬡
+      // CAUGHT BY CATHY (Codex) IN REVIEW ON anew#1346, P1: this check called Together
+      // directly with GROQ, so on a C2-seat-only configuration it correctly failed CLOSED
+      // (holding the digest, per the fix above) but had no usable rung to actually run on,
+      // permanently claiming the fact set for nothing. groundingCheckText() tries the C2
+      // seat first (through callGLM, so the thinking-disable fix covers this call too),
+      // Together only as the same last-resort fallback the compose call above already uses.
       try {
-        const gr = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST', headers: { Authorization: 'Bearer ' + GROQ, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: (process.env.GROQ_MODEL_C1 || 'openai/gpt-oss-20b'), max_tokens: 80, temperature: 0, messages: [
-            { role: 'system', content: 'Compare a drafted daily update against the real facts it claims to summarize. Reply EXACTLY: OK or FAIL, then a reason. FAIL if it states a specific capability the facts do not support, OR if it names a person, company, vendor, dollar figure, or specific detail that does not appear in the facts, even approximately -- a fact naming "sweintrop" does not license a reply naming a different company, a fact naming "Runpod" does not license "Runpay". Do not pass close-sounding substitutions.' },
-            { role: 'user', content: 'FACTS:\n' + user + '\n\nDRAFTED MESSAGE:\n' + message }
-          ] })
-        });
-        if (!gr.ok) {
-          await stampGroundingCheckFailure('digest_grounding_http_' + gr.status, message);
-          return { ok: false, message: '' };
-        }
-        const gd = await gr.json();
-        const gout = gd?.choices?.[0]?.message?.content?.trim() || '';
+        const gout = String((await groundingCheckText(
+          'Compare a drafted daily update against the real facts it claims to summarize. Reply EXACTLY: OK or FAIL, then a reason. FAIL if it states a specific capability the facts do not support, OR if it names a person, company, vendor, dollar figure, or specific detail that does not appear in the facts, even approximately -- a fact naming "sweintrop" does not license a reply naming a different company, a fact naming "Runpod" does not license "Runpay". Do not pass close-sounding substitutions.',
+          'FACTS:\n' + user + '\n\nDRAFTED MESSAGE:\n' + message, 80)) || '').trim();
         if (!gout) {
           await stampGroundingCheckFailure('digest_grounding_empty_response', message);
           return { ok: false, message: '' };
@@ -2480,7 +2737,11 @@ async function stampGroundingCheckFailure(reason, heldMessage) {
 // what to say -- just about not letting an accidental middle-of-the-night
 // check use up the day's one real chance to actually be seen.
 function localHour(iso) {
-  var tz = process.env.FOUNDER_TZ || 'America/New_York';
+  // ⬡B:core.outreach:FIX:quiet_hours_uses_the_shared_per_ham_resolver:20260725⬡ One source
+  // for a HAM's zone: the founder's quiet-hours clock resolves through the same resolver as
+  // everything else (founder -> FOUNDER_TZ env, documented default only if unset), never a
+  // second hand-maintained env read. Sync path: this gate is a hot cold-code check, no await.
+  var tz = require('./ham.timezone.js').resolveHamTimezoneCached(founderUid());
   try { return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(new Date(iso)), 10); }
   catch (e) { return new Date(iso).getUTCHours(); }
 }
@@ -2610,6 +2871,27 @@ async function checkDailyDigest() {
   return result;
 }
 
+function outreachProviderAttribution(kind,facts,env){
+  var runtime=env||process.env,ham=String(founderUid()||'').trim().toUpperCase();
+  var identity=(facts||[]).map(function(f){return String(f&&f.id||f&&f.source||'');}).join('|');
+  var digest=crypto.createHash('sha256').update(String(kind)+'|'+identity,'utf8')
+    .digest('hex').slice(0,40),cycle='outreach.'+String(kind)+'.'+ham+'.'+digest;
+  return {component:'outreach.'+String(kind),ham_uid:ham,cycle_id:cycle,
+    request_id:cycle+'.judge',seat:'c2_organ',owner_node_id:'station.overseer',
+    target_wonder_id:'wonder.reach',
+    service_id:String(runtime.RENDER_SERVICE_ID||runtime.ANEW_SERVICE_ID||'').trim()};
+}
+
+async function judgeAndCompose(facts,gapHeld){
+  return spendGuard.withAttribution(outreachProviderAttribution('decision',facts,process.env),
+    function(){return judgeAndComposeScoped(facts,gapHeld);});
+}
+
+async function composeDigest(facts){
+  return spendGuard.withAttribution(outreachProviderAttribution('digest',facts,process.env),
+    function(){return composeDigestScoped(facts);});
+}
+
 module.exports = { outreachPass, outreachPassForHam, startOutreach, placeCall,
   registerVoiceDeliveryReconciler, registerVoiceProviderAcceptanceRecorder,
   checkDailyDigest, classifyReachTruth, verifyVoiceAutonomousAttempt,
@@ -2626,4 +2908,6 @@ module.exports = { outreachPass, outreachPassForHam, startOutreach, placeCall,
     voiceAutonomousAttemptRow, voiceSessionBindingMessage,
     ambiguousProviderOutcome, definitiveProviderPreflightFailure,
     safeLearningFact, safeDecisionFeedbackFact, verifiedDecisionFeedbackFact,
-    gatherReachDecisionFeedback, buildReachChannelAvailability } };
+    gatherReachDecisionFeedback, buildReachChannelAvailability, gatherDigestFacts, callGLM,
+    judgeAndCompose, composeDigest, groundingCheckText,
+    outreachProviderAttribution:outreachProviderAttribution } };
