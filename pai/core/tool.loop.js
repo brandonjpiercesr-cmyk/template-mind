@@ -47,11 +47,34 @@ var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
 var shadowDecisionDialogue = require('./shadow.decision.dialogue.js');
 var outputGuard = require('./model.output.guard.js');
 var LIVE_VOICE_SESSION = Symbol.for('anew.verified.live.voice.session');
+var GMGU_CURRICULUM_PROPOSAL_CAPABILITIES = new WeakMap();
 var gmguNativeTutorMarker = require('./gmgu/native.tutor.marker.js');
 
 function verifiedGmguTutorTurn(channel, identity, hamUid) {
   return String(channel || '').trim().toLowerCase() === 'gmgu' &&
     gmguNativeTutorMarker.verify(identity, hamUid);
+}
+
+function bindGmguCurriculumProposalCapability(identity, hamUid, requestId, commit) {
+  var boundHam = String(hamUid || '').trim().toUpperCase();
+  var boundRequest = String(requestId || '').trim();
+  if (!identity || typeof identity !== 'object' || !boundHam || !boundRequest ||
+      String(identity.uid || '').trim().toUpperCase() !== boundHam ||
+      String(identity.request_id || identity.requestId || '').trim() !== boundRequest ||
+      typeof commit !== 'function') return false;
+  GMGU_CURRICULUM_PROPOSAL_CAPABILITIES.set(identity, Object.freeze({
+    ham_uid:boundHam, request_id:boundRequest, commit:commit }));
+  return true;
+}
+
+function gmguCurriculumProposalCapability(identity, hamUid) {
+  var capability = identity && GMGU_CURRICULUM_PROPOSAL_CAPABILITIES.get(identity);
+  var boundHam = String(hamUid || identity && identity.uid || '').trim().toUpperCase();
+  var requestId = String(identity && (identity.request_id || identity.requestId) || '').trim();
+  if (!capability || typeof capability.commit !== 'function' || !boundHam ||
+      capability.ham_uid !== boundHam || !requestId ||
+      capability.request_id !== requestId) return null;
+  return capability;
 }
 
 // The verified route attaches this proof through a symbol. Object.assign carries
@@ -1441,6 +1464,11 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','stamp_type','summary','content'],
     properties:{ham_uid:{type:'string'},stamp_type:{type:'string'},
       summary:{type:'string'},content:{type:'string'},importance:{type:'number'}}}}},
+  {type:'function',function:{name:'submit_gmgu_curriculum_proposal',
+    description:'Privately submit one structured GMG University curriculum proposal from your current judgment. Use this only when you decide the exact evidence supports a reviewable curriculum candidate. Your visible answer remains natural prose. This hand does not publish curriculum.',
+    parameters:{type:'object',required:['curriculum','rationale'],properties:{
+      curriculum:{type:'object',description:'The complete proposed curriculum block, preserving every unsupported part of the published curriculum.'},
+      rationale:{type:'string',description:'Why the exact supplied evidence supports this bounded proposal.'}}}}},
   {type:'function',function:{name:'create_chat_file',description:'Create a real downloadable file in the active A\'NU chat or project. Use when the person asks you to make, export, draft, or give them a file. The active workspace and conversation are bound by the server; provide the complete file content, not a preview.',
     parameters:{type:'object',required:['filename','content'],properties:{
       filename:{type:'string',description:'Safe filename including extension, such as roadmap.md or brief.csv'},
@@ -2148,6 +2176,7 @@ function requiredActionToolForMessage(message, intent) {
 // contains COLD-ANEW-TOOL-LOOP-0005 (their handlers are only reached at phase==='commit').
 var POST_COUNCIL_TOOLS = Object.freeze({
   write_to_brain:true,
+  submit_gmgu_curriculum_proposal:true,
   record_income:true,
   set_recurring_bill:true,
   log_expense:true,
@@ -2236,6 +2265,51 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
   if (runtime && runtime.phase === 'commit' &&
       await runtimeCancellationRequested(runtime)) {
     return cancelledToolResult(name);
+  }
+  if (name === 'submit_gmgu_curriculum_proposal') {
+    var _gmguProposalCapability = runtime && runtime.gmguCurriculumProposal;
+    if (!_gmguProposalCapability || typeof _gmguProposalCapability.commit !== 'function' ||
+        _gmguProposalCapability.ham_uid !== String(hamUid || '').trim().toUpperCase()) {
+      return JSON.stringify({ok:false,reason:'gmgu_curriculum_proposal_capability_required'});
+    }
+    if (!args || !args.curriculum || typeof args.curriculum !== 'object' ||
+        Array.isArray(args.curriculum) || typeof args.rationale !== 'string' ||
+        !args.rationale.trim()) {
+      return JSON.stringify({ok:false,reason:'gmgu_curriculum_proposal_artifact_invalid'});
+    }
+    if (!runtime || runtime.phase !== 'commit') {
+      if (!runtime || !Array.isArray(runtime.pendingEffects)) {
+        return JSON.stringify({ok:false,reason:'post_council_runtime_required',tool:name});
+      }
+      var _gmguQueuedArgs;
+      try { _gmguQueuedArgs = JSON.parse(JSON.stringify({
+        curriculum:args.curriculum, rationale:args.rationale.trim() })); }
+      catch (eGmguArgs) {
+        return JSON.stringify({ok:false,reason:'tool_args_not_serializable',tool:name});
+      }
+      var _gmguPriorIndex = runtime.pendingEffects.findIndex(function (effect) {
+        return effect && effect.name === name;
+      });
+      var _gmguEffect = { name:name, args:_gmguQueuedArgs,
+        key:name + ':' + JSON.stringify(_gmguQueuedArgs) };
+      if (_gmguPriorIndex >= 0) runtime.pendingEffects[_gmguPriorIndex] = _gmguEffect;
+      else runtime.pendingEffects.push(_gmguEffect);
+      return JSON.stringify({ok:true,accepted_for_commit:true,executed:false,
+        replacement:_gmguPriorIndex >= 0,tool:name,
+        note:'The private curriculum proposal is accepted for this same turn. Continue speaking naturally. Do not print, describe, or imitate the tool call.'});
+    }
+    try {
+      var _gmguCommitted = await _gmguProposalCapability.commit({
+        curriculum:args.curriculum, rationale:args.rationale.trim(),
+        councilResult:runtime.councilResult, hamUid:hamUid,
+        requestId:runtime.parentRequestId || runtime.requestId || null,
+        cycleId:runtime.parentCycleId || runtime.cycleId || null });
+      return JSON.stringify(_gmguCommitted || {
+        ok:false,reason:'gmgu_curriculum_proposal_commit_empty' });
+    } catch (eGmguCommit) {
+      return JSON.stringify({ok:false,
+        reason:eGmguCommit && eGmguCommit.message || 'gmgu_curriculum_proposal_commit_failed'});
+    }
   }
 // ⬡B:tool.loop:WIRE:mace_real_routes_verified_live_20260717⬡
   // Exact contracts, each confirmed with a real live POST before this was written:
@@ -4545,6 +4619,12 @@ function toolDefinitionsForTurn(tools, readOnlyNames, identity, flags) {
   var state = flags || {};
   if (state.reachIncidentIntake === true || state.roomSafeVoice === true ||
       state.gmguNativeTutor === true) return [];
+  if (gmguCurriculumProposalCapability(identity)) {
+    return (tools || []).filter(function (tool) {
+      return tool && tool.function &&
+        tool.function.name === 'submit_gmgu_curriculum_proposal';
+    });
+  }
   var readOnly = !!(identity && (identity.outbound_finalize === true ||
     identity._conversationOnly === true || identity._worldBuilderRestricted === true));
   if (!readOnly) return tools;
@@ -5714,6 +5794,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{},
     cycleId:_cycleId,requestId:_requestId };
+  _effectRuntime.gmguCurriculumProposal = gmguCurriculumProposalCapability(
+    identity, hamUid);
   _effectRuntime.channel = String(channel || '').toLowerCase();
   // Every advisor/compose turn (finance, legal, business, jobs, life, inbox_zero, ...) enters
   // through finalizePublicTurn, which stamps identity.outbound_finalize. This single flag marks
@@ -8288,6 +8370,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
               viewerTier:_effectiveViewerTier, readAuthority:_readAuthority,
               abortSignal:_turnAbortSignal || null, isCancelled:_turnCancelled },
             { caraContext:identity && identity.council_context || {},
+              gmguCurriculumProposal:gmguCurriculumProposalCapability(identity, hamUid),
               codaVerified:_effectRuntime.codaVerified === true,
               activationDecisionRequired:_effectRuntime.activationDecisionRequired === true,
               codaActivationApproved:_effectRuntime.codaActivationApproved === true,
@@ -8898,7 +8981,9 @@ function normalizeSubmitJobArgs(input) {
   return {ok:true,args:args};
 }
 
-module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
+module.exports={runPAI,bindVerifiedLiveVoiceSession,
+  bindGmguCurriculumProposalCapability,
+  _test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
   primaryProviderBody,applyProviderThinkingPolicy,applyGmguTutorProviderPolicy,
   fetchPaiSeatCandidate,
   prepareRoadmapActivationBody,
