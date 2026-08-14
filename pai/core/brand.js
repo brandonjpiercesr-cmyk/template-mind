@@ -234,7 +234,8 @@ function stageBootJs() {
   return 'var imgs=' + JSON.stringify(BACKGROUND_URLS) + ';'
     + 'var el=document.getElementById("bgLayer");if(!el)return;'
     + 'var i=Math.floor(Math.random()*imgs.length);'
-    + 'function show(n){el.src=imgs[n];el.onload=function(){el.classList.add("on")}}'
+    + 'function show(n){el.onload=function(){el.classList.add("on")};el.src=imgs[n];'
+    + 'if(el.complete&&el.naturalWidth>0)el.classList.add("on")}'
     + 'show(i);'
     + 'setInterval(function(){el.classList.remove("on");'
     + 'setTimeout(function(){i=(i+1)%imgs.length;show(i)},900)},38000);';
