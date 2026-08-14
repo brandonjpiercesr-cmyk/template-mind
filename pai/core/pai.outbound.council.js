@@ -4091,6 +4091,28 @@ async function runPreWriteCouncil(input, injected) {
     blocks.push(voiceOut.contextBlock);
   }
 
+  // ⬡B:core.pai_outbound_council:FIX:the_wake_survives_a_bypassed_pre_write_pass:20260814⬡
+  // Caught by a Codex review on #2141 and it was right. Both organs deliberately bypass on
+  // the live text wire (blooio) and on gmgu, returning live_text_uses_fcw_persona with zero
+  // model calls, because two paid pre-write passes measured 57 to 79 seconds of added
+  // latency before a single word was written. On those channels `blocks` is empty, so this
+  // returned ok:false with no context block, tool.loop injected nothing, and the wake
+  // reached no mind at all. The flag still said decided_by pending_reviewer, which made it
+  // a promise the path could not keep, and a receipt for something that never happened is
+  // the defect this estate keeps writing rulings about.
+  //
+  // The wake is a plain sentence of fact. Carrying it costs zero model calls, so it does
+  // not reintroduce the latency those bypasses exist to avoid, and the organs still bypass
+  // exactly as before. It rides as its own block so the writer, who is a mind, sees it on
+  // every channel including the ones where no paid brief runs.
+  if (cleanWake && cleanWake.fired) {
+    blocks.push('CLEAN SPEECH WAKE (fact carried by cold code, no judgment attached): the '
+      + 'inbound contains profanity. The standing floor is that she never curses at the '
+      + 'person and never at the founder, no matter how they speak to her. How that is '
+      + 'carried here is hers to decide; heat aimed at a situation is not heat aimed at a '
+      + 'person, and sanitizing the warmth out of a true answer is its own failure.');
+  }
+
   var contextBlock = blocks.join('\n\n');
   return {
     ok: blocks.length > 0,
