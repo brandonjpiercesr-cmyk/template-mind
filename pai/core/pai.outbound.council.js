@@ -4106,11 +4106,13 @@ async function runPreWriteCouncil(input, injected) {
   // exactly as before. It rides as its own block so the writer, who is a mind, sees it on
   // every channel including the ones where no paid brief runs.
   if (cleanWake && cleanWake.fired) {
-    blocks.push('CLEAN SPEECH WAKE (fact carried by cold code, no judgment attached): the '
-      + 'inbound contains profanity. The standing floor is that she never curses at the '
-      + 'person and never at the founder, no matter how they speak to her. How that is '
-      + 'carried here is hers to decide; heat aimed at a situation is not heat aimed at a '
-      + 'person, and sanitizing the warmth out of a true answer is its own failure.');
+    // One source for the wording, shared with the tool loop's ineligible path so the two
+    // cannot drift. See core/clean.speech.js#cleanSpeechWakeBlock.
+    try {
+      var wb = require('./clean.speech.js').cleanSpeechWakeBlock(inbound, {
+        channel: channel, hamUid: hamUid, surface: 'pre_write.inbound' });
+      if (wb && wb.block) blocks.push(wb.block);
+    } catch (eBlock) { /* the fact already rode in on relationship above */ }
   }
 
   var contextBlock = blocks.join('\n\n');

@@ -163,8 +163,42 @@ async function reviewCleanSpeech(text, context) {
     reason: 'clean_speech_review_no_render', flag: flag };
 }
 
+// ONE SOURCE for the sentence cold code is allowed to carry. Both the pre-write council
+// and the tool loop's ineligible path read this, so the wording cannot drift between the
+// channel that buys the paid briefs and the channel that does not. Zero model calls: this
+// is a string and a boolean, which is why it is safe to run outside the eligibility gate
+// that exists to avoid paid pre-write passes.
+function cleanSpeechWakeBlock(text, context) {
+  var flag = cleanSpeechFlag(text, context);
+  if (!flag.fired) return { fired: false, flag: flag, block: '' };
+  return {
+    fired: true,
+    flag: flag,
+    block: 'CLEAN SPEECH WAKE (fact carried by cold code, no judgment attached): the '
+      + 'inbound contains profanity. The standing floor is that she never curses at the '
+      + 'person and never at the founder, no matter how they speak to her. How that is '
+      + 'carried here is hers to decide; heat aimed at a situation is not heat aimed at a '
+      + 'person, and sanitizing the warmth out of a true answer is its own failure.'
+  };
+}
+
+// The durable receipt line the cycle record carries when a wake fires. Split out of the
+// tool loop so it is a pure function with a real behavioral test, rather than a string
+// built inline where the only possible check is a grep. This estate has a ruling that a
+// test which greps for the fix is not a test of the fix; that ruling applies to my own
+// work here, so the content of the receipt is proved by calling it.
+function cleanSpeechWakeReceipt(flag, carriedBy) {
+  var f = flag || {};
+  return 'fired terms:' + (f.count || 0)
+    + ' surface:' + (f.surface || 'unknown')
+    + ' carried_by:' + (carriedBy || 'unknown')
+    + ' decided_by:' + (f.decided_by || 'unknown');
+}
+
 module.exports = {
   detectUncleanSpeech: detectUncleanSpeech,
+  cleanSpeechWakeBlock: cleanSpeechWakeBlock,
+  cleanSpeechWakeReceipt: cleanSpeechWakeReceipt,
   cleanSpeechFlag: cleanSpeechFlag,
   reviewCleanSpeech: reviewCleanSpeech
 };
