@@ -4679,9 +4679,14 @@ async function runOutboundCouncil(input, injected) {
             // overwrites the resubmission receipt just written above, so the fact that a
             // resubmission was attempted and never delivered a verdict must ride in
             // heal_outcome or it is lost from the record entirely.
-            _healOutcome = _reThrew
-              ? 'heal_resubmission_' + String(_reNorm.reason || 'threw').slice(0, 80)
-              : 'heal_resubmission_hollow';
+            // Codex P2, live: a clean non-throw unavailability (shadow_model_unavailable,
+            // shadow_decision_judgment_unavailable) still carries a real named reason on
+            // _reNorm.reason; collapsing it to the generic 'heal_resubmission_hollow' lost
+            // that name from the durable receipt. Named reason wins whenever one exists,
+            // thrown or not; 'hollow' is now only the true no-reason fallback.
+            _healOutcome = _reNorm.reason
+              ? 'heal_resubmission_' + String(_reNorm.reason).slice(0, 80)
+              : (_reThrew ? 'heal_resubmission_threw' : 'heal_resubmission_hollow');
           }
         } catch (_healErr) {
           // heal is best-effort; fall through to the honest failure, but say it threw
