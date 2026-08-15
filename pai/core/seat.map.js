@@ -33,9 +33,68 @@
 // gemini slug via env once the exact OpenRouter slug is confirmed live (do not bake
 // an unverified slug: a wrong model id fails the seat silently).
 
+// ⬡B:core.seat_map:FOUNDER:codeless_seats_the_model_is_not_a_literal_anymore:20260815⬡
+// FOUNDER DIRECT, 20260814, on finding seven seats pinned to one vendor: "The point is not
+// hardcoding grok! It's being dynamic and based on founder and Anu!!! Deciding!" and then
+// "BUILD THIS WITHOUT CODE!! CODLESS WORLD!!"
+//
+// This file already said a re-seat was "an env change plus a deploy, never a code edit". That
+// was true for a coder standing at a dashboard and false for the person who owns the estate:
+// he reads on a phone, often with no way to reach a Render dashboard at all, so in practice
+// every seat froze at whatever a coder last typed. Seven seats on x-ai/grok-4.5 is what that
+// freeze looks like, and it is the opposite of the penny hustle this same file preaches.
+//
+// So the seat resolution gets a third source between the operator and the baked value: HER
+// SIGNED FLOOR. core/seat.floor.js reads one founder-signed row (abacia_core.guardrail_wall,
+// id seats.v1) and hands the values here. He and A'NU change a seat by deciding, not by
+// deploying. The same shape already proven for her heartbeat cadence, which reads
+// night_default_minutes off clock.v1 instead of a number a coder typed.
+//
+// THE ORDER, and each step is deliberate:
+//   1. An operator env var. A human hand on the live service outranks a stored decision,
+//      always, so an emergency re-seat is never argued with by a cached row.
+//   2. Her signed floor. Unsigned is ignored entirely: core/seat.floor.js refuses a row with
+//      no signed_by, so nobody re-seats this estate by writing a bank row.
+//   3. The baked value in SEATS below. This is a BOOTSTRAP, not a policy: it is what a brand
+//      new world runs before it has a floor of its own, so a world is never born mute.
+//
+// NO CAPS (founder, 20260815, verbatim: "NO CAPS!!!! NO CAPSS!! NO CAPSS!! WE TRACK AND LOG
+// AND WATCH!! NO CAPSS!!"). The cap envs below flow through this same function on purpose, so
+// the floor can lift a ceiling the same way it moves a model, with no coder and no deploy.
+// Nothing here installs a cap and no lane may add one as "counsel" again.
+var floorOverlay = Object.create(null);
+
+// Called by core/seat.floor.js after it has read and validated a SIGNED row. Replaces the
+// overlay whole rather than merging, so a value removed from her floor really disappears
+// instead of surviving forever in a cache nobody can see.
+function applyFloorOverlay(values) {
+  var next = Object.create(null);
+  if (values && typeof values === 'object') {
+    Object.keys(values).forEach(function (key) {
+      var raw = values[key];
+      if (raw == null) return;
+      var text = String(raw).trim();
+      if (text) next[key] = text;
+    });
+  }
+  floorOverlay = next;
+  return Object.keys(floorOverlay).length;
+}
+
+function floorOverlayValues() { return Object.assign({}, floorOverlay); }
+
 function env(key, dflt, runtime) {
   var v = (runtime || process.env)[key];
-  return (v && String(v).trim()) ? String(v).trim() : dflt;
+  if (v && String(v).trim()) return String(v).trim();
+  // An explicit runtime object is a caller asking what a SPECIFIC environment resolves to
+  // (tests, the estate monitor, a what-if). Answering that with this process's live floor
+  // would make the same question return different answers over time, so the floor applies
+  // only to the ambient environment it was actually loaded for.
+  if (!runtime || runtime === process.env) {
+    var floored = floorOverlay[key];
+    if (floored) return floored;
+  }
+  return dflt;
 }
 
 // ⬡B:core.seat_map:911:a_capability_flag_that_survives_a_re_seat_is_a_lie_with_a_deploy_behind_it:20260728⬡
@@ -662,6 +721,10 @@ function safeModelOverride(envValue, safeDefault, seatName) {
 }
 
 module.exports = { SEATS: SEATS, seat: seat, fallback: fallback, resolveKey: resolveKey, seatNames: seatNames, sanitizeKey: sanitizeKey,
+  // Codeless seats, 20260815: core/seat.floor.js hands her signed values in here and every
+  // seat resolves against them with no deploy. floorOverlayValues is a read for the estate
+  // monitor and the money wall, so an operator can see WHY a seat is on the model it is on.
+  applyFloorOverlay: applyFloorOverlay, floorOverlayValues: floorOverlayValues,
   isBannedProductionModel: isBannedProductionModel, safeModelOverride: safeModelOverride,
   // Ruling 20260808, a missing wallet says its own name: the reason token builder and the
   // live record of every keyless-seat refusal (capped ring buffer, newest last). Never a

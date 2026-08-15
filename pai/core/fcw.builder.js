@@ -588,9 +588,18 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   var _turnPrefix = require('./memory.keeper.js').MEMORY_CONTRACT.TURN_SOURCE_PREFIX;
   contextStr = allContext.map(function(b) {
     var _src = String(b.source || '').slice(0, 120);
+    // ⬡B:core.fcw.builder:FIX:a_null_column_is_an_absence_not_a_writer:20260815⬡
+    // TRAP 2, named in the founder's own drop the same day this fence shipped: "Do not invent
+    // 'an unstamped writer' for a NULL column. Say '(no writer stamp on the row)'." The fence
+    // shipped with 'an unnamed writer', which personifies an empty column into a writer-shaped
+    // thing. She is being asked to judge each line by its writer, so handing her a phantom
+    // writer for a row that has none is the fence telling her a small lie in the exact place
+    // it exists to stop one. A missing stamp is a fact about the ROW, not a name.
+    // Two independent blind critics found this in the shipped code within the hour, on both
+    // sides of the byte-paired file. Corrected here and mirrored to template-mind.
     var _writer = _src.indexOf(_turnPrefix) === 0
       ? 'the memory keeper, a real turn, channel on the line'
-      : (_src || 'an unnamed writer');
+      : (_src || '(no writer stamp on the row)');
     return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '')
       + ' | written by ' + _writer + '] ' + (b.summary || '');
   }).join('\n');
