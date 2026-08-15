@@ -264,9 +264,12 @@ function gapAppendixFor(wallGaps) {
   // used to pass in silence, because the appendix below was gated on the other gaps alone.
   const rankGap = gaps.set_aside_by_rank
     ? ('\n\n' + gaps.set_aside_by_rank + ' of your own stored records were set aside when the '
-       + 'space for this turn filled. They were ranked by how many of the question\'s words they '
-       + 'matched and which kind of record they were, never by what they mean. That ranking is not '
-       + 'a judgement about what matters to you and it may well have dropped the one that did.')
+       + 'space for this turn filled. A fixed scoring rule ordered them, and it weighs only these '
+       + 'things: how many of this turn\'s search terms the record matched, what kind of record it '
+       + 'is, the importance number stored on it, whether it happened to be the first of its kind '
+       + 'the scan reached, and how recently it was created. It never weighs what the record means '
+       + 'to you, so it is not a judgement about what matters and it may well have dropped the one '
+       + 'that did.')
     : '';
   const sizeGap = gaps.set_aside_by_size
     ? ('\n\n' + gaps.set_aside_by_size + ' further entries did not fit the space for this turn '
