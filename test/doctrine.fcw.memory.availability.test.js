@@ -263,7 +263,10 @@ test('nested partial FIND failures survive into the FCW receipt and prompt', asy
     /roadmap and doctrine: PARTIAL READ; 1 record\(s\) returned, but brain_http_error HTTP 503/);
   assert.match(wall.system_prompt,
     /READ STATUS FOR THIS SECTION:[\s\S]*roadmap and doctrine: PARTIAL READ/);
-  assert.match(wall.system_prompt, /\[DOCTRINE\] real doctrine/);
+  // The doctrine row still reaches the wall; the bracket now also names the writer that
+  // stamped it, per the 20260815 pen-on-her-mind fence. Asserting the writer clause too, so
+  // this stays a test of the fence rather than only of the content surviving.
+  assert.match(wall.system_prompt, /\[DOCTRINE \| written by [^\]]+\] real doctrine/);
 });
 
 test('a triggered preference outage is named partial instead of becoming no preference', async function (t) {
