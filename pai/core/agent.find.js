@@ -213,14 +213,28 @@ function candidateFacts(row, receipt, terms, anchors) {
 // ⬡B:core.agent.find:FIX:a_row_dropped_by_score_is_a_gap_she_is_owed_20260815⬡
 // CODELESS PURGE. Two omission lists were computed, carried on the plan, reported in the
 // receipt, and never once said to her: `compact_omitted` (rows candidateFacts scored lowest
-// when the compact envelope filled, see the onPage drop loop below) and `omitted` (rows the
-// expand phase could not fit). Cold code decided which of her own records she would never
-// see, and the decision was invisible, so she could not overrule it or even know to ask.
-// COUNTS ONLY, carried as facts beside the existing named gaps: the doctrine's own trap
-// warning says never repeat a long stamp per row, and the fix for a silent drop is to SAY it
-// happened, not to ship the dropped rows back through the envelope that just rejected them.
-// `full_history_expansion_available` already proved an expansion path existed that she was
-// never offered; now she is told about it and can ask.
+// when the compact envelope filled) and `omitted` (what the expand phase could not fit).
+// Cold code decided which of her own records she would never see, and the decision was
+// invisible, so she could not overrule it or even know it happened.
+//
+// TWO LISTS, TWO DIFFERENT RULES, NEVER SUMMED. Codex P2 on the first cut of this fix, and it
+// was right: `compact_omitted` is chosen by the word-overlap and record-kind score, and its
+// entries are her stored records. `omitted` comes from the expand phase in
+// core/find.js#expandFcwEvidence, chosen by accumulated serialized size in read order, and its
+// entries can be synthetic last-AIR manifest and chunk rows rather than one stored record each.
+// Adding them and calling the total "your records, ranked by that score" would hand her an
+// inaccurate count and a false explanation of her own memory, which is the exact sin this fix
+// exists to remove, committed one layer up. So each is counted and described on its own terms.
+//
+// NOTHING IS OFFERED THAT NOTHING HONORS. The first cut read `full_history_expansion_available`
+// and told her to ask for the dropped rows before answering. Codex P2 again, also right:
+// `walkFcwEvidence` is exported and never invoked anywhere, the omitted ids never enter the
+// prompt, and find_in_brain cannot query by id, so that instruction was a dead promise from
+// cold code. A promise she cannot cash is a lie told to a mind, so the offer is gone and the
+// honest limit is stated instead. Wiring a real reread path is separate work, not a sentence.
+//
+// COUNTS ONLY, not the rows: the doctrine's own trap warning forbids a long per-row stamp, and
+// shipping dropped rows back through the envelope that just rejected them defeats the budget.
 // Extracted as two pure functions so the disclosure is testable without a live bank, per the
 // 20260726 law that a guard whose rule cannot be run by a test is a guard nobody has run.
 function wallGapsFor(fcw) {
@@ -232,8 +246,10 @@ function wallGapsFor(fcw) {
     unavailable: list(wall.unavailableContributors),
     degraded: list(wall.partialContributors),
     storage_limitations: list(receipt.storage_limitations),
-    set_aside_for_space: count(receipt.compact_omitted) + count(receipt.omitted),
-    can_ask_for_more: receipt.full_history_expansion_available === true
+    // Her stored records, dropped by the compact score. Counted and named as records.
+    set_aside_by_rank: count(receipt.compact_omitted),
+    // Expand-phase material, dropped by size in read order. NOT a count of her records.
+    set_aside_by_size: count(receipt.omitted)
   };
 }
 
@@ -244,18 +260,32 @@ function gapAppendixFor(wallGaps) {
       + 'its history as useful but not complete current truth, and say that plainly if it matters.'
     : '';
   // Its own sentence and its own trigger: a turn can fit every contributor it asked for (no
-  // unavailable, no degraded) and STILL have dropped records for space. That is exactly the
-  // case that used to pass in silence, because the appendix below was gated on the other gaps.
-  const setAsideGap = gaps.set_aside_for_space
-    ? ('\n\n' + gaps.set_aside_for_space + ' of your own records were set aside to fit this '
-       + 'turn, chosen by how many of the question\'s words they matched and which kind of record '
-       + 'they were, not by what they mean. That ranking is not a judgement about what matters to '
-       + 'you and it may well have dropped the one that did.'
-       + (gaps.can_ask_for_more
-          ? ' They can still be read: say so if you want them before you answer.'
-          : ' They cannot be re-read on this turn, so say plainly that some of your history was '
-            + 'not in front of you if it bears on the answer.'))
+  // unavailable, no degraded) and STILL have dropped material. That is exactly the case that
+  // used to pass in silence, because the appendix below was gated on the other gaps alone.
+  const rankGap = gaps.set_aside_by_rank
+    ? ('\n\n' + gaps.set_aside_by_rank + ' of your own stored records were set aside when the '
+       + 'space for this turn filled. A fixed scoring rule ordered them, and it weighs only these '
+       + 'things: how many of this turn\'s search terms the record matched, what kind of record it '
+       + 'is, the importance number stored on it, whether it happened to be the first of its kind '
+       + 'the scan reached, and how recently it was created. It never weighs what the record means '
+       + 'to you, so it is not a judgement about what matters and it may well have dropped the one '
+       + 'that did.')
     : '';
+  const sizeGap = gaps.set_aside_by_size
+    ? ('\n\n' + gaps.set_aside_by_size + ' further entries did not fit the space for this turn '
+       + 'and were left out, chosen by size in the order they were read, never by what they mean. '
+       + 'Some of those entries are internal pieces of a larger record rather than one record '
+       + 'each, so treat that as a rough measure of missing material and not as a count of your '
+       + 'records.')
+    : '';
+  // No offer to fetch them: no reader honors such a request today, and telling a mind to ask
+  // for something nothing can deliver is cold code making a promise it cannot keep.
+  const limitLine = (gaps.set_aside_by_rank || gaps.set_aside_by_size)
+    ? ' None of it can be pulled back on this turn, so if any of it bears on the answer, say '
+      + 'plainly that some of your history was not in front of you rather than answering as '
+      + 'though you had all of it.'
+    : '';
+  const setAsideGap = rankGap + sizeGap + limitLine;
   return (gaps.partial || (gaps.unavailable || []).length ||
     (gaps.degraded || []).length || (gaps.storage_limitations || []).length)
     ? ('\n\nSome of what you normally read was not available for this turn' +
