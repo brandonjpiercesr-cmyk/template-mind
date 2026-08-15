@@ -2724,9 +2724,49 @@ function hamWorldBuilderFields(ctx) {
 // untouched, exactly like the structured reach-policy pass-through above. Tightly scoped:
 // only ever true when the caller set council_context.mode='coding', which only CODA's
 // internal advisor does — a user-facing turn can never reach this branch.
+function anuSpeakForExpression(ctx) {
+  var anu = require('./anu.js');
+  var result = anu.speak({ result: { pendingOutbound: ctx.answer } },
+    ctx.channel || 'ccwa', ctx.context || {});
+  return { result: result,
+    output: result && typeof result.output === 'string' ? result.output : '' };
+}
 function internalCodingDeliberation(ctx) {
   return !!(ctx && ctx.context && ctx.context.mode === 'coding'
     && ctx.context.internal_deliberation === true && typeof ctx.answer === 'string');
+}
+
+// ⬡B:core.pai.outbound.council:FIX:the_exit_gate_now_asks_the_same_question_the_mint_asked:20260815⬡
+// THE SECOND HALF OF THE 100-PERCENT CYCLE BLOCK, and it was still live after the first fix.
+// Verified against the live mind on 20260815 with a valid consult key: POST /cara/consult
+// answers 200 with ok:false, stage_empty_answer:writ_meaning_shadow_packet_unbound. The coder
+// door to her mind was dead, which is why every lane reporting "I could not reach her" was
+// telling the truth for a reason nobody had named.
+//
+// THE MECHANISM IS ONE LINE, and it is this file already agreeing with itself everywhere except
+// the exit. The WRIT stage decides whether to mint the meaning packet with
+// `requiresHumanRecheck = mode !== 'coding' && mode !== 'internal'` (the packet is minted only
+// when a human recheck is required), and it builds its own WRIT context with
+// `internal: mode === 'coding' || mode === 'internal'`. Both lines already treat 'internal' and
+// 'coding' as one family. My first fix did not: it keyed the bypass on mode 'coding' plus an
+// `internal_deliberation` flag that /cara/consult never sets, so the consult turn fell through
+// to a gate demanding a packet its own mode had just refused to mint.
+//
+// So the gate now asks the SAME question the mint asked. That is the real invariant and it
+// closes the class rather than one more instance of it: an exit may not require an artifact
+// that this file, one stage earlier and by its own rule, declined to create.
+//
+// NOT A WEAKENING OF THE ANCHOR, said out loud per the 20260814 door law, and narrower than it
+// looks. The meaning shadow guards the bytes a PERSON reads: it proves the words shipped are the
+// words WRIT rendered. These two modes are the two that reach no person. 'default', 'voice',
+// 'turn', 'anu_face', 'outbound_text' and every other human-facing mode still require the
+// packet, byte for byte as before, and a person-facing turn cannot enter this branch because
+// its own mode mints the packet. The internal turn is still fully judged by WRIT, PAM and
+// SHADOW inside this same council. What is removed is a demand for a key to a room this turn
+// was never sent into.
+function humanRecheckWaived(ctx) {
+  var mode = ctx && ctx.context && ctx.context.mode;
+  return (mode === 'coding' || mode === 'internal') && typeof ctx.answer === 'string';
 }
 async function defaultMetaCommentaryStage(ctx) {
   var worldBuilderFields = hamWorldBuilderFields(ctx);
@@ -3287,6 +3327,47 @@ async function defaultAnuExpressionStage(ctx) {
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
     reason:'ANU_EXPRESSION_STRUCTURED_REACH_POLICY_PASS',
     evidence:{ channel:'reach',blocked:false,exact_structured_policy:true } };
+  // ⬡B:core.pai.outbound.council:FIX:the_expression_gate_recognizes_the_internal_coding_turn:20260815⬡
+  // THE 100-PERCENT CYCLE BLOCK, read from her live rows on 20260815: the last 120 CYCLE_STEP
+  // beads held 18 cycle_start and 17 outbound_council_blocked, every one
+  // stage_empty_answer:writ_meaning_shadow_packet_unbound, every one an internal coding
+  // deliberation. The mechanism is structural, not intermittent. WRIT_INTERNAL_CODING_PASS
+  // above returns early for the internal machine-contract turn, correctly, because a voice
+  // rewrite may not touch typed evidence references; but the packet the meaning shadow rides
+  // on is minted ONLY inside the human-voice WRIT path, so this stage then demanded an
+  // artifact the internal path can never hold, set her answer to the empty string, and every
+  // internal cycle burned a real paid model call and shipped nothing. The exit gate required
+  // a key minted only in a room the internal turn never enters.
+  //
+  // WHY THIS IS NOT A WEAKENING OF THE ANCHOR, said out loud per the 20260814 door law. The
+  // meaning shadow guards the HUMAN-facing final bytes: it proves the words a person reads
+  // are the words WRIT rendered. An internal coding deliberation's answer is a typed machine
+  // contract that reaches no person: META and WRIT already recognize exactly this context
+  // with their own INTERNAL_CODING_PASS receipts, the turn is still fully judged by PAM and
+  // SHADOW inside this same council, and advisors/coding.js re-validates the exact evidence
+  // references after the council returns. The person-facing path is byte-for-byte untouched:
+  // no packet, no ship, exactly as before.
+  //
+  // WIDENED 20260815, same day, after the live consult door proved the first fix too narrow:
+  // this asks humanRecheckWaived, the same question the WRIT stage's own requiresHumanRecheck
+  // asks before deciding whether to mint the packet. See that helper for the full reasoning.
+  // Only THIS gate widened. META above and WRIT above keep the narrower predicate on purpose:
+  // a consult turn is supposed to RUN WRIT (that is how she is allowed to name machinery to a
+  // coder at all), and skipping it here would be a real weakening rather than a repair.
+  if (humanRecheckWaived(ctx)) {
+    var internalSpeak = anuSpeakForExpression(ctx);
+    return { ok:!!(internalSpeak.result && internalSpeak.result.blocked === false &&
+        internalSpeak.output.trim().length > 0),
+      answer:internalSpeak.output,
+      reason:internalSpeak.result && internalSpeak.result.blocked ? 'anu_expression_blocked'
+        : (internalSpeak.output.trim().length > 0 ? 'ANU_EXPRESSION_INTERNAL_CODING_PASS'
+          : 'stage_empty_answer:anu_expression_internal_empty'),
+      evidence:{ channel:internalSpeak.result && internalSpeak.result.channel,
+        blocked:!!(internalSpeak.result && internalSpeak.result.blocked),
+        internal_deliberation:true,
+        meaning_shadow:{ok:false,reason:'writ_meaning_shadow_inapplicable_internal_coding',
+          decision:null,dissent:false} } };
+  }
   var anu = require('./anu.js');
   var result = anu.speak({ result: { pendingOutbound: ctx.answer } },
     ctx.channel || 'ccwa', ctx.context || {});
@@ -4447,12 +4528,17 @@ async function runOutboundCouncil(input, injected) {
               isHumanFacingAnswer(_healed) && _healed !== before) {
             var _reStarted = nowMs(deps);
             var _reNorm;
+            var _reThrew = false;
+            var _reRaw;
             try {
-              _reNorm = normalizeStageResult(await handler(buildStageContext(
+              _reRaw = await handler(buildStageContext(
                 input, _healed, quillRequired, stages,
                 { stage: stage, healed: true, healedFrom: _healReason, runtime:stageRuntime }
-              )), _healed);
+              ));
+              _reNorm = normalizeStageResult(_reRaw, _healed);
             } catch (_reJudgeErr) {
+              _reThrew = true;
+              _reRaw = null;
               _reNorm = {
                 ok: false,
                 reason: 'stage_threw:' + errorReason(_reJudgeErr),
@@ -4465,6 +4551,66 @@ async function runOutboundCouncil(input, injected) {
             var _reModelOnlyCarry = stage === 'SHADOW' && _reHuman &&
               mayCarryBareShadowModelHold(_reNorm, input);
             var _rePassed = (_reNorm.ok || _reModelOnlyCarry) && _reHuman;
+            // Codex review, live, on the 20260815 fix below: a retry that THREW or came back
+            // HOLLOW (no human-facing text at all, so _reHuman is false) never got a second
+            // opinion at all. That is retry plumbing failing, not a mind re-judging the bytes
+            // and finding something worse. It must not be treated the same as a genuine harder
+            // verdict, which is the one case the 20260815 fix exists to catch.
+            //
+            // Codex review, live, round two: !_reHuman alone MISSES a real case. When the raw
+            // handler result is null, not an object, or an {ok:false} shape with no usable
+            // answer/output field, normalizeStageResult (by design, for every OTHER caller)
+            // substitutes the ALREADY-CONFIRMED-human-facing _healed text as a convenience
+            // fallback so downstream code always has a string to read. That fallback makes
+            // _reHuman true even though the handler supplied no verdict at all, which is the
+            // exact "never got a second opinion" case this whole guard exists to catch. The
+            // raw pre-normalization shape, not the normalized convenience answer, is the only
+            // honest signal of whether a verdict was actually returned.
+            var _reRawInvalid = !_reRaw || typeof _reRaw !== 'object' ||
+              (typeof _reRaw.answer !== 'string' && typeof _reRaw.output !== 'string');
+            // Codex review, rounds four and six: SHADOW's own "no real judgment happened"
+            // outcomes return a well-formed object with `answer: ctx.answer` -- the healed text
+            // echoed back verbatim, not a verdict on it -- so it is a valid string, human-facing,
+            // and passes every shape check above while still being zero verdict.
+            //
+            // Round four's fix read this off evidence.judgment.judgment_status, which is built
+            // by a `judgment ? {...AVAILABLE...} : {...UNAVAILABLE...}` ternary keyed on whether
+            // the raw provider call itself happened at all. Round six found the gap in that:
+            // when a relay-backed retry DOES get a raw provider response but its content fails
+            // to parse as JSON (parsed is null while judgment is still truthy), that ternary
+            // reports judgment_status:'AVAILABLE' -- a response arrived, so the shape check
+            // passed -- even though no usable verdict was ever extracted from it. The top-level
+            // reason this function returns already says 'shadow_model_unavailable' correctly in
+            // both the judgment-absent and judgment-unparseable cases; only the nested evidence
+            // summary disagreed. Reading the TOP-LEVEL reason instead of the nested evidence
+            // shape closes both known gaps at once, because both roads to "no verdict" already
+            // report through the same two named reasons this file defines for exactly that
+            // meaning: relayUnavailableHold's 'shadow_model_unavailable' and
+            // shadowDecisionUnavailableHold's 'shadow_decision_judgment_unavailable'.
+            //
+            // Codex review, round seven: a fifth real gap, and this one is severe rather than
+            // cosmetic. Both named-unavailable reasons above fire purely off whether the model
+            // JUDGE produced a usable verdict; neither says anything about the DETERMINISTIC
+            // board, which this whole file treats elsewhere as hard, mechanically-verified
+            // evidence, never a flaky signal to discard. relayUnavailableHold's ternary position
+            // is checked BEFORE `!boardPassed` in this stage's own reason chain, so a healed
+            // retry whose DETERMINISTIC board found a real, mechanical flag on the NEW bytes,
+            // while the model judge separately timed out or failed to parse, still reports
+            // 'shadow_model_unavailable' -- and without this guard, the fix above would read
+            // that as "no verdict, fall through" and silently discard a genuine hard finding on
+            // the retry in favor of carrying the OLD, pre-heal bytes. Carrying the original is
+            // still SAFE on its own terms (_initialModelOnlyCarry already proved the original
+            // clean independently of anything the retry found), but silently dropping a real
+            // deterministic flag on the retry is losing a signal this file's own law says must
+            // never be discarded. A model-unavailable outcome is only "no verdict at all" when
+            // the retry's OWN deterministic board is also clean; if it flagged something, that
+            // IS a verdict, hard and mechanical, and must not be waved through as unavailable.
+            var _reDeterministic = _reNorm.evidence && _reNorm.evidence.deterministic;
+            var _reDeterministicClean = !!(_reDeterministic &&
+              Array.isArray(_reDeterministic.flags) && _reDeterministic.flags.length === 0);
+            var _reNoRealJudgment = (_reNorm.reason === 'shadow_model_unavailable' ||
+              _reNorm.reason === 'shadow_decision_judgment_unavailable') && _reDeterministicClean;
+            var _reUnavailable = _reThrew || _reRawInvalid || !_reHuman || _reNoRealJudgment;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
             // Replace the held receipt in place and span the original stage input
@@ -4553,12 +4699,34 @@ async function runOutboundCouncil(input, injected) {
             // The founder's 20260802 standing order is untouched: a healed candidate that
             // is still merely model-held still carries, further down. What closes here is
             // only the case where the healed bytes drew a different, harder verdict.
-            return failureResult(!_reHuman
-              ? hollowStageReason(_reNorm.answer, _reNorm.reason)
-              : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
-            _healOutcome = !_reHuman
-              ? 'heal_resubmission_hollow'
-              : 'heal_resubmission_still_held';
+            //
+            // Codex review, live: this unconditional return went one step too far. A retry
+            // that never produced a second opinion at all (threw, timed out, or came back
+            // hollow, _reUnavailable) is not "the healed bytes drew a harder verdict"; it is
+            // retry plumbing failing to deliver any verdict. When the ORIGINAL result was
+            // already the founder's provably-safe bare model-only hold (_initialModelOnlyCarry),
+            // that unavailability must not override it: fall through to the existing carry
+            // gate below, the one the 20260802 standing order already governs, instead of
+            // hard-failing the whole turn over a retry that simply could not run. Only a
+            // retry that DID reach a real verdict and that verdict was still held stays a
+            // hard failure here.
+            if (!(_reUnavailable && _initialModelOnlyCarry)) {
+              return failureResult(!_reHuman
+                ? hollowStageReason(_reNorm.answer, _reNorm.reason)
+                : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
+            }
+            // Falling through to the _initialModelOnlyCarry gate below. Its receipt
+            // overwrites the resubmission receipt just written above, so the fact that a
+            // resubmission was attempted and never delivered a verdict must ride in
+            // heal_outcome or it is lost from the record entirely.
+            // Codex P2, live: a clean non-throw unavailability (shadow_model_unavailable,
+            // shadow_decision_judgment_unavailable) still carries a real named reason on
+            // _reNorm.reason; collapsing it to the generic 'heal_resubmission_hollow' lost
+            // that name from the durable receipt. Named reason wins whenever one exists,
+            // thrown or not; 'hollow' is now only the true no-reason fallback.
+            _healOutcome = _reNorm.reason
+              ? 'heal_resubmission_' + String(_reNorm.reason).slice(0, 80)
+              : (_reThrew ? 'heal_resubmission_threw' : 'heal_resubmission_hollow');
           }
         } catch (_healErr) {
           // heal is best-effort; fall through to the honest failure, but say it threw
