@@ -48,22 +48,7 @@ var PIECES = {
       var r = await fetch(base + '/os/calendar/' + hamUid, { headers: headers }).then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
       if (!r || !r.ok) return null;
       var events = (r.events || r.items || []).slice(0, 12);
-      // ⬡B:core.stream.piece_registry:FIX:an_empty_calendar_is_not_a_verdict_on_their_day:20260815⬡
-      // FOUNDER LAW, "cold code never decides to reach a human", and its nearer sister: cold code
-      // does not get to decide what is TRUE about a person's life either. This line read "Your
-      // next 24 hours are wide open with nothing scheduled" and put it on the glass in front of
-      // them as settled fact. It is the exact sentence the founder caught on 20260725 living in
-      // core/context.fusion.js, where the fix is stamped at FIX:an_empty_calendar_is_not_a
-      // _confident_open_day:20260725 and reads, in that file's own words: cold code took one
-      // silent source, the calendar, DECIDED that its silence meant the day was empty, and handed
-      // that over as settled fact. It was fixed there and it regrew HERE, on the surface the
-      // person actually looks at.
-      // MIRRORING THAT FIX'S SHAPE: say what the read actually was and scope the claim to the
-      // source that made it. The calendar is one source; anything they told A'NU in conversation
-      // may never have reached it. "Nothing is on the calendar" is a fact this module owns.
-      // "Your day is open" is a conclusion about their life, and this module does not own that.
-      if (!events.length) return { type: 'card', title: 'Your calendar',
-        text: 'Nothing is on your calendar for the next 24 hours. That is the calendar itself, not the whole of your day.' };
+      if (!events.length) return { type: 'card', title: 'Your calendar', text: 'Your next 24 hours are wide open with nothing scheduled.' };
       // ⬡B:piece_registry:FIX:render_the_enriched_date_fields:20260718⬡ the source now
       // stamps each event with date/time/is_today/is_past; render those, lead with today,
       // never show a passed event as if it were current, and label the day so a future
@@ -71,11 +56,7 @@ var PIECES = {
       var todayEvents = events.filter(function (e) { return e.is_today; });
       var upcoming = events.filter(function (e) { return !e.is_today && !e.is_past; });
       var shown = (todayEvents.length ? todayEvents : upcoming).slice(0, 8);
-      // Same law, same shape: this branch is reached when the read succeeded and every event it
-      // returned has already passed, which is a fact about the calendar and not a verdict on the
-      // rest of their day. "Today is open." was cold code asserting the second one.
-      if (!shown.length) return { type: 'card', title: 'Your calendar',
-        text: 'Nothing further is on your calendar today. That is the calendar itself, not the whole of your day.' };
+      if (!shown.length) return { type: 'card', title: 'Your calendar', text: 'Today is open. Nothing scheduled.' };
       return { type: 'timeline', title: todayEvents.length ? 'Today' : 'Coming up',
         events: shown.map(function (e) {
           var when = e.is_today ? (e.allDay ? 'today' : String(e.time || '')) : String(e.date || '');
