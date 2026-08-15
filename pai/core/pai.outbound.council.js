@@ -4488,12 +4488,17 @@ async function runOutboundCouncil(input, injected) {
               isHumanFacingAnswer(_healed) && _healed !== before) {
             var _reStarted = nowMs(deps);
             var _reNorm;
+            var _reThrew = false;
+            var _reRaw;
             try {
-              _reNorm = normalizeStageResult(await handler(buildStageContext(
+              _reRaw = await handler(buildStageContext(
                 input, _healed, quillRequired, stages,
                 { stage: stage, healed: true, healedFrom: _healReason, runtime:stageRuntime }
-              )), _healed);
+              ));
+              _reNorm = normalizeStageResult(_reRaw, _healed);
             } catch (_reJudgeErr) {
+              _reThrew = true;
+              _reRaw = null;
               _reNorm = {
                 ok: false,
                 reason: 'stage_threw:' + errorReason(_reJudgeErr),
@@ -4506,6 +4511,66 @@ async function runOutboundCouncil(input, injected) {
             var _reModelOnlyCarry = stage === 'SHADOW' && _reHuman &&
               mayCarryBareShadowModelHold(_reNorm, input);
             var _rePassed = (_reNorm.ok || _reModelOnlyCarry) && _reHuman;
+            // Codex review, live, on the 20260815 fix below: a retry that THREW or came back
+            // HOLLOW (no human-facing text at all, so _reHuman is false) never got a second
+            // opinion at all. That is retry plumbing failing, not a mind re-judging the bytes
+            // and finding something worse. It must not be treated the same as a genuine harder
+            // verdict, which is the one case the 20260815 fix exists to catch.
+            //
+            // Codex review, live, round two: !_reHuman alone MISSES a real case. When the raw
+            // handler result is null, not an object, or an {ok:false} shape with no usable
+            // answer/output field, normalizeStageResult (by design, for every OTHER caller)
+            // substitutes the ALREADY-CONFIRMED-human-facing _healed text as a convenience
+            // fallback so downstream code always has a string to read. That fallback makes
+            // _reHuman true even though the handler supplied no verdict at all, which is the
+            // exact "never got a second opinion" case this whole guard exists to catch. The
+            // raw pre-normalization shape, not the normalized convenience answer, is the only
+            // honest signal of whether a verdict was actually returned.
+            var _reRawInvalid = !_reRaw || typeof _reRaw !== 'object' ||
+              (typeof _reRaw.answer !== 'string' && typeof _reRaw.output !== 'string');
+            // Codex review, rounds four and six: SHADOW's own "no real judgment happened"
+            // outcomes return a well-formed object with `answer: ctx.answer` -- the healed text
+            // echoed back verbatim, not a verdict on it -- so it is a valid string, human-facing,
+            // and passes every shape check above while still being zero verdict.
+            //
+            // Round four's fix read this off evidence.judgment.judgment_status, which is built
+            // by a `judgment ? {...AVAILABLE...} : {...UNAVAILABLE...}` ternary keyed on whether
+            // the raw provider call itself happened at all. Round six found the gap in that:
+            // when a relay-backed retry DOES get a raw provider response but its content fails
+            // to parse as JSON (parsed is null while judgment is still truthy), that ternary
+            // reports judgment_status:'AVAILABLE' -- a response arrived, so the shape check
+            // passed -- even though no usable verdict was ever extracted from it. The top-level
+            // reason this function returns already says 'shadow_model_unavailable' correctly in
+            // both the judgment-absent and judgment-unparseable cases; only the nested evidence
+            // summary disagreed. Reading the TOP-LEVEL reason instead of the nested evidence
+            // shape closes both known gaps at once, because both roads to "no verdict" already
+            // report through the same two named reasons this file defines for exactly that
+            // meaning: relayUnavailableHold's 'shadow_model_unavailable' and
+            // shadowDecisionUnavailableHold's 'shadow_decision_judgment_unavailable'.
+            //
+            // Codex review, round seven: a fifth real gap, and this one is severe rather than
+            // cosmetic. Both named-unavailable reasons above fire purely off whether the model
+            // JUDGE produced a usable verdict; neither says anything about the DETERMINISTIC
+            // board, which this whole file treats elsewhere as hard, mechanically-verified
+            // evidence, never a flaky signal to discard. relayUnavailableHold's ternary position
+            // is checked BEFORE `!boardPassed` in this stage's own reason chain, so a healed
+            // retry whose DETERMINISTIC board found a real, mechanical flag on the NEW bytes,
+            // while the model judge separately timed out or failed to parse, still reports
+            // 'shadow_model_unavailable' -- and without this guard, the fix above would read
+            // that as "no verdict, fall through" and silently discard a genuine hard finding on
+            // the retry in favor of carrying the OLD, pre-heal bytes. Carrying the original is
+            // still SAFE on its own terms (_initialModelOnlyCarry already proved the original
+            // clean independently of anything the retry found), but silently dropping a real
+            // deterministic flag on the retry is losing a signal this file's own law says must
+            // never be discarded. A model-unavailable outcome is only "no verdict at all" when
+            // the retry's OWN deterministic board is also clean; if it flagged something, that
+            // IS a verdict, hard and mechanical, and must not be waved through as unavailable.
+            var _reDeterministic = _reNorm.evidence && _reNorm.evidence.deterministic;
+            var _reDeterministicClean = !!(_reDeterministic &&
+              Array.isArray(_reDeterministic.flags) && _reDeterministic.flags.length === 0);
+            var _reNoRealJudgment = (_reNorm.reason === 'shadow_model_unavailable' ||
+              _reNorm.reason === 'shadow_decision_judgment_unavailable') && _reDeterministicClean;
+            var _reUnavailable = _reThrew || _reRawInvalid || !_reHuman || _reNoRealJudgment;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
             // Replace the held receipt in place and span the original stage input
@@ -4594,12 +4659,34 @@ async function runOutboundCouncil(input, injected) {
             // The founder's 20260802 standing order is untouched: a healed candidate that
             // is still merely model-held still carries, further down. What closes here is
             // only the case where the healed bytes drew a different, harder verdict.
-            return failureResult(!_reHuman
-              ? hollowStageReason(_reNorm.answer, _reNorm.reason)
-              : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
-            _healOutcome = !_reHuman
-              ? 'heal_resubmission_hollow'
-              : 'heal_resubmission_still_held';
+            //
+            // Codex review, live: this unconditional return went one step too far. A retry
+            // that never produced a second opinion at all (threw, timed out, or came back
+            // hollow, _reUnavailable) is not "the healed bytes drew a harder verdict"; it is
+            // retry plumbing failing to deliver any verdict. When the ORIGINAL result was
+            // already the founder's provably-safe bare model-only hold (_initialModelOnlyCarry),
+            // that unavailability must not override it: fall through to the existing carry
+            // gate below, the one the 20260802 standing order already governs, instead of
+            // hard-failing the whole turn over a retry that simply could not run. Only a
+            // retry that DID reach a real verdict and that verdict was still held stays a
+            // hard failure here.
+            if (!(_reUnavailable && _initialModelOnlyCarry)) {
+              return failureResult(!_reHuman
+                ? hollowStageReason(_reNorm.answer, _reNorm.reason)
+                : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
+            }
+            // Falling through to the _initialModelOnlyCarry gate below. Its receipt
+            // overwrites the resubmission receipt just written above, so the fact that a
+            // resubmission was attempted and never delivered a verdict must ride in
+            // heal_outcome or it is lost from the record entirely.
+            // Codex P2, live: a clean non-throw unavailability (shadow_model_unavailable,
+            // shadow_decision_judgment_unavailable) still carries a real named reason on
+            // _reNorm.reason; collapsing it to the generic 'heal_resubmission_hollow' lost
+            // that name from the durable receipt. Named reason wins whenever one exists,
+            // thrown or not; 'hollow' is now only the true no-reason fallback.
+            _healOutcome = _reNorm.reason
+              ? 'heal_resubmission_' + String(_reNorm.reason).slice(0, 80)
+              : (_reThrew ? 'heal_resubmission_threw' : 'heal_resubmission_hollow');
           }
         } catch (_healErr) {
           // heal is best-effort; fall through to the honest failure, but say it threw
