@@ -132,13 +132,32 @@ async function generateSections(hamUid, moment, prefs) {
         // entire briefing. That is a worse failure than a trimmed list, and a silent one.
         // So: EVERY event still rides, none is dropped or ranked away. Only the bulk per row is
         // bounded, the same distinction used on her learned lines: bound the bytes, never the rows.
+        // ⬡B:dawn.generate_sections:FIX:carry_the_end_time_and_the_real_writer:20260815⬡
+        // Two corrections to my own compaction. FIRST, it kept only the start, so a fifteen
+        // minute call and a four hour block read identically and she could not speak about
+        // length or back-to-back timing. end_time is right there: getRadarEvents even filters
+        // on it. SECOND, and worse: I preserved e.source and e.stamp_type, and those can NEVER
+        // be present. getRadarEvents does select=content, parses that JSON, and returns the
+        // parsed EVENT, not the bead. So every calendar row entered the fenced prompt with no
+        // writer at all while the fence told the mind each line names its writer. The fence was
+        // lying for exactly these rows.
+        // The honest fix upstream is to add source and stamp_type to that SELECT, but
+        // core/schedule/schedule.logic.js is a generated mirror of anew/core and must not be
+        // hand-edited, so the writer is attached HERE at the adapter boundary. This is a carried
+        // fact, not an invented one: that reader's query is
+        // source=like.RADAR.<UID>.event.%, so every row it returns is a RADAR event bead by
+        // construction. Written as a plain fact about the reader, not a claim about a bead we
+        // never saw.
         if(Array.isArray(ev)) sec.upcoming=ev.map(function(e){
           if(!e||typeof e!=='object') return e;
           var c=e.content&&typeof e.content==='object'?e.content:e;
           return { title:String(c.title||c.summary||c.subject||'').slice(0,200),
             when:c.when||c.start||c.start_time||c.starts_at||null,
+            ends:c.end_time||c.end||c.ends_at||null,
+            all_day:c.is_all_day===true||undefined,
             location:String(c.location||'').slice(0,120) || undefined,
-            source:e.source||undefined, stamp_type:e.stamp_type||undefined };
+            source:e.source||'RADAR calendar reader (per-row bead stamp not carried by that reader)',
+            stamp_type:e.stamp_type||'EVENT' };
         });} } catch(e){}
     try { var iman=tryMod('../reach/iman.js');
       if (iman && iman.listEmails){ var em=await iman.listEmails({HAM_UID:hamUid},{unreadOnly:true,limit:8}); if(Array.isArray(em)) sec.emails=em;} } catch(e){}
