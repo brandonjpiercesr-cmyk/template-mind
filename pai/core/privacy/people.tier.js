@@ -242,6 +242,23 @@ module.exports = {
   isTier: isTier, parseTier: parseTier, normalizeMark: normalizeMark, founderHamUid: founderHamUid,
   resolveViewerTier: resolveViewerTier, effectiveTier: effectiveTier,
   isReadAuthority: isReadAuthority,
+  // ⬡B:core.privacy.people_tier:FIX:a_token_only_this_file_could_mint_starved_five_lanes:20260815⬡
+  // EXPORTED because withholding it did not make anything safer, it made five lanes read an
+  // EMPTY WORLD and call it an empty world. The READ_AUTHORITY symbol is stamped only inside
+  // readAuthority(), and readAuthority() was not exported, so no caller anywhere could produce a
+  // token isReadAuthority() would accept. core/tool.loop.js therefore built two BARE OBJECT
+  // LITERALS for its closed-world lanes, and measured on the real modules:
+  //   isReadAuthority({tier:STRICTEST,source:'closed_world'}, HAM)  ->  false
+  //   isReadAuthority(resolveReadTier(...), HAM)                    ->  true
+  // so core/context.fusion.js#readTierFor returned null and her whole fused world came back as
+  // "" and {}. The failure presents to a reader as "there is no context," never as "the token
+  // was never minted," which is the same describes-the-demand-not-the-supply shape that hid two
+  // starved council doors for a day.
+  // THIS WIDENS NOTHING. Exporting the MINTER does not export the ability to invent authority: a
+  // caller still has to say which tier and which ham, and effectiveTier() floors anything
+  // unrecognized at STRICTEST, the least privileged person alive. The closed-world lanes keep
+  // the exact tier they always intended, STRICTEST; they just get a token that can be READ.
+  readAuthority: readAuthority,
   structuralFilter: structuralFilter, envelopeOf: envelopeOf,
   buildEnvelope: buildEnvelope, visibleTo: visibleTo, bornPeopleTier: bornPeopleTier,
   resolveReadTier: resolveReadTier

@@ -437,8 +437,19 @@ async function writCheck(text, context) {
   var semanticChanges = [];
   // The phrase hints the organ is handed, gathered once so the overrule receipt
   // is derived against exactly what the prompt named, never a second list.
+  // ⬡B:board.writ:HEAL:the_name_overrule_was_first_out_of_a_capped_receipt:20260815⬡
+  // A BLIND CRITIC BROKE MY OWN HEADLINE CLAIM. I wrote that a name WRIT chose to KEEP lands in
+  // overruled_hints, so "the LLM decided, the regex did not" is PROVABLE rather than asserted.
+  // survivingHints ends in .slice(0, 8), and _hintNames was concatenated LAST, so name overrules
+  // were the first thing evicted. Measured on a long chatty answer carrying six real weak-ending
+  // phrases and three real process-narration phrases plus "Your daughter Nova has a recital":
+  //   overruled_hints -> eight filler phrases, and "nova" NOWHERE on the receipt
+  // WRIT kept the daughter's name and the receipt did not say so. The claim held only on short
+  // answers, and her normal register is not short.
+  // Names go FIRST now. If a cap has to drop something, it drops a filler phrase whose absence
+  // costs an audit nothing, never the one hint that proves a mind made the call.
   var _hintsForReceipt = []
-    .concat(_hintCTA, _hintProc, _hintBans, _hintHeaders || [], _hintNames);
+    .concat(_hintNames, _hintCTA, _hintProc, _hintBans, _hintHeaders || []);
   if (!isInternal) {
     try {
       var _ladder = require('../../core/model.ladder.js');

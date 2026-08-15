@@ -152,7 +152,33 @@ async function assemble(hamUid, moment, sec, prefs, discoveryQuestion) {
       ' Never show any agent or system names. Only use the facts given below.\n\nFACTS:\n'+JSON.stringify(sec);
     var out=await ladder.deliberate(persona.voicePrompt(instruction), '', { max_tokens:1200, timeout:40000 });
     var text=out&&out.content!=null?String(out.content).trim():'';
-    return text? persona.applyPersona(text) : null; // final identity scrub through the one persona
+    // ⬡B:pai.stations.dawn:HEAL:the_brief_kept_a_scrub_that_had_become_a_passthrough:20260815⬡
+    // A REGRESSION I SHIPPED ONE COMMIT AGO AND A BLIND CRITIC CAUGHT, and it lands in the SEED
+    // EVERY WORLD INHERITS, which is where it matters most. When applyPersona became a
+    // passthrough (correctly: it sits on HER ANSWER path and cold code may not author her
+    // sentence) this line silently stopped doing anything, while its own trailing comment still
+    // said "final identity scrub". A comment describing a guarantee the code no longer provides
+    // is the same defect I stamped two other files for tonight.
+    // AND THE RISK IS CONCRETE, not theoretical: the FACTS block above is built by
+    // JSON.stringify over bead summaries, machine rows that really do carry organ names, and
+    // this station reaches NO council, NO WRIT and NO wake. Its only remaining defense was one
+    // instruction sentence with nothing verifying it.
+    // SO THE BRIEF CARRIES HER BYTES and the fact is DETECTED and stamped where a reader can
+    // audit it. This is the honest half-measure and it is named as one: a station with no organ
+    // cannot wake a mind, so the correct end state is routing this brief through WRIT like every
+    // other human-facing surface. That is a bigger change than this heal and it is a real open
+    // row, not something to bury in a one-line fix.
+    if (!text) return null;
+    try {
+      var _wake = typeof persona.internalNameWake === 'function'
+        ? persona.internalNameWake(text, { hamUid:hamUid, surface:'dawn.briefing' }) : null;
+      if (_wake && _wake.fired && typeof console !== 'undefined' && console.warn) {
+        console.warn('[dawn.station] internal_name_wake UNJUDGED on a brief that reaches no WRIT:',
+          JSON.stringify({ terms:_wake.count, surface:_wake.surface,
+            decided_by:_wake.decided_by }));
+      }
+    } catch (eWake) {}
+    return text;
   } catch(e){ return null; }
 }
 

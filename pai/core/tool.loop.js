@@ -5366,11 +5366,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // identity fields never grant read authority. The same result governs the builder and every
   // later tool read.
   var _peopleTiers = require('./privacy/people.tier.js');
-  var _readAuthority = {tier:_peopleTiers.STRICTEST,source:'closed_world'};
+  // ⬡B:core.tool_loop:FIX:a_bare_literal_is_not_an_authority_token_and_never_was:20260815⬡
+  // These two lines built the read-authority token as PLAIN OBJECT LITERALS. The token carries a
+  // Symbol stamped only inside core/privacy/people.tier.js#readAuthority, so a literal can never
+  // satisfy isReadAuthority(). Measured on the real modules:
+  //   isReadAuthority({tier:STRICTEST,source:'closed_world'}, HAM)  ->  false
+  //   isReadAuthority(resolveReadTier(...), HAM)                    ->  true
+  // core/context.fusion.js#readTierFor then returns null, and getLatestSummary and
+  // readChannelActivity hand back "" and {} with no reason attached. So on the five lanes that
+  // use the closed-world literal (reach incident intake, signed voice closed turn, room-safe
+  // voice, internal CODA turn, GMGU native tutor) she silently lost her whole fused world and it
+  // read as "there is no context" rather than "nobody could mint the token." Same
+  // describes-the-demand-never-the-supply shape that hid two starved council doors for a day.
+  // THE TIER IS UNCHANGED, and that matters: STRICTEST in, STRICTEST out. This makes the token
+  // READABLE, it does not make it more permissive.
+  var _readAuthority = _peopleTiers.readAuthority(_peopleTiers.STRICTEST, 'closed_world', hamUid);
   if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn &&
       !_roomSafeVoice && !_internalCodaTurn && !_gmguNativeTutorTurn) {
     try { _readAuthority = await _peopleTiers.resolveReadTier(identity, hamUid); }
-    catch (eReadTier) { _readAuthority = {tier:_peopleTiers.STRICTEST,source:'unresolved'}; }
+    catch (eReadTier) {
+      _readAuthority = _peopleTiers.readAuthority(_peopleTiers.STRICTEST, 'unresolved', hamUid);
+    }
   }
   var _effectiveViewerTier = _peopleTiers.effectiveTier(_readAuthority && _readAuthority.tier);
   var _fcwT0=Date.now();
