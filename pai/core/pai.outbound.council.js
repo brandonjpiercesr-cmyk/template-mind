@@ -2787,12 +2787,56 @@ function internalCodingDeliberation(ctx) {
 // branch by naming a mode. The internal turn is still fully judged by WRIT, PAM and SHADOW
 // inside this same council. What is removed is a demand for a key to a room this turn was
 // never sent into.
-function humanRecheckWaived(ctx) {
-  var context = ctx && ctx.context;
-  if (!context || typeof ctx.answer !== 'string') return false;
-  // The server-owned proof, checked FIRST and never inferred from the mode string.
+// ⬡B:core.pai.outbound.council:FIX:a_coder_is_a_person_so_the_consult_reply_gets_a_real_packet:20260815⬡
+// Codex P1, second round, and it corrected the whole approach rather than one predicate. I had
+// marked the consult door "no person on the other end" and waived the meaning packet. But a
+// CODER IS A PERSON: routes/cara.routes.js returns that reply straight to them. Authentication
+// makes a marker server-owned; it does not make the bytes non-human-facing. Waiving the check
+// there was the same mistake as the caller-mode hole, one layer over.
+//
+// THE REAL DEFECT WAS ONE STRING CARRYING TWO DECISIONS. `mode:'internal'` meant both "let WRIT
+// allow her to name machinery to a coder" AND "mint no meaning packet." The consult door needs
+// the first and must never get the second, so the two are separated: a server-owned
+// `human_facing` says a person reads these bytes and forces the mint whatever the mode says.
+//
+// The repair is now MINT THE PACKET rather than SKIP THE CHECK, and that is what opens the door:
+// the exit gate was refusing to proceed without an artifact that nothing had created, and the
+// artifact now exists and binds.
+//
+// THE WAIVER, and the mint below reads the same marker so the consult door cannot deadlock again.
+function packetWaivedFor(context) {
+  if (!context) return false;
+  // A turn that says a person reads its bytes is never waivable, whatever else it claims.
+  // Checked first so the markers cannot combine into a contradiction that resolves in favor
+  // of shipping.
+  if (context.human_facing === true) return false;
+  // The server-owned proof, never inferred from the caller-supplied mode string.
   if (context.internal_deliberation !== true) return false;
   return context.mode === 'coding' || context.mode === 'internal';
+}
+
+// ADDITIVE ON PURPOSE, AND I SCOPED THIS DOWN DELIBERATELY. `human_facing` forces the mint; the
+// old mode rule is otherwise untouched. Making the mint the exact complement of the waiver is
+// the structurally correct end state and I had it written, but it changes behavior on a door I
+// cannot verify from here: a bare `{mode:'coding'}` turn is the CLAIR command center's live
+// path, and if the packet failed to bind there I would have traded a dead consult door for a
+// dead command center. That is a worse outage than the one I am fixing.
+//
+// SO THE PRE-EXISTING DEADLOCK IS NAMED, NOT QUIETLY INHERITED: a bare `{mode:'coding'}` or
+// `{mode:'internal'}` turn that sets no server-owned proof still mints NO packet and is still
+// held at the exit for the packet nobody made. That is the same defect that killed the consult
+// door, it is live on main today, it predates this branch, and it is not mine to close in a PR
+// about a different door. tests/pai.outbound.council.test.js records it so it cannot be
+// forgotten, and closing it needs its own gauntlet against the real command center.
+function requiresHumanRecheckFor(context) {
+  if (context && context.human_facing === true) return true;
+  var mode = context && context.mode;
+  return mode !== 'coding' && mode !== 'internal';
+}
+
+function humanRecheckWaived(ctx) {
+  if (!ctx || typeof ctx.answer !== 'string') return false;
+  return packetWaivedFor(ctx.context);
 }
 async function defaultMetaCommentaryStage(ctx) {
   var worldBuilderFields = hamWorldBuilderFields(ctx);
@@ -3172,7 +3216,7 @@ async function defaultWritStage(ctx) {
     bank.verdict.output_bytes === Buffer.byteLength(output, 'utf8'));
   var postMeta = null;
   var postMetaHoldReason = null;
-  var requiresHumanRecheck = mode !== 'coding' && mode !== 'internal';
+  var requiresHumanRecheck = requiresHumanRecheckFor(ctx.context);
   if (requiresHumanRecheck && result && result.ok === true && writOutputBound && output.trim()) {
     var metaOrgan = require('../agents/meta_commentary.js');
     var postState = {pendingOutbound:output};
@@ -5668,6 +5712,8 @@ module.exports = {
   createDefaultDependencies: createDefaultDependencies,
   createBrainReceiptStore: createBrainReceiptStore,
   _test: {
+    requiresHumanRecheckFor: requiresHumanRecheckFor,
+    humanRecheckWaived: humanRecheckWaived,
     buildSources: buildSources,
     requestEdges: requestEdges,
     stageEdges: stageEdges,
