@@ -34,6 +34,18 @@ function fenceLine(b) {
   return '[' + (b && b.stamp_type || '?') + ' | written by ' + writer + '] ' + ((b && b.summary) || '');
 }
 
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
+
 // Gather a long window of the HAM's activity (summaries only, to keep it cheap). Cold.
 async function gatherWindow(hamUid, days) {
   try {
@@ -74,7 +86,7 @@ async function reconcileObservations(hamUid, moment, recentWindow) {
     var sys='You are SAGE reviewing the long-horizon observations you already surfaced. For each, '+
       'using the recent activity, decide if the pattern has RESOLVED or been acted on ("closed") '+
       'or is STILL ongoing ("open"). Return a JSON array aligned in order: [{index, status}]. Do '+
-      'not keep a pattern alive just to have something to say.';
+      'not keep a pattern alive just to have something to say.' + NARRATION_FENCE;
     // ⬡B:sage.reconcile_observations:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡
     // gatherWindow's own query already bounds this window to 200 rows; re-slicing to 25 here
     // was a second, code-level decision on top of that read, the double cap the founder's
@@ -113,7 +125,7 @@ async function assess(hamUid, options) {
       'decaying relationship, a slowly-forming crisis. Reviewing the last '+windowDays()+' days '+
       'of activity summaries, return a JSON array of {pattern, horizon, evidence, suggested_move} '+
       'ONLY for patterns that truly stand out. If nothing clear stands out, return []. Never '+
-      'manufacture an insight from thin evidence.';
+      'manufacture an insight from thin evidence.' + NARRATION_FENCE;
     var out = await ladder.deliberate(persona.voicePrompt(sys), window.join('\n'), { json:true, max_tokens:800, timeout:35000 });
     var text = out && out.content!=null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g,'').trim());

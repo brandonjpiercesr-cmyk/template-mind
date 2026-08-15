@@ -83,6 +83,18 @@ function fenceLine(b) {
     + ' | written by ' + writer + '] ' + ((b && b.summary) || '');
 }
 
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
+
 // ---- GENERATE the six sections from the real roster; each guarded, conditional ----
 async function generateSections(hamUid, moment, prefs) {
   var hasNylas = !!(prefs && (prefs.nylas_grant || prefs.has_nylas));
@@ -95,7 +107,23 @@ async function generateSections(hamUid, moment, prefs) {
   // a second, code-level decision cutting her read down again before it reached the FACTS block.
   if (hasNylas) {
     try { var sched=tryMod('../core/schedule/schedule.logic.js');
-      if (sched && sched.getRadarEvents){ var ev=await sched.getRadarEvents(hamUid); if(Array.isArray(ev)) sec.upcoming=ev;} } catch(e){}
+      if (sched && sched.getRadarEvents){ var ev=await sched.getRadarEvents(hamUid);
+        // ⬡B:dawn.generate_sections:FIX:compact_the_row_never_drop_the_row:20260815⬡
+        // Removing the old .slice(0,10) was right: capping her read is the named trap. But the
+        // whole event object, description and attendee list included, was then serialized into
+        // ONE prompt. A busy or recurring calendar could overflow the provider window, assemble()
+        // catches, and buildBriefing reports nothing_to_brief, so the person silently loses the
+        // entire briefing. That is a worse failure than a trimmed list, and a silent one.
+        // So: EVERY event still rides, none is dropped or ranked away. Only the bulk per row is
+        // bounded, the same distinction used on her learned lines: bound the bytes, never the rows.
+        if(Array.isArray(ev)) sec.upcoming=ev.map(function(e){
+          if(!e||typeof e!=='object') return e;
+          var c=e.content&&typeof e.content==='object'?e.content:e;
+          return { title:String(c.title||c.summary||c.subject||'').slice(0,200),
+            when:c.when||c.start||c.start_time||c.starts_at||null,
+            location:String(c.location||'').slice(0,120) || undefined,
+            source:e.source||undefined, stamp_type:e.stamp_type||undefined };
+        });} } catch(e){}
     try { var iman=tryMod('../reach/iman.js');
       if (iman && iman.listEmails){ var em=await iman.listEmails({HAM_UID:hamUid},{unreadOnly:true,limit:8}); if(Array.isArray(em)) sec.emails=em;} } catch(e){}
   }
@@ -164,7 +192,8 @@ async function assemble(hamUid, moment, sec, prefs, discoveryQuestion) {
       'present. Close warm and encouraging without being cheesy.'+
       (discoveryQuestion?(' At the very end, after the briefing, ask this ONE question naturally, '+
       'like a friend catching up, never like a survey: "'+discoveryQuestion+'"'):'')+
-      ' Never show any agent or system names. Only use the facts given below.\n\nFACTS:\n'+JSON.stringify(sec);
+      ' Never show any agent or system names. Only use the facts given below.'+NARRATION_FENCE+
+      '\n\nFACTS:\n'+JSON.stringify(sec);
     var out=await ladder.deliberate(persona.voicePrompt(instruction), '', { max_tokens:1200, timeout:40000 });
     var text=out&&out.content!=null?String(out.content).trim():'';
     return text? persona.applyPersona(text) : null; // final identity scrub through the one persona

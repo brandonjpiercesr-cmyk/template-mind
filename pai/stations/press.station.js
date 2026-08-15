@@ -126,7 +126,7 @@ async function judgeRelevance(hamUid, moment, candidates, alreadySeen) {
       ' ' + moment.part_of_day + '. Prefer fresh, timely items. If NONE genuinely matter, ' +
       'return []. Never invent. Already surfaced (do not repeat): ' +
       // ⬡B:press.judge_relevance:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡
-      // recentlySurfaced's own query already bounds this list to 20 rows; re-slicing to the
+      // recentlySurfaced's own query already bounds this list to 20 rows + NARRATION_FENCE; re-slicing to the
       // same 20 here was still a coder deciding the ceiling twice.
       JSON.stringify(alreadySeen || []);
     var out = await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'),
@@ -165,6 +165,18 @@ function fenceLine(b) {
   var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
   return '[written by ' + writer + '] ' + ((b && b.summary) || '');
 }
+
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
 
 async function recentlySurfaced(hamUid) {
   try {

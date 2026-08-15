@@ -58,6 +58,18 @@ function fenceLine(b) {
   return '[' + (b && b.stamp_type || '?') + ' | written by ' + writer + '] ' + ((b && b.summary) || '');
 }
 
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
+
 // ---- (1) GATHER the real signals HUNCH monitors. Cold, each fails open. ----
 async function gatherSignals(hamUid, suppliedMoment) {
   var out = { pending: [], calendar_next: null, stale_jobs: [], unread_memos: [], ambient: [] };
@@ -110,7 +122,7 @@ async function composeTips(hamUid, moment, signals, covered) {
       '(a meeting soon and what it was last about), a stale job application worth a follow-up, '+
       'an unread memo that matters. Compose each in a warm, brief, butler tone. Return a JSON '+
       'array of {tip, why_now, urgency ("low"|"normal"|"high"), contradicts_action (bool)}. The '+
-      'bar is HIGH: only push what clearly helps; if little matters, return fewer or []. Never '+
+      'bar is HIGH: only push what clearly helps + NARRATION_FENCE; if little matters, return fewer or []. Never '+
       'nag, never invent. Already covered by BURST/HUNCH (do not repeat): '+
       // ⬡B:hunch.compose_tips:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ Founder
       // ruling 20260815, the pen on her mind: alreadyCovered's query already bounds this list to
@@ -185,7 +197,7 @@ async function reconcileTips(hamUid, moment) {
       '"done" (it has clearly been handled or is no longer relevant), "stale" (still worth doing '+
       'but going cold, worth ONE gentle re-nudge), or "dead" (obsolete, time has passed, drop it '+
       'quietly). Return a JSON array aligned to the tips in order: [{index, status, note}]. Be '+
-      'honest; do not keep things alive just to have something to say.';
+      'honest + NARRATION_FENCE; do not keep things alive just to have something to say.';
     // ⬡B:hunch.reconcile_tips:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ Founder
     // ruling 20260815, the pen on her mind: recentContext's own query already bounds this read
     // to 40 rows; re-slicing to 25 here was a second, code-level decision on top of that read.
