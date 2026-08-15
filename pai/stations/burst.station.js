@@ -86,10 +86,10 @@ async function judgeUrgent(hamUid, moment, candidates, alerted) {
       '"command_center"), confidence (0-1)}. The bar is very HIGH -- most things are NOT BURST, '+
       'they are HUNCH or DAWN. If nothing is truly urgent, return []. Already alerted (do not '+
       // ⬡B:burst.judge_urgent:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ alreadyAlerted's
-      // own query already bounds this list to 20 rows + NARRATION_FENCE; a second .slice(0,20) here was a coder
+      // own query already bounds this list to 20 rows; a second .slice(0,20) here was a coder
       // deciding the same ceiling twice, the exact double-cap the founder's ruling forbids.
       'repeat): '+JSON.stringify(alerted||[]);
-    var out=await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'), { json:true, max_tokens:600, timeout:25000 });
+    var out=await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), candidates.join('\n'), { json:true, max_tokens:600, timeout:25000 });
     var text=out&&out.content!=null?out.content:'';
     var arr=JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (!Array.isArray(arr)) return [];

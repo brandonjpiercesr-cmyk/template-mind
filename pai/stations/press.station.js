@@ -126,10 +126,10 @@ async function judgeRelevance(hamUid, moment, candidates, alreadySeen) {
       ' ' + moment.part_of_day + '. Prefer fresh, timely items. If NONE genuinely matter, ' +
       'return []. Never invent. Already surfaced (do not repeat): ' +
       // ⬡B:press.judge_relevance:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡
-      // recentlySurfaced's own query already bounds this list to 20 rows + NARRATION_FENCE; re-slicing to the
+      // recentlySurfaced's own query already bounds this list to 20 rows; re-slicing to the
       // same 20 here was still a coder deciding the ceiling twice.
       JSON.stringify(alreadySeen || []);
-    var out = await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'),
+    var out = await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), candidates.join('\n'),
       { json: true, max_tokens: 700, timeout: 30000 });
     var text = out && out.content != null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g, '').trim());

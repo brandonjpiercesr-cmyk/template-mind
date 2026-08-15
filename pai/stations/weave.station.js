@@ -66,8 +66,8 @@ async function weaveEntity(hamUid, entity) {
       'You are WEAVE. Given multiple mentions of "'+entity+'" across the person\'s recent '+
       'threads, decide if they form ONE meaningful through-line worth surfacing. If they do, '+
       'return {through_line, threads:[...], why_it_matters}. If they are unrelated, return '+
-      'null. Never force a connection that is not real.' + NARRATION_FENCE;
-    var out = await ladder.deliberate(sys, mentions.join('\n'), { json:true, max_tokens:600, timeout:30000 });
+      'null. Never force a connection that is not real.';
+    var out = await ladder.deliberate(sys + NARRATION_FENCE, mentions.join('\n'), { json:true, max_tokens:600, timeout:30000 });
     var text = out && out.content!=null ? out.content : '';
     var parsed = JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (parsed && parsed.through_line) { stampWeave(hamUid, entity, parsed, moment).catch(function(){}); return { moment:moment, entity:entity, weave:parsed }; }

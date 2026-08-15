@@ -538,8 +538,12 @@ function main() {
     + 'NOT read: ' + UNSCANNED_NOTE + '. A plain two-word name with no honorific, middle initial '
     + 'or generational suffix is also not detected, and a bare name with nothing personal-data '
     + 'shaped possessed nearby (no calendar/report/record/etc) is also not detected. Test '
-    + 'suites (test/, tests/, *.test.js) get the exact-match hash denylist only, never the shape '
-    + 'detectors, because those files deliberately plant synthetic PII-shaped fixtures on purpose.';
+    + 'suites (test/, tests/, *.test.js) get the exact-match hash denylist and the '
+    + 'infrastructure-identifier shape check, but not the other shape detectors, because those '
+    + 'files deliberately plant synthetic PII-shaped fixtures on purpose. The infrastructure '
+    + 'check is the one exception and it runs everywhere: a live Supabase project URL or Render '
+    + 'service id is the address of a running system, not a shape a fixture author would invent, '
+    + 'so a copied one is a real leak wherever it lands.';
   if (!all.length) {
     console.log('[no-founder-pii] no findings across ' + files.length + ' files. ' + ROSTER);
     process.exit(0);

@@ -122,7 +122,7 @@ async function composeTips(hamUid, moment, signals, covered) {
       '(a meeting soon and what it was last about), a stale job application worth a follow-up, '+
       'an unread memo that matters. Compose each in a warm, brief, butler tone. Return a JSON '+
       'array of {tip, why_now, urgency ("low"|"normal"|"high"), contradicts_action (bool)}. The '+
-      'bar is HIGH: only push what clearly helps + NARRATION_FENCE; if little matters, return fewer or []. Never '+
+      'bar is HIGH: only push what clearly helps; if little matters, return fewer or []. Never '+
       'nag, never invent. Already covered by BURST/HUNCH (do not repeat): '+
       // ⬡B:hunch.compose_tips:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ Founder
       // ruling 20260815, the pen on her mind: alreadyCovered's query already bounds this list to
@@ -133,7 +133,7 @@ async function composeTips(hamUid, moment, signals, covered) {
     var payload = { pending: signals.pending, stale_jobs: signals.stale_jobs,
       unread_memos: signals.unread_memos, calendar_next: signals.calendar_next,
       ambient: signals.ambient };
-    var out = await ladder.deliberate(persona.voicePrompt(sys), JSON.stringify(payload), { json:true, max_tokens:700, timeout:30000 });
+    var out = await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), JSON.stringify(payload), { json:true, max_tokens:700, timeout:30000 });
     var text = out && out.content!=null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g,'').trim());
     return Array.isArray(arr) ? arr.slice(0, maxTips()) : [];
@@ -197,12 +197,12 @@ async function reconcileTips(hamUid, moment) {
       '"done" (it has clearly been handled or is no longer relevant), "stale" (still worth doing '+
       'but going cold, worth ONE gentle re-nudge), or "dead" (obsolete, time has passed, drop it '+
       'quietly). Return a JSON array aligned to the tips in order: [{index, status, note}]. Be '+
-      'honest + NARRATION_FENCE; do not keep things alive just to have something to say.';
+      'honest; do not keep things alive just to have something to say.';
     // ⬡B:hunch.reconcile_tips:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ Founder
     // ruling 20260815, the pen on her mind: recentContext's own query already bounds this read
     // to 40 rows; re-slicing to 25 here was a second, code-level decision on top of that read.
     var payload={ tips:open.map(function(o,ix){return {index:ix, tip:o.tip, nudges:o.nudges};}), recent:ctx };
-    var out=await ladder.deliberate(persona.voicePrompt(sys), JSON.stringify(payload), { json:true, max_tokens:700, timeout:30000 });
+    var out=await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), JSON.stringify(payload), { json:true, max_tokens:700, timeout:30000 });
     var text=out&&out.content!=null?out.content:''; decisions=JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (!Array.isArray(decisions)) decisions=[];
   } catch(e){ return { reviewed:open.length, closed:0, nudged:0, dropped:0, error:true }; }

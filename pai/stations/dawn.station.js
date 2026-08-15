@@ -194,7 +194,7 @@ async function assemble(hamUid, moment, sec, prefs, discoveryQuestion) {
       'like a friend catching up, never like a survey: "'+discoveryQuestion+'"'):'')+
       ' Never show any agent or system names. Only use the facts given below.'+NARRATION_FENCE+
       '\n\nFACTS:\n'+JSON.stringify(sec);
-    var out=await ladder.deliberate(persona.voicePrompt(instruction), '', { max_tokens:1200, timeout:40000 });
+    var out=await ladder.deliberate(persona.voicePrompt(instruction + NARRATION_FENCE), '', { max_tokens:1200, timeout:40000 });
     var text=out&&out.content!=null?String(out.content).trim():'';
     return text? persona.applyPersona(text) : null; // final identity scrub through the one persona
   } catch(e){ return null; }

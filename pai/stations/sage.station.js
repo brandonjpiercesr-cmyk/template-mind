@@ -86,13 +86,13 @@ async function reconcileObservations(hamUid, moment, recentWindow) {
     var sys='You are SAGE reviewing the long-horizon observations you already surfaced. For each, '+
       'using the recent activity, decide if the pattern has RESOLVED or been acted on ("closed") '+
       'or is STILL ongoing ("open"). Return a JSON array aligned in order: [{index, status}]. Do '+
-      'not keep a pattern alive just to have something to say.' + NARRATION_FENCE;
+      'not keep a pattern alive just to have something to say.';
     // ⬡B:sage.reconcile_observations:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡
     // gatherWindow's own query already bounds this window to 200 rows; re-slicing to 25 here
     // was a second, code-level decision on top of that read, the double cap the founder's
     // ruling forbids.
     var payload={ observations:open.map(function(o,ix){return {index:ix, pattern:o.pattern};}), recent:recentWindow||[] };
-    var out=await ladder.deliberate(persona.voicePrompt(sys), JSON.stringify(payload), { json:true, max_tokens:500, timeout:25000 });
+    var out=await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), JSON.stringify(payload), { json:true, max_tokens:500, timeout:25000 });
     var decisions=JSON.parse(String(out&&out.content||'[]').replace(/```json|```/g,'').trim());
     if (!Array.isArray(decisions)) decisions=[];
     var closed=0;
@@ -125,8 +125,8 @@ async function assess(hamUid, options) {
       'decaying relationship, a slowly-forming crisis. Reviewing the last '+windowDays()+' days '+
       'of activity summaries, return a JSON array of {pattern, horizon, evidence, suggested_move} '+
       'ONLY for patterns that truly stand out. If nothing clear stands out, return []. Never '+
-      'manufacture an insight from thin evidence.' + NARRATION_FENCE;
-    var out = await ladder.deliberate(persona.voicePrompt(sys), window.join('\n'), { json:true, max_tokens:800, timeout:35000 });
+      'manufacture an insight from thin evidence.';
+    var out = await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), window.join('\n'), { json:true, max_tokens:800, timeout:35000 });
     var text = out && out.content!=null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (!Array.isArray(arr)) arr=[];
