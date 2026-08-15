@@ -4448,13 +4448,16 @@ async function runOutboundCouncil(input, injected) {
             var _reStarted = nowMs(deps);
             var _reNorm;
             var _reThrew = false;
+            var _reRaw;
             try {
-              _reNorm = normalizeStageResult(await handler(buildStageContext(
+              _reRaw = await handler(buildStageContext(
                 input, _healed, quillRequired, stages,
                 { stage: stage, healed: true, healedFrom: _healReason, runtime:stageRuntime }
-              )), _healed);
+              ));
+              _reNorm = normalizeStageResult(_reRaw, _healed);
             } catch (_reJudgeErr) {
               _reThrew = true;
+              _reRaw = null;
               _reNorm = {
                 ok: false,
                 reason: 'stage_threw:' + errorReason(_reJudgeErr),
@@ -4472,7 +4475,19 @@ async function runOutboundCouncil(input, injected) {
             // opinion at all. That is retry plumbing failing, not a mind re-judging the bytes
             // and finding something worse. It must not be treated the same as a genuine harder
             // verdict, which is the one case the 20260815 fix exists to catch.
-            var _reUnavailable = _reThrew || !_reHuman;
+            //
+            // Codex review, live, round two: !_reHuman alone MISSES a real case. When the raw
+            // handler result is null, not an object, or an {ok:false} shape with no usable
+            // answer/output field, normalizeStageResult (by design, for every OTHER caller)
+            // substitutes the ALREADY-CONFIRMED-human-facing _healed text as a convenience
+            // fallback so downstream code always has a string to read. That fallback makes
+            // _reHuman true even though the handler supplied no verdict at all, which is the
+            // exact "never got a second opinion" case this whole guard exists to catch. The
+            // raw pre-normalization shape, not the normalized convenience answer, is the only
+            // honest signal of whether a verdict was actually returned.
+            var _reRawInvalid = !_reRaw || typeof _reRaw !== 'object' ||
+              (typeof _reRaw.answer !== 'string' && typeof _reRaw.output !== 'string');
+            var _reUnavailable = _reThrew || _reRawInvalid || !_reHuman;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
             // Replace the held receipt in place and span the original stage input
