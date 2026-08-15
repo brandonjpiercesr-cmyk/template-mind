@@ -6617,8 +6617,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // answer whose CORRECT English form must keep one CJK glyph, a name, a dish, a filename,
         // the very term the person asked about, is therefore rejected by every rung, deliberate
         // returns null, and she was blanked. The guard was structurally guaranteed to destroy
-        // exactly the class it was written to handle. Left as a named follow-on rather than
-        // widened here: either honour noGuard in the ladder or drop the dead option.
+        // exactly the class it was written to handle. Honoured in the ladder as of anew#2187, so
+        // the rewrite can now actually come back. That is what makes the selection below load
+        // bearing: while the option was dead, `_rewritten` could only ever be CJK-free, because
+        // anything else had already been rejected upstream. Now it can be anything the seat
+        // returned, so the disposition has to be made here, where the ORIGINAL is still in hand.
         //
         // Also worth saying plainly, because it shaped how narrow this fix is: the founder has
         // never said her answers must be English. A corpus search over english, language,
@@ -6626,10 +6629,24 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // programming-language vocabulary, and persona accent. The English-only output rule is a
         // coder's assumption, so this change repairs the destruction and does not touch the
         // trigger, which is his to rule on.
+        // SELECTION, NOT AUTHORSHIP. Two model outputs are in hand, the original and the repair,
+        // and the caller picks between them on a measurable property. Cold code writes neither.
+        // containsCjk is a boolean, and a boolean cannot tell "correct English that keeps one
+        // proper noun" from "the seat echoed the whole Chinese source back". Both answer yes. So
+        // compare counts: fewer CJK characters means the repair did work, and only then does it
+        // replace the original. A repair that did nothing, or made it worse, loses to the answer
+        // she already produced, which is the same disposition the dead gate encoded by accident.
         var _rewritten = _englishRewrite && _englishRewrite.content;
-        if (_rewritten) {
+        var _cjkBefore = outputGuard.countCjk(msg.content);
+        var _cjkAfter = _rewritten ? outputGuard.countCjk(_rewritten) : _cjkBefore;
+        if (_rewritten && _cjkAfter < _cjkBefore) {
           msg.content = _rewritten;
-          _stampStep('cjk_output_regenerated', 'english');
+          // The stamp says what is TRUE of the bytes, not what the step was hoping for. A partial
+          // repair is a real outcome and the receipt names it, because he reads these overnight.
+          _stampStep('cjk_output_regenerated',
+            _cjkAfter === 0 ? 'english' : 'english_partial_cjk_retained_' + _cjkAfter);
+        } else if (_rewritten) {
+          _stampStep('cjk_output_regenerated', 'rewrite_kept_the_cjk_original_kept');
         } else {
           _stampStep('cjk_output_regenerated', 'rewrite_unavailable_original_kept');
         }

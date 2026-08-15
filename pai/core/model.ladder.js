@@ -85,12 +85,26 @@ function hasAcceptedContent(content, opts) {
   // rewrite that repairs an answer containing CJK, and nothing in this file ever read it. So the
   // repair ran under the very gate it exists to satisfy: any correct English rewrite that must
   // KEEP one CJK glyph, a person's name, a dish, a filename, the term the human actually asked
-  // about, was rejected by every rung, deliberate returned null, and the caller then blanked her
-  // answer. The guard was structurally guaranteed to destroy exactly the class it was written for.
+  // about, was rejected by every rung and deliberate returned null. The guard was structurally
+  // guaranteed to destroy exactly the class it was written for. A blind critic corrected the
+  // original wording here, so the cost is stated exactly: until anew#2184 the caller turned that
+  // null into an EMPTY answer and the person got the canned working-limit line. Since #2184 the
+  // original is kept, so the live cost was narrower and quieter, the repair simply could never
+  // succeed and the person kept the untranslated answer every single time.
   //
   // Honouring it is narrower than removing the check: noGuard suppresses ONLY the CJK verdict,
   // and only for a caller that asked for it in the same breath as saying why. Emptiness and the
-  // JSON contract below are untouched, and no other call site in the tree passes it.
+  // JSON contract below are untouched. One production call site passes it (core/tool.loop.js) and
+  // three test call sites do; the tests stub ASCII content, so their behaviour is unchanged.
+  //
+  // WHERE THE JUDGMENT MOVED, and this is the half that matters: the ladder now RETURNS the
+  // candidate instead of silently refusing it, and the accept/reject decision lives at the call
+  // site, which is the only place holding the ORIGINAL to compare against. See the selection
+  // block in core/tool.loop.js. A shared resolver cannot tell a repair from an echo; the caller
+  // can. Naming the follow-on rather than smuggling it in: `noGuard` is a wider name than its
+  // effect (it suppresses this one verdict, not the emptiness or JSON checks) and wants renaming
+  // to `allowNonEnglish` across the four sites. That is a pure rename and belongs in its own
+  // pull request, not bundled into a behaviour change.
   if (!(opts && opts.noGuard === true) && outputGuard.containsCjk(stripped)) return false;
   if (!opts || opts.json !== true) return true;
   // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
