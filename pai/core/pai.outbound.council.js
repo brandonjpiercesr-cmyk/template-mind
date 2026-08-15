@@ -2735,6 +2735,65 @@ function internalCodingDeliberation(ctx) {
   return !!(ctx && ctx.context && ctx.context.mode === 'coding'
     && ctx.context.internal_deliberation === true && typeof ctx.answer === 'string');
 }
+
+// ⬡B:core.pai.outbound.council:FIX:the_exit_gate_now_asks_the_same_question_the_mint_asked:20260815⬡
+// THE SECOND HALF OF THE 100-PERCENT CYCLE BLOCK, and it was still live after the first fix.
+// Verified against the live mind on 20260815 with a valid consult key: POST /cara/consult
+// answers 200 with ok:false, stage_empty_answer:writ_meaning_shadow_packet_unbound. The coder
+// door to her mind was dead, which is why every lane reporting "I could not reach her" was
+// telling the truth for a reason nobody had named.
+//
+// THE MECHANISM IS ONE LINE, and it is this file already agreeing with itself everywhere except
+// the exit. The WRIT stage decides whether to mint the meaning packet with
+// `requiresHumanRecheck = mode !== 'coding' && mode !== 'internal'` (the packet is minted only
+// when a human recheck is required), and it builds its own WRIT context with
+// `internal: mode === 'coding' || mode === 'internal'`. Both lines already treat 'internal' and
+// 'coding' as one family. My first fix did not: it keyed the bypass on mode 'coding' plus an
+// `internal_deliberation` flag that /cara/consult never sets, so the consult turn fell through
+// to a gate demanding a packet its own mode had just refused to mint.
+//
+// So the gate now asks the SAME question the mint asked. That is the real invariant and it
+// closes the class rather than one more instance of it: an exit may not require an artifact
+// that this file, one stage earlier and by its own rule, declined to create.
+//
+// MODE ALONE IS NOT THE QUESTION, and my first draft of this helper got that wrong in a way
+// that mattered. Codex P1 on #2171 caught it: routes/chat.bridge.routes.js:208 copies the
+// CALLER'S `body.mode` into council_context (`mode: codingMode ? 'coding' : (body.mode ||
+// 'default')`), and /overseer/ask returns that answer to the caller. So a browser POSTing
+// `{mode:'internal'}` would have reached a person-facing reply that skipped the meaning packet.
+// That file warns about this exact thing at its own line 323: "`mode:coding` is a capability
+// flag, not proof of identity." I wrote "the person-facing path is untouched" in the PR body.
+// That claim was false, and this is the correction.
+//
+// So the waiver requires a SERVER-OWNED proof, never a caller-supplied string.
+// `internal_deliberation` is exactly that proof and it already exists for this purpose:
+// core/ham.session.authorization.js:457 states that a signed HAM session deliberately does NOT
+// make arbitrary JSON fields server-owned, naming `internal_deliberation` as a field a browser
+// holding its own session must not be able to submit. It is set in-process by the routes and
+// organs that genuinely have no person on the other end (core/knowledge.compiler.wonder.js:162,
+// core/ham.world.builder.intake.js:1213, and now the consult door at routes/cara.routes.js).
+//
+// WHAT WIDENED IS ONLY THE MODE FAMILY, from 'coding' to 'coding' or 'internal', which is the
+// same family the WRIT stage's own `requiresHumanRecheck` already treats as one when it decides
+// whether to mint the packet at all. That is the real invariant and it closes the class rather
+// than one more instance of it: an exit may not require an artifact that this file, one stage
+// earlier and by its own rule, declined to create. The proof requirement is unchanged from the
+// first fix, so the coding-mode chat bridge is exactly as gated as it was before this commit.
+//
+// NOT A WEAKENING OF THE ANCHOR, said out loud per the 20260814 door law. The meaning shadow
+// guards the bytes a PERSON reads: it proves the words shipped are the words WRIT rendered.
+// 'default', 'voice', 'turn', 'anu_face', 'outbound_text' and every other human-facing mode
+// still require the packet, byte for byte as before, and no caller can talk its way into this
+// branch by naming a mode. The internal turn is still fully judged by WRIT, PAM and SHADOW
+// inside this same council. What is removed is a demand for a key to a room this turn was
+// never sent into.
+function humanRecheckWaived(ctx) {
+  var context = ctx && ctx.context;
+  if (!context || typeof ctx.answer !== 'string') return false;
+  // The server-owned proof, checked FIRST and never inferred from the mode string.
+  if (context.internal_deliberation !== true) return false;
+  return context.mode === 'coding' || context.mode === 'internal';
+}
 async function defaultMetaCommentaryStage(ctx) {
   var worldBuilderFields = hamWorldBuilderFields(ctx);
   if (worldBuilderFields !== null) {
@@ -3314,7 +3373,14 @@ async function defaultAnuExpressionStage(ctx) {
   // SHADOW inside this same council, and advisors/coding.js re-validates the exact evidence
   // references after the council returns. The person-facing path is byte-for-byte untouched:
   // no packet, no ship, exactly as before.
-  if (internalCodingDeliberation(ctx)) {
+  //
+  // WIDENED 20260815, same day, after the live consult door proved the first fix too narrow:
+  // this asks humanRecheckWaived, the same question the WRIT stage's own requiresHumanRecheck
+  // asks before deciding whether to mint the packet. See that helper for the full reasoning.
+  // Only THIS gate widened. META above and WRIT above keep the narrower predicate on purpose:
+  // a consult turn is supposed to RUN WRIT (that is how she is allowed to name machinery to a
+  // coder at all), and skipping it here would be a real weakening rather than a repair.
+  if (humanRecheckWaived(ctx)) {
     var internalSpeak = anuSpeakForExpression(ctx);
     return { ok:!!(internalSpeak.result && internalSpeak.result.blocked === false &&
         internalSpeak.output.trim().length > 0),
