@@ -398,8 +398,33 @@ function isHumanFacingAnswer(value) {
   // closing bracket stays optional.
   // Regex wakes, regex never decides: this one still DETECTS a machine payload, it just stopped
   // deciding that a bracketed sentence is one.
-  if (/(?:^|\n)[ \t]*\[(?:calling|invoking|running|executing)(?:\s+[a-z_][a-z0-9_]*)?\]?[ \t]*(?:\n|$)/i
-    .test(probe)) {
+  // ⬡B:core.pai_outbound_council:HEAL:my_narrowing_let_real_plumbing_through:20260815⬡
+  // A BLIND CRITIC BROKE THE RULE I SHIPPED ONE COMMIT AGO, and it was right. Narrowing the
+  // marker to "must end its line" rescued three human agenda shapes and quietly let SEVEN real
+  // tool-protocol payloads escape to a person. MEASURED, old vs mine vs now:
+  //   [invoking search_web]\r\n...           CRLF: my tail was [ \t]*(?:\n|$) and \r is neither
+  //   [calling brain.write_bead]             a dotted tool name
+  //   [calling send-sms]                     a hyphenated tool name
+  //   [calling find_in_brain(query="x")]     parenthesised args
+  //   [running search_web "nova recital"]    a quoted arg
+  //   [invoking search_web].                 a trailing period
+  //   [calling a] [calling b]                two markers on one line
+  // My tool-name charset [a-z_][a-z0-9_]* covered none of the punctuation a real tool name or
+  // call actually carries, and the old pattern only survived them by accident, because its
+  // looser \s alternative could match after the bare verb. When I anchored the tail, that
+  // accident stopped saving it. Returning true here means the payload SHIPS.
+  //
+  // THREE CHANGES, each one earned by a measured escape: line endings are normalised first so
+  // CRLF cannot walk past the anchor; the marker body is [^\]\n]* so dots, hyphens, parens and
+  // quotes are all inside one marker; and the marker group REPEATS with optional trailing
+  // punctuation, so a line that is nothing but markers is still a line of markers.
+  // The three human shapes stay legal for the same reason as before: prose CONTINUES after the
+  // bracket, and a marker followed by words is not a line of markers.
+  // 17 cases pinned in the test, 11 protocol and 6 human, so a widening in either direction
+  // turns red rather than being discovered in an outage.
+  var probeLines = String(probe).replace(/\r\n?/g, '\n');
+  if (/(?:^|\n)[ \t]*(?:\[(?:calling|invoking|running|executing)\b[^\]\n]*\]?[ \t]*)+[.,;:]?[ \t]*(?:\n|$)/i
+    .test(probeLines)) {
     return false;
   }
   if (/^\[?\s*(?:tool[_\s-]?call|function[_\s-]?call)\s*\]?\s*$/i.test(probe)) return false;
