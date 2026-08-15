@@ -24,6 +24,48 @@ function _tbl(){return process.env.BEAD_TABLE||(_memorySelected()?'beads':'aibe_
 function _schema(){return process.env.BRAIN_SCHEMA||(_memorySelected()?'memory_bank':'abacia_core');}
 var identityProvenance = require('./identity.provenance.js');
 
+// ⬡B:core.find:FIX:a_threshold_on_his_own_doctrine_had_no_owner:20260815⬡
+// THE ONE SOURCE for every number in this estate that rules on quality or worth:
+// core/judgment.SETTING.a_threshold_has_an_owner.20260731.js. Four legal answers, and the two
+// that are not FOUNDER or LANE mean nobody chose, which means there is no threshold to apply.
+var judgment = require('./judgment.SETTING.a_threshold_has_an_owner.20260731.js');
+
+// How important a DOCTRINE row must be before it may reach her wall.
+//
+// WHAT WAS HERE: a bare `importance_gte: 8`, hand-copied to five places in this file, deciding
+// which of the founder's OWN doctrine she is allowed to read. No owner, no name, no comment on
+// any of the five. Meanwhile the sibling ROADMAP read one line below carries no importance
+// predicate at all, which is the asymmetry that gives the number away: nobody chose 8 for a
+// reason, it was copied.
+//
+// AND THE WRITERS NEVER AGREED WITH IT. scripts/doctrine_ingest.js writes his corrected doctrine
+// archive at importance 6, and says in its own comment that it deliberately refuses to out-guess
+// the reader ("Keeper's mind ranks relevance at read time... so cold code here does not try to
+// out-guess it per file"). agents/advisor_scw.js defaults world doctrine to 7. BOTH scripted
+// writers land under 8. The writer declined to make the judgment; the reader made it anyway,
+// with a number nobody picked, and the doctrine section of her wall has been structurally empty
+// for every row either of them ever wrote.
+//
+// This is the shape CLAUDE.md 20260815 names: "never filter a row, never cap her read." The
+// predicate is a PostgREST `importance=gte.` on the database call (see queryPath below), so the
+// rows never came back at all and she never learned they existed. Importance is ALREADY a
+// ranking input one layer up at core/agent.find.js#191, so this predicate bought nothing the
+// ranking did not already do, except make rows unknowable.
+//
+// UNSET MEANS NO FLOOR: this returns null, never a number, when nobody chose. queryPath appends
+// the predicate only when it is non-null, so an unowned setting REMOVES the filter rather than
+// inventing a value. That is not an unbounded read: capacity is a different animal and is
+// unchanged, core/agent.find.js#runtimeContextBudgets still binds the expanded wall by
+// FCW_MODEL_CONTEXT_BYTES and still REPORTS every row it omitted. A bound on what a process can
+// hold is a fact; a ruling on what is worth seeing is a judgment. Only the judgment moves here.
+var DOCTRINE_WALL_FLOOR_SETTING = 'ANU_DOCTRINE_WALL_IMPORTANCE_FLOOR';
+function doctrineWallFloor(runtime) {
+  var gate = judgment.readJudgmentSetting(DOCTRINE_WALL_FLOOR_SETTING,
+    { integer: true, min: 0, max: 10 }, runtime);
+  return (gate.chosen_by === judgment.CHOSEN_BY.FOUNDER
+    || gate.chosen_by === judgment.CHOSEN_BY.LANE) ? gate.value : null;
+}
+
 var LAST_AIR_CYCLE_SCHEMA = 'anew.find.last-air-cycle-readback.v1';
 var LAST_AIR_STREAM_MODE = 'DURABLE_READBACK_NOT_LIVE_STREAM';
 var LAST_AIR_CHUNK_SCHEMA = 'anew.find.last-air-cycle-context-chunk.v1';
@@ -958,8 +1000,8 @@ function fcwEvidenceQueries(input) {
       importance_gte:contract.READER_IMPORTANCE_FLOOR,
       source_not_prefix:contract.TURN_SOURCE_PREFIX},true),
     q('doctrine',{stamp_type:'ROADMAP',ham_uid:hamUid}),
-    q('doctrine',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:8}),
-    q('doctrine',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:8},true),
+    q('doctrine',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:doctrineWallFloor()}),
+    q('doctrine',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:doctrineWallFloor()},true),
     q('profile',{source_prefix:'scw.person_profile.' + hamUid,ham_uid:hamUid},true),
     q('statedPlans',{source_prefix:contract.GIFT_SOURCE_PREFIX,ham_uid:hamUid}),
     q('statedPlans',{stamp_type:contract.GIFT_STAMP_TYPE,ham_uid:hamUid,
@@ -976,7 +1018,7 @@ function fcwEvidenceQueries(input) {
   if (value.include_wonder_games) {
     queries.push(q('wonderGames',{stamp_type:'WONDER_GAMES',ham_uid:hamUid},true));
     queries.push(q('wonderGames',{source_prefix:'wonder_games.',ham_uid:hamUid}));
-    queries.push(q('wonderGames',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:8}));
+    queries.push(q('wonderGames',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:doctrineWallFloor()}));
   }
   return queries.filter(function (query) { return query.anchor || terms.length > 0; });
 }
@@ -1409,7 +1451,7 @@ async function findRecentResults(hamUid, limit, viewerTier) {
 async function findDoctrine(hamUid, limit, viewerTier) {
   return find(scopedQueries([
     callerWindow({ stamp_type: 'ROADMAP', ham_uid: hamUid }, limit),
-    callerWindow({ stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8 }, limit)
+    callerWindow({ stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: doctrineWallFloor() }, limit)
   ], viewerTier));
 }
 
@@ -1523,7 +1565,7 @@ async function findWonderGames(hamUid, limit, viewerTier) {
   return find(scopedQueries([
     callerWindow({ stamp_type: 'WONDER_GAMES', ham_uid: hamUid }, limit),
     callerWindow({ source_prefix: 'wonder_games.', ham_uid: hamUid }, limit),
-    callerWindow({ stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: 8 }, limit)
+    callerWindow({ stamp_type: 'DOCTRINE', ham_uid: hamUid, importance_gte: doctrineWallFloor() }, limit)
   ], viewerTier));
 }
 
@@ -1625,6 +1667,12 @@ async function _tierColumnReachable(tier) {
 
 module.exports = { find, findForWorld, findIdentity, findAgentJDs, findNamedAgentRecords, findIdentityEvidence, findContext, findBySource, findRecentResults, findDoctrine, findDoctrinePage, findPersonProfile, findPreferences, findWonderGames, findStatedCommitments,
   readLastCompletedAirCycle:readLastCompletedAirCycle,
+  // Exported so the SIXTH hand-copied 8 (core/tool.loop.js) can stop being a copy and read the
+  // named setting instead. That file is held by another lane right now, so this change stops at
+  // this file's edge and the remaining literal is named out loud in the PR rather than left for
+  // someone to find. One source means the source has to be reachable.
+  doctrineWallFloor:doctrineWallFloor,
+  DOCTRINE_WALL_FLOOR_SETTING:DOCTRINE_WALL_FLOOR_SETTING,
   scanFcwEvidence:scanFcwEvidence,walkFcwEvidence:walkFcwEvidence,
   expandFcwEvidence:expandFcwEvidence,
   _test:{ bq:bq, identityBq:identityBq, identityQueryPath:identityQueryPath,
