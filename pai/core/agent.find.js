@@ -210,6 +210,62 @@ function candidateFacts(row, receipt, terms, anchors) {
   return {contributor:contributor,reasons:reasons,score:score,text:text};
 }
 
+// ⬡B:core.agent.find:FIX:a_row_dropped_by_score_is_a_gap_she_is_owed_20260815⬡
+// CODELESS PURGE. Two omission lists were computed, carried on the plan, reported in the
+// receipt, and never once said to her: `compact_omitted` (rows candidateFacts scored lowest
+// when the compact envelope filled, see the onPage drop loop below) and `omitted` (rows the
+// expand phase could not fit). Cold code decided which of her own records she would never
+// see, and the decision was invisible, so she could not overrule it or even know to ask.
+// COUNTS ONLY, carried as facts beside the existing named gaps: the doctrine's own trap
+// warning says never repeat a long stamp per row, and the fix for a silent drop is to SAY it
+// happened, not to ship the dropped rows back through the envelope that just rejected them.
+// `full_history_expansion_available` already proved an expansion path existed that she was
+// never offered; now she is told about it and can ask.
+// Extracted as two pure functions so the disclosure is testable without a live bank, per the
+// 20260726 law that a guard whose rule cannot be run by a test is a guard nobody has run.
+function wallGapsFor(fcw) {
+  const wall = fcw || {};
+  const receipt = wall.agent_find || {};
+  const count = function (value) { return Array.isArray(value) ? value.length : 0; };
+  return {
+    partial: wall.partial === true,
+    unavailable: list(wall.unavailableContributors),
+    degraded: list(wall.partialContributors),
+    storage_limitations: list(receipt.storage_limitations),
+    set_aside_for_space: count(receipt.compact_omitted) + count(receipt.omitted),
+    can_ask_for_more: receipt.full_history_expansion_available === true
+  };
+}
+
+function gapAppendixFor(wallGaps) {
+  const gaps = wallGaps || {};
+  const storageGap = (gaps.storage_limitations || []).indexOf('legacy_supersession_unavailable') >= 0
+    ? ' This memory store could not verify whether an older record was later corrected. Treat '
+      + 'its history as useful but not complete current truth, and say that plainly if it matters.'
+    : '';
+  // Its own sentence and its own trigger: a turn can fit every contributor it asked for (no
+  // unavailable, no degraded) and STILL have dropped records for space. That is exactly the
+  // case that used to pass in silence, because the appendix below was gated on the other gaps.
+  const setAsideGap = gaps.set_aside_for_space
+    ? ('\n\n' + gaps.set_aside_for_space + ' of your own records were set aside to fit this '
+       + 'turn, chosen by how many of the question\'s words they matched and which kind of record '
+       + 'they were, not by what they mean. That ranking is not a judgement about what matters to '
+       + 'you and it may well have dropped the one that did.'
+       + (gaps.can_ask_for_more
+          ? ' They can still be read: say so if you want them before you answer.'
+          : ' They cannot be re-read on this turn, so say plainly that some of your history was '
+            + 'not in front of you if it bears on the answer.'))
+    : '';
+  return (gaps.partial || (gaps.unavailable || []).length ||
+    (gaps.degraded || []).length || (gaps.storage_limitations || []).length)
+    ? ('\n\nSome of what you normally read was not available for this turn' +
+       ((gaps.unavailable || []).length ? ', missing: ' + gaps.unavailable.join(', ') : '') +
+       ((gaps.degraded || []).length ? ', incomplete: ' + gaps.degraded.join(', ') : '') +
+       '. Answer on what you do have and say plainly what you could not check. Never fill a gap ' +
+       'with a guess.' + storageGap + setAsideGap)
+    : setAsideGap;
+}
+
 function compareCandidates(a, b) {
   if (a.score !== b.score) return b.score - a.score;
   const created = String(b.created_at || '').localeCompare(String(a.created_at || ''));
@@ -573,12 +629,18 @@ async function bindWall(input, options) {
   // the deliberation can see precisely what was missing and say so rather than guessing, and the
   // gap is observable instead of silent. A wall that is entirely absent or unusable is still
   // refused above; that is a different fact and it stays refused.
-  const wallGaps = {
-    partial: fcw.partial === true,
-    unavailable: list(fcw.unavailableContributors),
-    degraded: list(fcw.partialContributors),
-    storage_limitations:list(fcw.agent_find&&fcw.agent_find.storage_limitations)
-  };
+  // ⬡B:core.agent.find:FIX:a_row_dropped_by_score_is_a_gap_she_is_owed_20260815⬡
+  // CODELESS PURGE. Two omission lists were computed, carried on the plan, reported in the
+  // receipt, and never once said to her: `compact_omitted` (rows candidateFacts scored lowest
+  // when the compact envelope filled, agent.find.js:304-313) and `omitted` (rows the expand
+  // phase could not fit). Cold code decided which of her own records she would never see, and
+  // the decision was invisible, so she could not overrule it or even know to ask. These are
+  // COUNTS ONLY, carried as facts beside the existing named gaps: the doctrine's own trap
+  // warning says never repeat a long stamp per row, and the fix for a silent drop is to say it
+  // happened, not to ship the dropped rows back through the same envelope that rejected them.
+  // `full_history_expansion_available` already proves an expansion path exists that she was
+  // never offered; now she can ask for it.
+  const wallGaps = wallGapsFor(fcw);
   if (wallGaps.partial || wallGaps.unavailable.length || wallGaps.degraded.length) {
     console.error('[agent.find] wall is thin, proceeding on named gaps rather than silencing her:',
       JSON.stringify({unavailable: wallGaps.unavailable, degraded: wallGaps.degraded,
@@ -657,19 +719,9 @@ async function bindWall(input, options) {
   } catch (error) {}
   // The thin-wall gap rides on the returned wall so nothing downstream has to guess whether it
   // is looking at a complete picture, and so a thin turn is distinguishable from a full one in
-  // the receipt rather than only in a log line.
-  const storageGap=wallGaps.storage_limitations.indexOf('legacy_supersession_unavailable')>=0
-    ? ' This memory store could not verify whether an older record was later corrected. Treat '
-      + 'its history as useful but not complete current truth, and say that plainly if it matters.'
-    : '';
-  const gapAppendix = (wallGaps.partial || wallGaps.unavailable.length ||
-    wallGaps.degraded.length || wallGaps.storage_limitations.length)
-    ? ('\n\nSome of what you normally read was not available for this turn' +
-       (wallGaps.unavailable.length ? ', missing: ' + wallGaps.unavailable.join(', ') : '') +
-       (wallGaps.degraded.length ? ', incomplete: ' + wallGaps.degraded.join(', ') : '') +
-       '. Answer on what you do have and say plainly what you could not check. Never fill a gap ' +
-       'with a guess.'+storageGap)
-    : '';
+  // the receipt rather than only in a log line. Composed by gapAppendixFor (above), which also
+  // names records set aside for space so a silent drop is never silent again.
+  const gapAppendix = gapAppendixFor(wallGaps);
   return Object.assign({}, fcw, {
     agent_find_wall_gaps: wallGaps,
     system_prompt:fcw.system_prompt + promptAppendix + gapAppendix,
@@ -865,4 +917,5 @@ module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
     scopedRecentRows:scopedRecentRows,belongsToRequest:belongsToRequest,
     questionTerms:questionTerms,candidateFacts:candidateFacts,compareCandidates:compareCandidates,
     runtimeContextBudgets:runtimeContextBudgets,
+    wallGapsFor:wallGapsFor,gapAppendixFor:gapAppendixFor,
     digest:digest}};

@@ -152,6 +152,14 @@ function agentFindWallProjection(plan,systemPrompt){
     fcw_bytes:Buffer.byteLength(systemPrompt,'utf8'),evidence_body_bytes:plan.fcw_bytes,
     fcw_byte_budget:plan.fcw_byte_budget,context_budget_source:plan.context_budget_source,
     byte_envelope_reached:plan.byte_envelope_reached,omitted:plan.omitted,
+    // ⬡B:core.fcw.builder:FIX:a_dropped_row_she_is_never_told_about_20260815⬡
+    // CODELESS PURGE. planWallEvidence computes compact_omitted (agent.find.js:341, rows
+    // dropped by a hand-tuned score when the compact byte envelope fills) and carried it on
+    // the plan, but this projection copied `omitted` and silently left `compact_omitted`
+    // behind. So the rows cold code scored lowest never reached the wall, never reached
+    // agent.find.js#bindWall's wallGaps, and never reached her prompt. She could not overrule
+    // what she was never told was missing. Carried here so the gap appendix can name it.
+    compact_omitted:Array.isArray(plan.compact_omitted) ? plan.compact_omitted.slice() : [],
     complete:plan.complete,partial:plan.partial,
     active_truth_enforced:plan.active_truth_enforced===true,
     storage_limitations:Array.isArray(plan.storage_limitations)
