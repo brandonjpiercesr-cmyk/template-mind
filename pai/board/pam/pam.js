@@ -27,17 +27,29 @@ var WORLD_PATTERNS = Object.freeze({
 // STAMP, which is deliberately excluded from healing, it kills the turn outright. Telling a
 // person who called is a life assistant's whole job.
 //
-// WHO MAY SEE A FACT ABOUT A PERSON IS THE PEOPLE-TIER QUESTION, and it is already answered
-// structurally, by machinery that reads the READER rather than the string:
-// core/privacy/people.tier.js#structuralFilter turns the viewer's ceiling into an acl_tier
-// DATABASE predicate, so a row above that ceiling is never selected and never travels; the same
-// file fails closed to STRICTEST for an unresolved reader and takes T0 only from env; and
-// pamRelease below re-applies the tier and mark gates before any mind is spent, with everything
-// unclassified going to a woken mind that fails closed.
-// SO THIS DELETES A DUPLICATE WEARING THE WRONG NAME, not a boundary, and a broken duplicate at
-// that: pamRelease already rules that the owner holds everything in his own world, and this
-// regex was overruling that ruling with a substring match, for the one reader the ladder says
-// has no boundary to enforce.
+// WHO MAY SEE A FACT ABOUT A PERSON IS THE PEOPLE-TIER QUESTION, and the first version of this
+// paragraph OVERSTATED where that is enforced. A blind critic counted instead of believing it,
+// so here is the honest split across all five callers of pamCheck:
+//   pamRelease, just below (a banked bead row)   THE TIER LADDER GOVERNS IT.
+//     core/privacy/people.tier.js#structuralFilter turns the viewer's ceiling into an acl_tier
+//     DATABASE predicate, so a row above that ceiling is never selected and never travels; it
+//     fails closed to STRICTEST for an unresolved reader and takes T0 only from env; and
+//     pamRelease re-applies the tier and mark gates before any mind is spent.
+//   the two council stages                       NOT the ladder. These are bytes she composed.
+//   the two outbound email edges                 NOT the ladder. people.tier is not required
+//                                                anywhere in that file.
+// A number arriving from a tool result, a calendar event or an inbound email never passes
+// through a bead SELECT, so it never meets the predicate.
+// SO THE CLAIM IS TWO CLAIMS, and both are true where they apply. On the banked-row path this
+// deletes a DUPLICATE WEARING THE WRONG NAME, and a broken one, since pamRelease already rules
+// the owner holds everything in his own world and this regex was overruling that with a
+// substring match. On the other four paths it deletes a COLD GATE DECIDING WHAT SHE MAY SAY, and
+// what governs those is the outbound council: a woken mind, which is the correct decider.
+// ONE NARROW BEHAVIOR CHANGE, named rather than left for someone to find. pamCheck runs BEFORE
+// the SANCTIONED branch below, and a SANCTIONED row is released verbatim with no mind spent. So
+// for that one row type this scan was the only content gate, and a sanctioned row carrying a
+// phone number was withheld from a lower-tier reader before this change and is released now.
+// It needs an explicit founder mark to reach that state, so it is narrow, but it is real.
 //
 // The supabase URL was the second. A HOSTNAME IS NOT A SECRET. The key is, and the key is still
 // caught by jwt_token below, which matches the exact HS256 header every Supabase anon and

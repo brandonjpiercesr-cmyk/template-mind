@@ -34,10 +34,39 @@ function stripMarkdown(text) {
   // they survive while every real bold and italic still strips.
   // ONE CASE HONESTLY LEFT STANDING: a standalone __init__ still strips to init, because with a
   // space on each side it cannot be told from a real __bold__. Named rather than fixed quietly.
-  t = t.replace(/(^|[^\w*])\*\*\*(?![\s*])([^\n]+?)(?<![\s*])\*\*\*(?![\w*])/g, '$1$2');
-  t = t.replace(/(^|[^\w*])\*\*(?![\s*])([^\n]+?)(?<![\s*])\*\*(?![\w*])/g, '$1$2');
+  // ⬡B:core.format_matrix:HEAL:my_first_rules_broke_the_job_they_were_fixing:20260815⬡
+  // A BLIND CRITIC CAUGHT A REGRESSION I SHIPPED, and measuring it found a second one the
+  // critic had not seen. My first version of these rules had two defects:
+  //   (a) the closing guard `(?![\w*])` rejected bold that closes against a word character.
+  //       That is VALID CommonMark (asterisk emphasis allows an intraword close; only
+  //       underscore forbids it) and it is ordinary output. MEASURED: "That is **3**x faster"
+  //       and "We support two **API**s" both kept their raw asterisks, so the formatter failed
+  //       its actual job and a person's SMS showed literal markdown.
+  //   (b) the inner `[^\n]+?` could span ACROSS an unrelated delimiter pair on the same line,
+  //       which pairs the wrong asterisks. MEASURED on one real line:
+  //         "That is **3**x faster. ... Copy src/**/*.js in."  ->  "3**x ... src//*.js"
+  //       So a glob got corrupted anyway, by the very rules written to protect it. Neither of
+  //       my single-defect test lines caught this, because both needed only ONE pair per line.
+  // THE CURE FOR BOTH: the inner content may not contain the delimiter, so a pair can never
+  // reach past its own partner; and the close is guarded only against another asterisk, so
+  // intraword bold works again. The OPENING guard is what protects arithmetic, and it is
+  // untouched: 2**10, 2**3 and src/**/ are all rejected at the open, never at the close.
+  // NAMED, NOT CLAIMED AWAY: "20**C**" and "5**stars**" still keep their asterisks, because the
+  // opening guard cannot tell that bold from an exponent. That is a real remaining tradeoff.
+  //   (c) AND THE GLOB STILL BROKE, order-dependently, which only a line carrying BOTH shapes
+  //       revealed. `src/**` has an UNPAIRED `**`, so it happily paired with a later `**` from
+  //       an exponent further along the same line. MEASURED after fixing (a) and (b):
+  //         "That is **3**x faster. Copy src/**/*.js in. Memory 2**10."
+  //           -> "That is 3x faster. Copy src//*.js in. Memory 210."
+  //       My own earlier test line had the same three shapes in a DIFFERENT ORDER, so nothing
+  //       followed the glob to pair with and it passed. A fixture whose ordering happens to be
+  //       kind is the fixture-cleaner-than-the-world failure, one more time.
+  //       The cure is one character in the opening guard: a path separator before `**` means a
+  //       GLOB, not an emphasis opener, so it can never open a pair at all.
+  t = t.replace(/(^|[^\w*\/])\*\*\*(?![\s*])((?:(?!\*\*\*)[^\n])+?)(?<![\s*])\*\*\*(?!\*)/g, '$1$2');
+  t = t.replace(/(^|[^\w*\/])\*\*(?![\s*])((?:(?!\*\*)[^\n])+?)(?<![\s*])\*\*(?!\*)/g, '$1$2');
   t = t.replace(/(^|[^\w*])\*(?![\s*])([^*\n]+?)(?<![\s*])\*(?![\w*])/g, '$1$2');
-  t = t.replace(/(^|[^\w_])__(?![\s_])([^\n]+?)(?<![\s_])__(?![\w_])/g, '$1$2');
+  t = t.replace(/(^|[^\w_])__(?![\s_])((?:(?!__)[^\n])+?)(?<![\s_])__(?![\w_])/g, '$1$2');
   // inline code: `x` -> x, and a fenced block keeps its fence. The old single-backtick rule ate
   // one backtick off ```js, so a code block she wrote arrived malformed.
   t = t.replace(/(?<!`)`([^`\n]+)`(?!`)/g, '$1');
