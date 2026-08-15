@@ -265,14 +265,36 @@ function findPhrases(lowerContent, list, label) {
 // verdict: it exists so a receipt can PROVE the mind overruled the scanner
 // rather than merely asserting that it may. Bounded and deduped, phrases only,
 // never answer bytes, so this can ride an internal receipt safely.
+// ⬡B:board.writ:HEAL:a_name_hint_IS_an_answer_byte_and_this_banked_it:20260815⬡
+// THE SENTENCE ABOVE STOPPED BEING TRUE THE DAY I ADDED THE NAME WAKE, and a blind critic
+// named it. Every other hint here is a fixed phrase from a fixed list ("just to recap"), so
+// "phrases only, never answer bytes" held. A name hint is a SUBSTRING LIFTED OUT OF HER ANSWER,
+// and for the wake it exists for, that substring is a real person's first name. It rode
+// overruled_hints into the durable bank through writCheckAndBank, so every turn where WRIT kept
+// a reader's daughter's name wrote that name into a bead as a flag code.
+// WORSE, I MADE IT CERTAIN. Ranking name hints FIRST into a list capped at 8, which was the
+// right fix for the proof being evicted, also guaranteed the name is always the thing banked.
+// I named this in the commit and deferred it. Deferring it was wrong: it is one function.
+//
+// THE PROOF SURVIVES WITHOUT THE NAME. A name hint now lands as the CLASS token
+// `internal_name_kept`, which says exactly what the receipt needs to say, that a mind read the
+// sentence and chose to keep a name a word list flagged. Which name is not the receipt's
+// business, it is hers, and dedupe collapses every kept name to that one token so names can
+// never crowd the other proof out of the cap either. Nothing is filtered and nothing is capped
+// on HER side: the organ still sees every name in its prompt and still decides.
 function survivingHints(hintPhrases, renderedText) {
   var lower = String(renderedText || '').toLowerCase();
   var seen = {};
   var survivors = [];
   (hintPhrases || []).forEach(function (entry) {
     var phrase = String((entry && (entry.phrase || entry.type)) || entry || '').trim().toLowerCase();
-    if (!phrase || phrase.length < 3 || seen[phrase]) return;
-    if (lower.indexOf(phrase) >= 0) { seen[phrase] = true; survivors.push(phrase); }
+    if (!phrase || phrase.length < 3) return;
+    if (lower.indexOf(phrase) < 0) return;
+    // The one hint family whose phrase is her answer rather than a fixed list entry.
+    var token = (entry && entry.type === 'internal_name') ? 'internal_name_kept' : phrase;
+    if (seen[token]) return;
+    seen[token] = true;
+    survivors.push(token);
   });
   return survivors.slice(0, 8);
 }
