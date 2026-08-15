@@ -5380,12 +5380,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // describes-the-demand-never-the-supply shape that hid two starved council doors for a day.
   // THE TIER IS UNCHANGED, and that matters: STRICTEST in, STRICTEST out. This makes the token
   // READABLE, it does not make it more permissive.
-  var _readAuthority = _peopleTiers.readAuthority(_peopleTiers.STRICTEST, 'closed_world', hamUid);
+  var _readAuthority = _peopleTiers.closedWorldAuthority(hamUid);
   if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn &&
       !_roomSafeVoice && !_internalCodaTurn && !_gmguNativeTutorTurn) {
     try { _readAuthority = await _peopleTiers.resolveReadTier(identity, hamUid); }
     catch (eReadTier) {
-      _readAuthority = _peopleTiers.readAuthority(_peopleTiers.STRICTEST, 'unresolved', hamUid);
+      _readAuthority = _peopleTiers.unresolvedAuthority(hamUid);
     }
   }
   var _effectiveViewerTier = _peopleTiers.effectiveTier(_readAuthority && _readAuthority.tier);
@@ -8001,6 +8001,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // preparation, read once at the council door. Reset per preparation run so a wake raised by a
   // first attempt can never ride a healed second draft that is already clean.
   var _internalNameWake = null;
+  // Set only when the tier gate held and a mind wrote the replacement sentence. Read once, at
+  // the success result, so the post-council gate can tell HER boundary sentence apart from
+  // bytes WRIT rewrote after the gate last saw them.
+  var _tierGateSentence = false;
   // async ONLY because the tier gate below now wakes a mind instead of holding her pen. Both
   // call sites already sit in an async function and both now await it.
   async function _prepareHumanAnswerOnce(candidate) {
@@ -8078,6 +8082,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           {omitRequest:true});
       } catch (eGateWake) { _gateSaid = null; }
       if (_gateSaid && _gateSaid.ok) {
+        // ⬡B:core.tool_loop:WIRE:mark_the_sentence_the_gate_itself_caused:20260815⬡
+        // These bytes ARE the tier boundary being explained, so the post-council copy of the
+        // same gate must not hold them: naming an access boundary tends to use the word
+        // "account", and that silenced her own explanation. Marked here rather than guessed
+        // downstream, because only this seam knows the wake produced this sentence.
+        _tierGateSentence = true;
         finalAns = _gateSaid.sentence;
       } else {
         // ABSENCE, never a substitute mouth. The gate still held, nothing is disclosed, and
@@ -9048,6 +9058,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   var _heldScreenEffect = _screenCommitFailure || _queuedScreenHolds[0] || null;
   var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,
+    // Carried to core/synthesize.js so the post-council tier gate can recognise the ONE case
+    // where its holding would delete her own boundary sentence. False on every ordinary turn.
+    tier_gate_sentence:_tierGateSentence,
     screen_effect:_heldScreenEffect ? {
       ok:false,reason:_heldScreenEffect.result.reason,
       pushed:_heldScreenEffect.result.pushed||0,

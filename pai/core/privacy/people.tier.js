@@ -242,23 +242,32 @@ module.exports = {
   isTier: isTier, parseTier: parseTier, normalizeMark: normalizeMark, founderHamUid: founderHamUid,
   resolveViewerTier: resolveViewerTier, effectiveTier: effectiveTier,
   isReadAuthority: isReadAuthority,
-  // ⬡B:core.privacy.people_tier:FIX:a_token_only_this_file_could_mint_starved_five_lanes:20260815⬡
-  // EXPORTED because withholding it did not make anything safer, it made five lanes read an
-  // EMPTY WORLD and call it an empty world. The READ_AUTHORITY symbol is stamped only inside
-  // readAuthority(), and readAuthority() was not exported, so no caller anywhere could produce a
-  // token isReadAuthority() would accept. core/tool.loop.js therefore built two BARE OBJECT
-  // LITERALS for its closed-world lanes, and measured on the real modules:
-  //   isReadAuthority({tier:STRICTEST,source:'closed_world'}, HAM)  ->  false
-  //   isReadAuthority(resolveReadTier(...), HAM)                    ->  true
-  // so core/context.fusion.js#readTierFor returned null and her whole fused world came back as
-  // "" and {}. The failure presents to a reader as "there is no context," never as "the token
-  // was never minted," which is the same describes-the-demand-not-the-supply shape that hid two
-  // starved council doors for a day.
-  // THIS WIDENS NOTHING. Exporting the MINTER does not export the ability to invent authority: a
-  // caller still has to say which tier and which ham, and effectiveTier() floors anything
-  // unrecognized at STRICTEST, the least privileged person alive. The closed-world lanes keep
-  // the exact tier they always intended, STRICTEST; they just get a token that can be READ.
-  readAuthority: readAuthority,
+  // ⬡B:core.privacy.people_tier:HEAL:I_exported_the_minter_and_made_the_token_forgeable:20260815⬡
+  // I SHIPPED A PRIVILEGE ESCALATION AND WROTE "THIS WIDENS NOTHING" IN THE COMMIT. A blind
+  // critic drove it instead of believing me:
+  //   readAuthority(T0, 'i_said_so', 'SOMEONE-ELSES-HAM')  ->  isReadAuthority: TRUE
+  //   effectiveTier(0)  ->  0        structuralFilter(0)  ->  null  (NO acl predicate at all)
+  // The READ_AUTHORITY Symbol had exactly one job: make the token impossible to construct
+  // outside this file, so resolveReadTier() was the ONLY door, and that door does the real work
+  // (identity mismatch falls to STRICTEST, T0 comes only from FOUNDER_HAM_UID env, otherwise the
+  // durable birth bead). Exporting the raw minter deleted that invariant in one line. Two
+  // consumers, core/fcw.builder.js and core/lens.js, explicitly TRUST a token that validates and
+  // skip re-resolution, so a forged T0 would have read every row including PRIVATE ones.
+  // MY DEFENCE WAS ALSO WRONG, and it is worth naming precisely: I wrote that effectiveTier()
+  // floors anything unrecognized at STRICTEST. It floors INVALID tiers. A caller naming T0 gets
+  // T0 straight through, which is the only case that mattered.
+  // No live exploit existed, because the only callers pass STRICTEST. That is luck, not design,
+  // and it is exactly the kind of thing that is true until somebody adds a caller.
+  // SO THE MINTER STAYS PRIVATE AND THE STARVATION STILL GETS FIXED. These two helpers are bound
+  // to STRICTEST at the definition site: they solve the closed-world lanes' unmintable token and
+  // there is no tier argument for a caller to name. A test pins that the raw minter is not
+  // exported and that no export can produce a T0 token.
+  closedWorldAuthority: function (hamUid) {
+    return readAuthority(STRICTEST, 'closed_world', hamUid);
+  },
+  unresolvedAuthority: function (hamUid) {
+    return readAuthority(STRICTEST, 'unresolved', hamUid);
+  },
   structuralFilter: structuralFilter, envelopeOf: envelopeOf,
   buildEnvelope: buildEnvelope, visibleTo: visibleTo, bornPeopleTier: bornPeopleTier,
   resolveReadTier: resolveReadTier
