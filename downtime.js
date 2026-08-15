@@ -41,15 +41,29 @@ async function downtimeCycle(env) {
   if (!HAM || !BANK || !KEY) return { ok: false, reason: 'unborn' };
   var h = { apikey: KEY, Authorization: 'Bearer ' + KEY, 'Accept-Profile': 'memory_bank' };
   var did = [];
+  var readFailed = null;
   // 1) Organize what accumulated: count fresh un-briefed deposits since last briefing.
   //    This stays cold -- a count is a fact, never prose attributed to her.
+  // ⬡B:downtime:FIX:a_failed_read_is_not_an_empty_inbox:20260815⬡
+  // A non-OK response or a throw used to leave `did` empty, and the next line then stated
+  // "nothing new accumulated while you were away" TO HER AS A FACT. That converts "we could
+  // not look" into "we looked and there was nothing", and the answer she writes on that
+  // footing is stored as her briefing. A person comes back reassured their night was quiet
+  // when the truth is the deposit count was never read. Three states now, never two: rows
+  // read, zero rows read, or the read failed and we say so.
   try {
     var r = await fetch(BANK + '/rest/v1/beads?stamp_type=eq.NOTE&order=created_at.desc&limit=20&select=id,summary', { headers: h });
     if (r.ok) { var rows = await r.json(); did.push('reviewed ' + (rows || []).length + ' recent deposits'); }
-  } catch (e) {}
+    else { readFailed = 'deposit read returned HTTP ' + r.status; }
+  } catch (e) { readFailed = 'deposit read threw: ' + String(e && e.message || e).slice(0, 120); }
   // 2) Wake her through the one real exit. SHE decides what the briefing says; cold
   //    code never drafts it and never falls back to a template on failure.
-  var factsLine = did.length ? did.join('; ') : 'nothing new accumulated while you were away';
+  // The uncertainty is CARRIED to her, not resolved by cold code. She is told plainly that
+  // the count is unknown and why, and SHE decides what the briefing says about it.
+  var factsLine = readFailed
+    ? ('the deposit count could not be read this cycle (' + readFailed + '), so what accumulated '
+      + 'is UNKNOWN, not known to be nothing')
+    : (did.length ? did.join('; ') : 'the deposit read succeeded and found nothing new');
   var question = 'What should be waiting for me when I get back? Give me your downtime briefing.';
   var deliberationInput = 'DOWNTIME CYCLE, no human on any channel right now. What accumulated '
     + 'since the last briefing: ' + factsLine + '. Write the short briefing that will be '

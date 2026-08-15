@@ -223,7 +223,12 @@ const TOKEN_RE = /[A-Za-z0-9._%+@-]{2,}/g;
 // folded in too, since it costs nothing here and is the same character some name-aware
 // autocorrect and IME pipelines emit; more exotic quote marks are left alone rather than widen
 // a possessive detector past what a possessive actually looks like.
-const POSSESSIVE_NAME_RE = /\b([A-Z][a-z]{1,20})['’ʼ]s\s+(lesson\s+plan|reports?|credentials?|rows?|records?|messages?|chats?|calendar|e?mails?|files?|data|notes?|transcripts?|history)\b/g;
+// A name ending in s takes the apostrophe alone: "James' reports". Requiring a literal s
+// after every apostrophe missed that whole family, and the strong-name and hash detectors do
+// not necessarily catch the bare name either. The apostrophe-only branch is deliberately
+// narrow: the name must itself END in s, so an ordinary typo like "John' reports" is not
+// treated as a possessive and does not become noise.
+const POSSESSIVE_NAME_RE = /\b(?:([A-Z][a-z]{1,20})['’ʼ]s|([A-Z][a-z]{0,19}s)['’ʼ](?!s))\s+(lesson\s+plan|reports?|credentials?|rows?|records?|messages?|chats?|calendar|e?mails?|files?|data|notes?|transcripts?|history)\b/g;
 const POSSESSOR_NOT_A_NAME = new Set(['world', 'lane', 'run', 'turn', 'ham', 'human', 'founder',
   'wall', 'station', 'grant', 'project', 'anthropic', 'user', 'system', 'this', 'that', 'it',
   'one', 'file', 'request', 'session']);
@@ -421,9 +426,15 @@ function scanFile(full) {
       // a bare capitalised name possessing something personal-data-shaped (see POSSESSIVE_NAME_RE)
       POSSESSIVE_NAME_RE.lastIndex = 0;
       while ((m = POSSESSIVE_NAME_RE.exec(line))) {
-        if (POSSESSOR_NOT_A_NAME.has(m[1].toLowerCase())) continue;
+        // Two alternatives now capture the name: m[1] for "James's", m[2] for the
+        // apostrophe-only "James'". Exactly one is ever set, and the possessed noun moved to
+        // m[3]. Reading m[1] blindly would throw on the second branch and mask the wrong text.
+        const possessor = m[1] || m[2];
+        const possessed = m[3];
+        if (!possessor) continue;
+        if (POSSESSOR_NOT_A_NAME.has(possessor.toLowerCase())) continue;
         violations.push({ rel, line: i + 1, type: 'hardcoded_person_name',
-          hint: tokenHint(m[1], maskName(m[1]) + '’s ' + m[2]) });
+          hint: tokenHint(possessor, maskName(possessor) + '’s ' + possessed) });
       }
       // a person assigned to a key that means a human
       IDENTITY_KEY_RE.lastIndex = 0;
