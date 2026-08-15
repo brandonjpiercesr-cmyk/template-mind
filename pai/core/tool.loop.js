@@ -122,7 +122,33 @@ var realNameBoundary = require('./real.name.boundary.js');
 var CANONICAL_ASSISTANT_NAME = "A'NU";
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
+// ⬡B:core.tool_loop:HEAL:the_code_and_the_prompt_disagreed_about_two_closed_lanes:20260815⬡
+// A BLIND CRITIC CAUGHT A SIDE EFFECT OF MY OWN FIX. The closed-world read-authority token was
+// built as a bare object literal that isReadAuthority could never accept, so context.fusion
+// returned nothing for every lane using it. I made the token mintable, correctly, because a
+// token nothing can mint starves five lanes and reads as "there is no context" instead of
+// "nobody could mint the token". But fixing the token also handed ambient fused context to two
+// lanes whose OWN PROMPTS FORBID IT:
+//   _reachIncidentIntake   closed-world over its exact granted packet
+//   _internalCodaTurn      "Do not infer ambient Memory Bank facts, recent activity, prior
+//                           conversation, or human intent outside that packet."
+// The other three the fix touched (GMGU tutor, room-safe voice, native live voice) were already
+// suppressed right here, so they were never affected, and my commit message overstated that as
+// "five lanes". Two, not five.
+//
+// DECIDED OUT LOUD RATHER THAN LEFT AS A SIDE EFFECT, which is what a critic asked for and what
+// the code deserved. The design intent was never ambiguous: the token is literally named
+// `closed_world`, the comment at its definition says these lanes intentionally perform no
+// ambient read, and both prompts say so in words. What was ambiguous was the MECHANISM: the
+// suppression was happening by accident, through a token nobody could mint, in a different file.
+// An intent enforced by a bug is not enforced. It is one refactor away from silently reversing,
+// which is exactly what my refactor did.
+// So the suppression moves to the place that already expresses this decision for three other
+// lanes, and the code now says what the prompt says. Nothing is newly restricted: this restores
+// what these two lanes always had, on purpose this time, in one readable place.
 function shouldIncludeWorldContext(channel, identity, hamUid, question) {
+  if (reachIncidentIntakeMode(channel, identity)) return false;
+  if (codaInternalDeliberation(identity)) return false;
   if (verifiedGmguTutorTurn(channel, identity, hamUid)) return false;
   if (String(channel || '').toLowerCase() !== 'voice') return true;
   if (voiceRoomSafe.isAuthorized(identity)) return false;
