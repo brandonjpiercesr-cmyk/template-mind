@@ -58,6 +58,35 @@ function stripReasoningTrace(content) {
   return text.trim();
 }
 
+// ⬡B:core.model_ladder:FIX:one_gate_carried_two_facts_and_one_opinion:20260815⬡
+// THE DEAD OPTION, closed. core/tool.loop.js passed `noGuard:true` on the CJK rewrite call and
+// NOTHING IN THIS FILE EVER READ IT (anew #2184 found it and deliberately left it). So the rewrite
+// whose entire job is "render this answer in clear English" ran under the very rule that rejects
+// CJK: any answer whose CORRECT English form must keep one glyph, a name, a dish, a filename, the
+// term the person asked about, was rejected by every rung, deliberate() returned null, and her
+// turn was destroyed. The guard was structurally guaranteed to destroy exactly the class it was
+// written to handle.
+//
+// WHY NOT SIMPLY HONOUR `noGuard`, which is the obvious repair and is WRONG. This gate does not
+// hold one rule, it holds THREE, and only one of them is an opinion:
+//   empty_answer        there is no answer once the reasoning trace is stripped  A STRUCTURAL FACT
+//   non_json_answer     the CALLER declared opts.json and this is not that       A CONTRACT THE CALLER ASKED FOR
+//   non_english_answer  it contains CJK                                          AN OPINION
+// A blanket bypass would waive the first two as well, so an empty string would be "accepted" and
+// cold code would ship nothing as her answer. That is a worse bug than the one being fixed, and it
+// is very likely why nobody ever wired `noGuard` up.
+//
+// SO THE WAIVER IS NARROW AND NAMED. `allowNonEnglish` suppresses the CJK rule and nothing else.
+// Both structural checks keep holding for every caller including this one. The founder has never
+// ruled that her output must be English, per the corpus search recorded in #2184, so the English
+// rule is a coder's assumption and is the caller's to waive. The TRIGGER in core/tool.loop.js is
+// untouched and stays his to rule on, exactly as #2184 left it.
+//
+// A PATTERN MAY DETECT AND REFUSE. THE CALLER MAY WAIVE ONLY THE OPINION.
+function englishRuleWaived(opts) {
+  return !!(opts && opts.allowNonEnglish === true);
+}
+
 // ⬡B:core.model.ladder:GUARD:json_contract_falls_through_provider_ladder:20260715⬡
 // A provider returning non-empty prose is not a successful JSON deliberation.
 // Validate the requested wire contract at each provider boundary so a malformed
@@ -80,32 +109,7 @@ function hasAcceptedContent(content, opts) {
   // reasoning, no closing tag ever written) is caught the same way.
   var stripped = stripReasoningTrace(content);
   if (!stripped) return false;
-  // ⬡B:core.model_ladder:FIX:the_cjk_repair_may_not_be_rejected_for_containing_cjk:20260815⬡
-  // noGuard WAS A DEAD OPTION. core/tool.loop.js passes `noGuard:true` on exactly one call, the
-  // rewrite that repairs an answer containing CJK, and nothing in this file ever read it. So the
-  // repair ran under the very gate it exists to satisfy: any correct English rewrite that must
-  // KEEP one CJK glyph, a person's name, a dish, a filename, the term the human actually asked
-  // about, was rejected by every rung and deliberate returned null. The guard was structurally
-  // guaranteed to destroy exactly the class it was written for. A blind critic corrected the
-  // original wording here, so the cost is stated exactly: until anew#2184 the caller turned that
-  // null into an EMPTY answer and the person got the canned working-limit line. Since #2184 the
-  // original is kept, so the live cost was narrower and quieter, the repair simply could never
-  // succeed and the person kept the untranslated answer every single time.
-  //
-  // Honouring it is narrower than removing the check: noGuard suppresses ONLY the CJK verdict,
-  // and only for a caller that asked for it in the same breath as saying why. Emptiness and the
-  // JSON contract below are untouched. One production call site passes it (core/tool.loop.js) and
-  // three test call sites do; the tests stub ASCII content, so their behaviour is unchanged.
-  //
-  // WHERE THE JUDGMENT MOVED, and this is the half that matters: the ladder now RETURNS the
-  // candidate instead of silently refusing it, and the accept/reject decision lives at the call
-  // site, which is the only place holding the ORIGINAL to compare against. See the selection
-  // block in core/tool.loop.js. A shared resolver cannot tell a repair from an echo; the caller
-  // can. Naming the follow-on rather than smuggling it in: `noGuard` is a wider name than its
-  // effect (it suppresses this one verdict, not the emptiness or JSON checks) and wants renaming
-  // to `allowNonEnglish` across the four sites. That is a pure rename and belongs in its own
-  // pull request, not bundled into a behaviour change.
-  if (!(opts && opts.noGuard === true) && outputGuard.containsCjk(stripped)) return false;
+  if (!englishRuleWaived(opts) && outputGuard.containsCjk(stripped)) return false;
   if (!opts || opts.json !== true) return true;
   // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
   // GLM-5.2 and other reasoning models can wrap the real JSON in a thinking
@@ -155,11 +159,7 @@ function contentVerdict(content, opts) {
   if (typeof content !== 'string') return 'empty_answer';
   var stripped = stripReasoningTrace(content);
   if (!stripped) return 'empty_answer';
-  // Same suppression as hasAcceptedContent above, so the receipt and the gate never disagree
-  // about why a rung was accepted or refused. See that comment for why noGuard exists.
-  if (!(opts && opts.noGuard === true) && outputGuard.containsCjk(stripped)) {
-    return 'non_english_answer';
-  }
+  if (!englishRuleWaived(opts) && outputGuard.containsCjk(stripped)) return 'non_english_answer';
   if (!opts || opts.json !== true) return 'accepted';
   return hasAcceptedContent(content, opts) ? 'accepted' : 'non_json_answer';
 }

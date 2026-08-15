@@ -6602,8 +6602,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try {
         var _englishRewrite = await _callPaiLadder(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
+          // ⬡B:core.tool_loop:FIX:the_waiver_this_call_asked_for_is_now_a_real_one:20260815⬡
+          // This said `noGuard:true`, which core/model.ladder.js never read, so this rewrite ran
+          // under the very CJK rule it exists to satisfy and every rung rejected the correct
+          // answer whenever that answer must keep one glyph. The intent was always right; the
+          // option was dead. It is now `allowNonEnglish`, which waives the CJK OPINION and only
+          // that: an empty answer and a declared JSON contract still refuse for this caller
+          // exactly as for every other one. See the ladder for why a blanket bypass was the wrong
+          // repair. `noGuard` is removed rather than kept beside it, because a dead option sitting
+          // next to a live one is the next coder's trap.
           String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
-            timeout:12000, noGuard:true });
+            timeout:12000, allowNonEnglish:true });
         // ⬡B:core.tool_loop:FIX:a_failed_rewrite_never_deletes_a_finished_answer:20260815⬡
         // Both branches used to assign `''`, so one CJK codepoint plus one ladder failure blanked
         // a complete answer and the person got the canned working-limit line instead. Waking a
@@ -6611,17 +6620,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         // receives NOTHING when the repair is unavailable is cold code deciding, and it trades a
         // cosmetic imperfection for a total loss. A stray glyph is smaller than silence.
         //
-        // NOT RARE, AND THAT IS THE PART THAT MATTERS: `noGuard:true` above is passed and never
-        // read anywhere in core/model.ladder.js, so the rewrite runs under the ladder's ordinary
-        // content gate, which itself rejects CJK (contentVerdict -> non_english_answer). Any
-        // answer whose CORRECT English form must keep one CJK glyph, a name, a dish, a filename,
-        // the very term the person asked about, is therefore rejected by every rung, deliberate
-        // returns null, and she was blanked. The guard was structurally guaranteed to destroy
-        // exactly the class it was written to handle. Honoured in the ladder as of anew#2187, so
-        // the rewrite can now actually come back. That is what makes the selection below load
-        // bearing: while the option was dead, `_rewritten` could only ever be CJK-free, because
-        // anything else had already been rejected upstream. Now it can be anything the seat
-        // returned, so the disposition has to be made here, where the ORIGINAL is still in hand.
+        // AND THE REPAIR CAN NOW ACTUALLY COME BACK, which is what makes the selection below load
+        // bearing rather than decorative. While the waiver above was dead, the rewrite ran under
+        // the ladder's own CJK rule, so `_rewritten` could only ever be CJK-free: anything else
+        // had already been rejected by every rung. anew#2188 closed that, so the seat's output now
+        // arrives as-is and the disposition has to be made HERE, the only place still holding the
+        // original to compare it against.
         //
         // Also worth saying plainly, because it shaped how narrow this fix is: the founder has
         // never said her answers must be English. A corpus search over english, language,
