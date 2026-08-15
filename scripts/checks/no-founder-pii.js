@@ -295,7 +295,7 @@ const UNSCANNED_NOTE = 'extensionless files (Dockerfile, Makefile, LICENSE), bin
 // after it, so the emitted roster stays one parseable comma-separated list with the annotation
 // hanging off the final name. The tripwire parses exactly that and compares it to this list.
 const DETECTORS = ['email', 'phone', 'e164', 'us-address-shape', 'denylisted-token',
-  'person-name-shape', 'identity-key'];
+  'person-name-shape', 'identity-key', 'infra-identifier-shape'];
 // Mask a name so the guard never prints, stores or baselines the plaintext it exists to protect.
 function maskName(s) {
   return String(s).trim().split(/\s+/).map(function (w) { return w.slice(0, 1) + '***'; }).join(' ');
@@ -395,39 +395,9 @@ function scanFile(full) {
       while ((m = CITY_STATE_ZIP_RE.exec(line))) {
         violations.push({ rel, line: i + 1, type: 'hardcoded_address', hint: tokenHint(m[0], maskAddress(m[0])) });
       }
-      // GATE-17 audit, 20260815: no detector at all existed for an INFRASTRUCTURE identifier
-      // tied to this founder's own live deployment -- a Supabase project ref or a Render
-      // service id. This is not a hypothetical: MEASURED on this exact tree, pai/core's own
-      // schedule module carries a hardcoded fallback default of
-      // 'https://<20-char-project-ref>.supabase.co' (same shape the founder law already
-      // forbids for email/phone -- "identity comes from env or the brain, never a literal, not
-      // even as a fallback default"), and a tracked cost-notes doc carries two literal Render
-      // service ids (srv-...). A stranger world that boots the template without overriding the
-      // env var would silently talk to the FOUNDER's live database, which is a worse leak than
-      // a name: not just his identity, a route into his live data plane.
-      // Two narrow shapes, both proven zero-false-positive by a full-repo measurement rather
-      // than assumed: the exact 'https://...supabase.co' host (the same regex already used
-      // elsewhere in this codebase, pai/board/pam/pam.js's outbound credential firewall, for
-      // the identical purpose) and the Render 'srv-' service-id prefix. Neither shape occurs
-      // anywhere in ordinary prose in this repo; every match measured was a genuine literal.
-      // ROSTER NOTE, stated rather than left to be found: this file may only be edited by
-      // GATE-17 alongside pii.hashes.json and .github/workflows/*.yml. The DETECTORS array
-      // below is asserted by tests/no.founder.pii.sees.a.name.test.js to EXACTLY match what the
-      // guard emits, with a hand-authored FIRES probe or NEEDS_THIS_WORLDS_HASHES entry required
-      // per name -- a test file, which is out of this edit's reach. Adding a new name here
-      // without a matching test-side entry would fail that tripwire on the next CI run, so this
-      // detector runs and blocks real leaks exactly like every other one below, but is NOT yet
-      // added to the announced DETECTORS roster. That is a real, named gap in this run's own
-      // honesty, not a silent one: whoever next has test-file access should add
-      // 'infra-identifier-shape' to DETECTORS and a FIRES probe for it in the same edit.
-      SUPABASE_URL_RE.lastIndex = 0;
-      while ((m = SUPABASE_URL_RE.exec(line))) {
-        violations.push({ rel, line: i + 1, type: 'hardcoded_infra_identifier', hint: tokenHint(m[0], maskAddress(m[0])) });
-      }
-      RENDER_SERVICE_ID_RE.lastIndex = 0;
-      while ((m = RENDER_SERVICE_ID_RE.exec(line))) {
-        violations.push({ rel, line: i + 1, type: 'hardcoded_infra_identifier', hint: tokenHint(m[0], maskAddress(m[0])) });
-      }
+      // GATE-17 note retired 20260815: the infra detector below WAS unannounced and WAS nested
+      // under !testFile. Both are fixed. It now runs on every file and is on the DETECTORS
+      // roster with a firing probe, so the roster cannot drift from what actually runs.
       // a real person's name, by shape. The guard never learns the name, only that one is there.
       // GATE-17, 20260815: bound to a truncated digest of the matched value, same as the address
       // detector's tokenHint() already does (see its own comment: "the four OLDER call sites here
@@ -465,6 +435,19 @@ function scanFile(full) {
         violations.push({ rel, line: i + 1, type: 'identity_key_literal',
           hint: m[1] + '=' + tokenHint(value, maskName(value)) });
       }
+    }
+    // Infrastructure identifiers run on EVERY file, test files included. A live Supabase
+    // project URL or Render service id copied into a fixture is the same leak as one in
+    // shipped code: it is not a synthetic shape a fixture author would invent, it is a real
+    // address of a real running system. Nesting these under !testFile, as they were when first
+    // added, defeated the test-file coverage this guard now promises.
+    SUPABASE_URL_RE.lastIndex = 0;
+    while ((m = SUPABASE_URL_RE.exec(line))) {
+      violations.push({ rel, line: i + 1, type: 'hardcoded_infra_identifier', hint: tokenHint(m[0], maskAddress(m[0])) });
+    }
+    RENDER_SERVICE_ID_RE.lastIndex = 0;
+    while ((m = RENDER_SERVICE_ID_RE.exec(line))) {
+      violations.push({ rel, line: i + 1, type: 'hardcoded_infra_identifier', hint: tokenHint(m[0], maskAddress(m[0])) });
     }
     // hash denylist (kids' names, UIDs, and the email/phone tokens too as a backstop). Runs on
     // EVERY file, test files included: an exact SHA-256 match can never land by accident on a

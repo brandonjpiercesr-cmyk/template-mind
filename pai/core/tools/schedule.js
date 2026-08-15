@@ -1,4 +1,4 @@
-// â¬¡B:core.tools.schedule:MODULE:calendar_read_and_book_ported:20260714â¬¡
+// ⬡B:core.tools.schedule:MODULE:calendar_read_and_book_ported:20260714⬡
 // DOCTRINE (entry): this schedule logic is never an entry point of its own. It runs inside
 // the one PAI cycle, whose entry is always A'NEW through the ABAHAM door -- calendar_read
 // and calendar_book call these helpers from inside that cycle, never from a side gate.
@@ -20,7 +20,7 @@ const https = require('https');
 const ABA_SERVER_URL = process.env.ABA_SERVER_URL || '';
 const ABA_SERVER_SRK = process.env.ABA_SERVER_SERVICE_ROLE_KEY;
 const NYLAS_KEY       = process.env.NYLAS_PRODUCTION_KEY || process.env.NYLAS_API_KEY;
-// â¬¡B:core.tools.schedule:FIX:calendar_grant_lives_on_production_not_sandbox:20260714â¬¡
+// ⬡B:core.tools.schedule:FIX:calendar_grant_lives_on_production_not_sandbox:20260714⬡
 // Same fix as the aibebase source: the real calendar grant (env-driven, verified
 // valid) only resolves against the PRODUCTION Nylas key. Preferred here without touching
 // NYLAS_API_KEY, which other paths in this world may depend on staying as-is.

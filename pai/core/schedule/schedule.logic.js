@@ -1,21 +1,21 @@
-// â¬¡B:AIR:REACH.SCHEDULE:CODE:scheduling.per_ham.booking:reach.schedule:T10:v2.0.0:20260606â¬¡
+// ⬡B:AIR:REACH.SCHEDULE:CODE:scheduling.per_ham.booking:reach.schedule:T10:v2.0.0:20260606⬡
 //
 // DOCTRINE (entry clause): this schedule logic is never an entry point of its own. It runs
 // inside the one PAI cycle, whose entry is always A'NEW through the ABAHAM door -- the
 // calendar_read tool calls these helpers from inside that cycle, never from a side gate.
 //
-// v2 â addresses every real failure from v1:
+// v2 — addresses every real failure from v1:
 //   1. HAM bleed: NO hardcoded grant IDs. No fallback to any one HAM's calendar for another HAM.
 //      Returns 503 if no grant bead found. Isolation guaranteed at DB level via Accept-Profile.
-//   2. Slot source: reads RADAR.{uid}.event.* beads from ham_{uid}.abacia â the brain already
+//   2. Slot source: reads RADAR.{uid}.event.* beads from ham_{uid}.abacia — the brain already
 //      has all calendar events stamped by RADAR. No Nylas API call for availability.
 //   3. IMAN notification: native https, no execFile curl hack.
 //   4. Privacy: event titles never exposed to the booker. Only slot windows returned.
 //   5. CAL bead fallback path: reads CAL.{ham}.availability.{window} first when stamped,
 //      falls back to RADAR events while global builds the loop.
 //
-// ROUTING: msria.org/schedule/{uid} â REACH â ham_{uid}.abacia â slots â response
-// HAM ISOLATION: every ABACIA read uses Accept-Profile: ham_{uid} â scoped at DB level.
+// ROUTING: msria.org/schedule/{uid} → REACH → ham_{uid}.abacia → slots → response
+// HAM ISOLATION: every ABACIA read uses Accept-Profile: ham_{uid} — scoped at DB level.
 
 const https = require('https');
 const crypto = require('node:crypto');
@@ -28,14 +28,14 @@ const crypto = require('node:crypto');
 const ABA_SERVER_URL = process.env.ABA_SERVER_URL || '';
 const ABA_SERVER_SRK = process.env.ABA_SERVER_SERVICE_ROLE_KEY;
 const NYLAS_KEY      = process.env.NYLAS_PRODUCTION_KEY || process.env.NYLAS_API_KEY;
-// â¬¡B:core.schedule.logic:FIX:calendar_grant_lives_on_production_not_sandbox:20260714â¬¡
+// ⬡B:core.schedule.logic:FIX:calendar_grant_lives_on_production_not_sandbox:20260714⬡
 // Found live tonight: the owner's real calendar grant (env-driven, verified valid)
 // only resolves against the PRODUCTION Nylas key, not NYLAS_API_KEY (sandbox), which other
 // systems in this codebase depend on staying sandbox for their own grants (BDIF/GMG/etc).
 // So this file prefers NYLAS_PRODUCTION_KEY specifically for calendar ops and never
 // touches the shared NYLAS_API_KEY other paths rely on.
 const NYLAS_HOST     = 'api.us.nylas.com';
-// CLAUDETTE grant â read from env. Never hardcoded here.
+// CLAUDETTE grant — read from env. Never hardcoded here.
 
 // All scheduling preferences are read per-HAM from the ham.prefs bead.
 // No hardcoded values. Defaults below are fallback-only when the bead is absent.
@@ -66,7 +66,7 @@ function cancelled(extra) {
   return Object.assign({ ok:false, reason:'voice_turn_cancelled' }, extra || {});
 }
 
-// âââ helpers ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
 function hamSchema(uid) {
   return `ham_${uid.toLowerCase()}`;
@@ -89,7 +89,7 @@ function parseBody(req) {
   });
 }
 
-// All ABACIA reads scoped to the HAM's schema via Accept-Profile â no cross-HAM access possible
+// All ABACIA reads scoped to the HAM's schema via Accept-Profile — no cross-HAM access possible
 function abaGet(schema, path, options) {
   return new Promise((resolve, reject) => {
     if (!ABA_SERVER_URL) return reject(new Error('ABA_SERVER_URL not configured'));
@@ -212,7 +212,7 @@ function verifiedScheduleStamp(response, source, exactContent) {
       ? exactContent : JSON.stringify(exactContent));
 }
 
-// â¬¡B:core.schedule.logic:EXCEPTION:transactional_status_email_boundary:20260715â¬¡
+// ⬡B:core.schedule.logic:EXCEPTION:transactional_status_email_boundary:20260715⬡
 // Booking status mail is a fixed transactional receipt, not generative A'NU
 // speech. The exception is narrow: the email must resolve back to this HAM,
 // the final kill switch must be readable and clear, exact subject/body/target
@@ -263,9 +263,9 @@ async function imanNotify(uid, grantId, toEmail, subject, htmlBody, sourceKey, o
   return { ok:true, messageId:messageId, requestId:requestId, cycleId:cycleId };
 }
 
-// âââ per-HAM data reads from ABACIA ââââââââââââââââââââââââââââââââââââââââââ
+// ─── per-HAM data reads from ABACIA ──────────────────────────────────────────
 
-// Read ham.settings from ham_{uid}.abacia â key locked by global
+// Read ham.settings from ham_{uid}.abacia — key locked by global
 async function getHamSettings(uid) {
   const DEFAULTS = {
     background: 'pink-smoke', backgroundMode: 'fixed',
@@ -284,7 +284,7 @@ async function getHamSettings(uid) {
   return DEFAULTS;
 }
 
-// Read ham.prefs from ABACIA â all scheduling preferences live here, not in code
+// Read ham.prefs from ABACIA — all scheduling preferences live here, not in code
 async function getHamPrefs(uid) {
   try {
     const r = await abaGet(hamSchema(uid),
@@ -299,8 +299,8 @@ async function getHamPrefs(uid) {
 }
 
 
-// Read calendar grant from ham_{uid}.abacia â source=nylas.grant.calendar
-// NO hardcoded fallback. Returns null if not found â caller returns 503.
+// Read calendar grant from ham_{uid}.abacia — source=nylas.grant.calendar
+// NO hardcoded fallback. Returns null if not found → caller returns 503.
 // This is the HAM bleed fix: if no grant bead exists for this HAM, we stop.
 async function getCalendarGrant(uid, options) {
   try {
@@ -321,7 +321,7 @@ async function getCalendarGrant(uid, options) {
   return null;
 }
 
-// Read HAM's email for notifications â source=ham.settings or nylas.grant.calendar
+// Read HAM's email for notifications — source=ham.settings or nylas.grant.calendar
 async function getHamEmail(uid) {
   try {
     const r = await abaGet(hamSchema(uid),
@@ -335,7 +335,7 @@ async function getHamEmail(uid) {
 
 // Read RADAR event beads from ham_{uid}.abacia
 // These are the HAM's actual calendar events, already stamped by RADAR.
-// Titles are NOT returned to the booker â only start/end times for slot computation.
+// Titles are NOT returned to the booker — only start/end times for slot computation.
 async function getRadarEvents(uid) {
   const now   = new Date();
   const limit = 200;
@@ -399,9 +399,9 @@ async function isExpectedBooker(uid, bookerEmail, bookerName) {
   return false;
 }
 
-// âââ slot computation from RADAR events âââââââââââââââââââââââââââââââââââââââ
+// ─── slot computation from RADAR events ───────────────────────────────────────
 
-// DST-safe slot computation â uses Intl.DateTimeFormat to convert wall-clock biz hours to UTC
+// DST-safe slot computation — uses Intl.DateTimeFormat to convert wall-clock biz hours to UTC
 // No hardcoded timezone offset. Reads prefs for bizHours, slotDuration, daysAhead, weekendsOff.
 function wallToUTC(localDateStr, wallHour, tz) {
   const probe = new Date(`${localDateStr}T${String(wallHour).padStart(2,'0')}:00:00Z`);
@@ -469,15 +469,15 @@ async function writeBead(uid, source, content, tags, importance = 7, options) {
   }, options);
 }
 
-// âââ route handlers âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ─── route handlers ───────────────────────────────────────────────────────────
 
 async function handleAvailability(req, res, uid) {
   console.log(`[SCHED] Availability: uid=${uid}`);
   try {
-    // 1. Settings â from ham.settings bead
+    // 1. Settings — from ham.settings bead
     const settings = await getHamSettings(uid);
 
-    // 2. Calendar grant â hard fail if not found (no HAM bleed)
+    // 2. Calendar grant — hard fail if not found (no HAM bleed)
     const grant = await getCalendarGrant(uid);
     if (!grant) {
       console.error(`[SCHED] No calendar grant bead for uid=${uid}`);
@@ -488,10 +488,10 @@ async function handleAvailability(req, res, uid) {
       });
     }
 
-    // 3. Slots â read CAL bead first (global), fall back to RADAR events
+    // 3. Slots — read CAL bead first (global), fall back to RADAR events
     let slots = await getCalAvailability(uid);
     if (!slots) {
-      console.log(`[SCHED] CAL bead absent â computing from RADAR events`);
+      console.log(`[SCHED] CAL bead absent — computing from RADAR events`);
       const events = await getRadarEvents(uid);
       console.log(`[SCHED] RADAR: ${events.length} events for uid=${uid}`);
       slots = computeFreeSlots(events, -4); // timezone from ham.settings in future
@@ -519,7 +519,7 @@ async function handleBook(req, res, uid, options) {
       return reply(res, 400, { error: 'Required: bookerName, bookerEmail, slotStart, slotEnd' });
     }
 
-    // Grant â hard fail if not found
+    // Grant — hard fail if not found
     const grant = await getCalendarGrant(uid, options);
     if (await cancellationRequested(options)) {
       return reply(res, 409, { error:'voice_turn_cancelled' });
@@ -539,8 +539,8 @@ async function handleBook(req, res, uid, options) {
     });
 
     if (expected) {
-      // A â auto-confirm: create Nylas event, write bead, notify HAM
-      console.log(`[SCHED] Expected booker ${bookerEmail} â auto-confirming`);
+      // A — auto-confirm: create Nylas event, write bead, notify HAM
+      console.log(`[SCHED] Expected booker ${bookerEmail} — auto-confirming`);
       const eventPayload = {
         title: `1:1 - ${bookerName}`,
         when: { start_time: slotStart, end_time: slotEnd },
@@ -610,8 +610,8 @@ async function handleBook(req, res, uid, options) {
         message: `Your 1:1 is confirmed for ${startDT} EST.` });
 
     } else {
-      // B â cold: hold pending, notify HAM
-      console.log(`[SCHED] Cold booker ${bookerEmail} â holding for HAM`);
+      // B — cold: hold pending, notify HAM
+      console.log(`[SCHED] Cold booker ${bookerEmail} — holding for HAM`);
       const pendingId = `schedule.pending.${bookerEmail.replace(/[@.]/g, '_')}.${slotStart}`;
       const pendingContent = { bookerName, bookerEmail, slotStart, slotEnd,
         status: 'pending' };
@@ -642,7 +642,7 @@ async function handleBook(req, res, uid, options) {
   }
 }
 
-// âââ export âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ─── export ───────────────────────────────────────────────────────────────────
 
 async function handleScheduleRoute(req, res, pathname, method, options) {
   const m = pathname.match(/^\/api\/schedule\/([A-Z0-9]+)\/(availability|book|bookings|confirm|manager-auth)$/i);
@@ -657,12 +657,12 @@ async function handleScheduleRoute(req, res, pathname, method, options) {
   return false;
 }
 
-// â¬¡B:core.schedule.logic:WIRE:read_helpers_exported_for_calendar_tool:20260713â¬¡
+// ⬡B:core.schedule.logic:WIRE:read_helpers_exported_for_calendar_tool:20260713⬡
 // Wonder rehaul G3 (read side): the cycle needs to scan the HAM's calendar and find open
 // slots ("what's on Tuesday", "find me a haircut slot"). These read functions already
 // existed but were module-internal. Exporting them lets the calendar_read cycle tool
 // reuse the real, DST-safe logic instead of any parallel implementation.
-// â¬¡B:core.schedule.logic:WIRE:book_event_callable_for_calendar_tool:20260713â¬¡
+// ⬡B:core.schedule.logic:WIRE:book_event_callable_for_calendar_tool:20260713⬡
 // Wonder rehaul G3b (write side): handleBook above is built for EXTERNAL bookers (a 1:1
 // request with a participant). The HAM booking their OWN event (a haircut, a block) needs
 // a simpler callable: a title and a time on their own calendar, no external participant.
@@ -786,7 +786,7 @@ async function bookEvent(uid, opts) {
   } catch (e) { return { ok: false, reason: 'exception', error: e.message }; }
 }
 
-// â¬¡B:core.schedule.logic:BUILD:real_live_calendar_read:20260713â¬¡
+// ⬡B:core.schedule.logic:BUILD:real_live_calendar_read:20260713⬡
 // Founder: "did she actually check my calendar?" RADAR beads were empty, so free-slot picking
 // guessed a default working-hours block. This reads his REAL calendar live over Nylas (the same
 // grant and nylasReq path bookEvent uses), so busy times are real and a free slot is verified,
@@ -833,7 +833,7 @@ async function validateManagerToken(uid, token) {
   return false;
 }
 
-// âââ /bookings â returns pending and confirmed bookings for HAM âââââââââââââââ
+// ─── /bookings — returns pending and confirmed bookings for HAM ───────────────
 async function handleBookings(req, res, uid) {
   console.log(`[SCHED] Bookings list: uid=${uid}`);
   const token = req.headers['x-mgr-token'];
@@ -856,7 +856,7 @@ async function handleBookings(req, res, uid) {
   }
 }
 
-// âââ /confirm â HAM confirms or declines a pending booking ââââââââââââââââââââ
+// ─── /confirm — HAM confirms or declines a pending booking ────────────────────
 async function handleConfirm(req, res, uid, options) {
   options = options || (req && req.signal ? { signal:req.signal } : null);
   console.log(`[SCHED] Confirm: uid=${uid}`);
@@ -899,13 +899,13 @@ async function handleConfirm(req, res, uid, options) {
           Number(booking.slotEnd) <= Number(booking.slotStart)) {
         return reply(res, 422, { error:'Pending booking record is invalid' });
       }
-      // â¬¡B:core.schedule.logic:EXCEPTION:manager_confirmed_calendar_transaction:20260715â¬¡
+      // ⬡B:core.schedule.logic:EXCEPTION:manager_confirmed_calendar_transaction:20260715⬡
       // The authenticated manager is the decision-maker here. This fixed
       // transactional create therefore does not ask a model to rewrite names,
       // times, or participant addresses; it binds the exact provider artifact
       // and destination to one permanent claim and requires a positive event ID.
       const eventPayload = {
-        title: `1:1 â ${booking.bookerName}`,
+        title: `1:1 — ${booking.bookerName}`,
         when: { start_time: booking.slotStart, end_time: booking.slotEnd },
         participants: [{ email: booking.bookerEmail, name: booking.bookerName }],
         description: 'Confirmed via msria.org/schedule manage panel.',
@@ -972,7 +972,7 @@ async function handleConfirm(req, res, uid, options) {
 }
 
 
-// âââ /manager-auth â validates manager token against ham.prefs bead âââââââââ
+// ─── /manager-auth — validates manager token against ham.prefs bead ─────────
 async function handleManagerAuth(req, res, uid) {
   try {
     const body  = await parseBody(req);
@@ -987,7 +987,7 @@ async function handleManagerAuth(req, res, uid) {
   }
 }
 
-// âââ read global.aesthetics.design_tokens bead âââââââââââââââââââââââââââââââ
+// ─── read global.aesthetics.design_tokens bead ───────────────────────────────
 async function getDesignTokens(uid) {
   try {
     const r = await abaGet(hamSchema(uid),
