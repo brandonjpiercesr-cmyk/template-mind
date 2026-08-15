@@ -1,0 +1,20 @@
+# ⬡B:gitattributes:FIX:her_voice_must_be_reviewable:20260815⬡
+# pai/core/persona.js carries two deliberate sentinel bytes:
+#   var HOLD_OPEN = '\x00', HOLD_CLOSE = '\x01';
+# used by renameRetiredOrgans to fence spans during replacement. Git's binary
+# heuristic sees the NUL and stops diffing the whole file, so a 775 byte change
+# to it reported as "Bin 19095 -> 19870 bytes, 0 insertions(+), 0 deletions(-)".
+#
+# The consequence, found 20260815: the file that holds her voice and her
+# self-knowledge could not be diffed, could not be read in a pull request, and
+# every edit to it landed unreviewable. A source file nobody can review is a
+# place a cold hand can write in her name and no critic would ever see it, which
+# is the exact failure THE PEN ON HER MIND doctrine exists to stop.
+#
+# Marking source as text restores the diff without touching the sentinels.
+*.js   text diff
+*.mjs  text diff
+*.cjs  text diff
+*.json text diff
+*.md   text diff
+*.yml  text diff
