@@ -508,6 +508,15 @@ function employmentPrompt(record, truth) {
         '. Use only the exact evidence in this request.'
       : (recent.length ? recent.join('\n')
         : '- AVAILABLE, SUCCESSFUL EMPTY. No prior cycle rows matched.'),
+    (!truth.policy_excluded && truth.partial)
+      ? '- PARTIAL READ: not every recent-truth query completed'
+        + ((Array.isArray(truth.failures) && truth.failures.length)
+          ? ' (' + truth.failures.map(function (failure) {
+            return clean(failure && failure.reason, 120) || 'reason unrecorded';
+          }).join('; ') + ')' : '')
+        + '. The rows above are what carried through, not the whole record. Never treat a row '
+        + 'you do not see here as proof it does not exist, and say plainly if this gap matters.'
+      : '',
     'This wake record is internal context. Never narrate Agent FIND, registry ids, policies, or '
       + 'cycle rows to the person. Use them to do the job, and return through the registered gate.',
     ''
@@ -575,9 +584,22 @@ async function bindWall(input, options) {
     return {ok:false,available:false,
       reason:clean(recent && recent.reason || 'agent_find_recent_truth_unavailable', 160)};
   }
-  if (recent.partial === true || (Array.isArray(recent.failures) && recent.failures.length)) {
-    return {ok:false,available:false,reason:'agent_find_recent_truth_partial'};
-  }
+  // ⬡B:core.agent_find:FIX:a_partial_recent_truth_read_may_not_cost_her_the_whole_cycle:20260815⬡
+  // This is the SAME disease the founder-felt 20260802 outage cured for the FCW wall directly
+  // above, left uncured here. A slow or failing recent-truth query does not make the rows that
+  // DID arrive false; it makes the read incomplete. Refusing over it was not a small drop:
+  // bindWall returning ok:false is the wake boundary, and tool.loop refuses every non-ok wall
+  // before its first provider call, so one thin sub-read was killing the entire cycle.
+  //
+  // Carry, never classify (founder Doctrine Drop 20260815): the gap rides through NAMED instead.
+  // recentTruthRecord already threads partial and failures, and employmentPrompt already renders
+  // "(PARTIAL READ)" beside the rows that did arrive; that carrying code was unreachable because
+  // this refusal fired first. No row is dropped and the section is never withheld for being
+  // incomplete. She is told plainly what did not complete and judges from there.
+  //
+  // The branch ABOVE stays refusing on purpose, and it is a different fact, exactly as this
+  // file's own 20260802 comment already draws the line: when available is false there are no
+  // rows at all to carry, so there is nothing to hand her but a refusal.
   const employment = employmentRecord(registry, target, providerSeat);
   const truth = recentTruthRecord(recent);
   const wall = wallRecord(fcw);
