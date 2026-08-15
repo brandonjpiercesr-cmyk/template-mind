@@ -3346,6 +3346,15 @@ async function defaultWritStage(ctx) {
   };
   if (ctx.context && typeof ctx.context.deliberate === 'function') writContext.deliberate = ctx.context.deliberate;
   if (ctx.context && ctx.context.brain) writContext.brain = ctx.context.brain;
+  // ⬡B:core.pai_outbound_council:WIRE:the_name_wake_reaches_the_mind_that_judges_it:20260815⬡
+  // A fact carried by cold code, never a verdict. core/persona.js used to REPLACE an internal
+  // organ name in her finished answer, which also renamed the reader's own daughter, because a
+  // word list cannot tell NOVA the organ from Nova the child. WRIT reads the whole sentence and
+  // may keep the name or rewrite it; overruled_hints on this stage's evidence records which way
+  // it went, so "the LLM decided, the regex did not" is provable rather than asserted.
+  if (ctx.context && ctx.context.internal_name_wake) {
+    writContext.internal_name_wake = ctx.context.internal_name_wake;
+  }
   var writBankOptions = {};
   if (ctx.context && ctx.context.brain) writBankOptions.brain = ctx.context.brain;
   var checkedAndBanked = await writ.writCheckAndBank(ctx.hamUid, ctx.answer,

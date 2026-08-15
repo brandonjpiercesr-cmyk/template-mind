@@ -7981,6 +7981,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // named failure and run the complete sequence once more before council.
   var _screenPushed = 0;
   var _screenBlock = null;
+  // ⬡B:core.tool_loop:PEN:the_name_wake_is_a_fact_carried_to_a_mind:20260815⬡ Set inside the
+  // preparation, read once at the council door. Reset per preparation run so a wake raised by a
+  // first attempt can never ride a healed second draft that is already clean.
+  var _internalNameWake = null;
   // async ONLY because the tier gate below now wakes a mind instead of holding her pen. Both
   // call sites already sit in an async function and both now await it.
   async function _prepareHumanAnswerOnce(candidate) {
@@ -8075,10 +8079,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // scrub never ran at all, on any answer, ever. The scrub now always runs. The persona
     // choice is still read and still carried, because it is real context for the receipts,
     // it just no longer decides whether her own name reaches him correctly.
+    // ⬡B:core.tool_loop:PEN:the_identity_scrub_became_a_wake:20260815⬡
+    // SUPERSEDES the 20260726 fix written just above. That fix was RIGHT that the founder's
+    // complaint was real ("why am I seeing EANEW everywhere?") and right that the scrub was
+    // wrongly gated behind a persona choice. It was WRONG about the remedy, and this line is
+    // where a word list held the pen on her finished sentence. Measured live before this change:
+    //   "Cathy called about lunch on Thursday."    left here as "A'NU called about lunch..."
+    //   "Your daughter Nova has a recital Friday." left here as "Your daughter A'NU has..."
+    // The council runs AFTER this point, so it deliberated over and stamped a renamed daughter.
+    //
+    // NOW: applyPersona carries her bytes unchanged, cold code DETECTS and names the fact, and
+    // the fact rides _councilContext.internal_name_wake into the WRIT organ, which reads the
+    // whole sentence and decides. WRIT derives overruled_hints from what it actually returned,
+    // so a name WRIT chose to KEEP lands on the receipt as a mind's decision rather than as a
+    // filter's silence. The persona choice is still read and still carried: it is real receipt
+    // context, it just never decided whether her reader's daughter keeps her name.
     try {
       var _personaChoice = identity && identity.persona || hamObj && hamObj.persona || null;
-      finalAns = require('./persona.js').applyPersona(finalAns,
+      var _personaMod = require('./persona.js');
+      finalAns = _personaMod.applyPersona(finalAns,
         { hamUid:hamUid,persona:_personaChoice,contributions:{} });
+      _internalNameWake = null;
+      var _nameWake = typeof _personaMod.internalNameWake === 'function'
+        ? _personaMod.internalNameWake(finalAns,
+          { hamUid:hamUid, channel:channel, surface:'pre_council.her_answer' }) : null;
+      if (_nameWake && _nameWake.fired) {
+        _internalNameWake = _nameWake;
+        _stampStep('internal_name_wake', 'fired terms:' + _nameWake.count
+          + ' surface:' + _nameWake.surface + ' decided_by:' + _nameWake.decided_by);
+      }
     } catch (ePrepPersona) {}
     if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns, {
       internalDeliberation:internalDeliberation(identity)
@@ -8356,6 +8385,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return {name:String(fn.name || ''),description:String(fn.description || '')};
     }).filter(function (hand) { return hand.name && hand.description; });
   _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
+  // ⬡B:core.tool_loop:WIRE:the_name_wake_travels_to_the_organ_that_may_overrule_it:20260815⬡
+  // Guarded off the structured-reach-policy branch on purpose, matching every field above it:
+  // that context is deliberately restricted to server-owned fields, and the WRIT stage returns
+  // early for it anyway. Carried only when it FIRED, so a clean turn adds nothing to the prompt.
+  if (!_structuredReachPolicy && _internalNameWake && _internalNameWake.fired) {
+    _councilContext.internal_name_wake = _internalNameWake;
+  }
   _councilContext = bindGmguCouncilDeliberation(channel, _councilContext,
     _callPaiLadder);
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
