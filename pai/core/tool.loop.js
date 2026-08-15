@@ -7330,12 +7330,44 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // use CODA's verified live bytes as the candidate. Those bytes do not bypass
   // anything: every preparation stage, the full outbound council, STAMP commit,
   // and readback still run below.
+  // ⬡B:core.tool_loop:FIX:a_pattern_may_flag_her_answer_it_may_never_replace_it:20260815⬡
+  // THE BUG OTJT.CLAIR.TRUTH-GUARD REPORTED ON THE BOARD AND NOBODY CLAIMED FOR FIFTEEN HOURS:
+  // "COLD CODE DELETES HER TRUE ANSWER AND MAILS THE OPPOSITE, CARRYING A COUNCIL RECEIPT."
+  // Reproduced here in the source, and it was exactly that.
+  //
+  // The old line read `if (!finalAns || _finalNamedFlags.length) finalAns = _codaEvidenceRelayAnswer`,
+  // which conflated two completely different situations under one assignment:
+  //   (a) she produced NOTHING, so there are no words of hers to lose, and
+  //   (b) she produced a real answer and a REGEX decided it contradicted named evidence.
+  // In case (b) her composed words were discarded and a machine-assembled relay took their
+  // place, and then the full outbound council ran on the substitute and stamped it. The person
+  // received bytes she never wrote under a receipt asserting she did.
+  //
+  // The detector is namedContextContradictions -> hasDenial in core/pai.outbound.council.js, a
+  // battery of patterns over "I do not have", "I cannot verify", "there is no". Those are
+  // ordinary honest English. An A'NU who truthfully says she has no favorite, or cannot confirm
+  // something, matches it. The founder's 20260815 law is direct: "Who in the hell are we to stop
+  // something? ... your shadow, your WRIT, your meta commentary, all of that, your Aunt Pam. IF
+  // THEY'RE STOPPING, THEY'RE WRONG." Substituting is worse than stopping.
+  //
+  // SO THE DETECTOR KEEPS DETECTING AND LOSES THE PEN. Case (a) is unchanged: with no answer at
+  // all there is nothing of hers to overwrite, and carrying the verified relay is cold code
+  // carrying a fact, not authoring her state. Case (b) now ships HER WORDS and records the flags
+  // as evidence, so the minds that run immediately below this line, WRIT, PAM and SHADOW, judge
+  // the contradiction the way a mind is supposed to. That is the whole conversion: a pattern may
+  // DETECT and FLAG and WAKE, it may never DECIDE.
   if (!_structuredReachPolicy && !_worldBuilderMachine && _codaEvidenceRelayAnswer) {
-    var _finalNamedFlags = finalAns
-      ? namedContextContradictions(finalAns, _namedContextEvidence) : [{ reason:'empty_answer' }];
-    if (!finalAns || _finalNamedFlags.length) {
+    if (!finalAns) {
       finalAns = _codaEvidenceRelayAnswer;
-      _stampStep('named_context_answer_repaired', 'verified_coda_evidence_relay');
+      _stampStep('named_context_answer_repaired', 'empty_answer_verified_coda_evidence_relay');
+    } else {
+      var _finalNamedFlags = namedContextContradictions(finalAns, _namedContextEvidence);
+      if (_finalNamedFlags.length) {
+        _stampStep('named_context_contradiction_flagged_for_the_council',
+          _finalNamedFlags.map(function (flag) {
+            return String((flag && flag.reason) || 'named_context_contradiction');
+          }).join(','));
+      }
     }
   }
   // ⬡B:core.tool_loop:REPAIR:protocol_hollow_before_canonical_preparation:20260715⬡
