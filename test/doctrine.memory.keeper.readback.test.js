@@ -284,3 +284,51 @@ test('ordinary user-facing success requires the exact turn record readback, not 
       {council_context:{mode:'internal_deliberation'}}, {}), true, channel);
   }
 });
+
+// ⬡B:tests.doctrine.memory.keeper.readback:PROOF:pen_on_her_mind_fence_pinned:20260815⬡
+// Founder doctrine THE PEN ON HER MIND (20260815): "FENCE THE READ-BACK FIRST. One fix
+// contains the whole class... CARRY, NEVER CLASSIFY. If you write a whitelist of trusted
+// sources that sorts her rows into hers and not-hers, YOU JUST BECAME THE NASTY COUGH ONE
+// LAYER UP. Pin that refusal in a test."
+//
+// The fence itself landed in core/fcw.builder.js (#518, mirror of anew #2146). Its pin did
+// not travel with it, so this template shipped the fence with nothing guarding it: the next
+// coder could add the source allowlist the doctrine forbids and every gate here would stay
+// green. This is that guard.
+//
+// What is deliberately NOT asserted here, and why: the builder currently renders a
+// source-less row as "written by an unnamed writer". The doctrine names that exact shape as
+// a trap ("do not invent an unstamped writer for a NULL column, say (no writer stamp on the
+// row)"). Pinning the current string would make this test the nasty cough one layer up,
+// since the doctrine also rules that "a test that pins the cold behavior is also nasty
+// cough." So the NULL wording is left unpinned and is carried as an open finding instead.
+// core/fcw.builder.js is a pai-sync-check synced pair, so it cannot be corrected on one
+// side alone; the correction must land byte-identical with anew in the same window.
+test('the pen-on-her-mind fence: every RECENT CONTEXT line names its writer, she is handed the judgment, and her rows are never sorted', () => {
+  const builderSource = fs.readFileSync(BUILDER_PATH, 'utf8');
+
+  assert.match(builderSource, /\| written by /,
+    'every context line must carry the writer that stamped the row as a fact on the line');
+
+  assert.match(builderSource,
+    /A writer name is the lane or module that stamped the row, not proof of who/,
+    'the mind must be told plainly that a writer name is the module, never proof of authorship');
+
+  assert.match(builderSource, /Judge each line by its named writer/,
+    'the reading mind judges which rows are hers; the builder must never judge for her');
+
+  assert.match(builderSource, /never say one to the person/,
+    'the narration fence: writer names are internal and are never spoken to a person');
+
+  // CARRY, NEVER CLASSIFY. The named trap: a source list that sorts her rows into hers and
+  // not-hers is the same cold hand one layer up, so the builder must never grow one.
+  assert.doesNotMatch(builderSource,
+    /(TRUSTED|HER_SOURCES|AUTHENTIC_SOURCES|REAL_SOURCES|MIND_SOURCES)\s*=/,
+    'carry, never classify: the wall must not grow an allowlist that sorts her rows');
+
+  // Never filter a row, never cap her read.
+  assert.match(builderSource, /contextStr = allContext\.map\(/,
+    'the wall maps every fetched row; it must not filter them');
+  assert.doesNotMatch(builderSource, /allContext\s*=\s*allContext\.slice\(/,
+    'the wall must not cap her read');
+});
