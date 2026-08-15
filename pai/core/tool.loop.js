@@ -1176,15 +1176,64 @@ var UNVERIFIED_ACTION_CLAIM = /\bI(?:'ve| have)?\s+(?:set|created|scheduled|adde
 // event half of the check could never be satisfied, and every honest confirmation of a REAL
 // booking ("I scheduled that event for Thursday") tripped the guard and was answered by telling
 // the person their real calendar entry did not exist. Naming the tool that actually exists.
-var ACTION_CLAIM_TOOLS = ['create_reminder', 'calendar_book'];
+// ⬡B:core.tool.loop:FIX:each_claimed_action_needs_its_own_tool:20260815⬡
+// Codex P1 on the merged #2164: checking "did ANY of these tools run" let one real action cover
+// a different unearned claim. A turn that genuinely called calendar_book and then also said "I
+// have set a reminder" passed clean, because calendar_book was in the list, and the mirror case
+// let create_reminder vouch for an event that was never booked. These tools have different
+// effects on a person's real world, so each claimed action is matched to the tool that actually
+// performs it, and the guard fires when ANY claimed action is missing its own tool.
+var ACTION_CLAIM_KINDS = [
+  { kind: 'reminder', claim: /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?reminder\b/i,
+    tool: 'create_reminder' },
+  { kind: 'event', claim: /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:calendar|event)\b/i,
+    tool: 'calendar_book' }
+];
+
+// ⬡B:core.tool.loop:MERGE:the_corroboration_half_belongs_to_another_lane:20260815⬡
+// THIS FUNCTION IS NOT MINE. It is the work of the lane that opened anew#2162 (session
+// 01Jq3vNB), carried here verbatim in behavior and credited by name. Their words for why it is a
+// FACT and not a meaning call, which is the load-bearing argument: priorTurns is the real,
+// already-guard-passed conversation history, so a false claim in an earlier turn would ALREADY
+// have been rewritten before it was stored; if the same claim phrasing survives unaltered in a
+// prior ASSISTANT turn, the tool truly fired back then and this turn is a corroborated echo, not
+// a hallucination. It carries that fact and never guesses at tense, intent, or meaning. Only her
+// own answer can corroborate: a prior USER turn repeating the words proves nothing.
+//
+// HOW IT GOT HERE, said plainly because it was my mistake. Their fix reached template-mind main
+// through the mirror sync in template-mind#534, while their anew PR #2162 closed unmerged, so the
+// two worlds were already split before I arrived. My own mirrors then copied my anew file whole
+// over the template half and DELETED their function from template-mind main. That is the clobber
+// the standing law forbids. The repair is not to revert mine or re-land theirs alone: the two
+// halves fix different ends of the same bug and belong together, which their own PR anticipated
+// when it left the cold replacement sentence as debt "scoped to the larger PAI_OUTPUT_REPAIR_
+// WONDER mind-wake" -- that wake is exactly what the conversion below is.
+//
+// COMBINED, THE GUARD IS STRICTLY BETTER THAN EITHER HALF: a corroborated echo of her own real
+// earlier work never fires the guard at all and costs no model call, and anything that does fire
+// wakes her instead of being answered for. Their cold denial sentence is retired here, which is
+// the outcome their PR said it was waiting for.
+function reminderClaimCorroboratedByHistory(priorTurns) {
+  return Array.isArray(priorTurns) && priorTurns.some(function (t) {
+    return t && t.role === 'assistant' && typeof t.content === 'string' &&
+      UNVERIFIED_ACTION_CLAIM.test(t.content);
+  });
+}
 
 // PURE COLD DETECTION, no judgment about what she meant. True only when the draft carries the
-// shape of an action claim AND no tool that could have performed it ran this turn.
-function unverifiedActionClaimShape(answer, toolsUsed) {
+// shape of an action claim, no tool that could have performed it ran this turn, AND her own
+// history does not already corroborate the claim.
+function unverifiedActionClaimShape(answer, toolsUsed, priorTurns) {
   if (!answer || typeof answer !== 'string') return false;
   if (!UNVERIFIED_ACTION_CLAIM.test(answer)) return false;
   var used = Array.isArray(toolsUsed) ? toolsUsed : [];
-  return ACTION_CLAIM_TOOLS.every(function (t) { return used.indexOf(t) === -1; });
+  // Every action the draft actually claims must be backed by the tool that performs THAT action.
+  // A sentence claiming both needs both; one real action never vouches for the other.
+  var unearned = ACTION_CLAIM_KINDS.some(function (k) {
+    return k.claim.test(answer) && used.indexOf(k.tool) === -1;
+  });
+  if (!unearned) return false;
+  return !reminderClaimCorroboratedByHistory(priorTurns);
 }
 
 // THE WAKE. Carries the fact and her own sentence to a named seat and returns HER answer.
@@ -7498,7 +7547,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // (hollow_protocol_answer_unrepaired). Silence is honest; a coder sentence in her voice is not,
   // and a fallback line here would rebuild the exact defect this conversion removes.
   if (!_structuredReachPolicy && !_worldBuilderMachine
-      && unverifiedActionClaimShape(finalAns, tools)) {
+      && unverifiedActionClaimShape(finalAns, tools, priorTurns)) {
     _stampStep('hallucinated_action_detected','reminder/event claim shape with no matching tool call, waking her');
     // No seat is passed on purpose: _callPaiLadder already defaults to this turn's own resolved
     // seat, and because it merges caller options OVER that default, naming a seat here would
@@ -9238,7 +9287,7 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,
   _noNewEvidenceLimit,_repeatQuestionLimit,
   paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
-  unverifiedActionClaimShape,repairUnverifiedActionClaim,
+  unverifiedActionClaimShape,repairUnverifiedActionClaim,reminderClaimCorroboratedByHistory,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
