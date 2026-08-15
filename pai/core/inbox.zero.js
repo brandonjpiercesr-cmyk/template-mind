@@ -819,7 +819,15 @@ async function emailFounderReport(HAM, config, decisions, packet, report, opts) 
     importance: importance, confidence: 0.92
   };
   var ruling;
-  try { ruling = await reachOrgan.judgeExit(finding, {}); } catch (e) { ruling = { ok: false, reason: 'reach_organ_threw' }; }
+  // ⬡B:core.inbox.zero:FIX:always_reach_needs_the_ham_to_read:20260815⬡
+  // Founder doctrine THE PEN ON HER MIND, 20260815: the reach organ's always-reach
+  // categories are no longer a hardcoded person in a prompt; they are read per call from
+  // THIS HAM's own CORE_DIRECTIVE beads. Passing {} left the organ with no world to read,
+  // so it fell to its empty set and forced call_worthy false on every finding. That is
+  // fail-closed rather than a leak, but it also meant a real standing directive could
+  // never reach anyone. HAM is this function's first parameter, so the organ gets the
+  // world it is judging for.
+  try { ruling = await reachOrgan.judgeExit(finding, { hamUid: HAM }); } catch (e) { ruling = { ok: false, reason: 'reach_organ_threw' }; }
   var channel = (ruling && ruling.ok && ruling.exit) ? ruling.exit : null;
   var audit = { emailed: false, channel: channel, reach_source: ruling && ruling.source || null,
     reach_reason: ruling && (ruling.reasoning || ruling.reason) || null, send_reason: null };
