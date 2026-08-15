@@ -4016,6 +4016,43 @@ async function runPreWriteCouncil(input, injected) {
   var readerOut = null;
   var voiceOut = null;
 
+  // ⬡B:core.pai_outbound_council:WIRE:cold_reports_into_the_pre_write_minds:20260814⬡
+  // FOUNDER LAW, Pre Governor Doctrine (Advisor Strategy Improvement), verbatim:
+  // "They run before the writing occurs, and they run after. Right. So it's a little bit
+  // of both, and it is truly a wonder because it's an LLM really deciding... So, no COLD
+  // CODE that checks for EM dashes is running by itself. It just flags and alerts the LLM
+  // so they can make intelligent decisions."
+  //
+  // The 20260814 clean-speech conversion wired the wake to the AFTER side only, so a wake
+  // could reach WRIT once she had already written and never reached her before she wrote.
+  // That was half the law. This is the other half.
+  //
+  // What cold code does here and nowhere else: it reads the INBOUND, reports the fact that
+  // profanity is present, and stops. It does not say what she should do about it, does not
+  // rank it, does not gate the turn, and does not touch a single byte she will write. The
+  // fact rides in on `relationship`, which is the one string both pre-write organs already
+  // read, so the reader brief and the voice brief each get it and each decide for
+  // themselves. Her floor (never curse at the person, never at the founder, no matter how
+  // they speak to her) is stated as the standing law it is, and the judgment about THIS
+  // relationship is handed to the mind, because a person swearing at a situation in front
+  // of someone they trust is not the same event as a person swearing at her.
+  var cleanWake = null;
+  try {
+    cleanWake = require('./clean.speech.js').cleanSpeechFlag(inbound, {
+      channel: channel, hamUid: hamUid, surface: 'pre_write.inbound' });
+  } catch (eWake) { cleanWake = null; }
+  if (cleanWake && cleanWake.fired) {
+    relationship = (relationship ? relationship + '\n' : '')
+      + 'CLEAN SPEECH WAKE. A fact carried in by cold code, not a judgment and not an '
+      + 'instruction about what to write: the inbound message contains profanity ('
+      + cleanWake.count + ' term' + (cleanWake.count === 1 ? '' : 's') + '). The standing '
+      + 'founder floor is that she never curses at the person and never at the founder, no '
+      + 'matter how they speak to her. How that floor is carried in THIS relationship, on '
+      + 'THIS turn, is yours to decide: heat aimed at a situation is not heat aimed at a '
+      + 'person, meeting someone plainly is not cursing back, and sanitizing the warmth out '
+      + 'of a real answer would be its own failure.';
+  }
+
   var readerStart = Date.now();
   try {
     var readerMod = deps.readerBrief
@@ -4054,12 +4091,39 @@ async function runPreWriteCouncil(input, injected) {
     blocks.push(voiceOut.contextBlock);
   }
 
+  // ⬡B:core.pai_outbound_council:FIX:the_wake_survives_a_bypassed_pre_write_pass:20260814⬡
+  // Caught by a Codex review on #2141 and it was right. Both organs deliberately bypass on
+  // the live text wire (blooio) and on gmgu, returning live_text_uses_fcw_persona with zero
+  // model calls, because two paid pre-write passes measured 57 to 79 seconds of added
+  // latency before a single word was written. On those channels `blocks` is empty, so this
+  // returned ok:false with no context block, tool.loop injected nothing, and the wake
+  // reached no mind at all. The flag still said decided_by pending_reviewer, which made it
+  // a promise the path could not keep, and a receipt for something that never happened is
+  // the defect this estate keeps writing rulings about.
+  //
+  // The wake is a plain sentence of fact. Carrying it costs zero model calls, so it does
+  // not reintroduce the latency those bypasses exist to avoid, and the organs still bypass
+  // exactly as before. It rides as its own block so the writer, who is a mind, sees it on
+  // every channel including the ones where no paid brief runs.
+  if (cleanWake && cleanWake.fired) {
+    // One source for the wording, shared with the tool loop's ineligible path so the two
+    // cannot drift. See core/clean.speech.js#cleanSpeechWakeBlock.
+    try {
+      var wb = require('./clean.speech.js').cleanSpeechWakeBlock(inbound, {
+        channel: channel, hamUid: hamUid, surface: 'pre_write.inbound' });
+      if (wb && wb.block) blocks.push(wb.block);
+    } catch (eBlock) { /* the fact already rode in on relationship above */ }
+  }
+
   var contextBlock = blocks.join('\n\n');
   return {
     ok: blocks.length > 0,
     reason: blocks.length > 0 ? 'PRE_WRITE_BRIEFED' : 'pre_write_briefs_unavailable',
     contextBlock: contextBlock,
     passes: passes,
+    // The wake is returned as an auditable fact so a later reader can prove cold code
+    // reported in and never decided. Null when nothing fired, so a clean turn is silent.
+    cleanSpeechWake: (cleanWake && cleanWake.fired) ? cleanWake : null,
     briefs: {
       reader: (readerOut && readerOut.ok) ? readerOut.brief : null,
       voice: (voiceOut && voiceOut.ok) ? voiceOut.brief : null

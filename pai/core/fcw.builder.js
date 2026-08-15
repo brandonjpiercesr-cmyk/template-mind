@@ -566,8 +566,33 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   allContext = dedupeContextRows(allContext);
   // The wall carries every fetched row and its complete summary. Provider pagination controls
   // transport batches only; it does not become a hidden cognition or prompt ceiling here.
+  // ⬡B:core.fcw.builder:FIX:every_context_line_names_its_writer:20260815⬡
+  // Founder ruling 20260815, the pen on her mind: cold writers stamp RESULT beads at the
+  // reader importance floor (a template briefing, a scheduler retiring tasks, a catch
+  // block), and this map presented them identically to mind-authored records, so a machine
+  // byte replayed to her as her own remembered life. The SOURCE is the writer's name in
+  // this brain, so it rides on every line as a carried fact, and the RECENT CONTEXT
+  // heading below hands HER the judgment. Carry, never classify: no source list here
+  // decides which rows count as truly hers. Same fence as the new world's minute
+  // presenters (anew-world PR 321). This wall's line shape deliberately differs from
+  // core/agent.find.js and advisors/coding.js: here the writer fact is judgment-bearing
+  // (she is told to weigh each line by it), so it is set off in the bracket, not inlined.
+  // GAUNTLET ROUND, blind-critic findings applied: (1) for turn records the raw source is
+  // an opaque row address (pai.minutes.<ham>.<ms>) with zero authorship signal, and the
+  // real discriminator, the channel, already rides in the summary's [TURN <channel>]
+  // prefix, so those rows carry the one truthful writer name their contract proves: the
+  // memory keeper at the one turn exit. (2) the source is bounded to 120 chars so a
+  // 260-char provenance-bound source cannot become a per-line prefix on an uncapped
+  // wall. (3) the body no longer falls back to b.source, which the header now carries,
+  // so a summary-less row does not print its source twice as if it were content.
+  var _turnPrefix = require('./memory.keeper.js').MEMORY_CONTRACT.TURN_SOURCE_PREFIX;
   contextStr = allContext.map(function(b) {
-    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '') + '] ' + (b.summary||b.source||'');
+    var _src = String(b.source || '').slice(0, 120);
+    var _writer = _src.indexOf(_turnPrefix) === 0
+      ? 'the memory keeper, a real turn, channel on the line'
+      : (_src || 'an unnamed writer');
+    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '')
+      + ' | written by ' + _writer + '] ' + (b.summary || '');
   }).join('\n');
 
   // ⬡B:core.fcw.builder:WIRE:doctrine_in_fcw_20260701⬡
@@ -819,7 +844,13 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     'ROADMAP AND DOCTRINE (your world\'s current priorities):',
     _doctrineSection,
     '',
-    'RECENT CONTEXT (brain):',
+    'RECENT CONTEXT (brain): stamped records, each line naming the writer that put it '
+    + 'there. A writer name is the lane or module that stamped the row, not proof of who '
+    + 'authored the words: real turns arrive through the memory keeper with their channel '
+    + 'on the line, station results arrive through their stations, and some rows are '
+    + 'machine facts a template, a scheduler, or a retry stamped in. '
+    + 'Judge each line by its named writer. These writer names are internal; '
+    + 'use them to judge a line, never say one to the person.',
     _contextSection,
     '',
     'SEARCH FIRST, ALWAYS: whenever the person asks about anything specific you do not '

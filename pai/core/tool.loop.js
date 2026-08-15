@@ -5792,6 +5792,41 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         String(_preWriteBriefing.reason || 'unknown').slice(0, 80));
     }
   }
+
+  // ⬡B:core.tool_loop:WIRE:the_clean_speech_wake_is_not_gated_by_paid_pass_eligibility:20260814⬡
+  // Second Codex P2 on #2141, correct on both counts and accepted.
+  //
+  // (1) COVERAGE. preWriteCouncilEligible above returns false for an authenticated live
+  // voice turn and for every gmgu turn, so runPreWriteCouncil is never entered and the
+  // wake inside it never runs. That gate exists to avoid buying TWO PAID drafting briefs
+  // in front of a real-time writer, which is a real and measured latency problem. The wake
+  // is not a paid brief. It is one boolean and one sentence, zero model calls, so gating it
+  // behind an eligibility test built for paid passes was my mistake, and it silently left
+  // voice and gmgu with no before-write wake while the comment claimed every channel.
+  //
+  // (2) RECEIPT. The council returns cleanSpeechWake, and nothing read it and nothing
+  // persisted it, so no cycle record could show that cold code reported in. A claim in a
+  // comment with no durable fact behind it is the exact shape this estate keeps ruling
+  // against, and I wrote one of those rulings earlier today. The stamp below is the fact.
+  //
+  // Detection and injection are therefore routed separately from eligibility, exactly as
+  // the review asked. The paid organs still bypass wherever they bypassed before.
+  var _cleanWake = null;
+  try {
+    _cleanWake = require('./clean.speech.js').cleanSpeechWakeBlock(_exactUserMessage, {
+      channel: String(channel || ''), hamUid: hamUid, surface: 'pre_write.inbound' });
+  } catch (eCleanWake) { _cleanWake = null; }
+  if (_cleanWake && _cleanWake.fired) {
+    // When the council ran and already carried the block, do not say it twice.
+    var _wakeAlreadyCarried = !!(_preWriteBriefing && _preWriteBriefing.ok &&
+      String(_preWriteBriefing.contextBlock || '').indexOf('CLEAN SPEECH WAKE') !== -1);
+    if (!_wakeAlreadyCarried && _cleanWake.block) {
+      msgs.push({ role:'system', content:_cleanWake.block });
+    }
+    _stampStep('clean_speech_wake',
+      require('./clean.speech.js').cleanSpeechWakeReceipt(_cleanWake.flag,
+        _wakeAlreadyCarried ? 'pre_write_council' : 'direct_injection'));
+  }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{},
     cycleId:_cycleId,requestId:_requestId };
   _effectRuntime.gmguCurriculumProposal = gmguCurriculumProposalCapability(
