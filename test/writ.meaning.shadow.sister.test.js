@@ -271,7 +271,20 @@ test('an inherited cancelled meaning judgment releases C1 for the next turn',
   firstController.abort();
   const firstOut=await first;
   const secondOut=await second;
-  assert.equal(firstOut.reason,'writ_meaning_shadow_unavailable');
+  // ⬡B:core.pai.outbound.council:HEAL:the_starved_receipt_names_its_cause:20260815⬡
+  // RETIRED IN THE SAME COMMIT AS THE WRITER IT PINNED, per the 20260815 law that a test holding
+  // cold behavior in place is itself the nasty cough. This line asserted the blanket
+  // 'writ_meaning_shadow_unavailable', which said the judge did not run and refused to say why.
+  // meaningShadowUnavailability() now names the cause, and this test is the cancellation case: it
+  // calls firstController.abort() eleven lines up, so 'caller_cancelled' is what actually
+  // happened. A receipt that cannot tell a cancelled judgment from a dead seat, an out-of-credit
+  // seat or a timeout is the same defect as 'writ_meaning_shadow_packet_unbound' describing a
+  // demand and saying nothing about the supply, and that one hid a live outage for a full day.
+  // The FAMILY is asserted too, so widening the vocabulary can never quietly move this turn out
+  // of the starved class and into a clean pass.
+  assert.ok(firstOut.reason.startsWith('writ_meaning_shadow_unavailable'),
+    'the turn is still in the starved family: '+firstOut.reason);
+  assert.equal(firstOut.reason,'writ_meaning_shadow_unavailable_caller_cancelled');
   assert.equal(secondOut.ok,true,JSON.stringify(secondOut));
   assert.deepEqual(starts,[
     'request-template-cancel-first.writ-meaning-shadow',
