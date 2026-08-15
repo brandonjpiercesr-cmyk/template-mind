@@ -86,7 +86,7 @@ async function persist(bound,facts,owner,shadow,decision,options){
   const store=options.brain||require('./brain.client.js');
   try{
     await store.writeBead({hamUid:bound.ham_uid,agentGlobal:'PAI',source:source,type:TYPE,
-      content:content,summary:'A\'NU and PENNY SHADOW judged whether this turn should continue.',
+      content:content,summary:owner.reason,
       importance:7,edges:edges});
     const row=await store.findBySource(source,bound.ham_uid);
     const body=parse(row&&row.content);
