@@ -77,10 +77,26 @@ async function markDelivered(hamUid, moment) {
 // proof of who wrote them, so they read to the organ exactly like something she herself
 // remembered. Same per-row shape as the reference fence in core/fcw.builder.js. Doctrine-correct
 // fallback for a source-less row is "(no writer stamp on the row)", never an invented writer name.
+// ⬡B:stations:FIX:bound_the_bytes_mark_the_cut_never_drop_the_row:20260815⬡
+// A row's summary rode into the prompt unbounded. With a busy window a station could
+// serialize hundreds of long summaries into ONE model call, overflow the provider, and hit
+// its own catch path, which reports nothing found. The person then silently loses the whole
+// briefing or sweep, which is a worse and quieter failure than a trimmed one.
+// Bound the BYTES, never the ROWS: every row still rides, none is dropped or ranked away.
+// And the cut is MARKED, never silent. Cold code trimming a mind's stored words and handing
+// them on as whole is the same sin as editing her answer; saying plainly that the row was cut,
+// and by how much, carries the fact instead of hiding it.
+var ROW_SUMMARY_MAX = 400;
+function boundSummary(v) {
+  var s = String(v || '');
+  if (s.length <= ROW_SUMMARY_MAX) return s;
+  return s.slice(0, ROW_SUMMARY_MAX) + ' [row cut here at ' + ROW_SUMMARY_MAX + ' of '
+    + s.length + ' characters, the rest is in the record]';
+}
 function fenceLine(b) {
   var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
   return '[' + (b && b.stamp_type || '?') + (b && b.agent_global ? '/' + b.agent_global : '')
-    + ' | written by ' + writer + '] ' + ((b && b.summary) || '');
+    + ' | written by ' + writer + '] ' + boundSummary(b && b.summary);
 }
 
 // ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
