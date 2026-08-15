@@ -602,7 +602,10 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // stripped; lanes number in the dozens, not the thousands. So: one legend line naming
   // each lane once, short W-refs per row. A row with no source stays inline in his exact
   // words, never minted a legend entry, per the second trap.
-  var _writerRefs = {};
+  // Codex P2: a lane string is free-form, so a source normalizing to an inherited
+  // Object.prototype key (toString, constructor) would read truthy on a plain object and
+  // never mint its legend entry. Null prototype keeps every lane an own property.
+  var _writerRefs = Object.create(null);
   var _writerLegend = [];
   var _laneOf = function (src) {
     var parts = src.split('.');
