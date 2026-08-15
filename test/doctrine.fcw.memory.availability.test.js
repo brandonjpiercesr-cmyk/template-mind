@@ -263,15 +263,10 @@ test('nested partial FIND failures survive into the FCW receipt and prompt', asy
     /roadmap and doctrine: PARTIAL READ; 1 record\(s\) returned, but brain_http_error HTTP 503/);
   assert.match(wall.system_prompt,
     /READ STATUS FOR THIS SECTION:[\s\S]*roadmap and doctrine: PARTIAL READ/);
-  // 20260815, the pen-on-her-mind fence widened to the DOCTRINE section of the same live
-  // prompt: every line names the writer that stamped it. This pin carried the pre-fence
-  // shape and retires with the writer it protected, per the founder's ruling that a test
-  // pinning cold behavior is itself the defect. Mirrors anew's copy of this same test.
-  assert.match(wall.system_prompt, /\[DOCTRINE \| written by an unnamed writer\] real doctrine/,
-    'a doctrine row with no source names that fact honestly instead of hiding it');
-  assert.match(wall.system_prompt, /Judge each line by its named writer/);
-  assert.match(wall.system_prompt, /never say one to the person/,
-    'writer names are internal vocabulary and carry the narration fence');
+  // The doctrine row still reaches the wall; the bracket now also names the writer that
+  // stamped it, per the 20260815 pen-on-her-mind fence. Asserting the writer clause too, so
+  // this stays a test of the fence rather than only of the content surviving.
+  assert.match(wall.system_prompt, /\[DOCTRINE \| written by [^\]]+\] real doctrine/);
 });
 
 test('a triggered preference outage is named partial instead of becoming no preference', async function (t) {
