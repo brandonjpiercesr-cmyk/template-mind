@@ -117,11 +117,32 @@ async function nashWonder(hamUid, question, league) {
   // 1. detect (cold, parallel)
   const [scores, news] = await Promise.all([detectScores(lg), detectNews(question)]);
   const all = scores.concat(news);
-  if (!all.length) return { ok: true, answer: 'No live ' + lg.toUpperCase() + ' games or fresh news on the board right now.', surfaced: 0 };
-  // 3. dedup: drop what he was already told
+  // ⬡B:core.wonders.nash:FIX:cold_code_may_not_write_her_answer_ok_false_over_a_hollow_one:20260815⬡
+  // FOUNDER LAW, "real receipts only: ok:false over a hollow reply", and "never fake a connection
+  // or mimic A'NU". Both of these returned ok:true carrying a sentence a CODER wrote, and
+  // tool.loop.js hands w.answer straight back into the cycle on ok:true, so a coder's sentence
+  // travelled the path reserved for hers with nothing to mark it. Line 127 of this same file
+  // already proved the correct shape for exactly this situation: no deliberation, no answer,
+  // { ok:false, reason }.
+  //
+  // THE FIRST ONE was also a claim it could not support. detectScores and detectNews both return
+  // [] on a non-ok response and [] on a thrown fetch, so an ESPN outage and a genuinely quiet
+  // board are the same empty array here. "No live games or fresh news on the board right now" is
+  // cold code reporting its own failed read as a fact about the world.
+  //
+  // THE SECOND ONE was worse in kind: "since I last filled you in" asserts a PRIOR CONVERSATION
+  // with this person. What the dedup memory actually knows is that these item ids were stamped as
+  // surfaced. Whether they ever reached this HAM's eyes, on what channel, or at all, is not in
+  // that record. A wonder telling someone what it already told them, when it may never have told
+  // them anything, is a faked connection in one clause.
+  //
+  // Both are refusals now. The caller (core/tool.loop.js nash_sports) already handles a non-ok
+  // return by saying nothing surfaced, so nothing here needs a sentence written for it.
+  if (!all.length) return { ok: false, reason: 'no_detection_rows', league: lg, surfaced: 0 };
+  // 3. dedup: drop what this HAM was already stamped as having been surfaced
   const seen = await alreadyTold(ham);
   const fresh = all.filter(function (i) { return !seen[i.id]; });
-  if (!fresh.length) return { ok: true, answer: 'Nothing new since I last filled you in on the ' + lg.toUpperCase() + '.', surfaced: 0, allDedup: true };
+  if (!fresh.length) return { ok: false, reason: 'all_detected_items_already_surfaced', league: lg, surfaced: 0, allDedup: true };
   // 2. deliberate (AI, penny) over ONLY the fresh items
   const answer = await deliberate(question, fresh);
   if (!answer) return { ok: false, reason: 'deliberation_empty' };
