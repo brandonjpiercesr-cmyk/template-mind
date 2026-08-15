@@ -507,7 +507,10 @@ function employmentPrompt(record, truth) {
       ? '- POLICY EXCLUDED FOR THIS CLOSED-WORLD DELIBERATION: ' + truth.exclusion_reason +
         '. Use only the exact evidence in this request.'
       : (recent.length ? recent.join('\n')
-        : '- AVAILABLE, SUCCESSFUL EMPTY. No prior cycle rows matched.'),
+        : (truth.partial
+          ? '- EMPTY ON AN INCOMPLETE READ. Zero rows arrived, and not every query completed, '
+            + 'so this emptiness is NOT proof of an empty record.'
+          : '- AVAILABLE, SUCCESSFUL EMPTY. No prior cycle rows matched.')),
     (!truth.policy_excluded && truth.partial)
       ? '- PARTIAL READ: not every recent-truth query completed'
         + ((Array.isArray(truth.failures) && truth.failures.length)
