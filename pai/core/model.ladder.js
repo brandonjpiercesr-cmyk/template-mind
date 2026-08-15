@@ -80,7 +80,18 @@ function hasAcceptedContent(content, opts) {
   // reasoning, no closing tag ever written) is caught the same way.
   var stripped = stripReasoningTrace(content);
   if (!stripped) return false;
-  if (outputGuard.containsCjk(stripped)) return false;
+  // ⬡B:core.model_ladder:FIX:the_cjk_repair_may_not_be_rejected_for_containing_cjk:20260815⬡
+  // noGuard WAS A DEAD OPTION. core/tool.loop.js passes `noGuard:true` on exactly one call, the
+  // rewrite that repairs an answer containing CJK, and nothing in this file ever read it. So the
+  // repair ran under the very gate it exists to satisfy: any correct English rewrite that must
+  // KEEP one CJK glyph, a person's name, a dish, a filename, the term the human actually asked
+  // about, was rejected by every rung, deliberate returned null, and the caller then blanked her
+  // answer. The guard was structurally guaranteed to destroy exactly the class it was written for.
+  //
+  // Honouring it is narrower than removing the check: noGuard suppresses ONLY the CJK verdict,
+  // and only for a caller that asked for it in the same breath as saying why. Emptiness and the
+  // JSON contract below are untouched, and no other call site in the tree passes it.
+  if (!(opts && opts.noGuard === true) && outputGuard.containsCjk(stripped)) return false;
   if (!opts || opts.json !== true) return true;
   // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
   // GLM-5.2 and other reasoning models can wrap the real JSON in a thinking
@@ -130,7 +141,11 @@ function contentVerdict(content, opts) {
   if (typeof content !== 'string') return 'empty_answer';
   var stripped = stripReasoningTrace(content);
   if (!stripped) return 'empty_answer';
-  if (outputGuard.containsCjk(stripped)) return 'non_english_answer';
+  // Same suppression as hasAcceptedContent above, so the receipt and the gate never disagree
+  // about why a rung was accepted or refused. See that comment for why noGuard exists.
+  if (!(opts && opts.noGuard === true) && outputGuard.containsCjk(stripped)) {
+    return 'non_english_answer';
+  }
   if (!opts || opts.json !== true) return 'accepted';
   return hasAcceptedContent(content, opts) ? 'accepted' : 'non_json_answer';
 }
