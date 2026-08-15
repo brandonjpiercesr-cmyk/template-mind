@@ -1230,12 +1230,23 @@ async function repairUnverifiedActionClaim(answer, callLadder, opts) {
   if (!spoken) {
     return { answer: '', stamp: 'hallucinated_action_no_mind_reachable' };
   }
-  if (UNVERIFIED_ACTION_CLAIM.test(spoken)) {
-    // The woken seat came back still carrying the same unproven claim. Cold code does not get to
-    // rewrite her a second time, and the person does not get an unverified claim, so the turn is
-    // honestly silent. Her words are preserved in the transcript, they are simply not mailed.
-    return { answer: '', stamp: 'hallucinated_action_reclaimed_by_seat' };
-  }
+  // ⬡B:core.tool.loop:FIX:the_post_filter_was_the_nasty_cough_one_layer_up:20260815⬡
+  // An earlier cut of this conversion re-ran UNVERIFIED_ACTION_CLAIM against HER answer and went
+  // silent if it matched. Two things were wrong with that, and the second is the doctrine one.
+  //   1. IT THREW AWAY THE ANSWER THE PROMPT ASKS FOR. The wake explicitly invites her to say
+  //      "I set that reminder earlier this week" when the claim is a true reference to earlier
+  //      work. That sentence matches the pattern by construction, so the post-filter silenced the
+  //      exact honest explanation it had just requested, and a person with a real live reminder
+  //      got a dead turn instead of an answer.
+  //   2. IT WAS COLD CODE JUDGING HER MEANING, one layer up from where it was just removed.
+  //      20260807: a regex may DETECT and WAKE, it may never DECIDE. 20260815: carry, never
+  //      classify. A filter that reads her reply and decides she must have lied is the same
+  //      nasty cough as the branch this conversion deleted, moved behind the wake where it is
+  //      harder to see. The detection before the wake is legitimate because it reads a DRAFT
+  //      against a mechanical fact (no tool ran). Re-reading her considered answer is not.
+  // She was woken, given the turn-scoped fact, and told plainly never to say something was
+  // created just now. Her answer stands. Verification of what she said belongs to the woken WRIT
+  // reviewer and the council downstream, which are minds, not to a pattern in this function.
   return { answer: spoken, stamp: 'she rewrote her own line after the wake' };
 }
 
