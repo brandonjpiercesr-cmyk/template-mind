@@ -592,14 +592,48 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // wall. (3) the body no longer falls back to b.source, which the header now carries,
   // so a summary-less row does not print its source twice as if it were content.
   var _turnPrefix = require('./memory.keeper.js').MEMORY_CONTRACT.TURN_SOURCE_PREFIX;
+  // ⬡B:core.fcw.builder:FIX:writer_legend_short_refs_on_the_uncapped_wall:20260815⬡
+  // Codex P1 on the fence itself, and it is the founder's own first cheap trap ("do not
+  // repeat a 57-char stamp on every row. Use a legend plus short refs"): this wall is
+  // deliberately uncapped, and measured against her live rows every full source is UNIQUE
+  // (row addresses carry timestamps), so inline repetition never dedupes and costs about
+  // twelve thousand prompt tokens per thousand rows. The WRITER the doctrine means is the
+  // MODULE, which is the source's lane prefix with its trailing ids and timestamps
+  // stripped; lanes number in the dozens, not the thousands. So: one legend line naming
+  // each lane once, short W-refs per row. A row with no source stays inline in his exact
+  // words, never minted a legend entry, per the second trap.
+  var _writerRefs = {};
+  var _writerLegend = [];
+  var _laneOf = function (src) {
+    var parts = src.split('.');
+    // Codex P2: 'continuation' is twelve letters and the first cut of this pattern ate it,
+    // collapsing model.shadow.continuation rows into model.shadow and falsifying the very
+    // provenance the fence exists to carry. An identifier has digits in it; a pure word is a
+    // lane component and stays.
+    while (parts.length > 1 && /^([0-9]+|[0-9a-f]{6,}|(?=[a-z0-9]*[0-9])[a-z0-9]{10,})$/i.test(parts[parts.length - 1]) && /[0-9]/.test(parts[parts.length - 1])) parts.pop();
+    return parts.join('.');
+  };
   contextStr = allContext.map(function(b) {
     var _src = String(b.source || '').slice(0, 120);
     var _writer = _src.indexOf(_turnPrefix) === 0
       ? 'the memory keeper, a real turn, channel on the line'
-      : (_src || '(no writer stamp on the row)');
+      : (_src ? _laneOf(_src) : '');
+    var _tag;
+    if (!_writer) _tag = '(no writer stamp on the row)';
+    else {
+      if (!_writerRefs[_writer]) {
+        _writerRefs[_writer] = 'W' + (_writerLegend.length + 1);
+        _writerLegend.push(_writerRefs[_writer] + '=' + _writer);
+      }
+      _tag = _writerRefs[_writer];
+    }
     return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '')
-      + ' | written by ' + _writer + '] ' + (b.summary || '');
+      + ' | written by ' + _tag + '] ' + (b.summary || '');
   }).join('\n');
+  if (_writerLegend.length) {
+    contextStr = 'WRITERS LEGEND (each W-ref below is the lane or module that stamped the row): '
+      + _writerLegend.join(', ') + '\n' + contextStr;
+  }
 
   // ⬡B:core.fcw.builder:WIRE:doctrine_in_fcw_20260701⬡
   // Roadmap + doctrine now ride in every Memory Bank. Real gap closed: she was asked her
@@ -789,13 +823,14 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
           : '';
         if (!_statedRows.length) return statedWarning;
         var lines = _statedRows.map(function (b) {
-          var words = '', when = (b && b.created_at) ? String(b.created_at) : '';
+          var words = '', when = (b && b.created_at) ? String(b.created_at) : '', leash = '';
           try {
             var c = b && b.content;
             if (typeof c === 'string') c = JSON.parse(c);
             if (c && typeof c === 'object') {
               words = String(c.their_words || c.gist || c.words || '');
               if (c.kept_at) when = String(c.kept_at);
+              leash = String((c.exit && c.exit.leash) || '');
             }
           } catch (e) { words = ''; }
           if (!words) words = String((b && b.summary) || '');
@@ -808,10 +843,35 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
               : (mins < 2880 ? (Math.round(mins / 60) + ' hours ago')
               : (Math.round(mins / 1440) + ' days ago'));
           }
-          return '- ' + (age ? '(they told you this ' + age + ') ' : '(no timestamp on this one) ') + words;
+          // ⬡B:core.fcw.builder:FIX:the_pen_fence_reaches_what_they_told_you_too:20260815⬡
+          // The last unfenced presenter, held back from the mechanical pass on purpose: these
+          // rows carry the memory keeper's leash, and a naive writer clause would have fenced
+          // the row while the heading's "in their own words" claim stayed overstated for the
+          // overruled case. leashToTheirWords (core/memory.keeper.js) proves the mind's
+          // proposed quote against the real message before anything is kept, and the verdict
+          // rides on content.exit.leash: 'verbatim' really is their own words, unedited;
+          // 'overruled_quote_not_in_message' means the keeper kept their WHOLE message because
+          // the quoted span could not be verified inside it, and the line now says exactly
+          // that. No row is dropped or filtered on any leash value; she judges. Small bounded
+          // block, so the writer clause is inlined rather than legend-and-refs.
+          var _writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+          var _leashNote = leash === 'verbatim'
+            ? ''
+            : (leash === 'overruled_quote_not_in_message'
+              ? ' [not a verbatim quote: the keeper could not verify the proposed quote inside '
+                + 'what they actually said, so this is their whole message, kept as-is]'
+              : (leash ? ' [leash: ' + leash + ']' : ''));
+          return '- ' + (age ? '(they told you this ' + age + ') ' : '(no timestamp on this one) ')
+            + words + _leashNote + ' [written by ' + _writer + ']';
         }).filter(function (line) { return !!line; });
         if (!lines.length) return '';
-        return statedWarning + 'WHAT THEY TOLD YOU DIRECTLY, in their own words, kept at the moment they said it:\n'
+        return statedWarning
+          + 'WHAT THEY TOLD YOU DIRECTLY, evidence with its age and its writer. A writer name '
+          + 'is the module that stamped the row, never proof of who authored the words, and '
+          + 'these names are internal, never said to the person. Rows without a bracketed '
+          + 'caveat are kept in their own words, unedited, at the moment they said it; a row '
+          + 'marked not-a-verbatim-quote is their whole message kept as a fallback. YOU judge '
+          + 'which is which and how much weight it carries:\n'
           + lines.join('\n') + '\n'
           + 'These are things this person SAID TO YOU. They are not calendar entries and most of them '
           + 'will never appear on any calendar, and they are every bit as real as what is on one. When '
