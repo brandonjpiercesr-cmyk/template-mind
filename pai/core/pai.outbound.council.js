@@ -4487,24 +4487,28 @@ async function runOutboundCouncil(input, injected) {
             // honest signal of whether a verdict was actually returned.
             var _reRawInvalid = !_reRaw || typeof _reRaw !== 'object' ||
               (typeof _reRaw.answer !== 'string' && typeof _reRaw.output !== 'string');
-            // Codex review, live, round four: a fourth shape slips past every check above.
-            // The SHADOW stage's own "no real judgment happened" outcomes (relayUnavailableHold,
-            // shadowDecisionUnavailableHold: the judge subsystem itself never produced a verdict)
-            // return a well-formed object with `answer: ctx.answer` -- the healed text echoed
-            // back verbatim, not a verdict on it -- so it is a valid string, human-facing, and
-            // passes every shape check above while still being zero verdict. The one honest,
-            // stage-shape-independent signal that no real judgment ran is SHADOW's own
-            // evidence.judgment.judgment_status, which this file already sets to exactly
-            // 'UNAVAILABLE' with reason 'no_real_judgment' for precisely this case (see the
-            // ternary above building this function's own return object). Checked by the FULL
-            // exact shape, not the status field alone, so a legitimate rejection that merely
-            // shares one field can never be mistaken for an unavailable judge.
-            var _reJudgment = _reNorm.evidence && _reNorm.evidence.judgment;
-            var _reJudgmentUnavailable = !!(_reJudgment &&
-              _reJudgment.judgment_status === 'UNAVAILABLE' &&
-              _reJudgment.approved === false &&
-              _reJudgment.reason === 'no_real_judgment');
-            var _reUnavailable = _reThrew || _reRawInvalid || !_reHuman || _reJudgmentUnavailable;
+            // Codex review, rounds four and six: SHADOW's own "no real judgment happened"
+            // outcomes return a well-formed object with `answer: ctx.answer` -- the healed text
+            // echoed back verbatim, not a verdict on it -- so it is a valid string, human-facing,
+            // and passes every shape check above while still being zero verdict.
+            //
+            // Round four's fix read this off evidence.judgment.judgment_status, which is built
+            // by a `judgment ? {...AVAILABLE...} : {...UNAVAILABLE...}` ternary keyed on whether
+            // the raw provider call itself happened at all. Round six found the gap in that:
+            // when a relay-backed retry DOES get a raw provider response but its content fails
+            // to parse as JSON (parsed is null while judgment is still truthy), that ternary
+            // reports judgment_status:'AVAILABLE' -- a response arrived, so the shape check
+            // passed -- even though no usable verdict was ever extracted from it. The top-level
+            // reason this function returns already says 'shadow_model_unavailable' correctly in
+            // both the judgment-absent and judgment-unparseable cases; only the nested evidence
+            // summary disagreed. Reading the TOP-LEVEL reason instead of the nested evidence
+            // shape closes both known gaps at once, because both roads to "no verdict" already
+            // report through the same two named reasons this file defines for exactly that
+            // meaning: relayUnavailableHold's 'shadow_model_unavailable' and
+            // shadowDecisionUnavailableHold's 'shadow_decision_judgment_unavailable'.
+            var _reNoRealJudgment = _reNorm.reason === 'shadow_model_unavailable' ||
+              _reNorm.reason === 'shadow_decision_judgment_unavailable';
+            var _reUnavailable = _reThrew || _reRawInvalid || !_reHuman || _reNoRealJudgment;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
             // Replace the held receipt in place and span the original stage input
