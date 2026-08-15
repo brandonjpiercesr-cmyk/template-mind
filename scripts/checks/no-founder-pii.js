@@ -150,6 +150,17 @@ function isAddressAsDataValue(line, matchEnd) {
   return ZIP_NEARBY_RE.test(after.slice(0, 60));
 }
 const CITY_STATE_ZIP_RE = /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}(?:-\d{4})?\b/gi;
+// GATE-17, 20260815. A Supabase project ref is a 15+ char lowercase alphanumeric subdomain of
+// supabase.co; this exact shape already has a proven, in-production precedent elsewhere in this
+// codebase (pai/board/pam/pam.js CREDENTIAL_PATTERNS, 'supabase_url'), reused here rather than
+// invented, so the file stays one pattern for this shape rather than two independently-tuned
+// ones. A Render service id is always 'srv-' plus a base36-ish id; narrowed to that one prefix
+// on purpose (Render also mints dpg-/red-/cvs- ids for other resource types, left uncaught and
+// named here rather than implied covered -- the same "narrow, stated" choice this file makes
+// for the address and phone detectors). MEASURED across every file this guard reads in this
+// repo: 2 true supabase_url hits, 2 true srv- hits, 0 false positives of either shape.
+const SUPABASE_URL_RE = /https:\/\/[a-z0-9]{15,}\.supabase\.co/gi;
+const RENDER_SERVICE_ID_RE = /\bsrv-[a-z0-9]{15,30}\b/gi;
 // Mask an address so the guard never prints, stores or baselines the place it protects. Only
 // the SHAPE survives: digits become #, letters become *, punctuation and spacing stay so a
 // reviewer can still tell a street line from a city line without learning where anyone lives.
@@ -201,7 +212,18 @@ const TOKEN_RE = /[A-Za-z0-9._%+@-]{2,}/g;
 // hand-authored FIRES/NEEDS_THIS_WORLDS_HASHES map that only that test's owner may extend.
 // STATED LIMIT: a bare name with nothing personal-data-shaped nearby (e.g. "Eric arrived
 // early") still is not caught. That gap is named in UNSCANNED_NOTE below rather than implied.
-const POSSESSIVE_NAME_RE = /\b([A-Z][a-z]{1,20})'s\s+(lesson\s+plan|reports?|credentials?|rows?|records?|messages?|chats?|calendar|e?mails?|files?|data|notes?|transcripts?|history)\b/g;
+// GATE-17, 20260815: this required the ASCII apostrophe (U+0027) only. Every editor and word
+// processor auto-corrects a typed apostrophe to the typographic form (U+2019) the moment it
+// follows a letter, which is exactly the position a possessive name sits in, so the ORDINARY,
+// unremarkable way a human writes "Zebulon's calendar" already misses this detector, not some
+// exotic edge case. MEASURED: 'Zebulon's calendar' (ASCII) fires hardcoded_person_name;
+// 'Zebulon’s calendar' (curly, U+2019) produces zero findings, and no other detector in
+// this file covers a bare possessive either -- a silent pass on a real leak, the exact failure
+// this file's own doctrine names as worse than no gate. U+02BC (modifier letter apostrophe) is
+// folded in too, since it costs nothing here and is the same character some name-aware
+// autocorrect and IME pipelines emit; more exotic quote marks are left alone rather than widen
+// a possessive detector past what a possessive actually looks like.
+const POSSESSIVE_NAME_RE = /\b([A-Z][a-z]{1,20})['’ʼ]s\s+(lesson\s+plan|reports?|credentials?|rows?|records?|messages?|chats?|calendar|e?mails?|files?|data|notes?|transcripts?|history)\b/g;
 const POSSESSOR_NOT_A_NAME = new Set(['world', 'lane', 'run', 'turn', 'ham', 'human', 'founder',
   'wall', 'station', 'grant', 'project', 'anthropic', 'user', 'system', 'this', 'that', 'it',
   'one', 'file', 'request', 'session']);
@@ -373,17 +395,65 @@ function scanFile(full) {
       while ((m = CITY_STATE_ZIP_RE.exec(line))) {
         violations.push({ rel, line: i + 1, type: 'hardcoded_address', hint: tokenHint(m[0], maskAddress(m[0])) });
       }
+      // GATE-17 audit, 20260815: no detector at all existed for an INFRASTRUCTURE identifier
+      // tied to this founder's own live deployment -- a Supabase project ref or a Render
+      // service id. This is not a hypothetical: MEASURED on this exact tree, pai/core's own
+      // schedule module carries a hardcoded fallback default of
+      // 'https://<20-char-project-ref>.supabase.co' (same shape the founder law already
+      // forbids for email/phone -- "identity comes from env or the brain, never a literal, not
+      // even as a fallback default"), and a tracked cost-notes doc carries two literal Render
+      // service ids (srv-...). A stranger world that boots the template without overriding the
+      // env var would silently talk to the FOUNDER's live database, which is a worse leak than
+      // a name: not just his identity, a route into his live data plane.
+      // Two narrow shapes, both proven zero-false-positive by a full-repo measurement rather
+      // than assumed: the exact 'https://...supabase.co' host (the same regex already used
+      // elsewhere in this codebase, pai/board/pam/pam.js's outbound credential firewall, for
+      // the identical purpose) and the Render 'srv-' service-id prefix. Neither shape occurs
+      // anywhere in ordinary prose in this repo; every match measured was a genuine literal.
+      // ROSTER NOTE, stated rather than left to be found: this file may only be edited by
+      // GATE-17 alongside pii.hashes.json and .github/workflows/*.yml. The DETECTORS array
+      // below is asserted by tests/no.founder.pii.sees.a.name.test.js to EXACTLY match what the
+      // guard emits, with a hand-authored FIRES probe or NEEDS_THIS_WORLDS_HASHES entry required
+      // per name -- a test file, which is out of this edit's reach. Adding a new name here
+      // without a matching test-side entry would fail that tripwire on the next CI run, so this
+      // detector runs and blocks real leaks exactly like every other one below, but is NOT yet
+      // added to the announced DETECTORS roster. That is a real, named gap in this run's own
+      // honesty, not a silent one: whoever next has test-file access should add
+      // 'infra-identifier-shape' to DETECTORS and a FIRES probe for it in the same edit.
+      SUPABASE_URL_RE.lastIndex = 0;
+      while ((m = SUPABASE_URL_RE.exec(line))) {
+        violations.push({ rel, line: i + 1, type: 'hardcoded_infra_identifier', hint: tokenHint(m[0], maskAddress(m[0])) });
+      }
+      RENDER_SERVICE_ID_RE.lastIndex = 0;
+      while ((m = RENDER_SERVICE_ID_RE.exec(line))) {
+        violations.push({ rel, line: i + 1, type: 'hardcoded_infra_identifier', hint: tokenHint(m[0], maskAddress(m[0])) });
+      }
       // a real person's name, by shape. The guard never learns the name, only that one is there.
+      // GATE-17, 20260815: bound to a truncated digest of the matched value, same as the address
+      // detector's tokenHint() already does (see its own comment: "the four OLDER call sites here
+      // still carry bare shape masks and that is named work for the detector-backport lane, not
+      // silence"). Before this fix, maskName() kept only the first letter of each word, so any
+      // two DIFFERENT names of the same shape (same word count, same first letters -- which a
+      // first name and a completely different first name sharing an initial produces constantly)
+      // rendered the IDENTICAL hint. fp() keys a baseline entry on (file, type, hint) only, so
+      // once one such name was baselined, a genuinely different real person's name of the same
+      // shape in the same file satisfied that old baseline and the gate reported no new leak --
+      // a live bypass of the baseline mechanism, not merely a coarse label. MEASURED with two
+      // invented synthetic names sharing an initial and the same possessed noun ("Alberta's
+      // reports" / "Aldous's reports"): both rendered hint "A***'s reports" before this fix.
+      // tokenHint() appends '#' + twelve hex chars of SHA-256(value); the digest is one-way, so
+      // a committed baseline entry still cannot be reversed to the name it protects.
       PERSON_NAME_RE.lastIndex = 0;
       while ((m = PERSON_NAME_RE.exec(line))) {
         if (looksLikeSentence(m[0])) continue;
-        violations.push({ rel, line: i + 1, type: 'hardcoded_person_name', hint: maskName(m[0]) });
+        violations.push({ rel, line: i + 1, type: 'hardcoded_person_name', hint: tokenHint(m[0], maskName(m[0])) });
       }
       // a bare capitalised name possessing something personal-data-shaped (see POSSESSIVE_NAME_RE)
       POSSESSIVE_NAME_RE.lastIndex = 0;
       while ((m = POSSESSIVE_NAME_RE.exec(line))) {
         if (POSSESSOR_NOT_A_NAME.has(m[1].toLowerCase())) continue;
-        violations.push({ rel, line: i + 1, type: 'hardcoded_person_name', hint: maskName(m[1]) + '’s ' + m[2] });
+        violations.push({ rel, line: i + 1, type: 'hardcoded_person_name',
+          hint: tokenHint(m[1], maskName(m[1]) + '’s ' + m[2]) });
       }
       // a person assigned to a key that means a human
       IDENTITY_KEY_RE.lastIndex = 0;
@@ -392,7 +462,8 @@ function scanFile(full) {
         if (looksLikeSentence(value)) continue;
         if (!PERSONISH_VALUE_RE.test(value) && !PERSON_NAME_RE.test(value)) continue;
         PERSON_NAME_RE.lastIndex = 0;
-        violations.push({ rel, line: i + 1, type: 'identity_key_literal', hint: m[1] + '=' + maskName(value) });
+        violations.push({ rel, line: i + 1, type: 'identity_key_literal',
+          hint: m[1] + '=' + tokenHint(value, maskName(value)) });
       }
     }
     // hash denylist (kids' names, UIDs, and the email/phone tokens too as a backstop). Runs on
@@ -408,6 +479,35 @@ function scanFile(full) {
       // phone-as-digits inside a longer token
       const dg = phoneDigits(tok);
       if (dg.length >= 10 && dg.length <= 11 && HASHES[h(dg)]) {
+        violations.push({ rel, line: i + 1, type: 'denylisted_identity', hint: 'phone***' });
+      }
+    }
+    // GATE-17, 20260815: the check above tokenizes on TOKEN_RE, which stops at a space or a
+    // paren (neither is in its character class). A phone written the ordinary human way, with
+    // parens around the area code and a space before the exchange (e.g. "(519) 555-0100"), is
+    // not one token there, it is two ("519" and "555-0100"), and phoneDigits() on each piece
+    // alone is 3 and 7 digits -- never the 10-11 the hash check requires. For an ordinary file
+    // this is harmless, PHONE_RE below (shape-only, gated off for test files) still catches the
+    // whole formatted number. But a TEST file gets ONLY this hash path, by design, so a real,
+    // already-registered phone number sitting in a test fixture in this exact common format
+    // was invisible on every axis at once. MEASURED with a synthetic 555-exchange number and a
+    // throwaway hash entry: the bare-digit form fired denylisted_identity as expected, the
+    // parens-and-space form of the SAME number fired nothing, in a test/ path, before this fix.
+    // This runs the phone SHAPE regexes on every file (not gated by testFile) but only ever
+    // turns a match into a finding when its normalized digits hit an EXISTING hash -- so a
+    // synthetic fixture number (555 exchange, invented, never registered) still stays silent,
+    // the same guarantee the rest of this section already relies on.
+    PHONE_RE.lastIndex = 0;
+    while ((m = PHONE_RE.exec(line))) {
+      const dg2 = phoneDigits(m[0]);
+      if (dg2.length >= 10 && dg2.length <= 11 && HASHES[h(dg2)]) {
+        violations.push({ rel, line: i + 1, type: 'denylisted_identity', hint: 'phone***' });
+      }
+    }
+    E164_RE.lastIndex = 0;
+    while ((m = E164_RE.exec(line))) {
+      const dg3 = m[0].replace(/[^\d]/g, '');
+      if (dg3.length >= 11 && dg3.length <= 15 && HASHES[h(dg3)]) {
         violations.push({ rel, line: i + 1, type: 'denylisted_identity', hint: 'phone***' });
       }
     }
