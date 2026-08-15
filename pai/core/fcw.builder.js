@@ -503,9 +503,15 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       var name = c && (c.agent || c.name || c.world);
       var role = c && (c.role || c.purpose);
       var summary = (b && (b.summary || b.source)) || '?';
-      if (name && role) return '- ' + String(name).toUpperCase() + ': ' + String(role);
-      if (name) return '- ' + String(name).toUpperCase() + ': ' + String(summary);
-      return '- ' + String(summary);
+      // ⬡B:core.fcw.builder:FIX:the_pen_fence_reaches_the_agent_roster_too:20260815⬡
+      // Same fence as RECENT CONTEXT and ROADMAP AND DOCTRINE: a roster row is a bead like
+      // any other and can be a mind's real record or a machine fact a seeder stamped in.
+      var _writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+      var line;
+      if (name && role) line = '- ' + String(name).toUpperCase() + ': ' + String(role);
+      else if (name) line = '- ' + String(name).toUpperCase() + ': ' + String(summary);
+      else line = '- ' + String(summary);
+      return line + ' [written by ' + _writer + ']';
     }).join('\n');
   }
 
@@ -845,7 +851,9 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
         + 'true answer -- not a memory to search for, the actual live reason for this exact call.'
       : ''),
     '',
-    'AVAILABLE AGENTS AND TOOLS:',
+    'AVAILABLE AGENTS AND TOOLS: each line names the writer that stamped it. A writer name '
+    + 'is the module that stamped the row, not proof of who authored it. Judge each line by '
+    + 'its named writer; these writer names are internal, never say one to the person.',
     _agentSection,
     '',
     'ROADMAP AND DOCTRINE (your world\'s current priorities): each line names the writer '
