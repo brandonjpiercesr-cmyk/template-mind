@@ -590,7 +590,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     var _src = String(b.source || '').slice(0, 120);
     var _writer = _src.indexOf(_turnPrefix) === 0
       ? 'the memory keeper, a real turn, channel on the line'
-      : (_src || 'an unnamed writer');
+      : (_src || '(no writer stamp on the row)');
     return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '')
       + ' | written by ' + _writer + '] ' + (b.summary || '');
   }).join('\n');
@@ -611,7 +611,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       // as capable of being a machine fact a scheduler stamped in as it is of being a mind's
       // real words, and this block was handing her both with no way to tell them apart.
       // Same writer clause, same fallback wording, no filter added.
-      var _writer = String(b.source || '').slice(0, 120) || 'an unnamed writer';
+      var _writer = String(b.source || '').slice(0, 120) || '(no writer stamp on the row)';
       return '[' + (b.stamp_type||'?') + ' | written by ' + _writer + '] '
         + (b.summary||'').slice(0) + (body ? '\n  ' + body : '');
     }).join('\n');
