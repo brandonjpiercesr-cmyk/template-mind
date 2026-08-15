@@ -249,18 +249,79 @@ async function judge(input, options) {
     writ_output:exactPacket.writ_output.text,
     post_meta_candidate:exactPacket.post_meta_candidate.text,
     final_human_output:exactPacket.final_human_output.text});
+  // ⬡B:core.writ_meaning_shadow:911:an_unreachable_judge_was_deleting_her_answer:20260815⬡
+  // THIS IS THE 32 SECONDS OF SILENCE ON A LIVE PHONE CALL, traced end to end.
+  //
+  // This judge rode ONE seat with NO second wallet. model.router.js#chatSeat builds a chain of
+  // the primary plus the seat's OWN declared fallbackModel, which rides the SAME key, and
+  // c1_cellm declares none at all, so the chain is length one. c1_cellm's $2/day ceiling is
+  // shared with board/pam, reach.department, tim, logful/gate, the gauntlet panel, tool.loop
+  // and model.shadow.executor. When that shared wallet is spent, openrouter.seat.spend raises
+  // openrouter_seat_daily_dollar_cap_reached, chatSeat throws, and this catch reported
+  // writ_meaning_shadow_unavailable. The exit gate in pai.outbound.council then set her
+  // composed, WRIT-rendered, PAM-clean answer to the empty string and the caller heard nothing.
+  //
+  // So a shared wallet running dry was silently converted into "she had nothing to say". Cold
+  // code deciding she was finished, on a fact it never had.
+  //
+  // WHY THIS IS NOT A WEAKENING, and the distinction is the whole point. It would have been
+  // easy and wrong to release her bytes when the judge is unreachable. That is not what this
+  // does. UNCERTAIN still holds exactly as the 20260807 gate requires, because UNCERTAIN is a
+  // judgment a mind FORMED after looking. UNREACHABLE is the absence of any judgment at all.
+  // The repair is not to decide in the judge's place. It is to make the judge REACHABLE.
+  //
+  // NOTHING ABOUT THE QUESTION CHANGES. The system prompt and the user payload above are passed
+  // byte-identically to the second attempt. No hint, no summary of the first failure, no
+  // suggested verdict, no "the primary was unavailable so be lenient". The second seat receives
+  // exactly what the first would have received and forms its own view from the same evidence.
+  // A planted expectation here would be the pen on her mind one door over.
+  //
+  // c4_watch is the same baked model at the same price on its OWN key under its OWN ceiling, so
+  // this is a second WALLET and not merely a second name. A failover onto the same exhausted
+  // key is not a failover. If both wallets are gone the answer is still
+  // writ_meaning_shadow_unavailable and the gate still holds, exactly as before.
+  //
+  // The receipt names the seat that ACTUALLY answered. Stamping c1_cellm on bytes bought by
+  // c4_watch would be a lie in a durable record.
   var raw;
-  try {
-    var chatSeat = opts.chatSeat || require('./model.router.js').chatSeat;
-    raw = await chatSeat('c1_cellm',[
-      {role:'system',content:system},{role:'user',content:user}
-    ],{temperature:0,maxTokens:320,reasoning:{effort:'none',exclude:true},
-      requireParameters:true,signal:opts.signal || undefined,
-      attribution:{component:'writ.meaning.shadow',
-      ham_uid:bound.ham_uid,request_id:bound.request_id + '.writ-meaning-shadow',
-      cycle_id:bound.cycle_id,seat:'c1_cellm',owner_node_id:'agent.penny_shadow',
-      target_wonder_id:'agent.penny_shadow'}});
-  } catch (error) {
+  var judgeSeats = ['c1_cellm', 'c4_watch'];
+  var lastJudgeError = null;
+  for (var seatIndex = 0; seatIndex < judgeSeats.length; seatIndex++) {
+    var judgeSeat = judgeSeats[seatIndex];
+    try {
+      var chatSeat = opts.chatSeat || require('./model.router.js').chatSeat;
+      raw = await chatSeat(judgeSeat,[
+        {role:'system',content:system},{role:'user',content:user}
+      ],{temperature:0,maxTokens:320,reasoning:{effort:'none',exclude:true},
+        requireParameters:true,signal:opts.signal || undefined,
+        attribution:{component:'writ.meaning.shadow',
+        ham_uid:bound.ham_uid,request_id:bound.request_id + '.writ-meaning-shadow',
+        cycle_id:bound.cycle_id,seat:judgeSeat,owner_node_id:'agent.penny_shadow',
+        target_wonder_id:'agent.penny_shadow'}});
+      lastJudgeError = null;
+      break;
+    } catch (error) {
+      lastJudgeError = error;
+      raw = null;
+      // ⬡B:core.writ_meaning_shadow:FIX:a_cancelled_judgment_is_not_an_unreachable_one:20260815⬡
+      // CAUGHT BY AN EXISTING TEST, not by me: my first version of this failover retried on
+      // EVERY error including cancellation, so a turn the caller had already abandoned bought a
+      // second paid call on a second wallet. The existing pin
+      // "a cancelled final meaning judgment releases the C1 seat for the next turn" went red,
+      // which is exactly what it was written to do.
+      //
+      // Cancellation is a DECISION ALREADY MADE, not a wallet that ran dry. The estate's own
+      // rule is do not retry an unknown effect merely because a gateway went away. A second
+      // wallet is the repair for "no mind could be reached"; it is not a licence to re-ask a
+      // question nobody is waiting for the answer to.
+      if (opts.signal && opts.signal.aborted) break;
+      var errName = String(error && error.name || '');
+      var errText = String(error && error.message || '');
+      if (errName === 'AbortError' || errName === 'TimeoutError'
+        || /abort|cancel/i.test(errText)) break;
+    }
+  }
+  if (lastJudgeError) {
     return {ok:false,reason:'writ_meaning_shadow_unavailable'};
   }
   var completion = completionTruth(raw);

@@ -30,23 +30,64 @@ function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_
 
 function urgencyThreshold(){ var v=parseFloat(process.env.BURST_URGENCY_THRESHOLD); return isFinite(v)?v:0.8; }
 
+// ⬡B:burst.candidate_signals:FIX:every_row_names_its_writer_no_double_cap:20260815⬡
+// Founder ruling 20260815, the pen on her mind: a row entering the organ's prompt with no
+// writer name lets a machine byte read as if it were her own life, and a code-level slice
+// riding on top of a query limit is a coder deciding twice what she may see. This helper
+// carries the row's real source as its writer (the doctrine-correct fallback for a
+// source-less row is "(no writer stamp on the row)", never an invented name), and the
+// query limit below is the ONE bound left, never doubled by a second cut before the prompt.
+// ⬡B:stations:FIX:bound_the_bytes_mark_the_cut_never_drop_the_row:20260815⬡
+// A row's summary rode into the prompt unbounded. With a busy window a station could
+// serialize hundreds of long summaries into ONE model call, overflow the provider, and hit
+// its own catch path, which reports nothing found. The person then silently loses the whole
+// briefing or sweep, which is a worse and quieter failure than a trimmed one.
+// Bound the BYTES, never the ROWS: every row still rides, none is dropped or ranked away.
+// And the cut is MARKED, never silent. Cold code trimming a mind's stored words and handing
+// them on as whole is the same sin as editing her answer; saying plainly that the row was cut,
+// and by how much, carries the fact instead of hiding it.
+var ROW_SUMMARY_MAX = 400;
+function boundSummary(v) {
+  var s = String(v || '');
+  if (s.length <= ROW_SUMMARY_MAX) return s;
+  return s.slice(0, ROW_SUMMARY_MAX) + ' [row cut here at ' + ROW_SUMMARY_MAX + ' of '
+    + s.length + ' characters, the rest is in the record]';
+}
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[' + (b && b.stamp_type || '?') + (b && b.agent_global ? '/' + b.agent_global : '')
+    + ' | written by ' + writer + '] ' + boundSummary(b && b.summary);
+}
+
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
+
 async function candidateSignals(hamUid) {
   // time-critical signals: urgent-flagged emails, imminent deadlines, emergency beads
   try {
     var url=_bu()+'/rest/v1/'+_tbl()+
-      '?select=summary,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '?select=summary,source,stamp_type,agent_global,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
       '&or=(summary.ilike.*urgent*,summary.ilike.*deadline*,summary.ilike.*today*,summary.ilike.*ASAP*,summary.ilike.*emergency*)&order=id.desc&limit=20';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(9000)}).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 
 async function alreadyAlerted(hamUid) {
   try {
-    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&ham_uid=eq.'+
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary,source,stamp_type&ham_uid=eq.'+
       encodeURIComponent(String(hamUid))+'&agent_global=eq.BURST&order=id.desc&limit=20';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(8000)}).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 
@@ -60,8 +101,11 @@ async function judgeUrgent(hamUid, moment, candidates, alerted) {
       'message, an emergency) as a JSON array of {alert, why_urgent, channel ("voice"|"text"|'+
       '"command_center"), confidence (0-1)}. The bar is very HIGH -- most things are NOT BURST, '+
       'they are HUNCH or DAWN. If nothing is truly urgent, return []. Already alerted (do not '+
-      'repeat): '+JSON.stringify((alerted||[]).slice(0,20));
-    var out=await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'), { json:true, max_tokens:600, timeout:25000 });
+      // ⬡B:burst.judge_urgent:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ alreadyAlerted's
+      // own query already bounds this list to 20 rows; a second .slice(0,20) here was a coder
+      // deciding the same ceiling twice, the exact double-cap the founder's ruling forbids.
+      'repeat): '+JSON.stringify(alerted||[]);
+    var out=await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), candidates.join('\n'), { json:true, max_tokens:600, timeout:25000 });
     var text=out&&out.content!=null?out.content:'';
     var arr=JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (!Array.isArray(arr)) return [];

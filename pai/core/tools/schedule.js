@@ -12,7 +12,12 @@
 
 const https = require('https');
 
-const ABA_SERVER_URL = process.env.ABA_SERVER_URL || 'https://dnzwyufdzafcwnjaqbxs.supabase.co';
+// ⬡B:identity:FIX:no_fallback_to_one_worlds_server:20260815⬡
+// Founder law 20260722, non-negotiable: identity is env-only, never a literal. This
+// fell back to ONE specific project, so a stranger's world with the var unset pointed
+// at that owner's server. Fails closed now, at the same guard the service-role key
+// already uses two lines down.
+const ABA_SERVER_URL = process.env.ABA_SERVER_URL || '';
 const ABA_SERVER_SRK = process.env.ABA_SERVER_SERVICE_ROLE_KEY;
 const NYLAS_KEY       = process.env.NYLAS_PRODUCTION_KEY || process.env.NYLAS_API_KEY;
 // ⬡B:core.tools.schedule:FIX:calendar_grant_lives_on_production_not_sandbox:20260714⬡
@@ -34,6 +39,7 @@ function hamSchema(uid) { return `ham_${String(uid).toLowerCase()}`; }
 
 function abaGet(schema, path) {
   return new Promise((resolve, reject) => {
+    if (!ABA_SERVER_URL) return reject(new Error('ABA_SERVER_URL not configured'));
     if (!ABA_SERVER_SRK) return reject(new Error('ABA_SERVER_SERVICE_ROLE_KEY not configured'));
     const url = new URL(ABA_SERVER_URL);
     const opts = { hostname: url.hostname, path, method: 'GET',
@@ -50,6 +56,7 @@ function abaGet(schema, path) {
 
 function abaPost(schema, path, payload) {
   return new Promise((resolve, reject) => {
+    if (!ABA_SERVER_URL) return reject(new Error('ABA_SERVER_URL not configured'));
     if (!ABA_SERVER_SRK) return reject(new Error('ABA_SERVER_SERVICE_ROLE_KEY not configured'));
     const url = new URL(ABA_SERVER_URL);
     const data = JSON.stringify(payload);

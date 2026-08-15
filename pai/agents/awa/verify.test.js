@@ -58,7 +58,10 @@ assert.strictEqual(v.residencyLock('You must reside in the United States to appl
 
 // 8. Universality: no HAM, no grant, no org roster reaches this module.
 var src = require('fs').readFileSync(__dirname + '/verify.js', 'utf8');
-assert.ok(src.indexOf('DC499D0C') === -1, 'no hardcoded HAM');
+// A HAM UID shape, never one person's literal: this file is the universality proof and
+// must not itself hardcode the human it protects. Eight hex chars with at least one
+// letter, so a date stamp like 20260716 is not mistaken for a UID.
+assert.ok(!/\b(?=[0-9A-F]{8}\b)(?=[0-9]*[A-F])[0-9A-F]{8}\b/.test(src), 'no hardcoded HAM');
 assert.ok(src.indexOf('nyk_') === -1 && src.indexOf('api.us.nylas') === -1, 'no credentials or reach');
 assert.ok(src.indexOf('groq') === -1 && src.indexOf('GROQ') === -1, 'C0: no LLM');
 

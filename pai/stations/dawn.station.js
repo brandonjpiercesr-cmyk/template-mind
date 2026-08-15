@@ -72,17 +72,95 @@ async function markDelivered(hamUid, moment) {
   await writeBead(hamUid,'DELIVERED',key,'[DAWN] briefing delivered '+moment.date,4,{at:moment.now_iso},moment);
 }
 
+// ⬡B:dawn.fence_line:FIX:every_row_names_its_writer:20260815⬡ Founder ruling 20260815, the pen
+// on her mind: BURST/GHOST rows entered the FACTS block below as bare .summary strings with no
+// proof of who wrote them, so they read to the organ exactly like something she herself
+// remembered. Same per-row shape as the reference fence in core/fcw.builder.js. Doctrine-correct
+// fallback for a source-less row is "(no writer stamp on the row)", never an invented writer name.
+// ⬡B:stations:FIX:bound_the_bytes_mark_the_cut_never_drop_the_row:20260815⬡
+// A row's summary rode into the prompt unbounded. With a busy window a station could
+// serialize hundreds of long summaries into ONE model call, overflow the provider, and hit
+// its own catch path, which reports nothing found. The person then silently loses the whole
+// briefing or sweep, which is a worse and quieter failure than a trimmed one.
+// Bound the BYTES, never the ROWS: every row still rides, none is dropped or ranked away.
+// And the cut is MARKED, never silent. Cold code trimming a mind's stored words and handing
+// them on as whole is the same sin as editing her answer; saying plainly that the row was cut,
+// and by how much, carries the fact instead of hiding it.
+var ROW_SUMMARY_MAX = 400;
+function boundSummary(v) {
+  var s = String(v || '');
+  if (s.length <= ROW_SUMMARY_MAX) return s;
+  return s.slice(0, ROW_SUMMARY_MAX) + ' [row cut here at ' + ROW_SUMMARY_MAX + ' of '
+    + s.length + ' characters, the rest is in the record]';
+}
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[' + (b && b.stamp_type || '?') + (b && b.agent_global ? '/' + b.agent_global : '')
+    + ' | written by ' + writer + '] ' + boundSummary(b && b.summary);
+}
+
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
+
 // ---- GENERATE the six sections from the real roster; each guarded, conditional ----
 async function generateSections(hamUid, moment, prefs) {
   var hasNylas = !!(prefs && (prefs.nylas_grant || prefs.has_nylas));
   var interests = (prefs && prefs.interests) || [];
   var sec = { upcoming:[], emails:[], news:[], pending:[], alertSummary:[], sports:null, spiritual:null };
 
+  // ⬡B:dawn.generate_sections:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ Founder
+  // ruling 20260815, the pen on her mind: getRadarEvents and listEmails already bound what they
+  // return (200 rows internally, limit:8 on the query respectively); a further .slice() here was
+  // a second, code-level decision cutting her read down again before it reached the FACTS block.
   if (hasNylas) {
     try { var sched=tryMod('../core/schedule/schedule.logic.js');
-      if (sched && sched.getRadarEvents){ var ev=await sched.getRadarEvents(hamUid); if(Array.isArray(ev)) sec.upcoming=ev.slice(0,10);} } catch(e){}
+      if (sched && sched.getRadarEvents){ var ev=await sched.getRadarEvents(hamUid);
+        // ⬡B:dawn.generate_sections:FIX:compact_the_row_never_drop_the_row:20260815⬡
+        // Removing the old .slice(0,10) was right: capping her read is the named trap. But the
+        // whole event object, description and attendee list included, was then serialized into
+        // ONE prompt. A busy or recurring calendar could overflow the provider window, assemble()
+        // catches, and buildBriefing reports nothing_to_brief, so the person silently loses the
+        // entire briefing. That is a worse failure than a trimmed list, and a silent one.
+        // So: EVERY event still rides, none is dropped or ranked away. Only the bulk per row is
+        // bounded, the same distinction used on her learned lines: bound the bytes, never the rows.
+        // ⬡B:dawn.generate_sections:FIX:carry_the_end_time_and_the_real_writer:20260815⬡
+        // Two corrections to my own compaction. FIRST, it kept only the start, so a fifteen
+        // minute call and a four hour block read identically and she could not speak about
+        // length or back-to-back timing. end_time is right there: getRadarEvents even filters
+        // on it. SECOND, and worse: I preserved e.source and e.stamp_type, and those can NEVER
+        // be present. getRadarEvents does select=content, parses that JSON, and returns the
+        // parsed EVENT, not the bead. So every calendar row entered the fenced prompt with no
+        // writer at all while the fence told the mind each line names its writer. The fence was
+        // lying for exactly these rows.
+        // The honest fix upstream is to add source and stamp_type to that SELECT, but
+        // core/schedule/schedule.logic.js is a generated mirror of anew/core and must not be
+        // hand-edited, so the writer is attached HERE at the adapter boundary. This is a carried
+        // fact, not an invented one: that reader's query is
+        // source=like.RADAR.<UID>.event.%, so every row it returns is a RADAR event bead by
+        // construction. Written as a plain fact about the reader, not a claim about a bead we
+        // never saw.
+        if(Array.isArray(ev)) sec.upcoming=ev.map(function(e){
+          if(!e||typeof e!=='object') return e;
+          var c=e.content&&typeof e.content==='object'?e.content:e;
+          return { title:String(c.title||c.summary||c.subject||'').slice(0,200),
+            when:c.when||c.start||c.start_time||c.starts_at||null,
+            ends:c.end_time||c.end||c.ends_at||null,
+            all_day:c.is_all_day===true||undefined,
+            location:String(c.location||'').slice(0,120) || undefined,
+            source:e.source||'RADAR calendar reader (per-row bead stamp not carried by that reader)',
+            stamp_type:e.stamp_type||'EVENT' };
+        });} } catch(e){}
     try { var iman=tryMod('../reach/iman.js');
-      if (iman && iman.listEmails){ var em=await iman.listEmails({HAM_UID:hamUid},{unreadOnly:true,limit:8}); if(Array.isArray(em)) sec.emails=em.slice(0,8);} } catch(e){}
+      if (iman && iman.listEmails){ var em=await iman.listEmails({HAM_UID:hamUid},{unreadOnly:true,limit:8}); if(Array.isArray(em)) sec.emails=em;} } catch(e){}
   }
   if (interests.length) {
     try { var press=tryMod('./press.station.js');
@@ -91,9 +169,9 @@ async function generateSections(hamUid, moment, prefs) {
   try { var hunch=tryMod('./hunch.station.js');
     if (hunch && hunch.pendingForBriefing){ sec.pending=await hunch.pendingForBriefing(hamUid)||[]; } } catch(e){}
   try {
-    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&or=(agent_global.eq.BURST,agent_global.eq.GHOST)&order=id.desc&limit=8';
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary,source,stamp_type,agent_global&or=(agent_global.eq.BURST,agent_global.eq.GHOST)&order=id.desc&limit=8';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(8000)}).then(function(x){return x.json();});
-    sec.alertSummary=(Array.isArray(r)?r:[]).map(function(b){return b.summary;}).slice(0,6);
+    sec.alertSummary=(Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){}
   try { var nash=tryMod('../core/wonders/nash.wonder.js'); if (nash && nash.latestForHam) sec.sports=await nash.latestForHam(hamUid); } catch(e){}
   try { var soul=tryMod('./soul.station.js'); if (soul && soul.surfaceDaily){ var so=await soul.surfaceDaily(hamUid); sec.spiritual=so&&so.offering; } } catch(e){}
@@ -149,8 +227,9 @@ async function assemble(hamUid, moment, sec, prefs, discoveryQuestion) {
       'present. Close warm and encouraging without being cheesy.'+
       (discoveryQuestion?(' At the very end, after the briefing, ask this ONE question naturally, '+
       'like a friend catching up, never like a survey: "'+discoveryQuestion+'"'):'')+
-      ' Never show any agent or system names. Only use the facts given below.\n\nFACTS:\n'+JSON.stringify(sec);
-    var out=await ladder.deliberate(persona.voicePrompt(instruction), '', { max_tokens:1200, timeout:40000 });
+      ' Never show any agent or system names. Only use the facts given below.'+NARRATION_FENCE+
+      '\n\nFACTS:\n'+JSON.stringify(sec);
+    var out=await ladder.deliberate(persona.voicePrompt(instruction + NARRATION_FENCE), '', { max_tokens:1200, timeout:40000 });
     var text=out&&out.content!=null?String(out.content).trim():'';
     return text? persona.applyPersona(text) : null; // final identity scrub through the one persona
   } catch(e){ return null; }

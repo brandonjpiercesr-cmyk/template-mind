@@ -78,10 +78,95 @@ async function assembleFounderContext(hamUid, full) {
   return { ok: true, fcx: fcx, chars: fcx.length, packs: beads.length };
 }
 
-// Express mount: GET /founder-bcw?ham=...&full=1 exposes the armory directly.
+// ⬡B:pai.core.founder_context:GATE:founder_bcw_was_open_to_the_world:20260815⬡
+// THIS DOOR WAS OPEN TO ANYONE. GET /founder-bcw served the assembled founder armory,
+// real contact details and family and money context included, to an unauthenticated
+// stranger with no header at all. Verified live before this fix: HTTP 200, 5868 bytes,
+// zero credentials sent.
+//
+// ⬡B:pai.core.founder_context:CORRECTION:the_template_kept_the_retracted_draft:20260815⬡
+// THE CORRECTION THIS FILE WAS OWED, AND DID NOT GET FOR NINETY MINUTES.
+// The first draft of this gate shipped here and in anew. A blind critic then found six
+// defects in it, and every one was corrected in anew and left standing HERE, in the repo
+// whose own CLAUDE.md says it is the mind-template every world inherits. The PR that fixed
+// anew claimed this file was "fixed identically". That claim was FALSE, which makes it the
+// same species of defect as the one it was retracting, written into the same PR. A tenth
+// seat auditing that work caught it. Three real things were still wrong here:
+//
+// 1. THE FIRST DRAFT'S CENTRAL CLAIM, verbatim, was still sitting above: "Its own sibling
+//    doors on this service already refuse properly, so the armory was the one surface that
+//    never learned to say no." That is FALSE. routes/brain.graph.view.routes.js in the
+//    sibling repo gates GET /brain/graph/data with the fail-open coderKeyOk() this very
+//    comment argues against, and that route returns each bead's `summary`, byte-for-byte
+//    what this file serves in default mode. Removed rather than softened.
+// 2. A HAND-ROLLED THIRD COMPARATOR, against the one-source law. Gone, see below.
+// 3. THE CROSS-WORLD READ HOLE was still open: req.query.ham went straight through.
+//
+// This door is not mounted in this repo today, so the hole was latent-in-the-seed rather
+// than live. That is a reason it went unnoticed, not a reason it was acceptable. A seed
+// defect ships to every stranger's world at once.
+//
+// FAILS CLOSED, NOT OPEN. The board's coderKeyOk() helper returns TRUE when its env key
+// is unset, which is a reasonable default for a coder wall and the wrong one for the
+// founder's private context: an unset var would silently reopen this exact hole. Here an
+// unconfigured key is a 503 and serves nothing. A door guarding one real person must never
+// treat "not configured yet" as "let everyone in".
+//
+// ONE SOURCE FOR THE COMPARISON, AND AN HONEST NOTE ON WHAT IT BUYS. The first draft
+// hand-rolled a constant-time compare and its commit claimed it was "length safe so a wrong
+// key cannot be narrowed down by timing". That claim was backwards: an early return on
+// length is precisely what leaks. This now uses the repo's existing crypto.timingSafeEqual
+// helper, which is the correct ONE-SOURCE choice. But the same auditor checked it, and the
+// shared helper ALSO returns early on a length mismatch, so the timing half of the original
+// justification is still not true and is not claimed here. What the change buys is one
+// source instead of three, which is the real reason to make it.
+//
+// THE KEY IS NOT FOUNDER-SCOPED TODAY, said plainly rather than implied. FOUNDER_BCW_KEY is
+// an override that nothing sets, so in practice this resolves to CCWA_KEY, the shared coder
+// key. That closes the anonymous hole, which was the leak. It does NOT make the armory a
+// founder-only surface, and nobody reading this should believe it does.
+//
+// IDENTITY IS ENV-ONLY. Key and ham both come from env with no literal fallback of any kind,
+// so this file stays a true zero for every world that inherits it.
+var _crypto = require('node:crypto');
+
+function founderBcwKey() {
+  return String(process.env.FOUNDER_BCW_KEY || process.env.CCWA_KEY || '').trim();
+}
+
+// One comparison, not a third hand-rolled copy. Matches core/webhook.guard.js#sameText in
+// the sibling repo; this repo has no webhook.guard module to require, so the same three
+// lines are used rather than inventing a different shape.
+function sameText(a, b) {
+  var left = Buffer.from(String(a == null ? '' : a), 'utf8');
+  var right = Buffer.from(String(b == null ? '' : b), 'utf8');
+  return left.length === right.length && _crypto.timingSafeEqual(left, right);
+}
+
+// ⬡B:pai.core.founder_context:GATE:the_caller_may_not_choose_whose_armory:20260815⬡
+// CROSS-WORLD READ, closed. The first draft passed req.query.ham straight through, so any
+// holder of the shared coder key could name ANY ham_uid and read that world's founder beads.
+// Authenticating a caller is not the same as authorizing which person they may read, and
+// this door had only the first. The HTTP surface now serves this deploy's own configured
+// founder and ignores a caller-supplied ham entirely. In-process callers are unaffected:
+// they call assembleFounderContext() directly with their own resolved ham.
+function thisWorldFounderHam() {
+  return String(process.env.FOUNDER_HAM_UID || process.env.DEFAULT_HAM_UID || '').trim();
+}
+
+// Express mount: GET /founder-bcw?full=1 exposes this world's armory to an authorized lane.
 module.exports = function (app) {
   app.get('/founder-bcw', async function (req, res) {
-    var out = await assembleFounderContext(req.query.ham, req.query.full === '1');
+    res.set('Cache-Control', 'no-store');
+    var expected = founderBcwKey();
+    if (!expected) return res.status(503).json({ ok: false, reason: 'founder_bcw_key_unconfigured' });
+    var supplied = String((req.headers || {})['x-ccwa-key'] || '');
+    if (!sameText(supplied, expected)) {
+      return res.status(401).json({ ok: false, reason: 'ccwa_key_required' });
+    }
+    var ham = thisWorldFounderHam();
+    if (!ham) return res.status(503).json({ ok: false, reason: 'founder_ham_unconfigured' });
+    var out = await assembleFounderContext(ham, req.query.full === '1');
     res.json(out);
   });
 };

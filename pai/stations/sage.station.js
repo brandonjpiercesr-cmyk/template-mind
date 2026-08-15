@@ -24,16 +24,54 @@ function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_
 
 function windowDays(){ var v=parseInt(process.env.SAGE_WINDOW_DAYS,10); return isFinite(v)?v:30; }
 
+// ⬡B:sage.gather_window:FIX:every_row_names_its_writer:20260815⬡ Founder ruling 20260815, the
+// pen on her mind: a bare "stamp_type: summary" string carries no proof of who wrote it, so a
+// row any other agent stamped read to the organ as identical to something she said herself.
+// The doctrine-correct fallback for a source-less row is "(no writer stamp on the row)", never
+// an invented writer name.
+// ⬡B:stations:FIX:bound_the_bytes_mark_the_cut_never_drop_the_row:20260815⬡
+// A row's summary rode into the prompt unbounded. With a busy window a station could
+// serialize hundreds of long summaries into ONE model call, overflow the provider, and hit
+// its own catch path, which reports nothing found. The person then silently loses the whole
+// briefing or sweep, which is a worse and quieter failure than a trimmed one.
+// Bound the BYTES, never the ROWS: every row still rides, none is dropped or ranked away.
+// And the cut is MARKED, never silent. Cold code trimming a mind's stored words and handing
+// them on as whole is the same sin as editing her answer; saying plainly that the row was cut,
+// and by how much, carries the fact instead of hiding it.
+var ROW_SUMMARY_MAX = 400;
+function boundSummary(v) {
+  var s = String(v || '');
+  if (s.length <= ROW_SUMMARY_MAX) return s;
+  return s.slice(0, ROW_SUMMARY_MAX) + ' [row cut here at ' + ROW_SUMMARY_MAX + ' of '
+    + s.length + ' characters, the rest is in the record]';
+}
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[' + (b && b.stamp_type || '?') + ' | written by ' + writer + '] ' + boundSummary(b && b.summary);
+}
+
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
+
 // Gather a long window of the HAM's activity (summaries only, to keep it cheap). Cold.
 async function gatherWindow(hamUid, days) {
   try {
     var since = new Date(Date.now() - days*24*3600*1000).toISOString();
     var url = _bu()+'/rest/v1/'+_tbl()+
-      '?select=summary,stamp_type,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '?select=summary,stamp_type,source,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
       '&created_at=gte.'+encodeURIComponent(since)+'&order=id.desc&limit=200';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(12000) }).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return (b.stamp_type||'')+': '+(b.summary||'');});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 
@@ -65,8 +103,12 @@ async function reconcileObservations(hamUid, moment, recentWindow) {
       'using the recent activity, decide if the pattern has RESOLVED or been acted on ("closed") '+
       'or is STILL ongoing ("open"). Return a JSON array aligned in order: [{index, status}]. Do '+
       'not keep a pattern alive just to have something to say.';
-    var payload={ observations:open.map(function(o,ix){return {index:ix, pattern:o.pattern};}), recent:(recentWindow||[]).slice(0,25) };
-    var out=await ladder.deliberate(persona.voicePrompt(sys), JSON.stringify(payload), { json:true, max_tokens:500, timeout:25000 });
+    // ⬡B:sage.reconcile_observations:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡
+    // gatherWindow's own query already bounds this window to 200 rows; re-slicing to 25 here
+    // was a second, code-level decision on top of that read, the double cap the founder's
+    // ruling forbids.
+    var payload={ observations:open.map(function(o,ix){return {index:ix, pattern:o.pattern};}), recent:recentWindow||[] };
+    var out=await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), JSON.stringify(payload), { json:true, max_tokens:500, timeout:25000 });
     var decisions=JSON.parse(String(out&&out.content||'[]').replace(/```json|```/g,'').trim());
     if (!Array.isArray(decisions)) decisions=[];
     var closed=0;
@@ -100,7 +142,7 @@ async function assess(hamUid, options) {
       'of activity summaries, return a JSON array of {pattern, horizon, evidence, suggested_move} '+
       'ONLY for patterns that truly stand out. If nothing clear stands out, return []. Never '+
       'manufacture an insight from thin evidence.';
-    var out = await ladder.deliberate(persona.voicePrompt(sys), window.join('\n'), { json:true, max_tokens:800, timeout:35000 });
+    var out = await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), window.join('\n'), { json:true, max_tokens:800, timeout:35000 });
     var text = out && out.content!=null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (!Array.isArray(arr)) arr=[];
