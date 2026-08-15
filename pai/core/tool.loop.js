@@ -6602,8 +6602,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try {
         var _englishRewrite = await _callPaiLadder(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
+          // ⬡B:core.tool_loop:FIX:the_waiver_this_call_asked_for_is_now_a_real_one:20260815⬡
+          // This said `noGuard:true`, which core/model.ladder.js never read, so this rewrite ran
+          // under the very CJK rule it exists to satisfy and every rung rejected the correct
+          // answer whenever that answer must keep one glyph. The intent was always right; the
+          // option was dead. It is now `allowNonEnglish`, which waives the CJK OPINION and only
+          // that: an empty answer and a declared JSON contract still refuse for this caller
+          // exactly as for every other one. See the ladder for why a blanket bypass was the wrong
+          // repair. `noGuard` is removed rather than kept beside it, because a dead option sitting
+          // next to a live one is the next coder's trap.
           String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
-            timeout:12000, noGuard:true });
+            timeout:12000, allowNonEnglish:true });
         // ⬡B:core.tool_loop:FIX:a_failed_rewrite_never_deletes_a_finished_answer:20260815⬡
         // Both branches used to assign `''`, so one CJK codepoint plus one ladder failure blanked
         // a complete answer and the person got the canned working-limit line instead. Waking a
