@@ -1153,12 +1153,26 @@ async function repairRawJsonAnswer(answer, context, callLadder) {
         { seat: REPAIR_SEAT, timeout: 8000, max_tokens: 120, temperature: 0.3 });
     } catch (eRepair) { reply = null; }
     var spoken = reply && reply.content ? String(reply.content).trim() : '';
+    // Codex review, live: the first cut here still cold-authored a human-facing sentence
+    // ("I am not able to put that into words right now...") on an unreachable seat, and that
+    // string is exactly what this whole conversion exists to stop -- a sentence nobody said
+    // riding into her memory as her_answer. An unreachable seat now returns NO answer at all,
+    // never a fallback sentence, the same shape as agents/dawn.js#brief's own conversion. The
+    // caller (runPAIInner) already owns the honest path for an empty finalAns: the
+    // terminal_no_answer_single_repair seam gets one more real attempt, and if that also comes
+    // back empty, the council_answer_hollow_protocol gate at the end of the turn refuses
+    // ok:false rather than shipping cold-authored bytes. The raw JSON itself never reaches the
+    // person either way, because an empty answer is not human-facing.
     if (!spoken) {
-      // Real refusal, never the old hardcoded line. A raw-JSON leak must still never reach the
-      // person, so this still replaces the answer; it replaces it with an honest admission
-      // rather than a sentence cold code invented in her name.
-      return { answer: 'I am not able to put that into words right now. Ask me again in a moment.',
-        stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
+      return { answer: '', stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
+    }
+    // Codex review, live: the repair seat's own output was never validated. A seat that answers
+    // with JSON instead of a sentence (a misconfigured seat, a model that ignored the system
+    // prompt) would ship that JSON straight to the person -- the exact leak this function exists
+    // to catch, now caused by the fix instead of prevented by it. Same detection this function
+    // already uses on the ORIGINAL answer, applied to the repaired one before it ships.
+    if (/^[[{]/.test(spoken)) {
+      return { answer: '', stamp: 'raw_json_answer_repair_itself_raw', why: why };
     }
     return { answer: spoken, stamp: 'raw_json_answer_caught', why: why };
   }
@@ -7499,8 +7513,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // an unreachable seat is an honest refusal, never the old hardcoded substitution. The detection
   // and the arrival exemption stay cold, as they always were; only the sentence moved.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
+    // Codex review, live: this call passed repairRawJsonAnswer's own fixed 8s timeout but not
+    // _modelRequestSignal(), so on a voice turn with less than 8s of budget left it could run
+    // past PAI_VOICE_MODEL_BUDGET_MS where every other recovery call in this closure settles
+    // inside it. The signal is merged in here, at the one guarded door, exactly like the other
+    // _callPaiLadder call sites in this same closure (e.g. the repair call two screens up):
+    // repairRawJsonAnswer itself stays ignorant of voice deadlines, same as before, and the
+    // wrapper supplies the real one at call time.
     var _rawRepair = await repairRawJsonAnswer(finalAns, identity && identity.council_context,
-      function (sys, user, opts) { return _callPaiLadder(sys, user, opts); });
+      function (sys, user, opts) {
+        return _callPaiLadder(sys, user, Object.assign({}, opts, { signal: _modelRequestSignal() }));
+      });
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
   }
