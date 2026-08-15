@@ -224,8 +224,20 @@ function runPaiHarness(t, options) {
     }
   };
 }
-test('runPAI tracker recovery returns an honest fallback without a false silent stamp',
+test('no mind answered at the working limit, so the turn commits nothing and says why',
   { concurrency:false }, async function (t) {
+    // ⬡B:test.doctrine_blocked_fallback:RETIRE:this_pinned_a_cold_sentence_as_her_answer:20260815⬡
+    // THIS TEST USED TO ASSERT:
+    //   assert.match(result.answer, /logged your full request so nothing is lost/);
+    //   assert.equal(harness.calls.keeper[0].answer, result.answer);
+    // It REQUIRED a coder's sentence to be the committed answer AND to be banked as hers.
+    // memory.keeper writes that value as "SHE ANSWERED: " at the reader floor and fcw.builder
+    // replays it into her RECENT CONTEXT, so the suite was pinning planted memory in the seed
+    // every world inherits. The doctrine is explicit that a test pinning cold behavior is
+    // itself nasty cough and must not outlive the writer it protects. The writer was converted
+    // in the same window (anew 63c89a5, sister here); this is its pin, retired with it.
+    // The twin in anew's tests/r1e.silence.boundary.test.js was already retired; this copy was
+    // missed, which is exactly why a synced pair needs both sides checked.
     const harness = runPaiHarness(t, {
       telemetry:true,
       message:'Can you send the update?',
@@ -236,27 +248,26 @@ test('runPAI tracker recovery returns an honest fallback without a false silent 
     const result = await harness.run();
     const steps = harness.calls.steps.map(function (entry) { return entry.step; });
 
-    assert.equal(result.ok, true, result.reason);
-    assert.match(result.answer, /logged your full request so nothing is lost/);
-    // ⬡B:tests.r1e_silence:SUPERSEDE:the_last_word_gets_its_own_budget:20260726⬡
-    // This was 1, and that single shared budget is why the founder met a canned sentence.
-    // exhaustion_forced_synthesis, the full-cap "answer the whole ask, do not narrow"
-    // recovery, was gated on the SAME flag the earlier bounded repair sets, so on the exact
-    // path it was written for it could never run. One flag was doing two jobs: bounding
-    // repair spend, and bounding the last word before a canned line goes to a human. The
-    // exhaustion synthesis has its own single-attempt budget now, so this turn makes two
-    // bounded ladder attempts before the honest limit line, not one. Both still return
-    // empty here, so the honest fallback asserted above is unchanged (#uncap, CLAIR).
-    assert.equal(harness.calls.ladder.length, 2);
+    assert.equal(result.ok, false,
+      'a turn no mind could speak for must not report success');
+    assert.equal(result.reason, 'exhaustion_no_mind_answered');
+    assert.equal(result.answer, undefined,
+      'no answer may exist when no mind wrote one');
+    // Four bounded rungs before the absence, and not one of them is a coder writing a
+    // sentence: the evidence synthesis, the forced synthesis, then the two-rung wake (this
+    // turn's own bound rung, then the penny rung) that exists so a cheaper mind gets the pen
+    // before silence does. All four return empty here.
+    assert.equal(harness.calls.ladder.length, 4);
     assert.equal(harness.calls.track.length, 1);
     assert.equal(harness.calls.track[0].status, 'BLOCKED');
-    assert.equal(harness.calls.keeper.length, 1,
-      'the working-limit answer cannot claim the request was logged without a verified keeper');
-    assert.equal(harness.calls.keeper[0].question, 'Can you send the update?');
-    assert.equal(harness.calls.keeper[0].answer, result.answer);
-    assert.equal(result.memory_keeper.turn_record.readback_verified, true);
-    assert.equal(harness.calls.council.length, 1);
-    assert.equal(steps.includes('cycle_end_silent'), false,
-      'a tracker-recovered answer was stamped as terminal silence');
-    assert.equal(steps.includes('cycle_end'), true);
+    // THE HEART OF IT. Nothing is banked. Her wall never learns a sentence nobody said, so a
+    // later wake cannot read one back under a heading that calls it her own words.
+    assert.equal(harness.calls.keeper.length, 0,
+      'cold code banked a turn record for an answer no mind ever gave');
+    assert.equal(harness.calls.council.length, 0,
+      'nothing may be committed through the council when no mind wrote the words');
+    assert.equal(steps.includes('cycle_end_silent'), true,
+      'an absence must be stamped as terminal silence, with its own named reason');
+    assert.equal(steps.includes('exhaustion_honest_limit'), true,
+      'the closing FACTS are still recorded: cold code carries facts, it just does not speak');
   });
