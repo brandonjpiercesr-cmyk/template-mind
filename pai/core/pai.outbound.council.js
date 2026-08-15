@@ -179,6 +179,76 @@ function currentCapabilityAnswerBindingReceipt(binding) {
     evidence_count:binding.evidence_count, exact_contract_preserved:true };
 }
 
+// ⬡B:core.pai_outbound_council:FIX:a_passing_writ_was_refused_and_the_person_got_silence:20260815⬡
+// MEASURED LIVE 20260815 on commit 5fd731a, not reasoned about: POST /cara/consult returned
+// HTTP 200 after 119 seconds with {"ok":false,"reason":"writ_native_pass_unverified"}. Her
+// cycle ran for two minutes, WRIT PASSED her words, and cold code then refused to accept
+// WRIT's own pass. The coder asking got nothing at all, and the reason code named nothing,
+// so this had been quietly killing consult turns with a shrug for a receipt.
+//
+// THE ONE CONDITION THAT FAILS, measured directly against board/writ.js, not guessed:
+//   writCheck(text,{mode:'internal'}) -> {ok:true, verdict:'WRIT_PASS', hardFails:[],
+//                                        failed_open:false, organ_decider:'internal_bypass'}
+// routes/cara.routes.js:425 runs a consult with council_context.mode 'internal'.
+// core/pai.outbound.council.js#defaultWritStage passes that through as writContext.internal,
+// board/writ/writ.js:425 then sets organDecider='internal_bypass' and skips the organ block
+// at :428 entirely, because internal mode is exactly the mode where the human-voice organ is
+// inapplicable. So organ_decider is 'internal_bypass' on EVERY consult, by construction, and
+// the old gate demanded the literal string 'model'. Seven of the eight conditions were true.
+//
+// FOUNDER LAW, verbatim, and it is the whole reason the failure mode is the defect:
+//   "What is it with refusals... Who in the hell are we to stop something? Why are you
+//    stopping something? We should be teaching and instructing. Why are you stopping
+//    something and rationalizing it? Your shadow, your WRIT, your meta commentary, all of
+//    that, your Aunt Pam. IF THEY'RE STOPPING, THEY'RE WRONG."
+//
+// CLASSIFIED OUT LOUD, per the 20260814 door law. The grounding contract is an ANCHOR and it
+// STAYS: a capability-bound turn ships the exact bytes that were minted from signed evidence,
+// so she can never claim a capability she does not have. Nothing below weakens that. What is
+// NOT an anchor is the PROVENANCE OF THE JUDGE. These conditions attest which organ cleared
+// her VOICE; they say nothing about whether the answer is true. Capability truth is enforced
+// twice elsewhere and independently, by guardCurrentCapabilityClaim before the binding is
+// minted and again post-council (core/tool.loop.js:8417), on the exact final bytes. So an
+// unverifiable voice attestation can never justify silence, and no case here holds: every
+// one of them ships her grounded answer and records the concern by name on the receipt.
+// One sentence I can defend against his law: nothing is stopped, because the bytes that leave
+// are the same evidence-bound bytes that would have left on the clean path.
+//
+// THE LESSON ALREADY WRITTEN ONE FILE OVER, at metaUnavailableProven below: an allowlist keyed
+// on exact conditions is a gate that silently re-closes. That fix converted a cold refusal in
+// agents/meta_commentary.js into a fail-open that carries its flags, and THIS gate defeated it
+// on the string 'model' alone. So this returns NAMED CONCERNS instead of a boolean: the next
+// reader gets a fact ('writ_organ_decider_internal_bypass') instead of a shrug, and a new
+// legitimate decider name costs a receipt line, never a person's answer.
+function capabilityWritProvenanceConcerns(evidence, writStageOrigin) {
+  var concerns = [];
+  var boundedName = function (value) {
+    return String(value === undefined || value === null ? 'absent' : value)
+      .toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) ||
+      'unnamed';
+  };
+  if (writStageOrigin !== 'default') {
+    concerns.push('writ_stage_origin_' + boundedName(writStageOrigin));
+  }
+  var ev = evidence && typeof evidence === 'object' ? evidence : {};
+  if (ev.verdict !== 'WRIT_PASS') concerns.push('writ_verdict_' + boundedName(ev.verdict));
+  if (!Array.isArray(ev.hard_fails)) concerns.push('writ_hard_fails_not_listed');
+  else if (ev.hard_fails.length !== 0) concerns.push('writ_hard_fails_present');
+  if (ev.organ_decider !== 'model') {
+    concerns.push('writ_organ_decider_' + boundedName(ev.organ_decider));
+  }
+  if (ev.failed_open !== false) concerns.push('writ_failed_open_' + boundedName(ev.failed_open));
+  return concerns;
+}
+
+var CAPABILITY_CONCERN_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+
+function validCapabilityConcernList(value) {
+  return Array.isArray(value) && value.every(function (name) {
+    return typeof name === 'string' && CAPABILITY_CONCERN_NAME.test(name);
+  });
+}
+
 function readCurrentCapabilityAnswerBinding(binding, input) {
   if (!binding) return { present:false, ok:true, receipt:null };
   var authentic = typeof binding === 'object' && currentCapabilityBindings.has(binding);
@@ -3114,6 +3184,53 @@ async function defaultWritStage(ctx) {
   var postMeta = null;
   var postMetaHoldReason = null;
   var requiresHumanRecheck = mode !== 'coding' && mode !== 'internal';
+  // ⬡B:core.pai_outbound_council:FIX:the_consult_minted_no_meaning_packet_and_expression_ate_her_answer:20260815⬡
+  // MEASURED 20260815 on the real path, not reasoned about. The seat before this one removed the
+  // WRIT provenance allowlist that was killing consults; she then died one stage later, and the
+  // measurement is exact:
+  //   defaultWritStage({context:{mode:'internal'}})    -> ok:true, WRIT_PASS, her words intact
+  //   writMeaningPacketFrom(that result)               -> NULL
+  //   defaultAnuExpressionStage(...)                   -> ok:false,
+  //                                        reason:'writ_meaning_shadow_packet_unbound', answer:''
+  // WRIT passed her, the packet was never minted, and the exit gate demanded the artifact its own
+  // upstream had just refused to make. One boolean did it: the mint at the bottom of this function
+  // was keyed on requiresHumanRecheck, which exists to answer a DIFFERENT question (should the
+  // META_COMMENTARY organ re-read these bytes), and internal mode is excluded from that one for a
+  // good reason that has nothing to do with meaning. The identical shape was fixed on 20260815 for
+  // internal CODING turns and the fix never covered mode 'internal'.
+  //
+  // WHAT MODE 'internal' ACTUALLY IS, counted rather than assumed. Exactly ONE production caller
+  // sets it: routes/cara.routes.js:425, the /cara/consult door, where a human coder reads her
+  // prose. It is not a mixed bag. The machine-contract turn is a DIFFERENT signal that already
+  // exists and is already handled: advisors/coding.js:959 sends {mode:'coding',
+  // internal_deliberation:true}, which internalCodingDeliberation() reads and which returns early
+  // above with WRIT_INTERNAL_CODING_PASS. So no new mode name is invented here; the real signal
+  // that separates the two was already in the file.
+  //
+  // WHY MINT AND RUN THE SHADOW INSTEAD OF ADDING 'internal' TO A BYPASS LIST, which is the easy
+  // move and the wrong one. Bypassing the meaning shadow was RIGHT for the coding turn because its
+  // answer is a typed machine contract that reaches no person and is re-validated field by field
+  // by advisors/coding.js after this council returns. A consult is the opposite: it is prose, and
+  // a human reads it. Bypassing there would be the third silencer wearing a different hat, since
+  // her meaning would go unjudged on exactly the turns a person reads it. So the packet is minted
+  // and Penny SHADOW actually runs.
+  //
+  // FOUNDER LAW, verbatim, and it is why the empty string was the defect and not a safety feature:
+  //   "Who in the hell are we to stop something? Why are you stopping something? We should be
+  //    teaching and instructing... your shadow, your WRIT, your meta commentary, all of that, your
+  //    Aunt Pam. IF THEY'RE STOPPING, THEY'RE WRONG."
+  // Nothing here stops anything: this turns a judge ON for traffic that was getting no judgment
+  // and no answer at all. ONE SENTENCE I CAN DEFEND: her consult words were being erased by a gate
+  // demanding a receipt nobody was allowed to write, and the fix writes the receipt rather than
+  // waiving it.
+  //
+  // CLASSIFIED OUT LOUD, per the 20260814 door law. The meaning shadow is an ANCHOR, not a cap: it
+  // proves the bytes a person reads still mean what she meant, and it is enforced nowhere else in
+  // the cycle. So it is not waived here for anyone. What was never an anchor is the ACCIDENTAL
+  // coupling of that anchor to the META recheck flag, and only that coupling is cut.
+  //
+  // 'coding' is the one mode whose answer is not prose a person reads. Everything else is.
+  var humanReadsThisProse = mode !== 'coding';
   if (requiresHumanRecheck && result && result.ok === true && writOutputBound && output.trim()) {
     var metaOrgan = require('../agents/meta_commentary.js');
     var postState = {pendingOutbound:output};
@@ -3189,7 +3306,7 @@ async function defaultWritStage(ctx) {
   var writHeld = !!(result && result.ok !== true);
   var writReceiptVerified = !ctx.hamUid || writOutputBound;
   if (result && result.ok === true && !writReceiptVerified) output = '';
-  var meaningPacket = requiresHumanRecheck && output.trim() && ctx.runtime &&
+  var meaningPacket = humanReadsThisProse && output.trim() && ctx.runtime &&
     typeof ctx.runtime === 'object' ? Object.freeze({
       ham_uid:String(ctx.hamUid || '').toUpperCase(),request_id:String(ctx.requestId || ''),
       cycle_id:String(ctx.cycleId || ''),pre_writ_draft:preWritDraft,
@@ -3201,6 +3318,20 @@ async function defaultWritStage(ctx) {
       post_meta_bytes:Buffer.byteLength(output,'utf8')
     }) : null;
   if (meaningPacket) writMeaningPacketRuns.set(meaningPacket,ctx.runtime);
+  // ⬡B:core.pai_outbound_council:BUILD:the_mint_side_says_out_loud_whether_it_minted:20260815⬡
+  // THE REASON THIS BUG SURVIVED, and the part worth keeping after the one-boolean fix above.
+  // The failure presented only at the CONSUMER: 'writ_meaning_shadow_packet_unbound', a reason
+  // that describes the demand and says nothing about the supply. Read from the outside it is
+  // indistinguishable from a forged, replayed or cross-HAM packet, which is a real attack this
+  // council must hold on, so it read as the anchor working rather than the anchor starving. The
+  // mint side never said a word, so nobody looked at it, and every consult burned two minutes of
+  // paid cycle to ship the empty string.
+  // This names the fact and decides nothing: whether the packet APPLIED to this turn, whether it
+  // was actually MINTED, and when it was not, which of the three causes it was. Bounded phrases
+  // only, never answer bytes. Cold code may detect and name; it may not judge her meaning.
+  var meaningPacketReason = meaningPacket ? 'minted' :
+    (!humanReadsThisProse ? 'not_applicable_machine_contract_turn' :
+      (!output.trim() ? 'no_output_to_bind' : 'no_stage_runtime_to_mint_into'));
   var stageResult = {
     ok: !!(result && result.ok === true && output.trim().length > 0 && writReceiptVerified),
     answer: output,
@@ -3227,6 +3358,8 @@ async function defaultWritStage(ctx) {
       why_changed:(result && result.why_changed) || null,
       semantic_verdict:(result && result.semantic_verdict) || null,
       semantic_changes:(result && result.semantic_changes) || [],
+      meaning_packet:{ applies:humanReadsThisProse, minted:!!meaningPacket,
+        reason:meaningPacketReason },
       post_writ_meta:postMeta && postMeta.metaCommentary ? {
         ok:postMeta.metaCommentary.ok === true,
         decider:postMeta.metaCommentary.decider || null,
@@ -3424,6 +3557,16 @@ async function defaultAnuExpressionStage(ctx) {
         ? 'ANU_EXPRESSION_PASS_SHADOW_DISSENT' : 'ANU_EXPRESSION_PASS') : meaningReason),
     evidence: { channel: result && result.channel, blocked: !!(result && result.blocked),
       exact_transport:result && result.output === ctx.answer,
+      // ⬡B:core.pai.outbound.council:BUILD:absent_and_forged_are_not_the_same_fact:20260815⬡
+      // The other half of the mint declaration added in defaultWritStage above. The reason code
+      // stays 'writ_meaning_shadow_packet_unbound' on purpose, because the HOLD is identical and
+      // correct in both cases and no test that pins that hold is being softened here. What was
+      // missing is the FACT underneath it. A packet that was never minted (an upstream that did
+      // not supply) and a packet that was minted and then failed its binding (a replay, a
+      // cross-HAM substitution, a mutated candidate: real attacks this council must stop) are
+      // opposite problems that produced one identical string, and that is precisely why the
+      // consult outage read for a full day as the anchor doing its job.
+      meaning_packet:{ present:!!packet, bound:packetBound },
       meaning_shadow:meaning ? {ok:meaning.ok === true,reason:meaning.reason || null,
         decision:meaning.shadow && meaning.shadow.decision || null,
         receipt_digest:meaning.receipt && meaning.receipt.digest || null,
@@ -4307,36 +4450,50 @@ async function runOutboundCouncil(input, injected) {
         observed_output_bytes:typeof proposedAnswer === 'string'
           ? Buffer.byteLength(proposedAnswer, 'utf8') : null,
         grounded_input_preserved:false,
+        binding_concerns:[],
+        writ_provenance:null,
         hold_reason:normalized.ok ? null : String(normalized.reason || 'stage_held').slice(0,120)
       };
-      var nativeWritPass = stage === 'WRIT' && normalized.ok && humanStageAnswer &&
-        deps.stageOrigins.WRIT === 'default' &&
-        normalized.evidence && normalized.evidence.verdict === 'WRIT_PASS' &&
-        Array.isArray(normalized.evidence.hard_fails) &&
-        normalized.evidence.hard_fails.length === 0 &&
-        normalized.evidence.organ_decider === 'model' &&
-        normalized.evidence.failed_open === false;
-      if (stage === 'WRIT' && nativeWritPass) {
+      // ⬡B:core.pai_outbound_council:FIX:an_unverifiable_attestation_records_a_concern_it_never_silences_her:20260815⬡
+      // The three branches below used to hold two different silencers. Both are gone and both
+      // are replaced by the SAME remedy, because the same founder law condemns both: "IF
+      // THEY'RE STOPPING, THEY'RE WRONG." Her grounded answer, the exact bytes bound to signed
+      // evidence, is carried forward, and the specific thing that could not be verified is
+      // named on the receipt so a woken reader judges it later. Cold code DETECTS and RECORDS
+      // here; it decides nothing about her meaning and erases none of her words.
+      //
+      // 1. WRIT passed and its provenance did not verify. Was ok:false with the anonymous
+      //    reason 'writ_native_pass_unverified', which is what killed every live consult
+      //    (see capabilityWritProvenanceConcerns above for the measured cause). Now the
+      //    grounded bytes ship and the receipt carries writ_provenance 'unverified' with the
+      //    exact failed conditions.
+      // 2. A non-WRIT stage proposed bytes other than the bound answer. Was ok:false with
+      //    '<stage>_bound_answer_mutated', a second silence sitting directly behind the first.
+      //    The unbound proposal is still refused, exactly as before, because unbound bytes
+      //    have no evidence behind them and the anchor is the whole point of the binding. What
+      //    changes is that refusing the proposal no longer means refusing the person: the
+      //    grounded answer is restored, the proposal's own digest and byte count stay on the
+      //    receipt as the record of what that stage tried to say, and the concern is named.
+      var groundedCarry = normalized.ok && humanStageAnswer;
+      if (stage === 'WRIT' && groundedCarry) {
+        var writConcerns = capabilityWritProvenanceConcerns(normalized.evidence,
+          deps.stageOrigins.WRIT);
         normalized.answer = capabilityBinding.answer;
         capabilityContractEvidence.grounded_input_preserved=true;
         capabilityContractEvidence.observed_output_transformed=
           proposedAnswer !== capabilityBinding.answer;
+        capabilityContractEvidence.binding_concerns=writConcerns;
+        capabilityContractEvidence.writ_provenance=writConcerns.length
+          ? 'unverified' : 'native_writ_organ';
         normalized.evidence = Object.assign({}, normalized.evidence || {}, {
           current_capability_contract:capabilityContractEvidence
         });
         humanStageAnswer = true;
-      } else if (stage === 'WRIT' && normalized.ok && humanStageAnswer) {
-        normalized.ok = false;
-        normalized.reason = 'writ_native_pass_unverified';
-        capabilityContractEvidence.hold_reason=normalized.reason;
-        normalized.evidence = Object.assign({}, normalized.evidence || {}, {
-          current_capability_contract:capabilityContractEvidence
-        });
-      } else if (normalized.ok && humanStageAnswer &&
-          proposedAnswer !== capabilityBinding.answer) {
-        normalized.ok = false;
-        normalized.reason = stage.toLowerCase() + '_bound_answer_mutated';
-        capabilityContractEvidence.hold_reason=normalized.reason;
+      } else if (groundedCarry && proposedAnswer !== capabilityBinding.answer) {
+        normalized.answer = capabilityBinding.answer;
+        capabilityContractEvidence.grounded_input_preserved=true;
+        capabilityContractEvidence.binding_concerns=[
+          stage.toLowerCase() + '_proposed_unbound_answer'];
         normalized.evidence = Object.assign({}, normalized.evidence || {}, {
           current_capability_contract:capabilityContractEvidence
         });
@@ -5199,19 +5356,35 @@ function verifyCouncilReceipt(receipt, expected) {
           contract.grounding_evidence_digest !== capabilityReceipt.evidence_digest ||
           !/^[a-f0-9]{64}$/.test(String(contract.observed_output_digest || '')) ||
           !Number.isInteger(contract.observed_output_bytes) ||
-          (contractStage.stage !== 'WRIT' &&
+          !validCapabilityConcernList(contract.binding_concerns) ||
+          // ⬡B:core.pai_outbound_council:FIX:the_verifier_carried_the_same_silence_one_layer_down:20260815⬡
+          // This reader is the second half of the same defect. It independently re-demanded
+          // organ_decider 'model' and an exact non-WRIT output digest, so relaxing only the
+          // council branch above would have moved the silence from 'writ_native_pass_unverified'
+          // to 'council_commit_unverified' and changed nothing for the person. It stays a
+          // CONSISTENCY check and never a second judge: a receipt that carries no concern must
+          // hold every native condition, and a receipt that carries concerns must name them and
+          // must not also claim a native pass. A stage whose proposal was refused and replaced
+          // by the grounded answer is exactly the case where its observed output legitimately
+          // differs from the bound bytes, and its concern line is what says so.
+          (contractStage.stage !== 'WRIT' && contract.binding_concerns.length === 0 &&
             (contract.observed_output_digest !== capabilityReceipt.answer_digest ||
              contract.observed_output_bytes !== capabilityReceipt.answer_bytes))) return false;
     }
-    if (!writContract || writContract.grounded_input_preserved !== true ||
-        writContract.grounded_input_digest !== capabilityReceipt.answer_digest ||
-        !/^[a-f0-9]{64}$/.test(String(writContract.observed_output_digest || '')) ||
-        !Number.isInteger(writContract.observed_output_bytes) ||
+    if (!writContract || !validCapabilityConcernList(writContract.binding_concerns)) return false;
+    if (writContract.binding_concerns.length === 0) {
+      if (writContract.writ_provenance !== 'native_writ_organ') return false;
+    } else if (writContract.writ_provenance !== 'unverified') return false;
+    if (writContract.binding_concerns.length === 0 && (
         writStage.evidence.verdict !== 'WRIT_PASS' ||
         !Array.isArray(writStage.evidence.hard_fails) ||
         writStage.evidence.hard_fails.length !== 0 ||
         writStage.evidence.organ_decider !== 'model' ||
-        writStage.evidence.failed_open !== false) return false;
+        writStage.evidence.failed_open !== false)) return false;
+    if (writContract.grounded_input_preserved !== true ||
+        writContract.grounded_input_digest !== capabilityReceipt.answer_digest ||
+        !/^[a-f0-9]{64}$/.test(String(writContract.observed_output_digest || '')) ||
+        !Number.isInteger(writContract.observed_output_bytes)) return false;
   }
 
   var unsignedReceipt = Object.assign({}, receipt);
@@ -5581,6 +5754,7 @@ module.exports = {
   runOutboundCouncil: runOutboundCouncil,
   mintCurrentCapabilityAnswerBinding: mintCurrentCapabilityAnswerBinding,
   currentCapabilityAnswerBindingReceipt: currentCapabilityAnswerBindingReceipt,
+  capabilityWritProvenanceConcerns: capabilityWritProvenanceConcerns,
   verifyCouncilReceipt: verifyCouncilReceipt,
   validateCouncilReceipt: verifyCouncilReceipt,
   verifyCommittedCouncil: verifyCommittedCouncil,
