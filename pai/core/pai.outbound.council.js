@@ -4487,7 +4487,24 @@ async function runOutboundCouncil(input, injected) {
             // honest signal of whether a verdict was actually returned.
             var _reRawInvalid = !_reRaw || typeof _reRaw !== 'object' ||
               (typeof _reRaw.answer !== 'string' && typeof _reRaw.output !== 'string');
-            var _reUnavailable = _reThrew || _reRawInvalid || !_reHuman;
+            // Codex review, live, round four: a fourth shape slips past every check above.
+            // The SHADOW stage's own "no real judgment happened" outcomes (relayUnavailableHold,
+            // shadowDecisionUnavailableHold: the judge subsystem itself never produced a verdict)
+            // return a well-formed object with `answer: ctx.answer` -- the healed text echoed
+            // back verbatim, not a verdict on it -- so it is a valid string, human-facing, and
+            // passes every shape check above while still being zero verdict. The one honest,
+            // stage-shape-independent signal that no real judgment ran is SHADOW's own
+            // evidence.judgment.judgment_status, which this file already sets to exactly
+            // 'UNAVAILABLE' with reason 'no_real_judgment' for precisely this case (see the
+            // ternary above building this function's own return object). Checked by the FULL
+            // exact shape, not the status field alone, so a legitimate rejection that merely
+            // shares one field can never be mistaken for an unavailable judge.
+            var _reJudgment = _reNorm.evidence && _reNorm.evidence.judgment;
+            var _reJudgmentUnavailable = !!(_reJudgment &&
+              _reJudgment.judgment_status === 'UNAVAILABLE' &&
+              _reJudgment.approved === false &&
+              _reJudgment.reason === 'no_real_judgment');
+            var _reUnavailable = _reThrew || _reRawInvalid || !_reHuman || _reJudgmentUnavailable;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
             // Replace the held receipt in place and span the original stage input
