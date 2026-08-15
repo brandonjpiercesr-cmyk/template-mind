@@ -14,15 +14,42 @@ var WORLD_PATTERNS = Object.freeze({
   gmg: Object.freeze(['globalmajority', 'globalmajoritygroup', 'global majority'])
 });
 
-// Credential patterns to block outbound (regex)
+// ⬡B:board.pam:PEN:a_fact_about_a_person_is_not_a_credential:20260815⬡
+// CREDENTIAL_PATTERNS is an ANCHOR list and it stays one: every entry is a provider SECRET, a
+// thing that hands someone else's hands real power, and a leak is an irreversible person-effect.
+// That is why a match here is a hard hold with no negotiation. Two entries were never that.
+//
+// `/\+1[0-9]{10}/` named `phone_number` was a fact ABOUT A PERSON wearing a credential's name.
+// MEASURED before this change, via checkCredentials:
+//   "Your mom called from +1XXXXXXXXXX this morning."
+//     -> {ok:false, reason:'credential_in_outbound', credential_type:'phone_number'}
+// In the council that heals into an LLM rewrite that DELETES the number from her mouth, and at
+// STAMP, which is deliberately excluded from healing, it kills the turn outright. Telling a
+// person who called is a life assistant's whole job.
+//
+// WHO MAY SEE A FACT ABOUT A PERSON IS THE PEOPLE-TIER QUESTION, and it is already answered
+// structurally, by machinery that reads the READER rather than the string:
+// core/privacy/people.tier.js#structuralFilter turns the viewer's ceiling into an acl_tier
+// DATABASE predicate, so a row above that ceiling is never selected and never travels; the same
+// file fails closed to STRICTEST for an unresolved reader and takes T0 only from env; and
+// pamRelease below re-applies the tier and mark gates before any mind is spent, with everything
+// unclassified going to a woken mind that fails closed.
+// SO THIS DELETES A DUPLICATE WEARING THE WRONG NAME, not a boundary, and a broken duplicate at
+// that: pamRelease already rules that the owner holds everything in his own world, and this
+// regex was overruling that ruling with a substring match, for the one reader the ladder says
+// has no boundary to enforce.
+//
+// The supabase URL was the second. A HOSTNAME IS NOT A SECRET. The key is, and the key is still
+// caught by jwt_token below, which matches the exact HS256 header every Supabase anon and
+// service key carries. Naming infrastructure is worth a FLAG on the receipt, never a held turn.
+// Regex wakes, regex never decides (20260807): an advisory DETECTS and rides the receipt, and
+// the mind reading the receipt decides what it means.
 var CREDENTIAL_PATTERNS = [
   { pattern: /gsk_[A-Za-z0-9]{20,}/, name: 'groq_key' },
   { pattern: /ghp_[A-Za-z0-9]{20,}/, name: 'github_token' },
   { pattern: /github_pat_[A-Za-z0-9]{30,}/, name: 'github_fine_grained_pat' },
   { pattern: /rnd_[A-Za-z0-9]{20,}/, name: 'render_key' },
   { pattern: /sk-or-v1-[a-z0-9]{40,}/, name: 'openrouter_key' },
-  { pattern: /\+1[0-9]{10}/, name: 'phone_number' },
-  { pattern: /https:\/\/[a-z]{15,}\.supabase\.co/, name: 'supabase_url' },
   { pattern: /eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]{20,}/, name: 'jwt_token' },
   // Provider keys the CATHY.SHADOW audit found leaked across the repos. The
   // outbound firewall must catch every family, not only the original seven. The
@@ -39,6 +66,13 @@ var CREDENTIAL_PATTERNS = [
   { pattern: /\bxai-[A-Za-z0-9]{20,}/, name: 'xai_key' },
   { pattern: /\bAKIA[0-9A-Z]{16}/, name: 'aws_access_key' },
   { pattern: /\bxox[baprs]-[A-Za-z0-9-]{10,}/, name: 'slack_token' }
+];
+
+// DETECTED AND CARRIED, NEVER DECIDED. An advisory never flips ok and never holds a turn. It
+// exists so the fact that she named infrastructure reaches a receipt a mind can read, which is
+// the whole difference between a regex that wakes and a regex that decides.
+var ADVISORY_PATTERNS = [
+  { pattern: /https:\/\/[a-z]{15,}\.supabase\.co/, name: 'infrastructure_hostname' }
 ];
 
 function safeContentText(content) {
@@ -64,6 +98,13 @@ function checkCredentials(content) {
         return { ok: false, reason: 'credential_in_outbound', credential_type: p.name };
       }
     }
+    var advisories = [];
+    for (var j = 0; j < ADVISORY_PATTERNS.length; j++) {
+      if (ADVISORY_PATTERNS[j].pattern.test(str)) advisories.push(ADVISORY_PATTERNS[j].name);
+    }
+    // Present only when non-empty, so a clean scan keeps its exact historical {ok:true} shape
+    // and the two deepEqual pins on this return value stay true without being touched.
+    if (advisories.length) return { ok:true, advisories:advisories };
   } catch (e) {
     return { ok:false, reason:'credential_scan_unavailable' };
   }
@@ -113,12 +154,18 @@ function checkEbcFirewall(content, activeWorld) {
 function pamCheck(content, activeWorld) {
   try {
     var flags = [];
+    var advisories = [];
     var credCheck = checkCredentials(content);
     if (!credCheck.ok) flags.push(credCheck);
+    else if (Array.isArray(credCheck.advisories)) advisories = credCheck.advisories;
     var ebcCheck = checkEbcFirewall(content, activeWorld);
     if (!ebcCheck.ok) flags.push(ebcCheck);
-    return { ok: flags.length === 0,
+    var out = { ok: flags.length === 0,
       verdict: flags.length === 0 ? 'PAM_PASS' : 'PAM_HOLD', flags: flags };
+    // Advisory only, and only when present: a clean answer keeps the exact three-key shape two
+    // existing deepEqual pins assert on, so nothing had to be loosened to carry this fact.
+    if (advisories.length) out.advisories = advisories;
+    return out;
   } catch (e) {
     return { ok:false, verdict:'PAM_HOLD',
       flags:[{ ok:false, reason:'pam_security_check_fault' }] };
@@ -322,6 +369,6 @@ async function pamRelease(candidates, ctx, options) {
   };
 }
 
-module.exports = { pamCheck: pamCheck, checkCredentials: checkCredentials, checkMetaCommentary: checkMetaCommentary, checkEbcFirewall: checkEbcFirewall, WORLD_PATTERNS: WORLD_PATTERNS,
+module.exports = { pamCheck: pamCheck, checkCredentials: checkCredentials, checkMetaCommentary: checkMetaCommentary, checkEbcFirewall: checkEbcFirewall, WORLD_PATTERNS: WORLD_PATTERNS, ADVISORY_PATTERNS: ADVISORY_PATTERNS,
   pamRelease: pamRelease, RELEASE_SYSTEM: RELEASE_SYSTEM,
   _test: { _extractJson: _extractJson, _text: _text, _judgeRelease: _judgeRelease } };

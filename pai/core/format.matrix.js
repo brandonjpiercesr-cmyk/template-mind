@@ -13,14 +13,34 @@ function stripMarkdown(text) {
   var t = String(text || '');
   // headers: '# Title' / '## Title' -> just the title, own line, no clutter
   t = t.replace(/^#{1,6}\s*(.+)$/gm, '$1');
-  // bold/italic: **x** or *x* or __x__ or _x_ -> just x (single-char asterisk math is rare
-  // enough in this content that stripping wins; doctrine already bans decorative asterisks)
-  t = t.replace(/\*\*\*(.+?)\*\*\*/g, '$1');
-  t = t.replace(/\*\*(.+?)\*\*/g, '$1');
-  t = t.replace(/\*(.+?)\*/g, '$1');
-  t = t.replace(/__(.+?)__/g, '$1');
-  // inline code: `x` -> x
-  t = t.replace(/`([^`]+)`/g, '$1');
+  // ⬡B:core.format_matrix:PEN:the_formatter_stopped_editing_her_arithmetic:20260815⬡
+  // MIRRORED BY HAND from anew, NOT copied, because this file is not a synced pair and the two
+  // copies have already drifted: this one still carries the 1500-character SMS cap that anew
+  // retired on 20260805, which cuts her mid-sentence. That cap is a separate row and is left
+  // alone here rather than swept in under this change's name.
+  //
+  // THE COMMENT THIS SUPERSEDES said "single-char asterisk math is rare enough in this content
+  // that stripping wins." It is not rare and stripping never wins, because the cost is not a lost
+  // asterisk, it is a WRONG NUMBER in her mouth. MEASURED before this change:
+  //   "Your 2*3 grid and the 5*8 board are ready."  ->  "Your 23 grid and the 58 board are ready."
+  //   "The multiplication is 3 * 4 * 5 = 60."       ->  "The multiplication is 3  4  5 = 60."
+  //   "Copy *.txt and src/**/*.js into the build."  ->  "Copy .txt and src//.js into the build."
+  // This runs BEFORE the outbound council, so the council deliberated over and STAMPED corrupted
+  // arithmetic as hers, which is the receipt vouching for words she never composed.
+  //
+  // THE FIX IS THE MARKDOWN RULE ITSELF, not a wider ban. An emphasis delimiter opens with no
+  // whitespace after it, closes with no whitespace before it, and does not sit between two word
+  // characters. Arithmetic, globs and mid-word snake case each fail at least one of those, so
+  // they survive while every real bold and italic still strips.
+  // ONE CASE HONESTLY LEFT STANDING: a standalone __init__ still strips to init, because with a
+  // space on each side it cannot be told from a real __bold__. Named rather than fixed quietly.
+  t = t.replace(/(^|[^\w*])\*\*\*(?![\s*])([^\n]+?)(?<![\s*])\*\*\*(?![\w*])/g, '$1$2');
+  t = t.replace(/(^|[^\w*])\*\*(?![\s*])([^\n]+?)(?<![\s*])\*\*(?![\w*])/g, '$1$2');
+  t = t.replace(/(^|[^\w*])\*(?![\s*])([^*\n]+?)(?<![\s*])\*(?![\w*])/g, '$1$2');
+  t = t.replace(/(^|[^\w_])__(?![\s_])([^\n]+?)(?<![\s_])__(?![\w_])/g, '$1$2');
+  // inline code: `x` -> x, and a fenced block keeps its fence. The old single-backtick rule ate
+  // one backtick off ```js, so a code block she wrote arrived malformed.
+  t = t.replace(/(?<!`)`([^`\n]+)`(?!`)/g, '$1');
   // horizontal rules: a line of only -, _, or * -> drop entirely
   t = t.replace(/^[\-_*]{3,}\s*$/gm, '');
   // markdown bullets '- item' or '* item' -> a clean bullet
