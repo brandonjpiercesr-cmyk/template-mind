@@ -6604,11 +6604,37 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
           String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
             timeout:12000, noGuard:true });
-        msg.content = _englishRewrite && _englishRewrite.content || '';
-        _stampStep('cjk_output_regenerated', msg.content ? 'english' : 'failed_closed');
+        // ⬡B:core.tool_loop:FIX:a_failed_rewrite_never_deletes_a_finished_answer:20260815⬡
+        // Both branches used to assign `''`, so one CJK codepoint plus one ladder failure blanked
+        // a complete answer and the person got the canned working-limit line instead. Waking a
+        // model to rewrite is the correct AIRCODE shape and it stays. Deciding that the human
+        // receives NOTHING when the repair is unavailable is cold code deciding, and it trades a
+        // cosmetic imperfection for a total loss. A stray glyph is smaller than silence.
+        //
+        // NOT RARE, AND THAT IS THE PART THAT MATTERS: `noGuard:true` above is passed and never
+        // read anywhere in core/model.ladder.js, so the rewrite runs under the ladder's ordinary
+        // content gate, which itself rejects CJK (contentVerdict -> non_english_answer). Any
+        // answer whose CORRECT English form must keep one CJK glyph, a name, a dish, a filename,
+        // the very term the person asked about, is therefore rejected by every rung, deliberate
+        // returns null, and she was blanked. The guard was structurally guaranteed to destroy
+        // exactly the class it was written to handle. Left as a named follow-on rather than
+        // widened here: either honour noGuard in the ladder or drop the dead option.
+        //
+        // Also worth saying plainly, because it shaped how narrow this fix is: the founder has
+        // never said her answers must be English. A corpus search over english, language,
+        // translate, chinese, multilingual returns only "plain English" meaning explain simply,
+        // programming-language vocabulary, and persona accent. The English-only output rule is a
+        // coder's assumption, so this change repairs the destruction and does not touch the
+        // trigger, which is his to rule on.
+        var _rewritten = _englishRewrite && _englishRewrite.content;
+        if (_rewritten) {
+          msg.content = _rewritten;
+          _stampStep('cjk_output_regenerated', 'english');
+        } else {
+          _stampStep('cjk_output_regenerated', 'rewrite_unavailable_original_kept');
+        }
       } catch (_eEnglish) {
-        msg.content = '';
-        _stampStep('cjk_output_regenerated', 'failed_closed');
+        _stampStep('cjk_output_regenerated', 'rewrite_threw_original_kept');
       }
     }
     try{_stampStep('corridor_a_post_stitch','content_len='+String(msg&&msg.content||'').length+' has_tc_tag='+(String(msg&&msg.content||'').indexOf('<tool_call>')!==-1)+' has_fn_tag='+(String(msg&&msg.content||'').indexOf('<function')!==-1)+' finish='+String(ch&&ch.finish_reason||'?'));}catch(_eCA){}
