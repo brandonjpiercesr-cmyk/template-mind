@@ -78,10 +78,49 @@ async function assembleFounderContext(hamUid, full) {
   return { ok: true, fcx: fcx, chars: fcx.length, packs: beads.length };
 }
 
-// Express mount: GET /founder-bcw?ham=...&full=1 exposes the armory directly.
+// ⬡B:pai.core.founder_context:GATE:founder_bcw_was_open_to_the_world:20260815⬡
+// THIS DOOR WAS OPEN TO ANYONE. GET /founder-bcw served the assembled founder armory,
+// real contact details and family and money context included, to an unauthenticated
+// stranger with no header at all. Verified live before this fix: HTTP 200, 5868 bytes,
+// zero credentials sent. Its own sibling doors on this service already refuse properly,
+// so the armory was the one surface that never learned to say no.
+//
+// FAILS CLOSED, NOT OPEN. The board's coderKeyOk() helper returns TRUE when its env key
+// is unset, which is a reasonable default for a coder wall and the wrong one for the
+// founder's private context: an unset var would silently reopen this exact hole. Here an
+// unconfigured key is a 503 and serves nothing. A door guarding one real person must never
+// treat "not configured yet" as "let everyone in".
+//
+// IDENTITY IS ENV-ONLY. The key is read from env with no literal fallback of any kind, so
+// this file stays a true zero for every world that inherits it.
+function founderBcwKey() {
+  return String(process.env.FOUNDER_BCW_KEY || process.env.CCWA_KEY || '').trim();
+}
+
+// Length-safe equality so a wrong key cannot be narrowed down by timing the reply.
+function keyMatches(presented, expected) {
+  var a = String(presented || '');
+  var b = String(expected || '');
+  if (a.length !== b.length) return false;
+  var diff = 0;
+  for (var i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+// Express mount: GET /founder-bcw?ham=...&full=1 exposes the armory to an authorized lane.
 module.exports = function (app) {
   app.get('/founder-bcw', async function (req, res) {
+    var expected = founderBcwKey();
+    if (!expected) {
+      res.set('Cache-Control', 'no-store');
+      return res.status(503).json({ ok: false, reason: 'founder_bcw_key_unconfigured' });
+    }
+    if (!keyMatches((req.headers || {})['x-ccwa-key'], expected)) {
+      res.set('Cache-Control', 'no-store');
+      return res.status(401).json({ ok: false, reason: 'ccwa_key_required' });
+    }
     var out = await assembleFounderContext(req.query.ham, req.query.full === '1');
+    res.set('Cache-Control', 'no-store');
     res.json(out);
   });
 };
