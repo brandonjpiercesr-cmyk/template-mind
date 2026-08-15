@@ -502,7 +502,11 @@ function employmentPrompt(record, truth) {
     lines('SEATS YOU MAY ONLY RECOMMEND', record.capabilities.may_recommend),
     lines('RUN OF SHOW, WAKES', record.capabilities.wakes),
     lines('RUN OF SHOW, HANDS TO', record.capabilities.hands_to),
-    'RECENT CYCLE TRUTH FROM THE WALL' + (truth.partial ? ' (PARTIAL READ)' : '') + ':',
+    'RECENT CYCLE TRUTH FROM THE WALL' + (truth.partial ? ' (PARTIAL READ)' : '') + ': each '
+      + 'row below carries its stamping source. A source names the lane or module that '
+      + 'stamped the row, never proof of who authored the words; some rows are machine facts '
+      + 'and some are a mind\'s real words, and YOU judge each one by its named source. These '
+      + 'names are internal, never said to a person.',
     truth.policy_excluded
       ? '- POLICY EXCLUDED FOR THIS CLOSED-WORLD DELIBERATION: ' + truth.exclusion_reason +
         '. Use only the exact evidence in this request.'
