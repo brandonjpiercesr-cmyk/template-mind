@@ -4447,12 +4447,14 @@ async function runOutboundCouncil(input, injected) {
               isHumanFacingAnswer(_healed) && _healed !== before) {
             var _reStarted = nowMs(deps);
             var _reNorm;
+            var _reThrew = false;
             try {
               _reNorm = normalizeStageResult(await handler(buildStageContext(
                 input, _healed, quillRequired, stages,
                 { stage: stage, healed: true, healedFrom: _healReason, runtime:stageRuntime }
               )), _healed);
             } catch (_reJudgeErr) {
+              _reThrew = true;
               _reNorm = {
                 ok: false,
                 reason: 'stage_threw:' + errorReason(_reJudgeErr),
@@ -4465,6 +4467,12 @@ async function runOutboundCouncil(input, injected) {
             var _reModelOnlyCarry = stage === 'SHADOW' && _reHuman &&
               mayCarryBareShadowModelHold(_reNorm, input);
             var _rePassed = (_reNorm.ok || _reModelOnlyCarry) && _reHuman;
+            // Codex review, live, on the 20260815 fix below: a retry that THREW or came back
+            // HOLLOW (no human-facing text at all, so _reHuman is false) never got a second
+            // opinion at all. That is retry plumbing failing, not a mind re-judging the bytes
+            // and finding something worse. It must not be treated the same as a genuine harder
+            // verdict, which is the one case the 20260815 fix exists to catch.
+            var _reUnavailable = _reThrew || !_reHuman;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
             // Replace the held receipt in place and span the original stage input
@@ -4553,12 +4561,29 @@ async function runOutboundCouncil(input, injected) {
             // The founder's 20260802 standing order is untouched: a healed candidate that
             // is still merely model-held still carries, further down. What closes here is
             // only the case where the healed bytes drew a different, harder verdict.
-            return failureResult(!_reHuman
-              ? hollowStageReason(_reNorm.answer, _reNorm.reason)
-              : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
-            _healOutcome = !_reHuman
-              ? 'heal_resubmission_hollow'
-              : 'heal_resubmission_still_held';
+            //
+            // Codex review, live: this unconditional return went one step too far. A retry
+            // that never produced a second opinion at all (threw, timed out, or came back
+            // hollow, _reUnavailable) is not "the healed bytes drew a harder verdict"; it is
+            // retry plumbing failing to deliver any verdict. When the ORIGINAL result was
+            // already the founder's provably-safe bare model-only hold (_initialModelOnlyCarry),
+            // that unavailability must not override it: fall through to the existing carry
+            // gate below, the one the 20260802 standing order already governs, instead of
+            // hard-failing the whole turn over a retry that simply could not run. Only a
+            // retry that DID reach a real verdict and that verdict was still held stays a
+            // hard failure here.
+            if (!(_reUnavailable && _initialModelOnlyCarry)) {
+              return failureResult(!_reHuman
+                ? hollowStageReason(_reNorm.answer, _reNorm.reason)
+                : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
+            }
+            // Falling through to the _initialModelOnlyCarry gate below. Its receipt
+            // overwrites the resubmission receipt just written above, so the fact that a
+            // resubmission was attempted and never delivered a verdict must ride in
+            // heal_outcome or it is lost from the record entirely.
+            _healOutcome = _reThrew
+              ? 'heal_resubmission_' + String(_reNorm.reason || 'threw').slice(0, 80)
+              : 'heal_resubmission_hollow';
           }
         } catch (_healErr) {
           // heal is best-effort; fall through to the honest failure, but say it threw
