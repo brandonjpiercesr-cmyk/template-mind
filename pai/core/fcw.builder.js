@@ -615,7 +615,7 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       var _dsrc = String(b.source || '').slice(0, 120);
       var _dwriter = _dsrc.indexOf(_turnPrefix) === 0
         ? 'the memory keeper, a real turn, channel on the line'
-        : (_dsrc || 'an unnamed writer');
+        : (_dsrc || '(no writer stamp on the row)');
       return '[' + (b.stamp_type||'?') + ' | written by ' + _dwriter + '] '
         + (b.summary||'').slice(0) + (body ? '\n  ' + body : '');
     }).join('\n');
