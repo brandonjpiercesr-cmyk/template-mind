@@ -379,7 +379,27 @@ function isHumanFacingAnswer(value) {
   // unfinished bracketed invocation disguised the plumbing as a human answer. A bracketed
   // invocation marker beginning its own line is protocol wherever it occurs in the draft.
   // Ordinary prose about calling someone remains legal.
-  if (/(?:^|\n)\s*\[(?:calling|invoking|running|executing)(?:\s+[a-z_][a-z0-9_]*)?(?:\s|\]|$)/i.test(probe)) {
+  // ⬡B:core.pai_outbound_council:FIX:a_bracketed_line_is_protocol_only_when_it_IS_the_line:20260815⬡
+  // THE LINE ABOVE CLAIMS "Ordinary prose about calling someone remains legal." That is true for
+  // INLINE prose and false the moment the sentence opens with a bracket, which is exactly how an
+  // agenda renders. The old pattern accepted whitespace, a closing bracket, OR end-of-input after
+  // the verb, so anything beginning `[Calling ...` matched and the WHOLE answer was discarded as
+  // tool protocol. MEASURED on real shapes:
+  //   "Here is your day:\n[Calling] your 9am with the dentist\n[Running] the 5k at 6pm" DISCARDED
+  //   "[Calling the vet back] is the first thing on your list."                          DISCARDED
+  //   "Your list:\n[Running late] tell Sam you are 10 minutes out"                        DISCARDED
+  // Three ordinary human sentences, thrown away whole, on a gate that runs every turn.
+  //
+  // THE REAL PROTOCOL SHAPE IS THAT THE MARKER **IS** THE LINE. A model emitting plumbing writes
+  // `[invoking search_web]` alone; it does not write a marker and then continue the sentence.
+  // So the marker must now END its line, and everything that follows it on the same line proves
+  // it was prose. The named failure this guard was built for still fails closed: an unterminated
+  // `[calling` at the end of the payload has nothing after it and still matches, because the
+  // closing bracket stays optional.
+  // Regex wakes, regex never decides: this one still DETECTS a machine payload, it just stopped
+  // deciding that a bracketed sentence is one.
+  if (/(?:^|\n)[ \t]*\[(?:calling|invoking|running|executing)(?:\s+[a-z_][a-z0-9_]*)?\]?[ \t]*(?:\n|$)/i
+    .test(probe)) {
     return false;
   }
   if (/^\[?\s*(?:tool[_\s-]?call|function[_\s-]?call)\s*\]?\s*$/i.test(probe)) return false;
