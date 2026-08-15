@@ -3429,6 +3429,122 @@ function meaningCleared(meaning) {
   return meaning.decision === 'DISAGREE' && meaning.consequential === false;
 }
 
+// ⬡B:core.pai_outbound_council:FIX:a_dead_paid_seat_may_not_silence_her:20260815⬡
+// FOUNDER LAW, verbatim, 20260815: "Who in the hell are we to stop something? Why are you
+// stopping something? We should be teaching and instructing... your shadow, your WRIT, your
+// meta commentary, all of that, your Aunt Pam. IF THEY'RE STOPPING, THEY'RE WRONG."
+//
+// THE DEFECT. The meaning shadow rides a paid c1_cellm seat. When that seat could not be
+// reached at all, writ.meaning.shadow.wonder.js#judge caught the throw and returned
+// {ok:false,reason:'writ_meaning_shadow_unavailable'}, and defaultAnuExpressionStage below
+// then blanked her already-composed answer. NO MIND JUDGED ANYTHING on that turn: a provider
+// outage, a rate limit, a billing refusal or a timeout was deciding, by absence, that her
+// words were unsafe. That is the third silencer of the same shape removed tonight, and it is
+// the same correction agents/meta_commentary.js already carries at
+// organ_unavailable_failed_open: her draft is PRESERVED, the flags ride the receipt, and a
+// woken reviewer can judge it later.
+//
+// WHAT IS NOT CHANGING, said out loud per the 20260814 door law. The meaning shadow is an
+// ANCHOR and it is waived for NOBODY. It is the only place in the cycle that judges whether
+// her expressed words still mean what her grounded answer meant, so a real verdict from a
+// real mind still holds her exactly as before: DISAGREE-consequential and UNCERTAIN both
+// blank her bytes, meaningCleared above is untouched, and a broken meaning CHAIN (an unbound
+// packet, a cross-HAM substitution, an invalid or incomplete verdict, a failed receipt
+// readback) still fails closed. The single case that changes is the one where the organ was
+// never reached, because a judgment that never happened is not a judgment.
+//
+// WHY THE CLASS IS NAMED AND NOT COLLAPSED. 'unavailable' collapsed a transport failure, a
+// 429, a 402 and a timeout into one word, so a total paid-seat outage and a forged-packet
+// attack read identically on the receipt and starvation looked exactly like the anchor doing
+// its job. Each cause has a different owner and a different fix: transport is an operations
+// problem, a rate limit is a pacing problem, a billing refusal is the founder's own hands, a
+// timeout is a latency problem, and a missing key is a configuration problem. The receipt
+// names which one happened.
+//
+// CALLER CANCELLATION IS DELIBERATELY NOT A STARVATION. When ctx.signal is already aborted
+// the turn itself was withdrawn upstream and there is no person waiting on these bytes, so
+// there is nothing to carry forward and shipping would be answering a question nobody is
+// still asking. It gets its own class and its own reason code so it can never be read as an
+// outage, and it holds exactly as it did before.
+var MEANING_SHADOW_TRANSPORT_CODES = ['ECONNREFUSED','ECONNRESET','ENOTFOUND','EAI_AGAIN',
+  'EPIPE','EHOSTUNREACH','ENETUNREACH','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT',
+  'ECONNABORTED'];
+var MEANING_SHADOW_TIMEOUT_CODES = ['ETIMEDOUT','ESOCKETTIMEDOUT','UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT'];
+
+// Reads the ERROR the paid seat actually threw. The router (core/model.router.js#_callProvider)
+// throws `new Error(provider + '/' + model + ': ' + bodyText)` and drops the HTTP status, which
+// is why the status is also recovered from the message text: this classifier is written against
+// what the real transport produces, not against a cleaner fixture. Nothing from the message is
+// copied onto the receipt, only the matched marker, because a provider error body can echo the
+// request and her words never belong in a diagnostic field.
+function meaningShadowUnavailability(error, callerSignal) {
+  var status = null;
+  var candidates = [error && error.status, error && error.statusCode,
+    error && error.response && error.response.status];
+  for (var i = 0; i < candidates.length; i++) {
+    if (Number.isFinite(Number(candidates[i])) && Number(candidates[i]) > 0) {
+      status = Number(candidates[i]); break;
+    }
+  }
+  var code = error && typeof error.code === 'string' ? error.code : null;
+  var name = error && typeof error.name === 'string' ? error.name : null;
+  var text = String((error && error.message) || '').toLowerCase();
+  if (status === null) {
+    var inText = text.match(/\b([45]\d\d)\b/);
+    if (inText) status = Number(inText[1]);
+  }
+  var out = function (cls, marker) {
+    return { class:cls, marker:marker, http_status:status, error_code:code, error_name:name,
+      error_captured:!!error, judged:false };
+  };
+  if (callerSignal && callerSignal.aborted === true) {
+    return out('caller_cancelled','caller_signal_aborted');
+  }
+  // Billing is tested BEFORE the rate limit on purpose: core/openrouter.seat.spend.js returns
+  // status 429 for 'openrouter_account_out_of_credit', so a status-first order would file a
+  // real billing refusal as a pacing problem and send the wrong person to fix it.
+  if (status === 402 ||
+      /payment required|insufficient (credit|fund|balance|quota)|out_of_credit|out of credit|billing|credit balance|cap_reached|daily_dollar_cap|quota exceeded/.test(text)) {
+    return out('billing_refusal', status === 402 ? 'http_402' : 'provider_billing_text');
+  }
+  if (status === 429 || /rate.?limit|too many requests|slow down/.test(text)) {
+    return out('rate_limit', status === 429 ? 'http_429' : 'provider_rate_limit_text');
+  }
+  if (name === 'TimeoutError' || name === 'AbortError' || status === 408 || status === 504 ||
+      MEANING_SHADOW_TIMEOUT_CODES.indexOf(code) !== -1 ||
+      /timeout|timed out/.test(text)) {
+    return out('timeout', name === 'AbortError' ? 'abort_without_caller_signal'
+      : (status === 408 || status === 504 ? 'http_' + status : 'transport_timeout'));
+  }
+  if (/no provider available|not configured|is not configured/.test(text)) {
+    return out('seat_not_configured','named_seat_key_absent');
+  }
+  if (MEANING_SHADOW_TRANSPORT_CODES.indexOf(code) !== -1 || (status !== null && status >= 500) ||
+      /fetch failed|socket hang up|network|econnrefused|enotfound|dns/.test(text)) {
+    return out('transport_failure', status !== null && status >= 500 ? 'http_' + status
+      : (code ? 'transport_code' : 'transport_text'));
+  }
+  return out('unclassified', error ? 'error_without_recognized_marker' : 'no_error_captured');
+}
+
+// The reason code a starved turn carries. It never reuses a pass string and never reuses the
+// old collapsed 'writ_meaning_shadow_unavailable', so no reader of a receipt can mistake
+// "nobody judged" for "judged and cleared".
+function meaningShadowStarvationReason(unavailability) {
+  return 'writ_meaning_shadow_unavailable_' +
+    String((unavailability && unavailability.class) || 'unclassified');
+}
+
+// Only a turn where the organ was never reached carries her words forward. A caller
+// cancellation is not an outage, and every other reason in the wonder means the organ DID
+// answer or the chain itself is broken.
+function meaningShadowStarved(meaning, unavailability) {
+  return !!(meaning && meaning.ok !== true &&
+    meaning.reason === 'writ_meaning_shadow_unavailable' &&
+    unavailability && unavailability.class !== 'caller_cancelled');
+}
+
 async function defaultAnuExpressionStage(ctx) {
   if (hamWorldBuilderDecisionContext(ctx)) {
     var worldAnu = require('./anu.js');
@@ -3500,12 +3616,26 @@ async function defaultAnuExpressionStage(ctx) {
     packet.post_meta_candidate === ctx.answer);
   var meaning = null;
   var finalPam = null;
+  var meaningSeatFailure = null;
+  var meaningUnavailability = null;
+  var meaningStarved = false;
+  // The wonder catches its own transport throw and returns a reason string, so the ERROR
+  // itself never reaches this stage. The seat is therefore wrapped here, at the one place
+  // that owns the release decision, so the exact cause survives long enough to be named on
+  // the receipt. The wrapper decides nothing and swallows nothing: it records and rethrows.
+  var meaningSeatProbe = async function () {
+    try {
+      var seat = (ctx.context && ctx.context.meaningShadowChatSeat) ||
+        require('./model.router.js').chatSeat;
+      return await seat.apply(null, arguments);
+    } catch (seatError) { meaningSeatFailure = seatError; throw seatError; }
+  };
   if (result && result.blocked === false && output.trim() && packetBound) {
     consumedWritMeaningPackets.add(packet);
     var meaningWonder = require('./writ.meaning.shadow.wonder.js');
     meaning = await meaningWonder.judge(Object.assign({},packet,{final_human_output:output}),{
       brain:ctx.context && ctx.context.brain,
-      chatSeat:ctx.context && ctx.context.meaningShadowChatSeat,
+      chatSeat:meaningSeatProbe,
       signal:ctx.signal || null
     });
     var releasedDigest = meaning && meaning.receipt && meaning.receipt.content &&
@@ -3538,23 +3668,45 @@ async function defaultAnuExpressionStage(ctx) {
     // "strictly safer-or-equal" property the first cut claimed but did not have: the only
     // case that ships now and did not ship before is a proven tone-only disagreement.
     var meaningRanBound = !!(meaning && finalBytesBound);
-    if (meaningRanBound && meaningCleared(meaning)) {
+    if (meaning && meaning.ok !== true &&
+        meaning.reason === 'writ_meaning_shadow_unavailable') {
+      meaningUnavailability = meaningShadowUnavailability(meaningSeatFailure,
+        ctx.signal || null);
+      meaningStarved = meaningShadowStarved(meaning,meaningUnavailability);
+    }
+    if ((meaningRanBound && meaningCleared(meaning)) || meaningStarved) {
+      // PAM still runs on the exact released bytes. It is a different anchor with a different
+      // job, the person-effect privacy and credential boundary, and it is not waived by the
+      // meaning organ being unreachable. What ships unjudged is her MEANING, never a leak.
       finalPam = await defaultPamStage(Object.assign({},ctx,{answer:output}));
       if (!finalPam || finalPam.ok !== true || finalPam.answer !== output) output = '';
     } else output = '';
   } else output = '';
-  var meaningClearedOuter = meaningCleared(meaning);
+  var meaningClearedOuter = meaningCleared(meaning) ||
+    (meaningStarved && output.trim().length > 0);
   var meaningDissent = !!(meaning && meaning.decision && meaning.decision !== 'AGREE');
+  var meaningUnavailableReason = meaningUnavailability
+    ? meaningShadowStarvationReason(meaningUnavailability) : null;
+  // A starved turn that still ends empty was held by PAM on the exact bytes, not by the
+  // meaning organ, and the receipt says so rather than blaming the dead seat for a hold it
+  // did not make.
   var meaningReason = meaning && meaning.ok === true && !finalBytesBound
-    ? 'writ_meaning_shadow_final_bytes_unbound' : (meaning && meaning.reason ||
-      (packetBound ? 'writ_meaning_shadow_not_run' : 'writ_meaning_shadow_packet_unbound'));
+    ? 'writ_meaning_shadow_final_bytes_unbound'
+    : (meaningStarved ? 'final_pam_hold_after_unjudged_meaning'
+      : (meaningUnavailableReason || (meaning && meaning.reason ||
+        (packetBound ? 'writ_meaning_shadow_not_run' : 'writ_meaning_shadow_packet_unbound'))));
   return {
     ok: !!(result && result.blocked === false && output.trim().length > 0 &&
       finalPam && finalPam.ok === true && meaningClearedOuter),
     answer: output,
+    // A pass whose meaning nobody judged carries its OWN reason code. It is never
+    // 'ANU_EXPRESSION_PASS' and never 'ANU_EXPRESSION_PASS_SHADOW_DISSENT', because a receipt
+    // that cannot tell "judged and cleared" from "nobody judged" is worthless, and one that
+    // claims the first when the second happened is a forged provenance.
     reason: result && result.blocked ? 'anu_expression_blocked' :
-      (output.trim().length > 0 ? (meaningDissent
-        ? 'ANU_EXPRESSION_PASS_SHADOW_DISSENT' : 'ANU_EXPRESSION_PASS') : meaningReason),
+      (output.trim().length > 0 ? (meaningStarved
+        ? 'ANU_EXPRESSION_PASS_MEANING_UNJUDGED' : (meaningDissent
+          ? 'ANU_EXPRESSION_PASS_SHADOW_DISSENT' : 'ANU_EXPRESSION_PASS')) : meaningReason),
     evidence: { channel: result && result.channel, blocked: !!(result && result.blocked),
       exact_transport:result && result.output === ctx.answer,
       // ⬡B:core.pai.outbound.council:BUILD:absent_and_forged_are_not_the_same_fact:20260815⬡
@@ -3567,7 +3719,26 @@ async function defaultAnuExpressionStage(ctx) {
       // opposite problems that produced one identical string, and that is precisely why the
       // consult outage read for a full day as the anchor doing its job.
       meaning_packet:{ present:!!packet, bound:packetBound },
+      // NAMED SEPARATELY FROM meaning_shadow SO A READER CANNOT MISS IT. When this is present
+      // the paid organ was never reached and no mind judged this turn's meaning: LOGFUL, a
+      // later reviewer, and the founder all see plainly which bytes went out unjudged and
+      // exactly why the seat was dead.
+      meaning_unjudged:meaningUnavailability ? {
+        carried:meaningStarved && output.trim().length > 0,
+        reason:meaningUnavailableReason,
+        cause:meaningUnavailability.class,
+        marker:meaningUnavailability.marker,
+        http_status:meaningUnavailability.http_status,
+        error_code:meaningUnavailability.error_code,
+        error_name:meaningUnavailability.error_name,
+        error_captured:meaningUnavailability.error_captured,
+        judged:false,
+        shadow_ran:false
+      } : null,
       meaning_shadow:meaning ? {ok:meaning.ok === true,reason:meaning.reason || null,
+        judged:!!(meaning.decision),
+        ran:!meaningUnavailability,
+        unavailable:meaningUnavailability ? meaningUnavailability.class : null,
         decision:meaning.shadow && meaning.shadow.decision || null,
         receipt_digest:meaning.receipt && meaning.receipt.digest || null,
         final_output_bound:!!(meaning.receipt && meaning.receipt.content &&
@@ -5840,6 +6011,9 @@ module.exports = {
     defaultWritStage: defaultWritStage,
     defaultAnuExpressionStage:defaultAnuExpressionStage,
     meaningCleared:meaningCleared,
+    meaningShadowUnavailability:meaningShadowUnavailability,
+    meaningShadowStarvationReason:meaningShadowStarvationReason,
+    meaningShadowStarved:meaningShadowStarved,
     normalizeStageResult:normalizeStageResult,
     writMeaningPacketFrom:function (result) {
       return result && Object.prototype.hasOwnProperty.call(result,WRIT_MEANING_PACKET) &&
