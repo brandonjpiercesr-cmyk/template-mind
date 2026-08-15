@@ -602,7 +602,10 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // stripped; lanes number in the dozens, not the thousands. So: one legend line naming
   // each lane once, short W-refs per row. A row with no source stays inline in his exact
   // words, never minted a legend entry, per the second trap.
-  var _writerRefs = {};
+  // Codex P2: a lane string is free-form, so a source normalizing to an inherited
+  // Object.prototype key (toString, constructor) would read truthy on a plain object and
+  // never mint its legend entry. Null prototype keeps every lane an own property.
+  var _writerRefs = Object.create(null);
   var _writerLegend = [];
   var _laneOf = function (src) {
     var parts = src.split('.');
@@ -852,9 +855,20 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
           // rides on content.exit.leash: 'verbatim' really is their own words, unedited;
           // 'overruled_quote_not_in_message' means the keeper kept their WHOLE message because
           // the quoted span could not be verified inside it, and the line now says exactly
-          // that. No row is dropped or filtered on any leash value; she judges. Small bounded
-          // block, so the writer clause is inlined rather than legend-and-refs.
-          var _writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+          // that. No row is dropped or filtered on any leash value; she judges.
+          // Codex P1 (20260815): this block is EXHAUSTIVE, not bounded (findStatedCommitments
+          // passes no limit), and every gift source is unique (it carries a timestamp), so a
+          // per-row 120-char writer repeats without ever deduping, the founder's first cheap
+          // trap again. All rows here share ONE lane by construction (the finder queries
+          // source_prefix memory.gifted.), so the writer is named ONCE in the heading, and a
+          // row only carries a writer tag when it deviates: a missing stamp says so in his
+          // exact words, and an unexpected lane is carried by name rather than hidden.
+          var _giftLane = 'memory.gifted.';
+          var _src = String(b && b.source || '');
+          var _writerTag = !_src
+            ? ' [(no writer stamp on the row)]'
+            : (_src.indexOf(_giftLane) === 0 ? ''
+              : ' [written by ' + _src.slice(0, 120) + ']');
           var _leashNote = leash === 'verbatim'
             ? ''
             : (leash === 'overruled_quote_not_in_message'
@@ -862,13 +876,15 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
                 + 'what they actually said, so this is their whole message, kept as-is]'
               : (leash ? ' [leash: ' + leash + ']' : ''));
           return '- ' + (age ? '(they told you this ' + age + ') ' : '(no timestamp on this one) ')
-            + words + _leashNote + ' [written by ' + _writer + ']';
+            + words + _leashNote + _writerTag;
         }).filter(function (line) { return !!line; });
         if (!lines.length) return '';
         return statedWarning
-          + 'WHAT THEY TOLD YOU DIRECTLY, evidence with its age and its writer. A writer name '
-          + 'is the module that stamped the row, never proof of who authored the words, and '
-          + 'these names are internal, never said to the person. Rows without a bracketed '
+          + 'WHAT THEY TOLD YOU DIRECTLY, evidence with its age. Every row below was stamped '
+          + 'by the memory keeper\'s gift lane (memory.gifted); a writer name is the module '
+          + 'that stamped the row, never proof of who authored the words, these names are '
+          + 'internal, never said to the person, and a row deviating from that lane carries '
+          + 'its own writer tag. Rows without a bracketed '
           + 'caveat are kept in their own words, unedited, at the moment they said it; a row '
           + 'marked not-a-verbatim-quote is their whole message kept as a fallback. YOU judge '
           + 'which is which and how much weight it carries:\n'

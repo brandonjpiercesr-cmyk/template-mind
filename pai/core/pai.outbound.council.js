@@ -2724,6 +2724,13 @@ function hamWorldBuilderFields(ctx) {
 // untouched, exactly like the structured reach-policy pass-through above. Tightly scoped:
 // only ever true when the caller set council_context.mode='coding', which only CODA's
 // internal advisor does — a user-facing turn can never reach this branch.
+function anuSpeakForExpression(ctx) {
+  var anu = require('./anu.js');
+  var result = anu.speak({ result: { pendingOutbound: ctx.answer } },
+    ctx.channel || 'ccwa', ctx.context || {});
+  return { result: result,
+    output: result && typeof result.output === 'string' ? result.output : '' };
+}
 function internalCodingDeliberation(ctx) {
   return !!(ctx && ctx.context && ctx.context.mode === 'coding'
     && ctx.context.internal_deliberation === true && typeof ctx.answer === 'string');
@@ -3287,6 +3294,40 @@ async function defaultAnuExpressionStage(ctx) {
   if (structuredReachPolicyContext(ctx)) return { ok:true, answer:ctx.answer,
     reason:'ANU_EXPRESSION_STRUCTURED_REACH_POLICY_PASS',
     evidence:{ channel:'reach',blocked:false,exact_structured_policy:true } };
+  // ⬡B:core.pai.outbound.council:FIX:the_expression_gate_recognizes_the_internal_coding_turn:20260815⬡
+  // THE 100-PERCENT CYCLE BLOCK, read from her live rows on 20260815: the last 120 CYCLE_STEP
+  // beads held 18 cycle_start and 17 outbound_council_blocked, every one
+  // stage_empty_answer:writ_meaning_shadow_packet_unbound, every one an internal coding
+  // deliberation. The mechanism is structural, not intermittent. WRIT_INTERNAL_CODING_PASS
+  // above returns early for the internal machine-contract turn, correctly, because a voice
+  // rewrite may not touch typed evidence references; but the packet the meaning shadow rides
+  // on is minted ONLY inside the human-voice WRIT path, so this stage then demanded an
+  // artifact the internal path can never hold, set her answer to the empty string, and every
+  // internal cycle burned a real paid model call and shipped nothing. The exit gate required
+  // a key minted only in a room the internal turn never enters.
+  //
+  // WHY THIS IS NOT A WEAKENING OF THE ANCHOR, said out loud per the 20260814 door law. The
+  // meaning shadow guards the HUMAN-facing final bytes: it proves the words a person reads
+  // are the words WRIT rendered. An internal coding deliberation's answer is a typed machine
+  // contract that reaches no person: META and WRIT already recognize exactly this context
+  // with their own INTERNAL_CODING_PASS receipts, the turn is still fully judged by PAM and
+  // SHADOW inside this same council, and advisors/coding.js re-validates the exact evidence
+  // references after the council returns. The person-facing path is byte-for-byte untouched:
+  // no packet, no ship, exactly as before.
+  if (internalCodingDeliberation(ctx)) {
+    var internalSpeak = anuSpeakForExpression(ctx);
+    return { ok:!!(internalSpeak.result && internalSpeak.result.blocked === false &&
+        internalSpeak.output.trim().length > 0),
+      answer:internalSpeak.output,
+      reason:internalSpeak.result && internalSpeak.result.blocked ? 'anu_expression_blocked'
+        : (internalSpeak.output.trim().length > 0 ? 'ANU_EXPRESSION_INTERNAL_CODING_PASS'
+          : 'stage_empty_answer:anu_expression_internal_empty'),
+      evidence:{ channel:internalSpeak.result && internalSpeak.result.channel,
+        blocked:!!(internalSpeak.result && internalSpeak.result.blocked),
+        internal_deliberation:true,
+        meaning_shadow:{ok:false,reason:'writ_meaning_shadow_inapplicable_internal_coding',
+          decision:null,dissent:false} } };
+  }
   var anu = require('./anu.js');
   var result = anu.speak({ result: { pendingOutbound: ctx.answer } },
     ctx.channel || 'ccwa', ctx.context || {});

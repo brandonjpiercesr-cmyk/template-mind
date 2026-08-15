@@ -477,8 +477,12 @@ function employmentPrompt(record, truth) {
   const duties = record.jd && list(record.jd.duties);
   const never = record.jd && list(record.jd.never);
   const recent = truth.rows.map(function (row) {
+    // A legacy row can arrive with an empty source, and the heading above promises every
+    // row a named writer; a blank would silently break that promise, so the missing state
+    // renders in the founder's exact words instead (pen fence, 20260815).
     return '- ' + (row.created_at ? row.created_at + ' ' : '') + row.stamp_type + ' ' +
-      row.source + (row.summary ? ': ' + row.summary : '');
+      (row.source || '(no writer stamp on the row)') +
+      (row.summary ? ': ' + row.summary : '');
   });
   return [
     '',
