@@ -480,18 +480,27 @@ function scanFile(full) {
     // turns a match into a finding when its normalized digits hit an EXISTING hash -- so a
     // synthetic fixture number (555 exchange, invented, never registered) still stays silent,
     // the same guarantee the rest of this section already relies on.
-    PHONE_RE.lastIndex = 0;
-    while ((m = PHONE_RE.exec(line))) {
-      const dg2 = phoneDigits(m[0]);
-      if (dg2.length >= 10 && dg2.length <= 11 && HASHES[h(dg2)]) {
-        violations.push({ rel, line: i + 1, type: 'denylisted_identity', hint: 'phone***' });
+    // ⬡B:checks.no_founder_pii:FIX:supplemental_pass_is_test_file_only:20260815⬡
+    // This supplemental pass exists ONLY because test files have the shape detectors turned
+    // off, so a formatted phone there never reaches PHONE_RE and TOKEN_RE splits it before it
+    // can match its own registered hash. Running it everywhere was a regression I introduced:
+    // in a shipped file PHONE_RE already emits hardcoded_phone for the same value, so this
+    // added a SECOND finding for one phone. Where the first is baselined, the second reads as
+    // a fresh leak and breaks a build with no data change at all. Test files only.
+    if (testFile) {
+      PHONE_RE.lastIndex = 0;
+      while ((m = PHONE_RE.exec(line))) {
+        const dg2 = phoneDigits(m[0]);
+        if (dg2.length >= 10 && dg2.length <= 11 && HASHES[h(dg2)]) {
+          violations.push({ rel, line: i + 1, type: 'denylisted_identity', hint: 'phone***' });
+        }
       }
-    }
-    E164_RE.lastIndex = 0;
-    while ((m = E164_RE.exec(line))) {
-      const dg3 = m[0].replace(/[^\d]/g, '');
-      if (dg3.length >= 11 && dg3.length <= 15 && HASHES[h(dg3)]) {
-        violations.push({ rel, line: i + 1, type: 'denylisted_identity', hint: 'phone***' });
+      E164_RE.lastIndex = 0;
+      while ((m = E164_RE.exec(line))) {
+        const dg3 = m[0].replace(/[^\d]/g, '');
+        if (dg3.length >= 11 && dg3.length <= 15 && HASHES[h(dg3)]) {
+          violations.push({ rel, line: i + 1, type: 'denylisted_identity', hint: 'phone***' });
+        }
       }
     }
   }
