@@ -1170,7 +1170,13 @@ async function repairRawJsonAnswer(answer, context, callLadder) {
 // call site for the live incident and the two harms. Detection stays cold and unchanged; only
 // the sentence moved from a coder's keyboard to her mouth.
 var UNVERIFIED_ACTION_CLAIM = /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i;
-var ACTION_CLAIM_TOOLS = ['create_reminder', 'create_event'];
+// ⬡B:core.tool.loop:FIX:the_event_half_named_a_tool_that_never_existed:20260815⬡
+// The 20260712 guard checked for 'create_event'. That tool name appears NOWHERE in this tree:
+// the real event-writing hand is calendar_book, defined in TOOLS in this same file. So the
+// event half of the check could never be satisfied, and every honest confirmation of a REAL
+// booking ("I scheduled that event for Thursday") tripped the guard and was answered by telling
+// the person their real calendar entry did not exist. Naming the tool that actually exists.
+var ACTION_CLAIM_TOOLS = ['create_reminder', 'calendar_book'];
 
 // PURE COLD DETECTION, no judgment about what she meant. True only when the draft carries the
 // shape of an action claim AND no tool that could have performed it ran this turn.
@@ -1188,18 +1194,29 @@ function unverifiedActionClaimShape(answer, toolsUsed) {
 async function repairUnverifiedActionClaim(answer, callLadder, opts) {
   var o = opts || {};
   if (typeof callLadder !== 'function') throw new Error('action_claim_ladder_caller_required');
-  var fact = 'FACT: this turn produced a sentence matching the shape of a claim that a reminder '
-    + 'or calendar event was set, and NO create_reminder or create_event tool ran this turn, so '
-    + 'nothing was actually created. The sentence may be a real claim, or it may be a refusal, a '
-    + 'denial, or a repeat of the question, which this check cannot tell apart.'
+  // THE FACT IS TURN SCOPED AND SAYS SO, OUT LOUD, TWICE. The only thing actually proven is that
+  // no creating tool ran on THIS turn. That is NOT evidence that no such reminder or event
+  // exists: one she set on an earlier turn is real and still standing, and this check cannot see
+  // earlier turns at all. A prompt that told her "nothing exists" would push her to deny a live
+  // reminder, which is the exact false positive this whole conversion exists to end, rebuilt one
+  // layer up in the prompt instead of the code.
+  var fact = 'FACT, SCOPED TO THIS TURN ONLY: your draft matches the shape of a claim that a '
+    + 'reminder or calendar event was set up, and no create_reminder or calendar_book tool ran on '
+    + 'this turn, so nothing was created just now. THIS IS NOT EVIDENCE THAT NO SUCH REMINDER OR '
+    + 'EVENT EXISTS. One you set on an earlier turn would be real and still standing, and this '
+    + 'check cannot see earlier turns. Your sentence may be a claim about work that did not '
+    + 'happen, a true reference to earlier work, or an echo of their own question, and this check '
+    + 'cannot tell those apart.'
     + String.fromCharCode(10) + 'THE SENTENCE: ' + String(answer);
   var sys = 'You are A\'NU, mid-turn, about to answer a person. A check caught that your draft '
-    + 'looks like it claims a reminder or calendar event was set, while no such tool ran, so '
-    + 'nothing exists. Read your own sentence in the fact below and answer in one or two '
-    + 'sentences in your own voice. If you did claim it, say plainly that it is not set and ask '
-    + 'for the exact thing and time so you can set it for real. If you were refusing, denying, or '
-    + 'repeating their question and nothing is actually being claimed, say what you meant plainly '
-    + 'instead. Never claim anything was created. Never an em dash.';
+    + 'reads like something was just set up, while no creating tool ran on this turn. Read your '
+    + 'own sentence in the fact below and answer in one or two sentences in your own voice. If '
+    + 'you were saying you just set it up, say plainly that it did not get created and ask for '
+    + 'the exact thing and time so you can do it for real. If you were pointing at something from '
+    + 'an earlier turn, say so plainly and do NOT deny it exists. If you were echoing their '
+    + 'question or telling them no, say what you meant. Never say something was created just now, '
+    + 'and never tell them something does not exist when all you know is that it was not created '
+    + 'on this turn. Never an em dash.';
   // The seat key is only set when the caller actually has one. _callPaiLadder merges as
   // Object.assign({seat: this turn's resolved seat}, options), so caller options WIN: passing
   // seat undefined would blank the turn's own resolution rather than defer to it.
