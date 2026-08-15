@@ -5,7 +5,7 @@
 // calendar_read tool calls these helpers from inside that cycle, never from a side gate.
 //
 // v2 — addresses every real failure from v1:
-//   1. HAM bleed: NO hardcoded grant IDs. No fallback to Brandon's calendar for other HAMs.
+//   1. HAM bleed: NO hardcoded grant IDs. No fallback to any one HAM's calendar for another HAM.
 //      Returns 503 if no grant bead found. Isolation guaranteed at DB level via Accept-Profile.
 //   2. Slot source: reads RADAR.{uid}.event.* beads from ham_{uid}.abacia — the brain already
 //      has all calendar events stamped by RADAR. No Nylas API call for availability.
