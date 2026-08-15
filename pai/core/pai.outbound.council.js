@@ -2801,9 +2801,26 @@ function anuSpeakForExpression(ctx) {
   return { result: result,
     output: result && typeof result.output === 'string' ? result.output : '' };
 }
+// ⬡B:core.pai.outbound.council:FIX:the_third_predicate_joins_the_other_two_or_it_reopens_the_class:20260815⬡
+// CAUGHT BY A BLIND CRITIC BEFORE MERGE, and it was a NEW instance of the exact class the same
+// commit claims to close. This predicate gates the WRIT and META early returns. It used to read
+// mode plus internal_deliberation directly and was blind to `human_facing`, so:
+//   {mode:'coding',internal_deliberation:true,human_facing:true}
+//     defaultWritStage -> WRIT_INTERNAL_CODING_PASS, returns early, meaning packet NEVER MINTED
+//     humanRecheckWaived (the exit) -> FALSE, because human_facing is checked first there
+// which is an exit demanding an artifact this file, one stage earlier and by its own rule,
+// declined to create. Measured on the shipped code, not reasoned about.
+//
+// So the safety property written one screen down, "a turn that says a person reads its bytes is
+// never waivable, whatever else it claims," was FALSE in coding mode. Saying it in a comment did
+// not make it true; there were three predicates answering one question and only two of them had
+// been brought into agreement. Now there is one predicate and this is its third consumer.
+//
+// I REPORT THIS ON MYSELF: I wrote the complement fix, declared the class closed, and shipped a
+// fresh instance of it in the same diff. It survived my own measurement because I measured the
+// four contexts I had listed and not the combination the new marker made reachable.
 function internalCodingDeliberation(ctx) {
-  return !!(ctx && ctx.context && ctx.context.mode === 'coding'
-    && ctx.context.internal_deliberation === true && typeof ctx.answer === 'string');
+  return !!(ctx && typeof ctx.answer === 'string' && packetWaivedFor(ctx.context));
 }
 
 // ⬡B:core.pai.outbound.council:FIX:the_exit_gate_now_asks_the_same_question_the_mint_asked:20260815⬡
@@ -2842,6 +2859,18 @@ function internalCodingDeliberation(ctx) {
 // holding its own session must not be able to submit. It is set in-process by the routes and
 // organs that genuinely have no person on the other end (core/knowledge.compiler.wonder.js:162,
 // core/ham.world.builder.intake.js:1213, and now the consult door at routes/cara.routes.js).
+// ⬡B:core.pai.outbound.council:HEAL:the_consult_door_never_carried_this_marker:20260815⬡
+// THAT LAST CLAUSE IS FALSE and it was false when written. routes/cara.routes.js:425 builds
+// `council_context: { mode:'internal', coder:... }` and nothing more; `internal_deliberation`
+// appears NOWHERE under routes/ in either repo, grepped. Kept rather than deleted, per
+// supersede-never-delete, because the danger is in reading it and believing it.
+//
+// WHY A WRONG COMMENT IS WORSE HERE THAN ANYWHERE ELSE, and a blind critic named the exact path:
+// a later seat reads "the consult door already carries the proof," adds internal_deliberation to
+// cara.routes.js to make the code match the comment, and packetWaivedFor then returns true for
+// the consult door. A human coder's prose ships with the meaning shadow never run, which is the
+// precise mistake this file corrected one screen up under "A CODER IS A PERSON." The comment
+// would have talked the next seat into reopening the door it was written to close.
 //
 // WHAT WIDENED IS ONLY THE MODE FAMILY, from 'coding' to 'coding' or 'internal', which is the
 // same family the WRIT stage's own `requiresHumanRecheck` already treats as one when it decides
@@ -2882,7 +2911,30 @@ function packetWaivedFor(context) {
   if (context.human_facing === true) return false;
   // The server-owned proof, never inferred from the caller-supplied mode string.
   if (context.internal_deliberation !== true) return false;
-  return context.mode === 'coding' || context.mode === 'internal';
+  // ⬡B:core.pai.outbound.council:HEAL:a_waived_shape_with_no_caller_still_skips_PAM:20260815⬡
+  // NARROWED from `mode === 'coding' || mode === 'internal'` back to 'coding' alone, and this is
+  // the one place I overruled the seat before me, so here is the whole reason in the open.
+  //
+  // Being waived here is not only "no meaning packet." The exit gate at defaultAnuExpressionStage
+  // returns EARLY on a waived turn, and that early return never reaches defaultPamStage. PAM is
+  // the credential and cross-person privacy boundary: a person-effect ANCHOR under the 20260814
+  // door law, not an opinion filter and not a cap. So the 'internal' arm handed a PAM bypass to
+  // any turn that could present {mode:'internal', internal_deliberation:true}.
+  //
+  // COUNTED BEFORE CUTTING, every internal_deliberation producer in the estate, all three:
+  //   advisors/coding.js:959                mode 'coding'            still waived, unchanged
+  //   core/knowledge.compiler.wonder.js:162 mode 'knowledge_compiler' never waived, unchanged
+  //   core/ham.world.builder.intake.js:1213 mode 'ham_world_builder'  never waived, unchanged
+  // Nothing sets {mode:'internal', internal_deliberation:true}. The arm had ZERO live callers, so
+  // this narrows no live door: it removes a loaded gun rather than a working path.
+  //
+  // AND IT DOES NOT TOUCH THE DOOR THE OTHER SEAT WIDENED IT FOR. The consult door sends a bare
+  // {mode:'internal'} with no server-owned proof (routes/cara.routes.js), so it fails the
+  // internal_deliberation line above and was never reaching this return either way. Their fix for
+  // that door is the MINT, which stands untouched. If a genuine internal machine contract ever
+  // needs the waiver, it carries mode 'coding' like the one that exists, or this line changes in
+  // a commit that says which caller needs it and proves PAM still runs for it.
+  return context.mode === 'coding';
 }
 
 // ADDITIVE ON PURPOSE, AND I SCOPED THIS DOWN DELIBERATELY. `human_facing` forces the mint; the
@@ -3362,8 +3414,13 @@ async function defaultWritStage(ctx) {
   //                                                         nothing was allowed to make
   //   {mode:'internal'}         (a browser naming a mode through chat.bridge.routes.js:208)
   //       humanRecheckWaived -> FALSE   old mint -> YES  =  already correct, unchanged below
-  //   {mode:'internal',internal_deliberation:true,human_facing:true}   (the consult door)
+  //   {mode:'internal',coder:'<NAME>'}   (routes/cara.routes.js:425, the real consult door: it
+  //                                       carries NO server-owned proof, so it is never waived
+  //                                       and it gets the packet)
   //       humanRecheckWaived -> FALSE   old mint -> YES  =  already correct, unchanged below
+  //   {mode:'coding',bcw,delivery_target}  (routes/chat.bridge.routes.js:208, coding-mode chat,
+  //                                       the same starved class as the console)
+  //       humanRecheckWaived -> FALSE   old mint -> NO   =  starved, revived by this fix
   //   {mode:'coding',internal_deliberation:true}  (advisors/coding.js:959, machine contract)
   //       humanRecheckWaived -> TRUE    old mint -> NO   =  already correct, unchanged below
   // So the command center was ALREADY dead before this line: not waived at the exit and not
@@ -3389,6 +3446,24 @@ async function defaultWritStage(ctx) {
   // strictly in the direction of MORE bytes judged. The caller's mode string no longer decides
   // anything here on its own, which is the Codex P1 correction on #2171 applied to the mint side
   // as well as the exit side.
+  //
+  // THE BUDGET LINE, which the 20260807 gauntlet law requires and my first draft did not carry.
+  // Both blind critics raised it independently, so it is counsel worth reading twice. Minting
+  // makes the meaning shadow actually run, which is one paid c1 seat call plus two bead rows per
+  // newly judged turn. It widens on exactly two doors, both HUMAN-TYPED and neither in a loop:
+  // routes/clair.console.routes.js:111 and routes/chat.bridge.routes.js:208. No scheduler, no
+  // cycle and no watchdog newly pays: the one always-on coding consumer, core/coda's liveness
+  // watchdog, runs through advisors/coding.js:959, which carries the server-owned proof and stays
+  // waived. The spend draws on the same daily ceiling in core/spend.guard.js whose exhaustion
+  // muted her live on 20260725, so it is named here rather than discovered there.
+  // WHAT IT BUYS: those two doors were returning nothing at all, so the trade is a penny seat
+  // against two dead doors, and 'writ_meaning_shadow_packet_unbound' is deliberately excluded
+  // from the healable reasons, which is why nothing rescued them.
+  // CARRIED FORWARD, not fixed here: the shadow's own bead writes a cold-templated `summary`,
+  // and `summary` is a field the 20260815 doctrine names as HERS. This change multiplies an
+  // unconverted cold writer rather than creating one. It belongs on the pen-on-her-mind writer
+  // conversion list, behind the read-back fence that already exists, and folding it in here would
+  // be a second change wearing this one's name.
   var humanReadsThisProse = !packetWaivedFor(ctx.context);
   if (requiresHumanRecheck && result && result.ok === true && writOutputBound && output.trim()) {
     var metaOrgan = require('../agents/meta_commentary.js');

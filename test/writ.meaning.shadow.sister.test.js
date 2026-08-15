@@ -272,8 +272,17 @@ test('an inherited cancelled meaning judgment releases C1 for the next turn',
   const firstOut=await first;
   const secondOut=await second;
   // ⬡B:core.pai.outbound.council:HEAL:the_starved_receipt_names_its_cause:20260815⬡
-  // RETIRED IN THE SAME COMMIT AS THE WRITER IT PINNED, per the 20260815 law that a test holding
-  // cold behavior in place is itself the nasty cough. This line asserted the blanket
+  // RETIRED ONE COMMIT LATE, AND SAYING SO IS THE POINT. My first version of this comment claimed
+  // "retired in the same commit as the writer it pinned," citing the 20260815 law. A blind critic
+  // checked the history instead of the sentence and it is false by two commits:
+  // meaningShadowUnavailability landed in a076c80, this pin sat red through 6fa97ec, and it is
+  // only being retired here. The law was not honored; it is being caught up to. Invoking a law in
+  // the same breath as breaking it is worse than staying silent, because the citation is what
+  // stops the next reader from checking.
+  // WHAT THAT COSTS, so the lesson is usable: a pin retirement is verified by running the sister
+  // suite inside the writer's own commit, never asserted in a message. This copy lagged its anew
+  // sister, which already asserted the suffixed form.
+  // The retirement itself stands and is strictly stronger. This line asserted the blanket
   // 'writ_meaning_shadow_unavailable', which said the judge did not run and refused to say why.
   // meaningShadowUnavailability() now names the cause, and this test is the cancellation case: it
   // calls firstController.abort() eleven lines up, so 'caller_cancelled' is what actually
