@@ -4506,8 +4506,29 @@ async function runOutboundCouncil(input, injected) {
             // report through the same two named reasons this file defines for exactly that
             // meaning: relayUnavailableHold's 'shadow_model_unavailable' and
             // shadowDecisionUnavailableHold's 'shadow_decision_judgment_unavailable'.
-            var _reNoRealJudgment = _reNorm.reason === 'shadow_model_unavailable' ||
-              _reNorm.reason === 'shadow_decision_judgment_unavailable';
+            //
+            // Codex review, round seven: a fifth real gap, and this one is severe rather than
+            // cosmetic. Both named-unavailable reasons above fire purely off whether the model
+            // JUDGE produced a usable verdict; neither says anything about the DETERMINISTIC
+            // board, which this whole file treats elsewhere as hard, mechanically-verified
+            // evidence, never a flaky signal to discard. relayUnavailableHold's ternary position
+            // is checked BEFORE `!boardPassed` in this stage's own reason chain, so a healed
+            // retry whose DETERMINISTIC board found a real, mechanical flag on the NEW bytes,
+            // while the model judge separately timed out or failed to parse, still reports
+            // 'shadow_model_unavailable' -- and without this guard, the fix above would read
+            // that as "no verdict, fall through" and silently discard a genuine hard finding on
+            // the retry in favor of carrying the OLD, pre-heal bytes. Carrying the original is
+            // still SAFE on its own terms (_initialModelOnlyCarry already proved the original
+            // clean independently of anything the retry found), but silently dropping a real
+            // deterministic flag on the retry is losing a signal this file's own law says must
+            // never be discarded. A model-unavailable outcome is only "no verdict at all" when
+            // the retry's OWN deterministic board is also clean; if it flagged something, that
+            // IS a verdict, hard and mechanical, and must not be waved through as unavailable.
+            var _reDeterministic = _reNorm.evidence && _reNorm.evidence.deterministic;
+            var _reDeterministicClean = !!(_reDeterministic &&
+              Array.isArray(_reDeterministic.flags) && _reDeterministic.flags.length === 0);
+            var _reNoRealJudgment = (_reNorm.reason === 'shadow_model_unavailable' ||
+              _reNorm.reason === 'shadow_decision_judgment_unavailable') && _reDeterministicClean;
             var _reUnavailable = _reThrew || _reRawInvalid || !_reHuman || _reNoRealJudgment;
             // ⬡B:core.pai_outbound_council:FIX:one_canonical_receipt_per_healed_stage:20260719⬡
             // The retry is a second attempt at this ordinal, not a second stage.
