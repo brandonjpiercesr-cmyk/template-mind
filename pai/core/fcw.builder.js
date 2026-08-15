@@ -592,14 +592,44 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // wall. (3) the body no longer falls back to b.source, which the header now carries,
   // so a summary-less row does not print its source twice as if it were content.
   var _turnPrefix = require('./memory.keeper.js').MEMORY_CONTRACT.TURN_SOURCE_PREFIX;
+  // ⬡B:core.fcw.builder:FIX:writer_legend_short_refs_on_the_uncapped_wall:20260815⬡
+  // Codex P1 on the fence itself, and it is the founder's own first cheap trap ("do not
+  // repeat a 57-char stamp on every row. Use a legend plus short refs"): this wall is
+  // deliberately uncapped, and measured against her live rows every full source is UNIQUE
+  // (row addresses carry timestamps), so inline repetition never dedupes and costs about
+  // twelve thousand prompt tokens per thousand rows. The WRITER the doctrine means is the
+  // MODULE, which is the source's lane prefix with its trailing ids and timestamps
+  // stripped; lanes number in the dozens, not the thousands. So: one legend line naming
+  // each lane once, short W-refs per row. A row with no source stays inline in his exact
+  // words, never minted a legend entry, per the second trap.
+  var _writerRefs = {};
+  var _writerLegend = [];
+  var _laneOf = function (src) {
+    var parts = src.split('.');
+    while (parts.length > 1 && /^([0-9]+|[0-9a-f]{6,}|[a-z0-9]{12,})$/i.test(parts[parts.length - 1])) parts.pop();
+    return parts.join('.');
+  };
   contextStr = allContext.map(function(b) {
     var _src = String(b.source || '').slice(0, 120);
     var _writer = _src.indexOf(_turnPrefix) === 0
       ? 'the memory keeper, a real turn, channel on the line'
-      : (_src || '(no writer stamp on the row)');
+      : (_src ? _laneOf(_src) : '');
+    var _tag;
+    if (!_writer) _tag = '(no writer stamp on the row)';
+    else {
+      if (!_writerRefs[_writer]) {
+        _writerRefs[_writer] = 'W' + (_writerLegend.length + 1);
+        _writerLegend.push(_writerRefs[_writer] + '=' + _writer);
+      }
+      _tag = _writerRefs[_writer];
+    }
     return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '')
-      + ' | written by ' + _writer + '] ' + (b.summary || '');
+      + ' | written by ' + _tag + '] ' + (b.summary || '');
   }).join('\n');
+  if (_writerLegend.length) {
+    contextStr = 'WRITERS LEGEND (each W-ref below is the lane or module that stamped the row): '
+      + _writerLegend.join(', ') + '\n' + contextStr;
+  }
 
   // ⬡B:core.fcw.builder:WIRE:doctrine_in_fcw_20260701⬡
   // Roadmap + doctrine now ride in every Memory Bank. Real gap closed: she was asked her
