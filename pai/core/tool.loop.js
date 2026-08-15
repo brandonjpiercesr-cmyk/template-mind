@@ -7781,11 +7781,29 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     } catch (eFmt) {}
     if (!finalAns) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
       reason:'emptied_after_model_by_scrub_or_format'};
+    // ⬡B:core.tool_loop:FIX:the_legacy_scrub_stops_editing_her_sentence:20260815⬡
+    // THE SAME DISEASE AS THE NAMED-CONTEXT SUBSTITUTION ABOVE, and this instance is the most
+    // literal of the three. It read `finalAns = _shadowPrepared.clean`, so a pattern list
+    // rewrote her sentence in place: every em dash became a comma, every phrase in a fifteen
+    // string HOLLOW list was deleted, and everything from the first leak marker onward was CUT.
+    // Then it killed the turn outright if that scrub emptied the text. The outbound council
+    // runs AFTER this point, so it deliberated over and stamped bytes she never composed, which
+    // is exactly how a receipt ends up vouching for words that are not hers.
+    //
+    // Founder, 20260815: "IF THEY'RE STOPPING, THEY'RE WRONG." Editing is worse than stopping,
+    // because a stop is visible and an edit is not.
+    //
+    // The audit now DETECTS and the finding is stamped. Her bytes go into the council exactly as
+    // she wrote them, and WRIT, PAM and SHADOW judge them there, which is the entire reason
+    // those stages exist. A thrown audit is still swallowed, as before, because a broken
+    // detector must never be able to take her turn down with it.
     try {
       var _shadowPrepared = require('./synthesize.js').shadowAudit(finalAns);
-      if (!_shadowPrepared.clean) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
-        reason:'shadow_scrubbed_to_empty'};
-      finalAns = _shadowPrepared.clean;
+      if (_shadowPrepared && Array.isArray(_shadowPrepared.violations)
+        && _shadowPrepared.violations.length) {
+        _stampStep('legacy_shadow_pattern_flagged_for_the_council',
+          _shadowPrepared.violations.join(','));
+      }
     } catch (ePrepShadow) {}
     try {
       var _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
