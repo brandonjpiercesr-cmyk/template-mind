@@ -1200,10 +1200,14 @@ async function repairUnverifiedActionClaim(answer, callLadder, opts) {
     + 'for the exact thing and time so you can set it for real. If you were refusing, denying, or '
     + 'repeating their question and nothing is actually being claimed, say what you meant plainly '
     + 'instead. Never claim anything was created. Never an em dash.';
+  // The seat key is only set when the caller actually has one. _callPaiLadder merges as
+  // Object.assign({seat: this turn's resolved seat}, options), so caller options WIN: passing
+  // seat undefined would blank the turn's own resolution rather than defer to it.
+  var ladderOpts = { timeout: 8000, max_tokens: 140, temperature: 0.3, signal: o.signal };
+  if (o.seat) ladderOpts.seat = o.seat;
   var reply = null;
   try {
-    reply = await callLadder(sys, fact,
-      { seat: o.seat, timeout: 8000, max_tokens: 140, temperature: 0.3, signal: o.signal });
+    reply = await callLadder(sys, fact, ladderOpts);
   } catch (eClaim) { reply = null; }
   var spoken = reply && reply.content ? String(reply.content).trim() : '';
   if (!spoken) {
@@ -7443,10 +7447,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // substituted a sentence a coder wrote in her first person ("I want to set that reminder for
   // you..."). Reported live by OTJT.CLAIR.TRUTH-GUARD on the CCWA board 20260815 05:06 as firing
   // on every channel every turn. Two separate harms, and the second is the worse one:
-  //   1. FALSE POSITIVES MAILED THE OPPOSITE OF WHAT SHE SAID. The pattern cannot tell a claim
-  //      from a refusal or a quote. "I have set no reminder", "I have not created that event
-  //      yet", "you asked if I have set a reminder" all match, and each one was replaced with a
-  //      confession of a failure that never happened, while her true answer was thrown away.
+  //   1. FALSE POSITIVES MAILED THE OPPOSITE OF A TRUE STATEMENT. Measured against the live
+  //      pattern, not assumed: plain negations do NOT match ("I have not created that event yet"
+  //      and "I have set no reminder" are both false, the negation word breaks the run). What
+  //      DOES match while being perfectly true is a reference to an earlier turn's real work,
+  //      "Earlier this week I set a reminder for that, it is still on", because the check only
+  //      looks at THIS turn's tool list. An echo of the person's own question, "you asked if I
+  //      have set a reminder", matches too. Each of those was deleted and replaced with a
+  //      confession of a failure that never happened, telling the person a reminder that really
+  //      exists does not.
   //   2. IT BECAME HER MEMORY. finalAns rides into core/memory.keeper.js#keepTurn as
   //      content.exit.her_answer, literally labeled her answer, and core/find.js reads that lane
   //      back to her on later turns. A coder's sentence banked under her name is planted memory.
@@ -7463,12 +7472,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (!_structuredReachPolicy && !_worldBuilderMachine
       && unverifiedActionClaimShape(finalAns, tools)) {
     _stampStep('hallucinated_action_detected','reminder/event claim shape with no matching tool call, waking her');
-    // Seat comes off this turn's own resolution, never a literal a coder typed, and the wake
-    // rides _callPaiLadder with the shared turn signal so a voice turn still settles inside
-    // PAI_VOICE_MODEL_BUDGET_MS instead of running past it on a private timeout.
+    // No seat is passed on purpose: _callPaiLadder already defaults to this turn's own resolved
+    // seat, and because it merges caller options OVER that default, naming a seat here would
+    // override the turn's resolution instead of honoring it. The shared turn signal does ride
+    // along, so a voice turn settles inside PAI_VOICE_MODEL_BUDGET_MS rather than on a private
+    // timeout of its own.
     var _claimRepair = await repairUnverifiedActionClaim(finalAns,
       function (sys, user, opts) { return _callPaiLadder(sys, user, opts); },
-      { seat: _paiSeatName(), signal: _modelRequestSignal() });
+      { signal: _modelRequestSignal() });
     if (await _turnCancelled(true)) return _turnCancelledResult('after_hallucinated_action_wake');
     if (!_claimRepair.answer) {
       _stampStep('cycle_end_silent', _claimRepair.stamp);
