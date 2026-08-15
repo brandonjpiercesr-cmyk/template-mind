@@ -2566,7 +2566,24 @@ async function defaultShadowStage(ctx, injected) {
   // verified relay overrides a flaky model rejection on an otherwise clean board. This does NOT
   // apply when the judge never ran at all (relayUnavailableHold owns that case) or when the
   // board itself is not clean (boardPassed required).
-  var exactRelayOverridesJudgment = !!(boardPassed && exactRelay && judgment && parsed);
+  // ⬡B:core.pai.outbound.council:FIX:the_exact_relay_override_obeys_the_quoted_fabrication:20260815⬡
+  // This arm tested only that the judge RAN and returned parseable JSON. It never read
+  // parsed.approved and never called _verbatimClaimFound, so an approved:false verdict
+  // that QUOTED a real verbatim fabrication satisfied it exactly like an approval, and
+  // because it is the first arm of the OR below it could alone make shadowPassed true.
+  // That contradicted this file's own law twice over: line 2460 ("the verdict belongs to
+  // the WONDER; deterministic proofs are evidence it weighs, never cold overrides") and
+  // line 2540 ("A real quoted fabrication still holds, every time"), which until now was
+  // enforced only through shadowFailOpenCleanBoard while this arm bypassed it entirely.
+  // The guard is the SAME expression that arm already obeys, declared 28 lines above.
+  // It does not deadlock the cases this override exists for: a blindfolded judge is
+  // already carried by shadowFailOpenCleanBoard, an unavailable wonder never reached this
+  // arm (it requires judgment && parsed), and the flaky-rejection case this arm was
+  // written for has no quotable claim, so the guard is a no-op there and the pass keeps
+  // its reason string. Only one behavior changes: clean board plus verified relay plus a
+  // judge that quoted a real verbatim claim now HOLDS instead of shipping.
+  var exactRelayOverridesJudgment = !!(boardPassed && exactRelay && judgment && parsed &&
+    !shadowHasQuotableFalseClaim);
   var shadowPassed = !relayUnavailableHold && !shadowDecisionUnavailableHold && boardPassed &&
     (exactRelayOverridesJudgment || modelPassed || wonderUnavailableCleanPass || shadowFailOpenCleanBoard);
 
@@ -4521,11 +4538,24 @@ async function runOutboundCouncil(input, injected) {
               currentAnswer = _reNorm.answer;
               continue; // healed and passed; move to the next stage
             }
-            if (!_initialModelOnlyCarry) {
-              return failureResult(!_reHuman
-                ? hollowStageReason(_reNorm.answer, _reNorm.reason)
-                : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
-            }
+            // ⬡B:core.pai.outbound.council:FIX:a_failed_resubmission_fails_honestly:20260815⬡
+            // The `!_initialModelOnlyCarry` guard that stood here discarded the
+            // resubmission's verdict WHATEVER it was. If the healed draft came back with a
+            // harder failure than the original (a hard board flag on the new bytes, for
+            // instance), the honest failure return was skipped and the ORIGINAL held bytes
+            // shipped anyway at the carry below, under a receipt reading
+            // SHADOW_PASS_MODEL_ONLY_HOLD_CARRIED. The carry gate revalidates the ORIGINAL
+            // result's evidence only, so nothing re-examined the new verdict.
+            // This also mattered for the fix 2000 lines above: without it, a hold produced
+            // there lands as exactly the input mayCarryBareShadowModelHold accepts, one
+            // heal runs, and the same bytes ship. The two changes are one change; either
+            // alone is cosmetic.
+            // The founder's 20260802 standing order is untouched: a healed candidate that
+            // is still merely model-held still carries, further down. What closes here is
+            // only the case where the healed bytes drew a different, harder verdict.
+            return failureResult(!_reHuman
+              ? hollowStageReason(_reNorm.answer, _reNorm.reason)
+              : (_reNorm.reason || 'stage_held'), stage, stages, input, _reNorm.answer);
             _healOutcome = !_reHuman
               ? 'heal_resubmission_hollow'
               : 'heal_resubmission_still_held';
