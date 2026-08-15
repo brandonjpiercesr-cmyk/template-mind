@@ -4741,46 +4741,46 @@ function bindGmguCouncilDeliberation(channel, context, deliberate) {
   return councilContext;
 }
 
-// ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡ ⬡B:core.tool.loop:FIX:reminder_confirmation_false_positive_20260815⬡
+// ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡
 // Founder screenshot: she replied 'I've set a reminder for you to check in on Tameka,
 // it'll pop up tomorrow 9am' -- but create_reminder NEVER fired, so no reminder
 // exists. Claiming an action you did not take is the worst failure. Guard: if the
 // reply claims a reminder/calendar action but the matching tool did not run this
 // turn, strip the false claim and tell the truth. Cold detection, no LLM.
-// 20260815 fix, pen-on-her-mind sweep: the ORIGINAL guard only checked THIS turn's
-// fired tools, so a truthful confirmation of a reminder/event she really set in an
-// EARLIER turn of the same conversation (create_reminder/create_event fired then,
-// not now) read identically to a fresh false claim and got overwritten with the
-// denial sentence -- a false statement replacing a true one. Cold fact check, not a
-// meaning call: priorTurns is the real, already-guard-passed conversation history --
-// a false claim in an earlier turn would already have been rewritten to the denial
-// sentence before being stored -- so if this same claim phrasing already appears in
-// a PRIOR assistant turn, the tool truly fired back then and this turn is a
-// corroborated echo, not a hallucination. This only CARRIES that fact; it still
-// never guesses at tense, intent, or what she meant. Extracted here, testable
-// per the "a guard whose rule cannot be run by a test is a guard nobody has ever
-// run" law (RULINGS 20260726), instead of living inline where only the whole
-// runPAIInner cycle could exercise it.
+// 20260815, CODEX P1 CORRECTION on this same date's first attempt: that attempt tried
+// widening this guard with a priorTurns-based corroboration check (a matching claim
+// phrase anywhere in the prior assistant turns cleared the guard), reasoned as a cold
+// fact check on the theory that priorTurns is always the real, already-guard-passed
+// history. Codex proved both premises false on review: (1) the match was generic, not
+// tied to the SPECIFIC claimed action, so a real reminder from last week would clear a
+// fresh, unrelated, false claim about a different event this turn; (2) priorTurns is
+// not uniformly server-owned history -- `routes/three-ray.routes.js` (`/pai/turn`)
+// copies request-body `priorTurns` straight into `runPAI` with no validation, so a
+// caller could inject a fabricated assistant turn and defeat the guard outright. A
+// fix built on an unverified trust assumption is worse than the false positive it
+// tried to cure. Reverted the corroboration logic entirely rather than narrow it
+// further; the underlying false-positive (a truthful confirmation of an EARLIER
+// turn's real reminder reading as a fresh lie) is real and still unresolved, but the
+// correct fix needs a genuinely server-owned fact source -- e.g. a direct query
+// against the actual reminder/event store for the specific claimed item -- not a
+// pattern match over conversational text of uncertain provenance. Left as a named,
+// open, more-careful future fix rather than shipped as a patch that could be defeated
+// by the exact caller it was reasoning about. What DOES survive from that attempt:
+// the guard body extracted out of the inline `if` into a pure, testable function,
+// per the "a guard whose rule cannot be run by a test is a guard nobody has ever run"
+// law (RULINGS 20260726) -- this part was never in question.
 var REMINDER_ACTION_CLAIM_REGEX =
   /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i;
 var REMINDER_ACTION_DENIAL_SENTENCE =
   "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
 
-function reminderClaimCorroboratedByHistory(priorTurns) {
-  return Array.isArray(priorTurns) && priorTurns.some(function (t) {
-    return t && t.role === 'assistant' && typeof t.content === 'string' &&
-      REMINDER_ACTION_CLAIM_REGEX.test(t.content);
-  });
-}
-
-// Returns the correction sentence when the claim is a fresh, uncorroborated,
-// tool-less claim this turn; returns null when there is nothing to correct.
-function hallucinatedReminderCorrection(finalAns, tools, priorTurns) {
+// Returns the correction sentence when the claim is a tool-less claim this turn;
+// returns null when there is nothing to correct.
+function hallucinatedReminderCorrection(finalAns, tools) {
   if (!finalAns || !REMINDER_ACTION_CLAIM_REGEX.test(finalAns)) return null;
   var firedTools = Array.isArray(tools) ? tools : [];
   if (firedTools.indexOf('create_reminder') !== -1 ||
       firedTools.indexOf('create_event') !== -1) return null;
-  if (reminderClaimCorroboratedByHistory(priorTurns)) return null;
   return REMINDER_ACTION_DENIAL_SENTENCE;
 }
 
@@ -7424,7 +7424,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // Guard body extracted above runPAIInner as hallucinatedReminderCorrection(); see
   // that block for the full history. Cold detection, no LLM.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
-    var _reminderCorrection = hallucinatedReminderCorrection(finalAns, tools, priorTurns);
+    var _reminderCorrection = hallucinatedReminderCorrection(finalAns, tools);
     if (_reminderCorrection) {
       _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
       finalAns = _reminderCorrection;
@@ -9120,7 +9120,7 @@ function normalizeSubmitJobArgs(input) {
 module.exports={runPAI,bindVerifiedLiveVoiceSession,
   bindGmguCurriculumProposalCapability,
   _test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
-  hallucinatedReminderCorrection,reminderClaimCorroboratedByHistory,
+  hallucinatedReminderCorrection,
   primaryProviderBody,applyProviderThinkingPolicy,applyGmguTutorProviderPolicy,
   fetchPaiSeatCandidate,
   prepareRoadmapActivationBody,
