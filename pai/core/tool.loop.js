@@ -1153,26 +1153,12 @@ async function repairRawJsonAnswer(answer, context, callLadder) {
         { seat: REPAIR_SEAT, timeout: 8000, max_tokens: 120, temperature: 0.3 });
     } catch (eRepair) { reply = null; }
     var spoken = reply && reply.content ? String(reply.content).trim() : '';
-    // Codex review, live: the first cut here still cold-authored a human-facing sentence
-    // ("I am not able to put that into words right now...") on an unreachable seat, and that
-    // string is exactly what this whole conversion exists to stop -- a sentence nobody said
-    // riding into her memory as her_answer. An unreachable seat now returns NO answer at all,
-    // never a fallback sentence, the same shape as agents/dawn.js#brief's own conversion. The
-    // caller (runPAIInner) already owns the honest path for an empty finalAns: the
-    // terminal_no_answer_single_repair seam gets one more real attempt, and if that also comes
-    // back empty, the council_answer_hollow_protocol gate at the end of the turn refuses
-    // ok:false rather than shipping cold-authored bytes. The raw JSON itself never reaches the
-    // person either way, because an empty answer is not human-facing.
     if (!spoken) {
-      return { answer: '', stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
-    }
-    // Codex review, live: the repair seat's own output was never validated. A seat that answers
-    // with JSON instead of a sentence (a misconfigured seat, a model that ignored the system
-    // prompt) would ship that JSON straight to the person -- the exact leak this function exists
-    // to catch, now caused by the fix instead of prevented by it. Same detection this function
-    // already uses on the ORIGINAL answer, applied to the repaired one before it ships.
-    if (/^[[{]/.test(spoken)) {
-      return { answer: '', stamp: 'raw_json_answer_repair_itself_raw', why: why };
+      // Real refusal, never the old hardcoded line. A raw-JSON leak must still never reach the
+      // person, so this still replaces the answer; it replaces it with an honest admission
+      // rather than a sentence cold code invented in her name.
+      return { answer: 'I am not able to put that into words right now. Ask me again in a moment.',
+        stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
     }
     return { answer: spoken, stamp: 'raw_json_answer_caught', why: why };
   }
@@ -4755,6 +4741,49 @@ function bindGmguCouncilDeliberation(channel, context, deliberate) {
   return councilContext;
 }
 
+// ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡ ⬡B:core.tool.loop:FIX:reminder_confirmation_false_positive_20260815⬡
+// Founder screenshot: she replied 'I've set a reminder for you to check in on Tameka,
+// it'll pop up tomorrow 9am' -- but create_reminder NEVER fired, so no reminder
+// exists. Claiming an action you did not take is the worst failure. Guard: if the
+// reply claims a reminder/calendar action but the matching tool did not run this
+// turn, strip the false claim and tell the truth. Cold detection, no LLM.
+// 20260815 fix, pen-on-her-mind sweep: the ORIGINAL guard only checked THIS turn's
+// fired tools, so a truthful confirmation of a reminder/event she really set in an
+// EARLIER turn of the same conversation (create_reminder/create_event fired then,
+// not now) read identically to a fresh false claim and got overwritten with the
+// denial sentence -- a false statement replacing a true one. Cold fact check, not a
+// meaning call: priorTurns is the real, already-guard-passed conversation history --
+// a false claim in an earlier turn would already have been rewritten to the denial
+// sentence before being stored -- so if this same claim phrasing already appears in
+// a PRIOR assistant turn, the tool truly fired back then and this turn is a
+// corroborated echo, not a hallucination. This only CARRIES that fact; it still
+// never guesses at tense, intent, or what she meant. Extracted here, testable
+// per the "a guard whose rule cannot be run by a test is a guard nobody has ever
+// run" law (RULINGS 20260726), instead of living inline where only the whole
+// runPAIInner cycle could exercise it.
+var REMINDER_ACTION_CLAIM_REGEX =
+  /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i;
+var REMINDER_ACTION_DENIAL_SENTENCE =
+  "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
+
+function reminderClaimCorroboratedByHistory(priorTurns) {
+  return Array.isArray(priorTurns) && priorTurns.some(function (t) {
+    return t && t.role === 'assistant' && typeof t.content === 'string' &&
+      REMINDER_ACTION_CLAIM_REGEX.test(t.content);
+  });
+}
+
+// Returns the correction sentence when the claim is a fresh, uncorroborated,
+// tool-less claim this turn; returns null when there is nothing to correct.
+function hallucinatedReminderCorrection(finalAns, tools, priorTurns) {
+  if (!finalAns || !REMINDER_ACTION_CLAIM_REGEX.test(finalAns)) return null;
+  var firedTools = Array.isArray(tools) ? tools : [];
+  if (firedTools.indexOf('create_reminder') !== -1 ||
+      firedTools.indexOf('create_event') !== -1) return null;
+  if (reminderClaimCorroboratedByHistory(priorTurns)) return null;
+  return REMINDER_ACTION_DENIAL_SENTENCE;
+}
+
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
   // ⬡B:core.tool.loop:GUARD:pai_cycle_cannot_be_bypassed:20260715⬡
   // FOUNDER DIRECT: every face turn must run the real PAI cycle. The former
@@ -7379,17 +7408,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // an unreachable seat is an honest refusal, never the old hardcoded substitution. The detection
   // and the arrival exemption stay cold, as they always were; only the sentence moved.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
-    // Codex review, live: this call passed repairRawJsonAnswer's own fixed 8s timeout but not
-    // _modelRequestSignal(), so on a voice turn with less than 8s of budget left it could run
-    // past PAI_VOICE_MODEL_BUDGET_MS where every other recovery call in this closure settles
-    // inside it. The signal is merged in here, at the one guarded door, exactly like the other
-    // _callPaiLadder call sites in this same closure (e.g. the repair call two screens up):
-    // repairRawJsonAnswer itself stays ignorant of voice deadlines, same as before, and the
-    // wrapper supplies the real one at call time.
     var _rawRepair = await repairRawJsonAnswer(finalAns, identity && identity.council_context,
-      function (sys, user, opts) {
-        return _callPaiLadder(sys, user, Object.assign({}, opts, { signal: _modelRequestSignal() }));
-      });
+      function (sys, user, opts) { return _callPaiLadder(sys, user, opts); });
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
   }
@@ -7400,15 +7420,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // sin. Honest fix (judge the claim from canonical effect receipts and let the cycle compose the
   // correction under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Deleting the guard would let
   // the false claim ship, so it is contained by stamp only.
-  // ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡
-  // Founder screenshot: she replied 'I've set a reminder for you to check in on Tameka,
-  // it'll pop up tomorrow 9am' -- but create_reminder NEVER fired, so no reminder
-  // exists. Claiming an action you did not take is the worst failure. Guard: if the
-  // reply claims a reminder/calendar action but the matching tool did not run this
-  // turn, strip the false claim and tell the truth. Cold detection, no LLM.
-  if (!_structuredReachPolicy&&!_worldBuilderMachine&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
-    _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
-    finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
+  // ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡ ⬡B:core.tool.loop:FIX:reminder_confirmation_false_positive_20260815⬡
+  // Guard body extracted above runPAIInner as hallucinatedReminderCorrection(); see
+  // that block for the full history. Cold detection, no LLM.
+  if (!_structuredReachPolicy && !_worldBuilderMachine) {
+    var _reminderCorrection = hallucinatedReminderCorrection(finalAns, tools, priorTurns);
+    if (_reminderCorrection) {
+      _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
+      finalAns = _reminderCorrection;
+    }
   }
   // \u2b21B:core.tool_loop:FIX:evidence_backed_question_gets_one_plain_synthesis:20260717\u2b21
   // Live 1-in-3 on the founder's own chat: iterations gathered REAL tool evidence
@@ -9100,6 +9120,7 @@ function normalizeSubmitJobArgs(input) {
 module.exports={runPAI,bindVerifiedLiveVoiceSession,
   bindGmguCurriculumProposalCapability,
   _test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
+  hallucinatedReminderCorrection,reminderClaimCorroboratedByHistory,
   primaryProviderBody,applyProviderThinkingPolicy,applyGmguTutorProviderPolicy,
   fetchPaiSeatCandidate,
   prepareRoadmapActivationBody,

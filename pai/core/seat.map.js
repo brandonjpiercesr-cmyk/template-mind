@@ -175,28 +175,10 @@ function capability(kind, resolvedModel, bakedModel, declared) {
 // lane's, which is what /coda/sensors/health has been saying in prose since 20260728.
 var ceilingOwner = require('./ceiling.owner.js');
 
-// Codex review, live: this used to hand ceilingOwner.readCeiling the RAW runtime object
-// (runtime || process.env) directly, so it read process.env[key] itself and never once
-// consulted floorOverlay above -- the exact overlay her signed floor writes into and the exact
-// function (env()) every OTHER reader in this file goes through. A signed SEAT_*_DAILY_CAP_USD
-// row would apply to nothing: capChosenBy would still read 'this_lane' or 'nobody_yet' and the
-// baked value would win, silently, the same shape as the 20260731 911 above about a cap that
-// looks configured but is not in force. Fixed by resolving through env() FIRST -- same
-// operator-env-then-floor precedence every other seat value already gets -- and handing
-// readCeiling a synthetic single-key object carrying that resolved value, so its own shape
-// validation, chosen_by labelling and NOBODY/LANE/FOUNDER logic all still run unchanged. When
-// env() finds nothing (no operator override, no floor row), the object passed through is the
-// exact same runtime || process.env as before, so a world with no floor behaves identically.
 function capDetail(key, dflt, runtime) {
-  var resolved = env(key, undefined, runtime);
-  var effectiveRuntime = runtime || process.env;
-  if (resolved !== undefined) {
-    effectiveRuntime = {};
-    effectiveRuntime[key] = resolved;
-  }
   return ceilingOwner.readCeiling(key,
     { decimals: 4, lane_value: Number.isFinite(dflt) && dflt > 0 ? dflt : null },
-    effectiveRuntime);
+    runtime || process.env);
 }
 
 function envUsd(key, dflt, runtime) { return capDetail(key, dflt, runtime).value; }
