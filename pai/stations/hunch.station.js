@@ -47,21 +47,32 @@ function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_
 
 function maxTips(){ var v=parseInt(process.env.HUNCH_MAX_TIPS,10); return isFinite(v)?v:3; }
 
+// ⬡B:hunch.fence_line:FIX:every_row_names_its_writer:20260815⬡ Founder ruling 20260815, the
+// pen on her mind: every bare .summary string HUNCH fed its organ carried no proof of who
+// wrote it, so a row a different agent stamped looked identical to something she herself
+// remembered. Same per-row shape as the reference fence in core/fcw.builder.js: stamp_type,
+// writer, summary. Doctrine-correct fallback for a source-less row is "(no writer stamp on
+// the row)", never an invented writer name (the known defect that fence used to carry).
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[' + (b && b.stamp_type || '?') + ' | written by ' + writer + '] ' + ((b && b.summary) || '');
+}
+
 // ---- (1) GATHER the real signals HUNCH monitors. Cold, each fails open. ----
 async function gatherSignals(hamUid, suppliedMoment) {
   var out = { pending: [], calendar_next: null, stale_jobs: [], unread_memos: [], ambient: [] };
   // pending items + unread memos: read from the bank (facts other agents stamped)
   try {
     var url = _bu()+'/rest/v1/'+_tbl()+
-      '?select=summary,stamp_type,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '?select=summary,stamp_type,source,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
       '&or=(summary.ilike.*pending*,summary.ilike.*unread*,summary.ilike.*follow%20up*,summary.ilike.*stale*,stamp_type.eq.SURFACE)&order=id.desc&limit=25';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(9000) }).then(function(x){return x.json();});
     (Array.isArray(r)?r:[]).forEach(function(b){
-      var s=(b.summary||'');
-      if (/stale|no response|no reply/i.test(s)) out.stale_jobs.push(s);
-      else if (/unread|memo/i.test(s)) out.unread_memos.push(s);
-      else out.pending.push(s);
+      var s=(b.summary||''), line=fenceLine(b);
+      if (/stale|no response|no reply/i.test(s)) out.stale_jobs.push(line);
+      else if (/unread|memo/i.test(s)) out.unread_memos.push(line);
+      else out.pending.push(line);
     });
   } catch(e){}
   // upcoming calendar via NOW's moment (already resolved, no twin)
@@ -78,11 +89,11 @@ async function gatherSignals(hamUid, suppliedMoment) {
 async function alreadyCovered(hamUid) {
   try {
     var url = _bu()+'/rest/v1/'+_tbl()+
-      '?select=summary&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '?select=summary,stamp_type,source&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
       '&or=(agent_global.eq.BURST,agent_global.eq.HUNCH)&order=id.desc&limit=30';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(8000) }).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 
@@ -101,10 +112,15 @@ async function composeTips(hamUid, moment, signals, covered) {
       'array of {tip, why_now, urgency ("low"|"normal"|"high"), contradicts_action (bool)}. The '+
       'bar is HIGH: only push what clearly helps; if little matters, return fewer or []. Never '+
       'nag, never invent. Already covered by BURST/HUNCH (do not repeat): '+
-      JSON.stringify((covered||[]).slice(0,20));
-    var payload = { pending: signals.pending.slice(0,10), stale_jobs: signals.stale_jobs.slice(0,8),
-      unread_memos: signals.unread_memos.slice(0,8), calendar_next: signals.calendar_next,
-      ambient: signals.ambient.slice(0,5) };
+      // ⬡B:hunch.compose_tips:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ Founder
+      // ruling 20260815, the pen on her mind: alreadyCovered's query already bounds this list to
+      // 30 rows, and gatherSignals' shared query already bounds pending+stale+unread together to
+      // 25. Re-slicing each of these to 20 / 10 / 8 / 8 here was a coder deciding the ceiling a
+      // second time on top of an already-bounded read, the exact double cap the ruling forbids.
+      JSON.stringify(covered||[]);
+    var payload = { pending: signals.pending, stale_jobs: signals.stale_jobs,
+      unread_memos: signals.unread_memos, calendar_next: signals.calendar_next,
+      ambient: signals.ambient };
     var out = await ladder.deliberate(persona.voicePrompt(sys), JSON.stringify(payload), { json:true, max_tokens:700, timeout:30000 });
     var text = out && out.content!=null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g,'').trim());
@@ -151,10 +167,10 @@ async function openTips(hamUid) {
 // recent context the organ uses to decide if a tip got handled
 async function recentContext(hamUid) {
   try {
-    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&ham_uid=eq.'+
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary,stamp_type,source&ham_uid=eq.'+
       encodeURIComponent(String(hamUid))+'&order=id.desc&limit=40';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(9000)}).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 
@@ -170,7 +186,10 @@ async function reconcileTips(hamUid, moment) {
       'but going cold, worth ONE gentle re-nudge), or "dead" (obsolete, time has passed, drop it '+
       'quietly). Return a JSON array aligned to the tips in order: [{index, status, note}]. Be '+
       'honest; do not keep things alive just to have something to say.';
-    var payload={ tips:open.map(function(o,ix){return {index:ix, tip:o.tip, nudges:o.nudges};}), recent:ctx.slice(0,25) };
+    // ⬡B:hunch.reconcile_tips:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ Founder
+    // ruling 20260815, the pen on her mind: recentContext's own query already bounds this read
+    // to 40 rows; re-slicing to 25 here was a second, code-level decision on top of that read.
+    var payload={ tips:open.map(function(o,ix){return {index:ix, tip:o.tip, nudges:o.nudges};}), recent:ctx };
     var out=await ladder.deliberate(persona.voicePrompt(sys), JSON.stringify(payload), { json:true, max_tokens:700, timeout:30000 });
     var text=out&&out.content!=null?out.content:''; decisions=JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (!Array.isArray(decisions)) decisions=[];

@@ -125,7 +125,10 @@ async function judgeRelevance(hamUid, moment, candidates, alreadySeen) {
       'JSON array of {headline, why_it_matters, source, freshness}. It is ' + moment.day_name +
       ' ' + moment.part_of_day + '. Prefer fresh, timely items. If NONE genuinely matter, ' +
       'return []. Never invent. Already surfaced (do not repeat): ' +
-      JSON.stringify((alreadySeen || []).slice(0, 20));
+      // ⬡B:press.judge_relevance:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡
+      // recentlySurfaced's own query already bounds this list to 20 rows; re-slicing to the
+      // same 20 here was still a coder deciding the ceiling twice.
+      JSON.stringify(alreadySeen || []);
     var out = await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'),
       { json: true, max_tokens: 700, timeout: 30000 });
     var text = out && out.content != null ? out.content : '';
@@ -155,16 +158,24 @@ function defaultInterests() {
   return String(process.env.PRESS_INTERESTS || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
 }
 
+// ⬡B:press.recently_surfaced:FIX:every_row_names_its_writer:20260815⬡ Founder ruling
+// 20260815, the pen on her mind: doctrine-correct fallback for a source-less row is
+// "(no writer stamp on the row)", never an invented writer name.
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[written by ' + writer + '] ' + ((b && b.summary) || '');
+}
+
 async function recentlySurfaced(hamUid) {
   try {
     var url = _bu() + '/rest/v1/' + _tbl() +
-      '?select=summary&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '?select=summary,source&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
       '&source=ilike.press.station.item.' + encodeURIComponent(String(hamUid).toLowerCase()) + '*' +
       '&order=id.desc&limit=20';
     var r = await fetch(url, { headers: {
       apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema()
     }, signal: AbortSignal.timeout(8000) }).then(function (x) { return x.json(); });
-    return (Array.isArray(r) ? r : []).map(function (b) { return b.summary; });
+    return (Array.isArray(r) ? r : []).map(fenceLine);
   } catch (e) { return []; }
 }
 

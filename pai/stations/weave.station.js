@@ -23,6 +23,16 @@ function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY
 function _tbl(){ return process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain'); }
 function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'); }
 
+// ⬡B:weave.gather_mentions:FIX:every_row_names_its_writer:20260815⬡ Founder ruling 20260815,
+// the pen on her mind: this read already carried `source`, but it was thrown away at the
+// bare-.summary map, so the through-line the organ builds carried no proof of who wrote any
+// mention. Doctrine-correct fallback for a source-less row is "(no writer stamp on the row)",
+// never an invented writer name.
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[written by ' + writer + '] ' + ((b && b.summary) || '');
+}
+
 // Gather mentions of an entity (person/topic) across recent threads. Cold, fails open.
 async function gatherMentions(hamUid, entity) {
   try {
@@ -30,7 +40,7 @@ async function gatherMentions(hamUid, entity) {
       '?select=summary,source,created_at&summary=ilike.*'+encodeURIComponent(entity)+'*&order=id.desc&limit=40';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(10000) }).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 

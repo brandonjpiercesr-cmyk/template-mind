@@ -30,23 +30,36 @@ function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_
 
 function urgencyThreshold(){ var v=parseFloat(process.env.BURST_URGENCY_THRESHOLD); return isFinite(v)?v:0.8; }
 
+// ⬡B:burst.candidate_signals:FIX:every_row_names_its_writer_no_double_cap:20260815⬡
+// Founder ruling 20260815, the pen on her mind: a row entering the organ's prompt with no
+// writer name lets a machine byte read as if it were her own life, and a code-level slice
+// riding on top of a query limit is a coder deciding twice what she may see. This helper
+// carries the row's real source as its writer (the doctrine-correct fallback for a
+// source-less row is "(no writer stamp on the row)", never an invented name), and the
+// query limit below is the ONE bound left, never doubled by a second cut before the prompt.
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[' + (b && b.stamp_type || '?') + (b && b.agent_global ? '/' + b.agent_global : '')
+    + ' | written by ' + writer + '] ' + ((b && b.summary) || '');
+}
+
 async function candidateSignals(hamUid) {
   // time-critical signals: urgent-flagged emails, imminent deadlines, emergency beads
   try {
     var url=_bu()+'/rest/v1/'+_tbl()+
-      '?select=summary,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '?select=summary,source,stamp_type,agent_global,created_at&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
       '&or=(summary.ilike.*urgent*,summary.ilike.*deadline*,summary.ilike.*today*,summary.ilike.*ASAP*,summary.ilike.*emergency*)&order=id.desc&limit=20';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(9000)}).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 
 async function alreadyAlerted(hamUid) {
   try {
-    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&ham_uid=eq.'+
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary,source,stamp_type&ham_uid=eq.'+
       encodeURIComponent(String(hamUid))+'&agent_global=eq.BURST&order=id.desc&limit=20';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(8000)}).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 
@@ -60,7 +73,10 @@ async function judgeUrgent(hamUid, moment, candidates, alerted) {
       'message, an emergency) as a JSON array of {alert, why_urgent, channel ("voice"|"text"|'+
       '"command_center"), confidence (0-1)}. The bar is very HIGH -- most things are NOT BURST, '+
       'they are HUNCH or DAWN. If nothing is truly urgent, return []. Already alerted (do not '+
-      'repeat): '+JSON.stringify((alerted||[]).slice(0,20));
+      // ⬡B:burst.judge_urgent:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ alreadyAlerted's
+      // own query already bounds this list to 20 rows; a second .slice(0,20) here was a coder
+      // deciding the same ceiling twice, the exact double-cap the founder's ruling forbids.
+      'repeat): '+JSON.stringify(alerted||[]);
     var out=await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'), { json:true, max_tokens:600, timeout:25000 });
     var text=out&&out.content!=null?out.content:'';
     var arr=JSON.parse(String(text).replace(/```json|```/g,'').trim());

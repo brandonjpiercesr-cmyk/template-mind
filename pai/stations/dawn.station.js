@@ -72,17 +72,32 @@ async function markDelivered(hamUid, moment) {
   await writeBead(hamUid,'DELIVERED',key,'[DAWN] briefing delivered '+moment.date,4,{at:moment.now_iso},moment);
 }
 
+// ⬡B:dawn.fence_line:FIX:every_row_names_its_writer:20260815⬡ Founder ruling 20260815, the pen
+// on her mind: BURST/GHOST rows entered the FACTS block below as bare .summary strings with no
+// proof of who wrote them, so they read to the organ exactly like something she herself
+// remembered. Same per-row shape as the reference fence in core/fcw.builder.js. Doctrine-correct
+// fallback for a source-less row is "(no writer stamp on the row)", never an invented writer name.
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[' + (b && b.stamp_type || '?') + (b && b.agent_global ? '/' + b.agent_global : '')
+    + ' | written by ' + writer + '] ' + ((b && b.summary) || '');
+}
+
 // ---- GENERATE the six sections from the real roster; each guarded, conditional ----
 async function generateSections(hamUid, moment, prefs) {
   var hasNylas = !!(prefs && (prefs.nylas_grant || prefs.has_nylas));
   var interests = (prefs && prefs.interests) || [];
   var sec = { upcoming:[], emails:[], news:[], pending:[], alertSummary:[], sports:null, spiritual:null };
 
+  // ⬡B:dawn.generate_sections:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡ Founder
+  // ruling 20260815, the pen on her mind: getRadarEvents and listEmails already bound what they
+  // return (200 rows internally, limit:8 on the query respectively); a further .slice() here was
+  // a second, code-level decision cutting her read down again before it reached the FACTS block.
   if (hasNylas) {
     try { var sched=tryMod('../core/schedule/schedule.logic.js');
-      if (sched && sched.getRadarEvents){ var ev=await sched.getRadarEvents(hamUid); if(Array.isArray(ev)) sec.upcoming=ev.slice(0,10);} } catch(e){}
+      if (sched && sched.getRadarEvents){ var ev=await sched.getRadarEvents(hamUid); if(Array.isArray(ev)) sec.upcoming=ev;} } catch(e){}
     try { var iman=tryMod('../reach/iman.js');
-      if (iman && iman.listEmails){ var em=await iman.listEmails({HAM_UID:hamUid},{unreadOnly:true,limit:8}); if(Array.isArray(em)) sec.emails=em.slice(0,8);} } catch(e){}
+      if (iman && iman.listEmails){ var em=await iman.listEmails({HAM_UID:hamUid},{unreadOnly:true,limit:8}); if(Array.isArray(em)) sec.emails=em;} } catch(e){}
   }
   if (interests.length) {
     try { var press=tryMod('./press.station.js');
@@ -91,9 +106,9 @@ async function generateSections(hamUid, moment, prefs) {
   try { var hunch=tryMod('./hunch.station.js');
     if (hunch && hunch.pendingForBriefing){ sec.pending=await hunch.pendingForBriefing(hamUid)||[]; } } catch(e){}
   try {
-    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary&or=(agent_global.eq.BURST,agent_global.eq.GHOST)&order=id.desc&limit=8';
+    var url=_bu()+'/rest/v1/'+_tbl()+'?select=summary,source,stamp_type,agent_global&or=(agent_global.eq.BURST,agent_global.eq.GHOST)&order=id.desc&limit=8';
     var r=await fetch(url,{headers:{apikey:_bk(),Authorization:'Bearer '+_bk(),'Accept-Profile':_schema()},signal:AbortSignal.timeout(8000)}).then(function(x){return x.json();});
-    sec.alertSummary=(Array.isArray(r)?r:[]).map(function(b){return b.summary;}).slice(0,6);
+    sec.alertSummary=(Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){}
   try { var nash=tryMod('../core/wonders/nash.wonder.js'); if (nash && nash.latestForHam) sec.sports=await nash.latestForHam(hamUid); } catch(e){}
   try { var soul=tryMod('./soul.station.js'); if (soul && soul.surfaceDaily){ var so=await soul.surfaceDaily(hamUid); sec.spiritual=so&&so.offering; } } catch(e){}
