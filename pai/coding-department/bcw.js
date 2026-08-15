@@ -51,8 +51,23 @@ function hamFilter(hamUid) {
   return hamUid ? '&ham_uid=eq.' + encodeURIComponent(String(hamUid).toUpperCase()) : '';
 }
 
+// ⬡B:coding-department.bcw:FIX:the_pen_fence_reaches_the_bcw_armory:20260815⬡
+// Founder doctrine 20260815, the pen on her mind: every row below is a real brain bead
+// (PACKS, DOCTRINE, BURN BOOK, STANDARDS, SPAN/ROADMAP, PATHWAY) that reaches CODA's own
+// model call (advisors/coding.js runLead -> generateVerifiedLead -> finalizePublicTurn)
+// and reaches the CLAIR command center coding-mode chat directly through GET /bcw. Before
+// this fix, doctrine/burns/standards rows carried no source at all (not even fetched), and
+// packs/roadmap/span carried a raw source prefix with no framing telling the mind what that
+// name means or that it must judge the row itself. Same fence fcw.builder.js already runs
+// on RECENT CONTEXT and ROADMAP AND DOCTRINE: carry the writer, never classify it. A
+// source-less row renders the corrected wording, never "an unnamed writer".
+function writerTag(b) {
+  var source = String(b && b.source || '').trim();
+  return source ? ('written by ' + source.slice(0, 120)) : '(no writer stamp on the row)';
+}
+
 function rowLine(b, max) {
-  return '- ' + (b.source ? b.source + ': ' : '') + String(b.summary || '').slice(0, max || 260);
+  return '- [' + writerTag(b) + '] ' + String(b.summary || '').slice(0, max || 260);
 }
 
 function packLine(b) {
@@ -96,8 +111,8 @@ function historicalRoadmap(row) {
 }
 
 function roadmapLine(row) {
-  if (historicalRoadmap(row)) return '- ' + (row.source || 'roadmap')
-    + ': Historical roadmap snapshot. Current implementation status is withheld until newer receipts and live repository evidence are reconciled.';
+  if (historicalRoadmap(row)) return '- [' + writerTag(row)
+    + '] Historical roadmap snapshot. Current implementation status is withheld until newer receipts and live repository evidence are reconciled.';
   return rowLine(row, 320);
 }
 
@@ -144,6 +159,15 @@ async function assembleBCW(topic, hamUid) {
   var parts = [];
   parts.push('=== BUILDING CONTEXT WINDOW (you are armed before you build) ===');
   parts.push('CODING RELAY LAW: ' + codingRelay.line());
+  // ⬡B:coding-department.bcw:FIX:the_pen_fence_reaches_the_bcw_armory:20260815⬡
+  // Founder ruling 20260815, the pen on her mind. Every row in every section below is a
+  // stamped brain bead, each now tagged [written by X]. A writer name is the lane or module
+  // that stamped the row in this brain, never proof of who authored it: a DOCTRINE, BURN,
+  // STANDARD, ROADMAP, or SPAN row can be a mind's own real deliberation from an earlier
+  // cycle, or a machine fact a seeder or scheduler filed under that stamp_type. YOU judge
+  // which is which and how much weight it carries. These writer names are internal; carry
+  // the narration fence, never repeat one to the founder. Carry, never classify: nothing here
+  // sorts rows into trusted or untrusted by source name.
   if (packs.length) parts.push('LIVE BCW PACKS (source of truth):\n' + packs.map(packLine).join('\n'));
   // ⬡B:coding-department.bcw:FIX:truncation_was_gutting_doctrine_20260713⬡
   // Founder-caught live: a coding-mode answer on the 90/10 law came back
@@ -156,13 +180,13 @@ async function assembleBCW(topic, hamUid) {
   // them to noise was the real bug. Burns/standards get more room too, same
   // reasoning at smaller scale; pathway stays tight since it is a scan, not
   // a read.
-  if (doctrine.length) parts.push('LIVE DOCTRINE (obey it -- if asked about a named law or doctrine by name, state its actual definition precisely from what is below, never paraphrase loosely into your own words):\n' + doctrine.map(function (b) { return '- ' + (b.summary || ''); }).join('\n'));
+  if (doctrine.length) parts.push('LIVE DOCTRINE (weigh it by its named writer -- if asked about a named law or doctrine by name, state its actual definition precisely from what is below, never paraphrase loosely into your own words):\n' + doctrine.map(function (b) { return '- [' + writerTag(b) + '] ' + (b.summary || ''); }).join('\n'));
   parts.push('THE FLOOR (non-negotiable): no scaffold, no stub, no hardcoded identity, no rogue orphan, no cold code that is not wired to a wonder, no em dash in output, honor the ABAHAM door, run through the council and CANON, verify it persists before calling it done.');
-  if (burns.length) parts.push('BURN BOOK (mistakes already made, never repeat):\n' + burns.map(function (b) { return '- ' + (b.summary || '').slice(0, 220); }).join('\n'));
-  if (standards.length) parts.push('STANDARDS:\n' + standards.map(function (b) { return '- ' + (b.summary || '').slice(0, 200); }).join('\n'));
+  if (burns.length) parts.push('BURN BOOK (mistakes already made, never repeat):\n' + burns.map(function (b) { return '- [' + writerTag(b) + '] ' + (b.summary || '').slice(0, 220); }).join('\n'));
+  if (standards.length) parts.push('STANDARDS:\n' + standards.map(function (b) { return '- [' + writerTag(b) + '] ' + (b.summary || '').slice(0, 200); }).join('\n'));
   if (roadmaps.length || span.length) parts.push('LIVE SPAN AND ROADMAP EVIDENCE (SPAN decides sequence; never silently substitute your own ranking):\n'
     + roadmaps.map(roadmapLine).concat(span.map(function (b) { return rowLine(b, 320); })).join('\n'));
-  parts.push('PATHWAY SCAN' + (t ? ' for "' + t + '"' : '') + ' (CHECK FIRST, upgrade what exists, never build a duplicate):\n' + (pathway.length ? pathway.map(function (b) { return '- exists: ' + (b.source || '') + ' -- ' + (b.summary || '').slice(0, 150); }).join('\n') : '- no existing work found on this topic; still search the code before building.'));
+  parts.push('PATHWAY SCAN' + (t ? ' for "' + t + '"' : '') + ' (CHECK FIRST, upgrade what exists, never build a duplicate):\n' + (pathway.length ? pathway.map(function (b) { return '- exists [' + writerTag(b) + '] -- ' + (b.summary || '').slice(0, 150); }).join('\n') : '- no existing work found on this topic; still search the code before building.'));
   parts.push('PROOF CHECKLIST before you ship: council PASS, CANON_PASS or GAP, boots clean, persisted in origin/main, deployed live.');
 
   var bcw = parts.join('\n\n');

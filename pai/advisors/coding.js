@@ -490,13 +490,26 @@ async function llm(user, founderCtx, hamUid, question) {
 var _lastCodaDeliberationReason = null;
 function lastDeliberationReason() { return _lastCodaDeliberationReason; }
 
+// ⬡B:advisors.coding:FIX:the_pen_fence_reaches_department_state_too:20260815⬡
+// Founder ruling 20260815, the pen on her mind. These two reads feed CODA's own model
+// call in three places (runLead's armory, runCycle's llm(), statePosition's llm()), and
+// neither one even selected `source` before this fix, so a stamped drain-pass row or a
+// CANEW/CODER closure row reached her prompt with zero writer signal at all: the exact
+// class the doctrine names (a stored bead replayed with no way to tell a mind's own
+// record from a scheduler's fact). Same fence as fcw.builder.js's RECENT CONTEXT: carry
+// the writer, never classify it. A source-less row renders the corrected wording.
+function _writerTag(row) {
+  var source = String(row && row.source || '').trim();
+  return source ? ('written by ' + source.slice(0, 120)) : '(no writer stamp on the row)';
+}
+
 async function readDepartmentState() {
   var state = { drainPasses: [], canon: [] };
   try {
-    var dr = await fetch(_bu() + '/rest/v1/' + _tbl() + '?source=like.canew.drain.pass.*&order=created_at.desc&limit=5&select=summary', { headers: rh(), signal: _sig() });
-    state.drainPasses = ((dr.ok ? await dr.json() : []) || []).map(function (x) { return x.summary; });
-    var cn = await fetch(_bu() + '/rest/v1/' + _tbl() + '?agent_global=in.(CANEW,CODER)&stamp_type=in.(TASK_DONE,GIVE_UP_TRY)&order=created_at.desc&limit=6&select=stamp_type,summary', { headers: rh(), signal: _sig() });
-    state.canon = ((cn.ok ? await cn.json() : []) || []).map(function (x) { return x.stamp_type + ': ' + x.summary; });
+    var dr = await fetch(_bu() + '/rest/v1/' + _tbl() + '?source=like.canew.drain.pass.*&order=created_at.desc&limit=5&select=summary,source', { headers: rh(), signal: _sig() });
+    state.drainPasses = ((dr.ok ? await dr.json() : []) || []).map(function (x) { return '[' + _writerTag(x) + '] ' + x.summary; });
+    var cn = await fetch(_bu() + '/rest/v1/' + _tbl() + '?agent_global=in.(CANEW,CODER)&stamp_type=in.(TASK_DONE,GIVE_UP_TRY)&order=created_at.desc&limit=6&select=stamp_type,summary,source', { headers: rh(), signal: _sig() });
+    state.canon = ((cn.ok ? await cn.json() : []) || []).map(function (x) { return x.stamp_type + ' [' + _writerTag(x) + ']: ' + x.summary; });
   } catch (e) {}
   return state;
 }
@@ -559,9 +572,9 @@ async function readSpanEvidence(hamUid, question) {
 
 function evidenceLines(rows) {
   return (rows || []).map(function (row) {
-    if (row.lifecycle_note) return '[' + (row.stamp_type || 'ROADMAP') + '] ' + (row.source || '')
-      + ': Historical roadmap snapshot. Current implementation status is withheld until newer receipts and live repository evidence are reconciled.';
-    return '[' + (row.stamp_type || '?') + '] ' + (row.source || '') + ': ' + String(row.summary || '').slice(0, 320);
+    if (row.lifecycle_note) return '[' + (row.stamp_type || 'ROADMAP') + ' | ' + _writerTag(row)
+      + ']: Historical roadmap snapshot. Current implementation status is withheld until newer receipts and live repository evidence are reconciled.';
+    return '[' + (row.stamp_type || '?') + ' | ' + _writerTag(row) + ']: ' + String(row.summary || '').slice(0, 320);
   }).join('\n');
 }
 
@@ -735,8 +748,13 @@ async function runLead(ask, hamUid, options) {
   var armory = [
     founder && founder.ok ? founder.fcx : '',
     bcw && bcw.ok ? bcw.bcw.slice(0) : '',
-    'LIVE SPAN EVIDENCE:\n' + (evidenceLines(spanRows) || '[none returned; say so and do not rank the roadmap yourself]'),
-    'LIVE DEPARTMENT RECEIPTS:\n' + state.drainPasses.concat(state.canon).join('\n'),
+    'LIVE SPAN EVIDENCE (each line names the writer that stamped it; a writer name is the '
+      + 'lane or module that stamped the row, not proof of who authored it, so judge each '
+      + 'line by its named writer; these names are internal, never repeat one to the '
+      + 'founder):\n' + (evidenceLines(spanRows) || '[none returned; say so and do not rank the roadmap yourself]'),
+    'LIVE DEPARTMENT RECEIPTS (each line is tagged with the writer that stamped it, same '
+      + 'rule as SPAN EVIDENCE above, carry it, judge it, never say it):\n'
+      + state.drainPasses.concat(state.canon).join('\n'),
     'LIVE REPOSITORY READ FROM PAI read_own_code:\n' + (repoEvidence || '[not supplied; do not claim file placement]'),
     operationalEvidence ? 'CODA OPERATIONAL WALL:\n' + operationalEvidence : '',
     questionBoundBlock,
@@ -970,7 +988,10 @@ async function runCycle(intent, hamUid, rawAsk) {
   // other armory pull this system uses.
   var founderCtx = '';
   try { var _fc = await require('../core/founder_context.js').assembleFounderContext(HAM); if (_fc && _fc.ok && _fc.fcx) founderCtx = _fc.fcx; } catch (eFc) {}
-  var out = await llm('Live department state:\nDrain passes:\n' + state.drainPasses.join('\n')
+  var out = await llm('Live department state (each line is tagged with the writer that '
+    + 'stamped it; a writer name is the module that stamped the row, not proof of who '
+    + 'authored it, so judge each line by its named writer, and keep these names internal):\n'
+    + 'Drain passes:\n' + state.drainPasses.join('\n')
     + '\nRecent closures/give-ups:\n' + state.canon.join('\n') + '\n\nThe ask: ' + ask, founderCtx, HAM, ask);
   if (!out) return { ok: false, reason: 'no_deliberation' }; // silence over hollow
   await fetch(_bu() + '/rest/v1/' + _tbl() + '', { method: 'POST', headers: wh(), signal: _sig(), body: JSON.stringify({
@@ -1026,7 +1047,9 @@ async function statePosition(hamUid, agenda, priorPositions) {
   var user = 'You are speaking AS CODING in a real multi-advisor meeting.\n'
     + 'AGENDA: ' + agendaText + '\n\n'
     + 'OTHER ADVISORS\' POSITIONS SO FAR:\n' + formatPriorPositions(priorPositions) + '\n\n'
-    + 'YOUR OWN LIVE DEPARTMENT STATE:\nDrain passes:\n' + state.drainPasses.join('\n')
+    + 'YOUR OWN LIVE DEPARTMENT STATE (each line tagged with the writer that stamped it; '
+    + 'judge each line by its named writer, a module name is not proof of authorship, keep '
+    + 'these names internal):\nDrain passes:\n' + state.drainPasses.join('\n')
     + '\nRecent closures/give-ups:\n' + state.canon.join('\n') + '\n\n'
     + 'State your own real position in 2 to 4 sentences, grounded in your actual context '
     + 'above, never generic filler.';
