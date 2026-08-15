@@ -341,13 +341,29 @@ async function decideMetaCommentary(turn, result) {
     // THE SPLIT (see NEVER_SHIP_UNJUDGED above): an identity or leak shape still
     // holds, which is what hands the draft to the one-ladder healer for its
     // bounded repair attempt. Only TASTE fails open.
+    // ⬡B:agents.meta_commentary:FIX:a_regex_may_not_erase_her_answer:20260815⬡
+    // FOUNDER CORRECTION, 20260815, verbatim: "Who in the hell are we to stop something? Why
+    // are you stopping something? We should be teaching and instructing... your shadow, your
+    // WRIT, your meta commentary, all of that, your Aunt Pam. IF THEY'RE STOPPING, THEY'RE
+    // WRONG."
+    // This branch used to set `result.pendingOutbound = ''` when a bare regex matched one of
+    // NEVER_SHIP_UNJUDGED and the organ was unreachable. core/pai.outbound.council.js computes
+    // `ok: output.trim().length > 0`, so blanking the draft turned her real, already-composed
+    // answer into a hold decided entirely by a pattern with NO MIND IN THE LOOP on that turn.
+    // That is the worst shape the doctrine names: a human receives nothing, and what replaced
+    // her words was cold code's own verdict.
+    // It now fails OPEN, exactly as the taste branch below already did. The flags still ride
+    // the receipt, so a woken reviewer and LOGFUL both see what was unjudged and she can be
+    // corrected by INSTRUCTION. The real anchor is unaffected and still runs independently:
+    // board/pam/pam.js catches genuine credential and cross-person privacy leaks
+    // deterministically, and that is a person-effect boundary, not an opinion filter.
     if (hasUnjudgeableRisk(flags)) {
-      result.pendingOutbound = '';
       result.metaCommentaryFlag = hints;
       result.metaCommentary = {
-        ok: false, decider: 'hold_unjudged_identity_risk', flags: flags,
-        held_draft_length: outbound.length,
-        why_changed: 'The draft was held because a severe internal leak could not be judged.'
+        ok: true, decider: 'organ_unavailable_failed_open_identity_risk', flags: flags,
+        failed_open: true, unjudged_draft_length: outbound.length,
+        why_changed: 'Her own draft was preserved. An identity or leak hint was detected but no '
+          + 'mind was reachable to judge it, and a pattern does not get to erase a mind\'s answer.'
       };
       return result;
     }
