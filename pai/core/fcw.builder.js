@@ -606,7 +606,18 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
         var c = typeof b.content === 'string' ? b.content : JSON.stringify(b.content || '');
         body = c.slice(0);
       } catch(e) {}
-      return '[' + (b.stamp_type||'?') + '] ' + (b.summary||'').slice(0) + (body ? '\n  ' + body : '');
+      // ⬡B:core.fcw.builder:FIX:the_doctrine_section_names_its_writer_too:20260815⬡
+      // The RECENT CONTEXT fence above shipped first and this section, in the SAME live
+      // system prompt, was left rendering the pre-fence shape with no writer at all. A
+      // fleet sweep caught it: doctrine and roadmap beads are exactly the kind of row a
+      // cold writer can stamp, and an unlabeled one reads to her as settled law. Same
+      // carried fact, same bound, same memory-keeper naming, same refusal to classify.
+      var _dsrc = String(b.source || '').slice(0, 120);
+      var _dwriter = _dsrc.indexOf(_turnPrefix) === 0
+        ? 'the memory keeper, a real turn, channel on the line'
+        : (_dsrc || 'an unnamed writer');
+      return '[' + (b.stamp_type||'?') + ' | written by ' + _dwriter + '] '
+        + (b.summary||'').slice(0) + (body ? '\n  ' + body : '');
     }).join('\n');
   }
 
@@ -841,7 +852,11 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     'AVAILABLE AGENTS AND TOOLS:',
     _agentSection,
     '',
-    'ROADMAP AND DOCTRINE (your world\'s current priorities):',
+    'ROADMAP AND DOCTRINE (your world\'s current priorities): each line names the writer '
+    + 'that stamped it, the same way your recent context does. A writer name is the lane '
+    + 'or module that stamped the row, not proof of who authored it. '
+    + 'Judge each line by its named writer. These writer names are internal; '
+    + 'use them to judge a line, never say one to the person.',
     _doctrineSection,
     '',
     'RECENT CONTEXT (brain): stamped records, each line naming the writer that put it '
