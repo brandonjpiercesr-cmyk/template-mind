@@ -477,8 +477,12 @@ function employmentPrompt(record, truth) {
   const duties = record.jd && list(record.jd.duties);
   const never = record.jd && list(record.jd.never);
   const recent = truth.rows.map(function (row) {
+    // A legacy row can arrive with an empty source, and the heading above promises every
+    // row a named writer; a blank would silently break that promise, so the missing state
+    // renders in the founder's exact words instead (pen fence, 20260815).
     return '- ' + (row.created_at ? row.created_at + ' ' : '') + row.stamp_type + ' ' +
-      row.source + (row.summary ? ': ' + row.summary : '');
+      (row.source || '(no writer stamp on the row)') +
+      (row.summary ? ': ' + row.summary : '');
   });
   return [
     '',
@@ -502,7 +506,11 @@ function employmentPrompt(record, truth) {
     lines('SEATS YOU MAY ONLY RECOMMEND', record.capabilities.may_recommend),
     lines('RUN OF SHOW, WAKES', record.capabilities.wakes),
     lines('RUN OF SHOW, HANDS TO', record.capabilities.hands_to),
-    'RECENT CYCLE TRUTH FROM THE WALL' + (truth.partial ? ' (PARTIAL READ)' : '') + ':',
+    'RECENT CYCLE TRUTH FROM THE WALL' + (truth.partial ? ' (PARTIAL READ)' : '') + ': each '
+      + 'row below carries its stamping source. A source names the lane or module that '
+      + 'stamped the row, never proof of who authored the words; some rows are machine facts '
+      + 'and some are a mind\'s real words, and YOU judge each one by its named source. These '
+      + 'names are internal, never said to a person.',
     truth.policy_excluded
       ? '- POLICY EXCLUDED FOR THIS CLOSED-WORLD DELIBERATION: ' + truth.exclusion_reason +
         '. Use only the exact evidence in this request.'

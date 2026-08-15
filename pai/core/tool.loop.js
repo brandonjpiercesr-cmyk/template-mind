@@ -1083,7 +1083,41 @@ function isArrivalDestinationBlock(parsed) {
 //      channel never sets it, so an SMS turn cannot reach this branch at all.
 //   2. the answer matches the arrival contract shape.
 // Context first, then shape. That ordering is the whole correction.
-function repairRawJsonAnswer(answer, context) {
+// ⬡B:core.tool_loop:AIRCODE:PAI_OUTPUT_REPAIR_WONDER_20260815⬡
+// ##DD DOCTRINE DROP 20260815, THE PEN ON HER MIND. This is PAI_OUTPUT_REPAIR_WONDER, named
+// and stamped absent by this file's own comment since 20260723 (COLD-ANEW-REPORT-0075): "The
+// honest fix (return the defect to the PAI cycle and compose through the canonical mind under
+// SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here." It was the file naming its own defect and
+// nobody had built the fix yet.
+//
+// The guard stayed cold because deleting it ships raw JSON to a human, which is worse. What
+// changes here is who writes the sentence a human reads when the guard fires: cold code carried
+// two hardcoded sentences (a calendar line, an ask-again line) and this file's own stamp,
+// finalAns, then rides straight into core/memory.keeper.js#keepTurn as `content.exit.her_answer`
+// -- literally labeled the exit, her answer -- and core/find.js reads that lane back on every
+// future turn as what she actually said. A hardcoded sentence banked as her_answer is exactly
+// the planted memory the drop names.
+//
+// AIRCODE: cold code still does everything it did before except phrase the sentence. It detects
+// the raw JSON, proves or refuses the arrival exemption, and for a calendar-shaped leak it
+// carries the FACT (the open-slot count) rather than the tool result itself, so nothing beyond
+// what was already going out reaches the seat. A named seat is woken once, told the situation,
+// and her one honest sentence becomes the answer. An unreachable seat is a real refusal, never a
+// silent fallback to the old hardcoded line: that fallback would be the 20260814 clean.speech
+// defect moved into this file.
+//
+// THE CALL RIDES THE ONE GUARDED DOOR, NOT A SECOND ONE. tests/a.one.millisecond.call.is.cold
+// .code.choosing.silence.test.js pins that exactly one `.deliberate(` call exists in this whole
+// file (callPaiLadderNetwork) and that every ladder call in a voice-bearing turn respects
+// _voiceModelDeadline through _callPaiLadder: a branch-local call to model.ladder.js directly,
+// which my first cut here was, is precisely the bypass that guard exists to catch, and it did.
+// repairRawJsonAnswer is not itself the closure that owns _callPaiLadder (that lives inside
+// runPAIInner), so the caller must hand it in; callLadder defaults to a bare deliberate call
+// only so the extracted function stays independently callable by these tests without a whole
+// runPAIInner closure.
+var REPAIR_SEAT = 'c2_organ';
+
+async function repairRawJsonAnswer(answer, context, callLadder) {
   var text = answer == null ? '' : String(answer);
   if (!text || !/^[[{]/.test(text.trim())) return { answer: answer, stamp: null, why: null };
   var parsed = null;
@@ -1095,15 +1129,38 @@ function repairRawJsonAnswer(answer, context) {
   }
   if (parsed && typeof parsed === 'object') {
     var why = 'a tool result nearly went out as raw JSON instead of a sentence';
-    if (parsed.next_open_slots || parsed.upcoming_events !== undefined) {
-      var n = Array.isArray(parsed.next_open_slots) ? parsed.next_open_slots.length : 0;
-      return { answer: n > 0
-        ? 'Your calendar is open right now, ' + n + ' free half-hour blocks coming up. Want me to grab one?'
-        : 'Nothing open on your calendar in the window I checked, or it is genuinely clear with no slots computed yet -- tell me what you are trying to book and I will look closer.',
-        stamp: 'raw_json_answer_caught', why: why };
+    var isCalendarShape = !!(parsed.next_open_slots || parsed.upcoming_events !== undefined);
+    var openSlots = Array.isArray(parsed.next_open_slots) ? parsed.next_open_slots.length : 0;
+    var fact = isCalendarShape
+      ? ('FACT: a calendar tool answered with ' + openSlots + ' open half-hour block(s) in the '
+        + 'window checked (0 can mean either a genuinely clear window or slots not yet computed, '
+        + 'the tool result does not say which).')
+      : 'FACT: a tool call finished and returned structured data instead of words, and the '
+        + 'person is waiting on an answer, not the raw data.';
+    var sys = 'You are A\'NU, mid-turn. A tool just answered you with data instead of words, and '
+      + 'you almost sent that raw data to the person instead of speaking to them. Using ONLY the '
+      + 'fact below, say one short honest sentence in your own voice: if there is something '
+      + 'concrete to offer, offer it; if not, say plainly you need to look again and invite them '
+      + 'to ask. Never invent a number, a time or a detail that is not in the fact. Never an em '
+      + 'dash.';
+    // callLadder is REQUIRED to reach this branch, on purpose: no fallback default that
+    // quietly dials model.ladder.js on its own, because that fallback would BE the
+    // branch-local bypass this whole conversion exists to close.
+    if (typeof callLadder !== 'function') throw new Error('repair_ladder_caller_required');
+    var reply = null;
+    try {
+      reply = await callLadder(sys, fact,
+        { seat: REPAIR_SEAT, timeout: 8000, max_tokens: 120, temperature: 0.3 });
+    } catch (eRepair) { reply = null; }
+    var spoken = reply && reply.content ? String(reply.content).trim() : '';
+    if (!spoken) {
+      // Real refusal, never the old hardcoded line. A raw-JSON leak must still never reach the
+      // person, so this still replaces the answer; it replaces it with an honest admission
+      // rather than a sentence cold code invented in her name.
+      return { answer: 'I am not able to put that into words right now. Ask me again in a moment.',
+        stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
     }
-    return { answer: 'I pulled that up, but I need to say it in words instead of handing you raw data. Ask me again and I will answer it properly.',
-      stamp: 'raw_json_answer_caught', why: why };
+    return { answer: spoken, stamp: 'raw_json_answer_caught', why: why };
   }
   return { answer: answer, stamp: null, why: null };
 }
@@ -7301,14 +7358,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   }
   // ⬡COLD:speak:become:PAI_OUTPUT_REPAIR_WONDER:20260723⬡
-  // COLD-ANEW-REPORT-0075 stamped, needs-live-verification. When the answer is raw JSON this cold
-  // branch substitutes hardcoded calendar prose or a hardcoded ask-again line, which is cold code
-  // authoring human-facing bytes. The honest fix (return the defect to the PAI cycle and compose
-  // through the canonical mind under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Removing the
-  // guard would ship raw JSON to the human; rerouting to re-synthesis cannot be verified here, so it
-  // is contained by stamp only.
+  // COLD-ANEW-REPORT-0075, BUILT 20260815 under the ##DD PEN ON HER MIND drop. This branch used
+  // to substitute hardcoded calendar prose or a hardcoded ask-again line, cold code authoring
+  // human-facing bytes that then rode into her own memory lane as her_answer. repairRawJsonAnswer
+  // now wakes a named seat (REPAIR_SEAT) with the raw-JSON fact and lets her say the one sentence;
+  // an unreachable seat is an honest refusal, never the old hardcoded substitution. The detection
+  // and the arrival exemption stay cold, as they always were; only the sentence moved.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
-    var _rawRepair = repairRawJsonAnswer(finalAns, identity && identity.council_context);
+    var _rawRepair = await repairRawJsonAnswer(finalAns, identity && identity.council_context,
+      function (sys, user, opts) { return _callPaiLadder(sys, user, opts); });
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
   }
