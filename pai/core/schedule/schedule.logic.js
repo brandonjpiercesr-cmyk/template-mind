@@ -462,175 +462,6 @@ async function writeBead(uid, source, content, tags, importance = 7, options) {
   }, options);
 }
 
-// ─── the HAM-facing booking notice ────────────────────────────────────────────
-
-// ⬡B:core.schedule.logic:FIX:booking_notice_is_her_answer_not_a_cold_template:20260815⬡
-// FOUNDER RULING, 20260815. Until today this file built the HAM-facing booking email by pure
-// template interpolation, with zero model call anywhere on the path, and closed it with her
-// name. That is cold code mimicking A'NU, which the standing laws forbid outright: only her
-// real cycle speaks for her, and ok:false beats a hollow reply. The narrow exception stamped
-// above at EXCEPTION:transactional_status_email_boundary covers the SEND (identity resolved
-// back to this HAM, kill switch readable and clear, one durable effect claim, provider message
-// id required). It never covered authorship of the prose, and it never licensed her signature.
-//
-// The shape the founder named, in his words: cold code carries the FACT, it lists what was
-// open, it WAKES a mind, HER ANSWER becomes the record, and cold code writes down what she
-// said and NOTHING ELSE. So this helper assembles a facts only evidence block out of what the
-// organ actually stamped, wakes the one public exit (finalizePublicTurn runs the whole window
-// cycle: council, WRIT, meta commentary, synthesize, with its own penny seat ladder inside),
-// and transports out.answer verbatim. If the cycle cannot be reached there is NO email and NO
-// fallback text, ever. The booking is already durable in ABACIA and already on the calendar,
-// so a missed notice is recoverable from the bookings panel, while a fabricated note signed in
-// her name is not recoverable at all.
-//
-// Pattern copied, not invented: pai/core/inbox.zero.js composeDraftViaCycle.
-
-function escapeHtml(text) {
-  return String(text == null ? '' : text)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
-// Transport only. Her plain text becomes escaped paragraphs, nothing added, nothing removed.
-// This is the "writes down what she said" step. It is never an authoring step.
-function answerToHtml(answer) {
-  return String(answer).replace(/\r\n/g, '\n').trim().split(/\n{2,}/)
-    .map(function (block) {
-      return '<p>' + escapeHtml(block.trim()).replace(/\n/g, '<br>') + '</p>';
-    }).join('');
-}
-
-// The signature is CONFIGURATION or it is nothing. No persona name and no person is ever
-// written here: a hardcoded sign off is the same leak as a hardcoded human being, and this
-// repo is the mind template every world inherits (CLAUDE.md, identity is env only, 20260722).
-// Nothing configured means no signature block at all, never an invented one.
-function scheduleNotifySignature() {
-  var sig = String(process.env.SCHEDULE_NOTIFY_SIGNATURE || '').trim();
-  return sig ? sig.replace(/\\n/g, '\n') : '';
-}
-
-// A miss must never be silent. When the wake or the send does not land, the fact that the HAM
-// was not told is itself stamped, so the gap is durable and auditable next to the booking bead
-// instead of vanishing into a log line.
-async function auditNotifyMiss(uid, kind, sourceKey, reason, facts, options) {
-  const source = 'schedule.notify_failed.' + String(sourceKey || kind);
-  try {
-    await writeBead(uid, source, {
-      kind: kind,
-      status: 'notification_not_sent',
-      reason: reason || 'unknown',
-      bookerEmail: facts && facts.bookerEmail || null,
-      slotStart: facts && facts.slotStart || null,
-      pendingId: facts && facts.pendingId || null,
-      eventId: facts && facts.eventId || null,
-      at: new Date().toISOString(),
-    }, ['schedule', 'notification', 'notify_failed', kind], 8, options);
-  } catch (eAudit) {
-    console.error('[SCHED] notify miss audit bead failed:', eAudit && eAudit.message);
-  }
-}
-
-// At most once per BOOKING, not per phrasing. The old template was byte deterministic, so two
-// identical POSTs hashed to the same provider effect key and the second email was refused. Her
-// answer is not byte deterministic, so that guarantee has to be re anchored to the booking
-// identity itself, claimed before the wake. Same durable claim registry, deterministic artifact.
-async function claimNotifyIntent(uid, hamEmail, kind, sourceKey, facts) {
-  const artifact = JSON.stringify({ kind: kind, sourceKey: String(sourceKey || ''),
-    bookerEmail: String(facts.bookerEmail || '').toLowerCase(),
-    slotStart: facts.slotStart || null });
-  const requestId = stableTransactionalId('schedule.notify.intent',
-    String(uid).toUpperCase() + '\n' + artifact);
-  try {
-    return await require('../outbound.effect.js').claimProviderAttempt({
-      hamUid: String(uid).toUpperCase(),
-      channel: 'schedule_notification_intent',
-      deliveryTarget: { kind: 'email', value: [{ email: String(hamEmail).trim().toLowerCase() }] },
-      artifact: artifact,
-      requestId: requestId,
-      cycleId: stableTransactionalId('schedule.transactional', requestId),
-    });
-  } catch (eClaim) {
-    return { ok: false, reason: 'provider_effect_claim_uncertain' };
-  }
-}
-
-// FACT in, wake, her answer out. `facts` carries only what the organ stamped:
-// bookerName, bookerEmail, slotStart, startDT, and eventId (confirmed) or pendingId (pending).
-async function notifyBookingViaCycle(uid, grantId, hamEmail, kind, facts, sourceKey, options) {
-  if (!hamEmail || !grantId) return { ok:false, reason:'notification_not_configured' };
-  if (await cancellationRequested(options)) return cancelled();
-
-  const confirmed = kind === 'confirmed';
-  const intent = await claimNotifyIntent(uid, hamEmail, kind, sourceKey, facts);
-  if (!intent.ok) return { ok:false, reason:intent.reason,
-    effectKey:intent.effectKey || null };
-  if (await cancellationRequested(options)) return cancelled();
-
-  // THE FACT the cold code carries. Assembled, never generated. Nothing here is invented and
-  // nothing here is prose she has to accept: it is the stamped record plus what is still open.
-  const lines = [];
-  lines.push('These are the only facts the scheduling organ stamped. Nothing else is known.');
-  lines.push('Booker: ' + facts.bookerName + ' <' + facts.bookerEmail + '>');
-  lines.push('Requested time: ' + facts.startDT + ' EST (America/New_York)');
-  if (confirmed) {
-    lines.push('Status: this booker is on the expected list, so the 1:1 auto confirmed.');
-    lines.push('A calendar event was created. Event id: ' + facts.eventId);
-    lines.push('Still open and owed by the principal: nothing. The calendar already holds it.');
-  } else {
-    lines.push('Status: this booker is NOT on the expected list. Nothing was put on the calendar.');
-    lines.push('The request is held. Pending id: ' + facts.pendingId);
-    lines.push('Still open and owed by the principal: approve or decline this one request.');
-  }
-  lines.push('');
-  lines.push('Write ONLY the short note that tells the principal this, in your own voice, from '
-    + 'the facts above and nothing else. Do not invent a person, a reason, a history, or a next '
-    + 'step that is not listed above. Do not add a signature line, that is attached separately.');
-  const evidence = lines.join('\n');
-  const question = confirmed
-    ? ('Tell me about the 1:1 with ' + facts.bookerName + ' that just auto confirmed on my '
-        + 'calendar for ' + facts.startDT + ' EST.')
-    : ('Tell me that ' + facts.bookerName + ' asked for a 1:1 at ' + facts.startDT + ' EST and '
-        + 'that it is waiting on my approve or decline.');
-
-  var out = null;
-  try {
-    out = await require('../pai.public.finalizer.js').finalizePublicTurn({
-      hamUid: String(uid).toUpperCase(),
-      question: question,
-      deliberationInput: evidence,
-      channel: 'schedule_notification',
-      councilContext: { surface:'schedule_booking_notify', kind:kind,
-        pending_id: facts.pendingId || null, event_id: facts.eventId || null },
-    });
-  } catch (eCycle) { out = null; }
-  if (await cancellationRequested(options)) return cancelled();
-  // No answer means no email. There is no fallback body, in any form, at any time.
-  if (!out || out.ok !== true || typeof out.answer !== 'string' || !out.answer.trim()) {
-    const cycleReason = out && out.reason || null;
-    await auditNotifyMiss(uid, kind, sourceKey, cycleReason || 'compose_cycle_unavailable',
-      facts, options);
-    return { ok:false, reason:'compose_cycle_unavailable', cycleReason:cycleReason };
-  }
-
-  var htmlBody = answerToHtml(out.answer);
-  const sig = scheduleNotifySignature();
-  if (sig && out.answer.indexOf(sig) === -1) htmlBody += answerToHtml(sig);
-  // The subject stays a fact, the same way the booker facing `message` field stays a fact:
-  // a filing label on a transactional receipt, unsigned and attributed to no one.
-  const subject = confirmed
-    ? ('1:1 booked: ' + facts.bookerName)
-    : ('1:1 request: ' + facts.bookerName + ' (needs your OK)');
-
-  const sent = await imanNotify(uid, grantId, hamEmail, subject, htmlBody, sourceKey, options);
-  if (!sent || sent.ok !== true) {
-    await auditNotifyMiss(uid, kind, sourceKey, sent && sent.reason || 'send_unverified',
-      facts, options);
-    return sent || { ok:false, reason:'send_unverified' };
-  }
-  return { ok:true, messageId:sent.messageId, requestId:sent.requestId,
-    cycleId:out.cycleId || sent.cycleId || null, via:'window_cycle' };
-}
-
 // ─── route handlers ───────────────────────────────────────────────────────────
 
 async function handleAvailability(req, res, uid) {
@@ -759,14 +590,12 @@ async function handleBook(req, res, uid, options) {
           providerAccepted:true });
       }
 
-      // ⬡B:core.schedule.logic:FIX:booking_notice_is_her_answer_not_a_cold_template:20260815⬡
-      // Founder ruling 20260815. Was a hand built HTML body signed in her name. Now: facts in,
-      // real cycle wakes, her answer is the record. Unreachable cycle means no email at all.
       const notifGrant1 = grant.notificationGrant || process.env.NYLAS_CLAUDETTE_GRANT;
       var notification1 = null;
       if (hamEmail && notifGrant1) {
-        notification1 = await notifyBookingViaCycle(uid, notifGrant1, hamEmail, 'confirmed',
-          { bookerName, bookerEmail, slotStart, startDT, eventId },
+        notification1 = await imanNotify(uid, notifGrant1, hamEmail,
+          `1:1 Booked - ${bookerName}`,
+          `<p>Hey!</p><p><strong>${bookerName}</strong> booked a 1:1 for <strong>${startDT} EST</strong>. Auto-confirmed, calendar event created.</p><p>Thanks,<br>A&#8217;NU</p>`,
           'confirmed.' + bookerEmail + '.' + slotStart, options);
       }
       reply(res, 200, { status: 'confirmed', eventId:eventId,
@@ -788,14 +617,12 @@ async function handleBook(req, res, uid, options) {
         return reply(res, 502, { error:'pending_booking_stamp_unverified' });
       }
 
-      // ⬡B:core.schedule.logic:FIX:booking_notice_is_her_answer_not_a_cold_template:20260815⬡
-      // Founder ruling 20260815. Same conversion as the confirmed branch. What is OPEN here is
-      // the decision itself, approve or decline, and the evidence block says exactly that.
       const notifGrant2 = grant.notificationGrant || process.env.NYLAS_CLAUDETTE_GRANT;
       var notification2 = null;
       if (hamEmail && notifGrant2) {
-        notification2 = await notifyBookingViaCycle(uid, notifGrant2, hamEmail, 'pending',
-          { bookerName, bookerEmail, slotStart, startDT, pendingId },
+        notification2 = await imanNotify(uid, notifGrant2, hamEmail,
+          `1:1 Request - ${bookerName} (needs your OK)`,
+          `<p>Hey!</p><p><strong>${bookerName}</strong> (${bookerEmail}) wants a 1:1 for <strong>${startDT} EST</strong>. Not on your expected list. Reply approve or decline.</p><p>Pending ID: ${pendingId}</p><p>Thanks,<br>A&#8217;NU</p>`,
           pendingId, options);
       }
       reply(res, 200, { status: 'pending',
