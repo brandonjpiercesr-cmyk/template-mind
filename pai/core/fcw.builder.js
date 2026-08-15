@@ -606,7 +606,11 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   var _writerLegend = [];
   var _laneOf = function (src) {
     var parts = src.split('.');
-    while (parts.length > 1 && /^([0-9]+|[0-9a-f]{6,}|[a-z0-9]{12,})$/i.test(parts[parts.length - 1])) parts.pop();
+    // Codex P2: 'continuation' is twelve letters and the first cut of this pattern ate it,
+    // collapsing model.shadow.continuation rows into model.shadow and falsifying the very
+    // provenance the fence exists to carry. An identifier has digits in it; a pure word is a
+    // lane component and stays.
+    while (parts.length > 1 && /^([0-9]+|[0-9a-f]{6,}|(?=[a-z0-9]*[0-9])[a-z0-9]{10,})$/i.test(parts[parts.length - 1]) && /[0-9]/.test(parts[parts.length - 1])) parts.pop();
     return parts.join('.');
   };
   contextStr = allContext.map(function(b) {
