@@ -149,9 +149,32 @@ async function synthesize(paiResult, question, channel) {
   // order. This legacy layer may inspect the committed bytes and attach
   // metadata, but it may never trim, scrub, rewrite, or replace them after
   // STAMP. If its older pattern scrub would change even one byte, fail closed.
+  // ⬡B:core.synthesize:FIX:a_legacy_pattern_may_not_overrule_four_minds:20260815⬡
+  // THE GUARD ABOVE WAS RIGHT AND ITS FAILURE MODE WAS WRONG. It correctly refuses to let this
+  // legacy layer rewrite committed bytes. Then it chose to answer that refusal by KILLING HER
+  // TURN: `shadow_scrubbed_to_empty` and `post_council_shadow_mutation_rejected` both return
+  // ok:false, so a single em dash, or one phrase from a fifteen-string HOLLOW list, silenced an
+  // answer that SHADOW, PAM, WRIT and A'NU expression had already judged and STAMPED. Live on
+  // text, voice and omi (core/wren/reply.js, routes/omi.routes.js, routes/three-ray.routes.js,
+  // routes/vala.llm.routes.js).
+  //
+  // Founder, 20260815: "Who in the hell are we to stop something? Why are you stopping something?
+  // We should be teaching and instructing. Your shadow, your WRIT, your meta commentary, all of
+  // that, your Aunt Pam. IF THEY'RE STOPPING, THEY'RE WRONG." A pattern list written before the
+  // council existed does not get a veto over four minds that already ran in order.
+  //
+  // So the audit stays and becomes what this block's own comment always said it was: it INSPECTS
+  // and ATTACHES METADATA. The violations already ride out on the receipt as `shadow.violations`
+  // and `shadow.passed`, which is where a monitor and a woken reviewer can see them. Her
+  // committed bytes ship unchanged, because they were never this layer's to edit or to veto.
+  //
+  // WHAT IS STILL ANCHORED, said plainly so this is not read as opening a door: the real
+  // consequence gates are untouched and still run below this line. secretLiteralScan still
+  // refuses a credential shape, and pamGate still refuses a genuine credential or cross-person
+  // privacy leak. Those are deterministic person-effect anchors, not opinion filters. What
+  // converts here is taste and internal-vocabulary preference, which is WRIT's job and WRIT
+  // already ran inside the council on these exact bytes.
   var shadow = shadowAudit(rawText);
-  if (!shadow.clean) return { ok: false, reason: 'shadow_scrubbed_to_empty' };
-  if (shadow.clean !== rawText) return { ok: false, reason: 'post_council_shadow_mutation_rejected' };
   var text = rawText;
 
   var receipt = paiResult.council_receipt || paiResult.councilReceipt;

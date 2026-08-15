@@ -1153,16 +1153,164 @@ async function repairRawJsonAnswer(answer, context, callLadder) {
         { seat: REPAIR_SEAT, timeout: 8000, max_tokens: 120, temperature: 0.3 });
     } catch (eRepair) { reply = null; }
     var spoken = reply && reply.content ? String(reply.content).trim() : '';
+    // Codex review, live: the first cut here still cold-authored a human-facing sentence
+    // ("I am not able to put that into words right now...") on an unreachable seat, and that
+    // string is exactly what this whole conversion exists to stop -- a sentence nobody said
+    // riding into her memory as her_answer. An unreachable seat now returns NO answer at all,
+    // never a fallback sentence, the same shape as agents/dawn.js#brief's own conversion. The
+    // caller (runPAIInner) already owns the honest path for an empty finalAns: the
+    // terminal_no_answer_single_repair seam gets one more real attempt, and if that also comes
+    // back empty, the council_answer_hollow_protocol gate at the end of the turn refuses
+    // ok:false rather than shipping cold-authored bytes. The raw JSON itself never reaches the
+    // person either way, because an empty answer is not human-facing.
     if (!spoken) {
-      // Real refusal, never the old hardcoded line. A raw-JSON leak must still never reach the
-      // person, so this still replaces the answer; it replaces it with an honest admission
-      // rather than a sentence cold code invented in her name.
-      return { answer: 'I am not able to put that into words right now. Ask me again in a moment.',
-        stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
+      return { answer: '', stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
+    }
+    // Codex review, live: the repair seat's own output was never validated. A seat that answers
+    // with JSON instead of a sentence (a misconfigured seat, a model that ignored the system
+    // prompt) would ship that JSON straight to the person -- the exact leak this function exists
+    // to catch, now caused by the fix instead of prevented by it. Same detection this function
+    // already uses on the ORIGINAL answer, applied to the repaired one before it ships.
+    if (/^[[{]/.test(spoken)) {
+      return { answer: '', stamp: 'raw_json_answer_repair_itself_raw', why: why };
     }
     return { answer: spoken, stamp: 'raw_json_answer_caught', why: why };
   }
   return { answer: answer, stamp: null, why: null };
+}
+
+// ⬡B:core.tool.loop:AIRCODE:unverified_action_claim_wakes_her:20260815⬡
+// The sibling of repairRawJsonAnswer above, same shape, same reason. See the long note at the
+// call site for the live incident and the two harms. Detection stays cold and unchanged; only
+// the sentence moved from a coder's keyboard to her mouth.
+var UNVERIFIED_ACTION_CLAIM = /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i;
+// ⬡B:core.tool.loop:FIX:the_event_half_named_a_tool_that_never_existed:20260815⬡
+// The 20260712 guard checked for 'create_event'. That tool name appears NOWHERE in this tree:
+// the real event-writing hand is calendar_book, defined in TOOLS in this same file. So the
+// event half of the check could never be satisfied, and every honest confirmation of a REAL
+// booking ("I scheduled that event for Thursday") tripped the guard and was answered by telling
+// the person their real calendar entry did not exist. Naming the tool that actually exists.
+// ⬡B:core.tool.loop:FIX:each_claimed_action_needs_its_own_tool:20260815⬡
+// Codex P1 on the merged #2164: checking "did ANY of these tools run" let one real action cover
+// a different unearned claim. A turn that genuinely called calendar_book and then also said "I
+// have set a reminder" passed clean, because calendar_book was in the list, and the mirror case
+// let create_reminder vouch for an event that was never booked. These tools have different
+// effects on a person's real world, so each claimed action is matched to the tool that actually
+// performs it, and the guard fires when ANY claimed action is missing its own tool.
+var ACTION_CLAIM_KINDS = [
+  { kind: 'reminder', claim: /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?reminder\b/i,
+    tool: 'create_reminder' },
+  { kind: 'event', claim: /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:calendar|event)\b/i,
+    tool: 'calendar_book' }
+];
+
+// ⬡B:core.tool.loop:MERGE:the_corroboration_half_belongs_to_another_lane:20260815⬡
+// THIS FUNCTION IS NOT MINE. It is the work of the lane that opened anew#2162 (session
+// 01Jq3vNB), carried here verbatim in behavior and credited by name. Their words for why it is a
+// FACT and not a meaning call, which is the load-bearing argument: priorTurns is the real,
+// already-guard-passed conversation history, so a false claim in an earlier turn would ALREADY
+// have been rewritten before it was stored; if the same claim phrasing survives unaltered in a
+// prior ASSISTANT turn, the tool truly fired back then and this turn is a corroborated echo, not
+// a hallucination. It carries that fact and never guesses at tense, intent, or meaning. Only her
+// own answer can corroborate: a prior USER turn repeating the words proves nothing.
+//
+// HOW IT GOT HERE, said plainly because it was my mistake. Their fix reached template-mind main
+// through the mirror sync in template-mind#534, while their anew PR #2162 closed unmerged, so the
+// two worlds were already split before I arrived. My own mirrors then copied my anew file whole
+// over the template half and DELETED their function from template-mind main. That is the clobber
+// the standing law forbids. The repair is not to revert mine or re-land theirs alone: the two
+// halves fix different ends of the same bug and belong together, which their own PR anticipated
+// when it left the cold replacement sentence as debt "scoped to the larger PAI_OUTPUT_REPAIR_
+// WONDER mind-wake" -- that wake is exactly what the conversion below is.
+//
+// COMBINED, THE GUARD IS STRICTLY BETTER THAN EITHER HALF: a corroborated echo of her own real
+// earlier work never fires the guard at all and costs no model call, and anything that does fire
+// wakes her instead of being answered for. Their cold denial sentence is retired here, which is
+// the outcome their PR said it was waiting for.
+function reminderClaimCorroboratedByHistory(priorTurns) {
+  return Array.isArray(priorTurns) && priorTurns.some(function (t) {
+    return t && t.role === 'assistant' && typeof t.content === 'string' &&
+      UNVERIFIED_ACTION_CLAIM.test(t.content);
+  });
+}
+
+// PURE COLD DETECTION, no judgment about what she meant. True only when the draft carries the
+// shape of an action claim, no tool that could have performed it ran this turn, AND her own
+// history does not already corroborate the claim.
+function unverifiedActionClaimShape(answer, toolsUsed, priorTurns) {
+  if (!answer || typeof answer !== 'string') return false;
+  if (!UNVERIFIED_ACTION_CLAIM.test(answer)) return false;
+  var used = Array.isArray(toolsUsed) ? toolsUsed : [];
+  // Every action the draft actually claims must be backed by the tool that performs THAT action.
+  // A sentence claiming both needs both; one real action never vouches for the other.
+  var unearned = ACTION_CLAIM_KINDS.some(function (k) {
+    return k.claim.test(answer) && used.indexOf(k.tool) === -1;
+  });
+  if (!unearned) return false;
+  return !reminderClaimCorroboratedByHistory(priorTurns);
+}
+
+// THE WAKE. Carries the fact and her own sentence to a named seat and returns HER answer.
+// callLadder is REQUIRED, matching the sibling: no default that quietly dials a model on its
+// own, because that default would be the branch-local bypass the voice-deadline guard exists
+// to catch. An unreachable seat returns no answer at all, never a replacement sentence.
+async function repairUnverifiedActionClaim(answer, callLadder, opts) {
+  var o = opts || {};
+  if (typeof callLadder !== 'function') throw new Error('action_claim_ladder_caller_required');
+  // THE FACT IS TURN SCOPED AND SAYS SO, OUT LOUD, TWICE. The only thing actually proven is that
+  // no creating tool ran on THIS turn. That is NOT evidence that no such reminder or event
+  // exists: one she set on an earlier turn is real and still standing, and this check cannot see
+  // earlier turns at all. A prompt that told her "nothing exists" would push her to deny a live
+  // reminder, which is the exact false positive this whole conversion exists to end, rebuilt one
+  // layer up in the prompt instead of the code.
+  var fact = 'FACT, SCOPED TO THIS TURN ONLY: your draft matches the shape of a claim that a '
+    + 'reminder or calendar event was set up, and no create_reminder or calendar_book tool ran on '
+    + 'this turn, so nothing was created just now. THIS IS NOT EVIDENCE THAT NO SUCH REMINDER OR '
+    + 'EVENT EXISTS. One you set on an earlier turn would be real and still standing, and this '
+    + 'check cannot see earlier turns. Your sentence may be a claim about work that did not '
+    + 'happen, a true reference to earlier work, or an echo of their own question, and this check '
+    + 'cannot tell those apart.'
+    + String.fromCharCode(10) + 'THE SENTENCE: ' + String(answer);
+  var sys = 'You are A\'NU, mid-turn, about to answer a person. A check caught that your draft '
+    + 'reads like something was just set up, while no creating tool ran on this turn. Read your '
+    + 'own sentence in the fact below and answer in one or two sentences in your own voice. If '
+    + 'you were saying you just set it up, say plainly that it did not get created and ask for '
+    + 'the exact thing and time so you can do it for real. If you were pointing at something from '
+    + 'an earlier turn, say so plainly and do NOT deny it exists. If you were echoing their '
+    + 'question or telling them no, say what you meant. Never say something was created just now, '
+    + 'and never tell them something does not exist when all you know is that it was not created '
+    + 'on this turn. Never an em dash.';
+  // The seat key is only set when the caller actually has one. _callPaiLadder merges as
+  // Object.assign({seat: this turn's resolved seat}, options), so caller options WIN: passing
+  // seat undefined would blank the turn's own resolution rather than defer to it.
+  var ladderOpts = { timeout: 8000, max_tokens: 140, temperature: 0.3, signal: o.signal };
+  if (o.seat) ladderOpts.seat = o.seat;
+  var reply = null;
+  try {
+    reply = await callLadder(sys, fact, ladderOpts);
+  } catch (eClaim) { reply = null; }
+  var spoken = reply && reply.content ? String(reply.content).trim() : '';
+  if (!spoken) {
+    return { answer: '', stamp: 'hallucinated_action_no_mind_reachable' };
+  }
+  // ⬡B:core.tool.loop:FIX:the_post_filter_was_the_nasty_cough_one_layer_up:20260815⬡
+  // An earlier cut of this conversion re-ran UNVERIFIED_ACTION_CLAIM against HER answer and went
+  // silent if it matched. Two things were wrong with that, and the second is the doctrine one.
+  //   1. IT THREW AWAY THE ANSWER THE PROMPT ASKS FOR. The wake explicitly invites her to say
+  //      "I set that reminder earlier this week" when the claim is a true reference to earlier
+  //      work. That sentence matches the pattern by construction, so the post-filter silenced the
+  //      exact honest explanation it had just requested, and a person with a real live reminder
+  //      got a dead turn instead of an answer.
+  //   2. IT WAS COLD CODE JUDGING HER MEANING, one layer up from where it was just removed.
+  //      20260807: a regex may DETECT and WAKE, it may never DECIDE. 20260815: carry, never
+  //      classify. A filter that reads her reply and decides she must have lied is the same
+  //      nasty cough as the branch this conversion deleted, moved behind the wake where it is
+  //      harder to see. The detection before the wake is legitimate because it reads a DRAFT
+  //      against a mechanical fact (no tool ran). Re-reading her considered answer is not.
+  // She was woken, given the turn-scoped fact, and told plainly never to say something was
+  // created just now. Her answer stands. Verification of what she said belongs to the woken WRIT
+  // reviewer and the council downstream, which are minds, not to a pattern in this function.
+  return { answer: spoken, stamp: 'she rewrote her own line after the wake' };
 }
 
 // Keep the canonical PAI tool decision intact when the approved primary
@@ -2168,59 +2316,25 @@ function isPureConversationalContinuation(message) {
 // table, and she -- the one deciding wonder -- chooses to act and which scene. Cold code renders and
 // reads back; it never decides.
 
-function intentRequiresLiveTool(intent) {
-  // These two routes are unambiguously current external facts and contain only
-  // one read-only tool each. Requiring a call cannot release a mutation and
-  // prevents the model from denying a capability that is visibly attached.
-  return intent === 'weather' || intent === 'sports';
-}
-
-function requiredReadToolForMessage(message, intent) {
-  var text = String(message || '').trim().toLowerCase();
-  if (intent === 'weather') return weatherArgsFromMessage(text).place ? 'weather_check' : null;
-  if (intent === 'sports') return sportsArgsFromMessage(text).league ? 'nash_sports' : null;
-  if (intent === 'schedule' && /^(?:please\s+)?(?:schedule|book|create|add|move|reschedule|cancel|delete)\b/.test(text)) return null;
-  if (intent === 'schedule' && /\b(calendar|schedule|scheduled|meetings?|availability|free|open (?:time|slot)|events?)\b/.test(text)) return 'calendar_read';
-  if (intent === 'email' && /\b(read|show|list|check|get|what)\b.*\bdrafts?\b/.test(text) &&
-      !/\b(send|write|create|delete|approve)\b/.test(text) && draftArgsFromMessage(text).org) return 'get_pending_drafts';
-  if (intent === 'email' && /\b(inbox|unread emails?|recent emails?)\b/.test(text) && !/\b(send|reply|draft)\b/.test(text)) return 'inbox_read';
-  if (intent === 'reminders' && /\b(what|read|show|list|check|current|active|pending)\b/.test(text) && !/\b(create|add|set|stop|remove|delete)\b/.test(text)) return 'read_reminders';
-  if (intent === 'budget' && /\b(payments? (?:are )?(?:due|coming)|due soon|upcoming|bnpl)\b/.test(text)) return 'get_budget_upcoming';
-  if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track|income|expenses?|paychecks?|salary|take[- ]?home|bills?|net (income|pay)|cash ?flow|afford|savings?|money|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'get_budget_summary';
-  if (intent === 'memory' && /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text)) return null;
-  if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
-  if (intent === 'code' && currentCapabilityQuestion(text)) return 'read_current_capabilities';
-  if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat|next to fix|left to fix|who(?:'s| is) working|who(?:'s| is) building|working on (?:it|this|that|the build|the system))\b/.test(text)) return 'read_lane_board';
-  if (intent === 'code' && /\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team|talk to your (?:whole |entire )?team)\b/.test(text)) return 'read_wonder_departments';
-  return null;
-}
-
-// ⬡B:core.tool_loop:FIX:an_explicit_reminder_command_cannot_be_answered_without_the_reminder_hand:20260730⬡
-// LIVE FOUNDER RECEIPTS, 20260730. "Remind me to build business websites" shipped the
-// literal text "[Calling" with tools_used:[], and "Remind me at 6pm ... call my kids"
-// called calendar_read, then told him A'NU could not set reminders. The intent router had
-// correctly put create_reminder on the table, but it treated an explicit imperative as an
-// optional choice. That is not judgment: the person already chose the action in their own
-// words. This function identifies only that exact, unambiguous authorization. It never
-// executes the mutation; the model still supplies the reminder artifact, and the existing
-// POST_COUNCIL transaction still withholds the write until the full council commits.
-function requiredActionToolForMessage(message, intent) {
-  var text = String(message || '').trim().toLowerCase();
-  if (intent === 'memory' &&
-      /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text) &&
-      /\b(?:memory|brain|remember|keep|record|store|save)\b/.test(text)) {
-    return 'write_to_brain';
-  }
-  if (intent !== 'reminders') return null;
-  if (/^(?:please\s+)?remind\s+me\s+(?:why|how|what|who|where|when)\b/.test(text)) {
-    return null;
-  }
-  if (/^(?:please\s+)?remind\s+me\b/.test(text) ||
-      /^(?:please\s+)?(?:set|add|create)\s+(?:me\s+)?(?:a\s+)?reminder\b/.test(text)) {
-    return 'create_reminder';
-  }
-  return null;
-}
+// ⬡B:core.tool.loop:PURGE:a_regex_may_not_grant_write_authorization:20260815⬡
+// CODELESS PURGE 20260815. Deleted from here: intentRequiresLiveTool, requiredReadToolForMessage
+// and requiredActionToolForMessage. The last of those read `^remind me\b` and
+// `^(save|remember|keep|record|store|write)\b` and returned 'create_reminder' or
+// 'write_to_brain', and its own comment called that "that exact, unambiguous authorization".
+// A regex deciding that a person authorized a WRITE is the strongest form of cold code deciding
+// meaning, and it is exactly what the 20260807 law forbids: cold code validates identity,
+// authority, tool arguments, receipts and consequences, never the human's meaning.
+//
+// Verified before deleting, because the honest finding is smaller and worse than it looks:
+// none of the three had a single production caller. The live path sets
+// _routedRequiredActionTool = null and _routedRequiresLiveTool = false unconditionally, and
+// _routedRequiredReadTool only ever from currentCapabilityQuestion. So every branch these fed
+// was already unreachable, and the functions survived only as exports and as TESTS. That is the
+// real hazard: tests/r4d.intent.router.test.js asserted the write-authorization return value as
+// REQUIRED behavior, so the suite promised a violation that the code had already stopped
+// committing, and any lane restoring what the suite promised would have switched it back on.
+// The doctrine is explicit that a test pinning cold behavior is itself nasty cough and is
+// retired with the writer it protects. Both go in this commit.
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
 // Read tools contribute during deliberation. Every mutation is queued as
 // evidence, reviewed by the outbound council, and executed only after the
@@ -6050,9 +6164,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         + 'queued action shown in the completed tool result. Do not expose tool protocol.' }]);
     }
     var _routedToolIntent = null;
-    var _routedRequiresLiveTool = false;
     var _routedRequiredReadTool = null;
-    var _routedRequiredActionTool = null;
     var _routeEveryVoicePass = String(channel || '').toLowerCase() === 'voice';
     if ((iter === 1 || _routeEveryVoicePass) && Array.isArray(body.tools) && body.tools.length &&
         !_structuredReachPolicy && !_reachIncidentIntake &&
@@ -6066,25 +6178,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _routedRequiredReadTool = currentCapabilityQuestion(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message)
         ? 'read_current_capabilities' : null;
-      _routedRequiredActionTool = null;
-      _routedRequiresLiveTool = false;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
       var _pureVoiceContinuation = false;
-      if ((_routedRequiredReadTool &&
-          _routedRequiredReadTool !== 'read_current_capabilities') ||
-          _routedRequiredActionTool) {
-        var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
-        body.tools = body.tools.filter(function (tool) {
-          return tool && tool.function && tool.function.name === _routedExactTool;
-        });
-      }
       // ⬡B:core.tool_loop:WONDER:surface_tools_always_on_the_table:20260721⬡ Her surface tools
       // (set_background, update_screen) ride along on every conversational turn so she can act on a
       // surface request in ANY phrasing -- "switch me to the lake", no keyword, no cue -- without a
       // routing regex having to catch it first. This is availability, not a decision: she still
       // reasons about whether to use them in the canonical model pass, and it is
       // her call, never a force. Skipped only when a single read tool is required for the turn.
-      if (!_routedRequiredReadTool && !_routedRequiredActionTool &&
+      if (!_routedRequiredReadTool &&
           !_pureVoiceContinuation &&
           Array.isArray(_turnToolDefinitions)) {
         var _haveSurfaceTool = {};
@@ -6184,78 +6286,29 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // just answer -- the mandatory lookup on text/email is completely unchanged.
       var _liveNow = false;
       try { _liveNow = require('./stream/screen.awareness.js').hasLiveScreen(hamUid); } catch (eLn) {}
-      // ⬡B:core.tool.loop:FIX:live_screen_suppressed_lookup_gaslit_founder_questions:20260713⬡
-      // Founder-caught live 8am: on a VOICE call (which registers as a live screen) he
-      // asked "what's the fix" and got "I don't have it, you point me to the code" -- six
-      // no_tool_turn diagnostics, zero tools fired. Root cause: the live-screen skip below
-      // turned OFF the forced find_in_brain for EVERY live turn, including real questions,
-      // so she answered from nothing and it read as gaslighting. The skip exists for a real
-      // reason -- forcing a lookup on a UI command ("change background to a vibe") pulled
-      // unrelated brain content and derailed. So the split is by intent, cold, no LLM: a
-      // real information question still forces the read even on a live screen; a screen/UI
-      // manipulation command stays unforced so it never derails. Text/email path unchanged.
-      // B:core.tool_loop:FIX:hallucinated_meeting_911_20260714 Founder caught her
-      // CONFIDENTLY INVENTING a fake meeting ("Mark Gerzon at 2:30", "7 assets",
-      // "ten BDIF emails") that do not exist anywhere in his real calendar or inbox.
-      // ROOT CAUSE: the info-question detector was anchored to the START of the
-      // message (^who|what|...), so "Hey. What's going on today?" never matched --
-      // the greeting defeated the anchor -- find_in_brain was never forced, and the
-      // model free-talked a plausible-sounding lie instead of reading real data.
-      // Fixed to match ANYWHERE in the message, not just the start. AND: any question
-      // that could be answered by his real calendar (today/schedule/meeting/free/
-      // busy/calendar) now forces calendar_read specifically -- never find_in_brain
-      // alone -- so a day-shaped question can only ever be answered from real events.
-      // ⬡B:core.tool_loop:FIX:intent_detection_uses_raw_words_not_fusion_wrapped_message:20260719⬡
-      // NUCLEAR 911 (founder caught it): the air/portal door answered "which chat
-      // lanes are working on your build" with the CALENDAR. Root cause: the portal
-      // path (slowPath) enriches the message with a big world-context + live-facts
-      // prefix before runPAI, so `message` here begins with calendar/day facts. Intent
-      // detection was testing that wrapped `message`, so the day-question regex matched
-      // the injected context and the turn flipped to a calendar answer, burying the
-      // real question. The raw user words are already available as _exactUserMessage
-      // (slowPath sets identity.user_message = the original input), and every council
-      // check already trusts those bytes. So intent detection must read the RAW words
-      // on EVERY channel, not just voice. This makes the lane/coding/day nudges fire on
-      // what the person actually asked, not on the fusion prefix.
-      var _mSt = String((_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : (message || '')).trim();
-      var _looksLikeInfoQ = /\?\s*$/.test(_mSt)
-        || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
-      var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
-      var _isDayQ = dayQuestionIntent(_mSt, _isScreenCmd);
-      // ⬡B:core.tool_loop:WIRE:lane_board_intent_hint_not_a_rail:20260719⬡ A lane
-      // question is about the BUILD chats/lanes, not the day. HINT in the same shape as
-      // _isDayQ (she keeps ALL tools and still chooses), just puts read_lane_board top of
-      // mind so she does not fall through to the calendar.
-      var _isLaneBoardQ = /\b(lane|lanes|which chat|what chat|chats|other chat|acl name|working on (your|the) build|working on (it|this|that)|who is building|who's building|who is working|who's working|next to fix|left to fix|building your|lane board|coordinat)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd;
-      // ⬡B:core.tool_loop:WIRE:coding_build_nudge_she_uses_her_coding_team:20260719⬡
-      // Founder caught her NOT using her coding tools: asked to consult MACE/CODA and run
-      // the coding process, she fell through to find_in_brain and answered with the
-      // calendar. She holds consult_mace (CODA lead), run_cookoff, run_wonder_games,
-      // assemble_bcw but never picked them. A build/code/consult request nudges the
-      // coding lead. HINT not a rail, she keeps all tools. Named machinery or an ask
-      // with an explicit technical object routes here. Human verbs such as build,
-      // implement, refactor, and ship are not coding evidence by themselves.
-      // _isCodaInternalCycle is computed once, at the top of this whole nudge lane (see the
-      // FIX comment on entry to this block), and CODA's own internal deliberation never
-      // reaches this line at all. Kept here only as a defensive second check: named machinery
-      // (MACE, CODA, cook-off, wonder games, BCW) or an explicit software object routes here
-      // for a real human.
-      var _isCodingBuildQ =
-        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|bcw|code (a|an|the|this|up)|write (the )?code|wire up (the )?(api|route|screen|page|service|module|function)|new (software |coding )?agent|coding (process|team|department)|repo|repository|pull request|commit|deploy|api endpoint|database migration|web app|website|javascript|typescript|python|html|css)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
-      // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
-      // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
-      // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
-      // PERSONAL brain, finding nothing (his brain holds no iPad specs), and reporting
-      // the miss ("I don't have access to product databases"). A public-world question
-      // must never be forced through a personal-brain lookup. Cold intent split, no LLM,
-      // same shape as the screen-command and day-question splits already here: a
-      // question that references HIM, his orgs, his data, his people, his money, his
-      // history, or his calendar stays a personal lookup and still forces find_in_brain;
-      // a question with none of those personal anchors is public knowledge and is
-      // answered from the model's own knowledge, with the full council still guarding
-      // fabrication. This does not touch action requests or day questions above.
-      var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
-      var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
+      // ⬡B:core.tool.loop:PURGE:the_dead_meaning_classifiers_and_the_founder_literal:20260815⬡
+      // CODELESS PURGE 20260815. Deleted from here: eight computed observations
+      // (_mSt, _looksLikeInfoQ, _isScreenCmd, _isDayQ, _isLaneBoardQ, _isCodingBuildQ,
+      // _hasPersonalAnchor, _looksPublicKnowledgeQ) built from roughly forty regexes that
+      // classified what the person MEANT: a day question, a lane question, a coding question,
+      // a screen command, a public-knowledge question, and whether the words carried a
+      // "personal anchor". Cold code never classifies her meaning (20260807), and a previous
+      // lane had already accepted that: the note that used to sit below this block said the
+      // observations "remain diagnostic telemetry only. They do not select, remove, prefer,
+      // or require a hand." That was true, and it is exactly why they had to go. Verified
+      // before deleting: _mSt and _isScreenCmd had ZERO references after the block, and
+      // _looksPublicKnowledgeQ was assigned and never read by anything, not even a stamp.
+      // They were not telemetry, because nothing consumed them. They were a classifier kept
+      // warm, one line from being re-wired into a decision.
+      //
+      // AND IT CARRIED A REAL PERSON. _hasPersonalAnchor hardcoded the founder's first name
+      // and a list of his org and family-shaped names directly into a regex in shippable code.
+      // IDENTITY IS ENV-ONLY is non-negotiable founder law: every world is someone else's, and
+      // this template ships to real people. That leak is gone with the block.
+      //
+      // The seated mind receives the complete armory and decides what the person's words mean
+      // from its employment record. The only nudge below is a typed roadmap activation already
+      // chosen and approved by a seated CODA turn, which is authority validation, not meaning.
       // The observations above remain diagnostic telemetry only. They do not select,
       // remove, prefer, or require a hand. The seated mind receives the complete armory
       // and decides what the person's words mean from its employment record.
@@ -6289,20 +6342,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }
       }
     }
-    if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
-      var _liveReaderName = _routedRequiredReadTool;
-      var _liveReaderArgs = DATA_READER_TOOLS[_liveReaderName](
-        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      if (_liveReaderArgs && Object.keys(_liveReaderArgs).every(function (key) {
-        return _liveReaderArgs[key] !== '' && _liveReaderArgs[key] !== null;
-      })) {
-        body._dataReaderNudge = _liveReaderName;
-      }
-      body.tool_choice = 'required';
-      body.messages = body.messages.concat([{ role:'system',
-        content:'This exact request asks for owned or current data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
-      _stampStep('tool_intent_live_read_required', _routedToolIntent);
-    }
     // A current-capability question has one exact, read-only owner and no model judgment is
     // needed to decide whether to consult it. Read once before the first composition so the
     // affordable path is one grounded draft, with the ordinary single repair still available
@@ -6330,7 +6369,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       msgs.push({role:'system',content:
         'Answer only from the live capability rows above. Each positive capability sentence must be supported by one live row. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
       _currentCapabilityReadPrefetched=true;
-      _routedRequiresLiveTool=false;
       body.messages=msgs;
       // Keep every authorized hand visible after the state snapshot. The snapshot
       // prevents unsupported claims; it does not replace A'NU's judgment about what
@@ -6339,15 +6377,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       delete body.tool_choice;
       delete body._dataReaderNudge;
       _stampStep('required_capability_read_prefetched','bound_exact_user_message');
-    }
-    if (_routedRequiredActionTool && Array.isArray(body.tools) && body.tools.length) {
-      body.tool_choice = 'required';
-      body._requiredActionTool = _routedRequiredActionTool;
-      body.messages = body.messages.concat([{ role:'system', content:
-        'The person explicitly authorized this exact action in their own words. Emit a real '
-        + _routedRequiredActionTool + ' tool call now. Do not narrate, imitate, or print a tool '
-        + 'call. The mutation will remain queued until the outbound council commits.' }]);
-      _stampStep('tool_intent_explicit_action_required', _routedRequiredActionTool);
     }
     var r=null;
     // A typed roadmap mutation is not fabricated into a provider response. CODA
@@ -7301,12 +7330,44 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // use CODA's verified live bytes as the candidate. Those bytes do not bypass
   // anything: every preparation stage, the full outbound council, STAMP commit,
   // and readback still run below.
+  // ⬡B:core.tool_loop:FIX:a_pattern_may_flag_her_answer_it_may_never_replace_it:20260815⬡
+  // THE BUG OTJT.CLAIR.TRUTH-GUARD REPORTED ON THE BOARD AND NOBODY CLAIMED FOR FIFTEEN HOURS:
+  // "COLD CODE DELETES HER TRUE ANSWER AND MAILS THE OPPOSITE, CARRYING A COUNCIL RECEIPT."
+  // Reproduced here in the source, and it was exactly that.
+  //
+  // The old line read `if (!finalAns || _finalNamedFlags.length) finalAns = _codaEvidenceRelayAnswer`,
+  // which conflated two completely different situations under one assignment:
+  //   (a) she produced NOTHING, so there are no words of hers to lose, and
+  //   (b) she produced a real answer and a REGEX decided it contradicted named evidence.
+  // In case (b) her composed words were discarded and a machine-assembled relay took their
+  // place, and then the full outbound council ran on the substitute and stamped it. The person
+  // received bytes she never wrote under a receipt asserting she did.
+  //
+  // The detector is namedContextContradictions -> hasDenial in core/pai.outbound.council.js, a
+  // battery of patterns over "I do not have", "I cannot verify", "there is no". Those are
+  // ordinary honest English. An A'NU who truthfully says she has no favorite, or cannot confirm
+  // something, matches it. The founder's 20260815 law is direct: "Who in the hell are we to stop
+  // something? ... your shadow, your WRIT, your meta commentary, all of that, your Aunt Pam. IF
+  // THEY'RE STOPPING, THEY'RE WRONG." Substituting is worse than stopping.
+  //
+  // SO THE DETECTOR KEEPS DETECTING AND LOSES THE PEN. Case (a) is unchanged: with no answer at
+  // all there is nothing of hers to overwrite, and carrying the verified relay is cold code
+  // carrying a fact, not authoring her state. Case (b) now ships HER WORDS and records the flags
+  // as evidence, so the minds that run immediately below this line, WRIT, PAM and SHADOW, judge
+  // the contradiction the way a mind is supposed to. That is the whole conversion: a pattern may
+  // DETECT and FLAG and WAKE, it may never DECIDE.
   if (!_structuredReachPolicy && !_worldBuilderMachine && _codaEvidenceRelayAnswer) {
-    var _finalNamedFlags = finalAns
-      ? namedContextContradictions(finalAns, _namedContextEvidence) : [{ reason:'empty_answer' }];
-    if (!finalAns || _finalNamedFlags.length) {
+    if (!finalAns) {
       finalAns = _codaEvidenceRelayAnswer;
-      _stampStep('named_context_answer_repaired', 'verified_coda_evidence_relay');
+      _stampStep('named_context_answer_repaired', 'empty_answer_verified_coda_evidence_relay');
+    } else {
+      var _finalNamedFlags = namedContextContradictions(finalAns, _namedContextEvidence);
+      if (_finalNamedFlags.length) {
+        _stampStep('named_context_contradiction_flagged_for_the_council',
+          _finalNamedFlags.map(function (flag) {
+            return String((flag && flag.reason) || 'named_context_contradiction');
+          }).join(','));
+      }
     }
   }
   // ⬡B:core.tool_loop:REPAIR:protocol_hollow_before_canonical_preparation:20260715⬡
@@ -7365,8 +7426,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // an unreachable seat is an honest refusal, never the old hardcoded substitution. The detection
   // and the arrival exemption stay cold, as they always were; only the sentence moved.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
+    // Codex review, live: this call passed repairRawJsonAnswer's own fixed 8s timeout but not
+    // _modelRequestSignal(), so on a voice turn with less than 8s of budget left it could run
+    // past PAI_VOICE_MODEL_BUDGET_MS where every other recovery call in this closure settles
+    // inside it. The signal is merged in here, at the one guarded door, exactly like the other
+    // _callPaiLadder call sites in this same closure (e.g. the repair call two screens up):
+    // repairRawJsonAnswer itself stays ignorant of voice deadlines, same as before, and the
+    // wrapper supplies the real one at call time.
     var _rawRepair = await repairRawJsonAnswer(finalAns, identity && identity.council_context,
-      function (sys, user, opts) { return _callPaiLadder(sys, user, opts); });
+      function (sys, user, opts) {
+        return _callPaiLadder(sys, user, Object.assign({}, opts, { signal: _modelRequestSignal() }));
+      });
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
   }
@@ -7378,14 +7448,59 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // correction under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Deleting the guard would let
   // the false claim ship, so it is contained by stamp only.
   // ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡
-  // Founder screenshot: she replied 'I've set a reminder for you to check in on Tameka,
-  // it'll pop up tomorrow 9am' -- but create_reminder NEVER fired, so no reminder
-  // exists. Claiming an action you did not take is the worst failure. Guard: if the
-  // reply claims a reminder/calendar action but the matching tool did not run this
-  // turn, strip the false claim and tell the truth. Cold detection, no LLM.
-  if (!_structuredReachPolicy&&!_worldBuilderMachine&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
-    _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
-    finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
+  // Founder screenshot: she replied that she had set a reminder to check in on someone and
+  // that it would pop up the next morning, but create_reminder NEVER fired, so no reminder
+  // exists. Claiming an action you did not take is the worst failure, and that detection is
+  // still exactly right: the false claim must never ship.
+  //
+  // ⬡B:core.tool.loop:AIRCODE:hallucinated_action_wakes_her_instead_of_being_answered_for:20260815⬡
+  // ##DD DOCTRINE DROP 20260815, THE PEN ON HER MIND, plus the 20260807 ruling that a regex
+  // WAKES and never DECIDES. What shipped before was the whole nasty-cough shape in nine lines:
+  // a pattern read her sentence, cold code concluded she had lied, DELETED her answer, and
+  // substituted a sentence a coder wrote in her first person ("I want to set that reminder for
+  // you..."). Reported live by OTJT.CLAIR.TRUTH-GUARD on the CCWA board 20260815 05:06 as firing
+  // on every channel every turn. Two separate harms, and the second is the worse one:
+  //   1. FALSE POSITIVES MAILED THE OPPOSITE OF A TRUE STATEMENT. Measured against the live
+  //      pattern, not assumed: plain negations do NOT match ("I have not created that event yet"
+  //      and "I have set no reminder" are both false, the negation word breaks the run). What
+  //      DOES match while being perfectly true is a reference to an earlier turn's real work,
+  //      "Earlier this week I set a reminder for that, it is still on", because the check only
+  //      looks at THIS turn's tool list. An echo of the person's own question, "you asked if I
+  //      have set a reminder", matches too. Each of those was deleted and replaced with a
+  //      confession of a failure that never happened, telling the person a reminder that really
+  //      exists does not.
+  //   2. IT BECAME HER MEMORY. finalAns rides into core/memory.keeper.js#keepTurn as
+  //      content.exit.her_answer, literally labeled her answer, and core/find.js reads that lane
+  //      back to her on later turns. A coder's sentence banked under her name is planted memory.
+  //
+  // AIRCODE: cold code keeps doing everything it did except speak. It still detects the shape,
+  // still proves the tool never ran, still refuses to let an unverified claim reach the person.
+  // Then it carries the FACT to a named seat, wakes her, and writes down HER sentence. She is
+  // the one who knows whether she claimed an action, refused one, or was quoting the question.
+  //
+  // NO MIND, NO SUBSTITUTE MOUTH. If the seat is unreachable the turn goes SILENT the way this
+  // file already handles an unrepairable hollow answer twenty lines up
+  // (hollow_protocol_answer_unrepaired). Silence is honest; a coder sentence in her voice is not,
+  // and a fallback line here would rebuild the exact defect this conversion removes.
+  if (!_structuredReachPolicy && !_worldBuilderMachine
+      && unverifiedActionClaimShape(finalAns, tools, priorTurns)) {
+    _stampStep('hallucinated_action_detected','reminder/event claim shape with no matching tool call, waking her');
+    // No seat is passed on purpose: _callPaiLadder already defaults to this turn's own resolved
+    // seat, and because it merges caller options OVER that default, naming a seat here would
+    // override the turn's resolution instead of honoring it. The shared turn signal does ride
+    // along, so a voice turn settles inside PAI_VOICE_MODEL_BUDGET_MS rather than on a private
+    // timeout of its own.
+    var _claimRepair = await repairUnverifiedActionClaim(finalAns,
+      function (sys, user, opts) { return _callPaiLadder(sys, user, opts); },
+      { signal: _modelRequestSignal() });
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_hallucinated_action_wake');
+    if (!_claimRepair.answer) {
+      _stampStep('cycle_end_silent', _claimRepair.stamp);
+      return {ok:false,reason:'hallucinated_action_unrepaired',ham:hamObj,cycleId:_cycleId,
+        requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    finalAns = _claimRepair.answer;
+    _stampStep('hallucinated_action_answered_by_her', _claimRepair.stamp);
   }
   // \u2b21B:core.tool_loop:FIX:evidence_backed_question_gets_one_plain_synthesis:20260717\u2b21
   // Live 1-in-3 on the founder's own chat: iterations gathered REAL tool evidence
@@ -7666,11 +7781,29 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     } catch (eFmt) {}
     if (!finalAns) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
       reason:'emptied_after_model_by_scrub_or_format'};
+    // ⬡B:core.tool_loop:FIX:the_legacy_scrub_stops_editing_her_sentence:20260815⬡
+    // THE SAME DISEASE AS THE NAMED-CONTEXT SUBSTITUTION ABOVE, and this instance is the most
+    // literal of the three. It read `finalAns = _shadowPrepared.clean`, so a pattern list
+    // rewrote her sentence in place: every em dash became a comma, every phrase in a fifteen
+    // string HOLLOW list was deleted, and everything from the first leak marker onward was CUT.
+    // Then it killed the turn outright if that scrub emptied the text. The outbound council
+    // runs AFTER this point, so it deliberated over and stamped bytes she never composed, which
+    // is exactly how a receipt ends up vouching for words that are not hers.
+    //
+    // Founder, 20260815: "IF THEY'RE STOPPING, THEY'RE WRONG." Editing is worse than stopping,
+    // because a stop is visible and an edit is not.
+    //
+    // The audit now DETECTS and the finding is stamped. Her bytes go into the council exactly as
+    // she wrote them, and WRIT, PAM and SHADOW judge them there, which is the entire reason
+    // those stages exist. A thrown audit is still swallowed, as before, because a broken
+    // detector must never be able to take her turn down with it.
     try {
       var _shadowPrepared = require('./synthesize.js').shadowAudit(finalAns);
-      if (!_shadowPrepared.clean) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
-        reason:'shadow_scrubbed_to_empty'};
-      finalAns = _shadowPrepared.clean;
+      if (_shadowPrepared && Array.isArray(_shadowPrepared.violations)
+        && _shadowPrepared.violations.length) {
+        _stampStep('legacy_shadow_pattern_flagged_for_the_council',
+          _shadowPrepared.violations.join(','));
+      }
     } catch (ePrepShadow) {}
     try {
       var _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
@@ -9081,15 +9214,14 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,
   fetchPaiSeatCandidate,
   prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
-  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
+  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,
   isPureConversationalContinuation,
   currentCapabilityQuestion,currentCapabilityEvidence,categoricalCurrentCapabilityClaim,
   verifiedCurrentCapabilityRows,verifiedCurrentCapabilityEvidenceCount,
   currentCapabilityHumanProjection,_currentCapabilityProjectionSafe,
   currentCapabilityClaimFindings,guardCurrentCapabilityClaim,
   agentFindClosedWorldReason,
-  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
-  requiredActionToolForMessage,
+  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,
   prioritizeVerifiedEvidence,prioritizeCouncilEvidence,regenerateHollowAnswer,
   regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
@@ -9108,6 +9240,7 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,
   _noNewEvidenceLimit,_repeatQuestionLimit,
   paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
+  unverifiedActionClaimShape,repairUnverifiedActionClaim,reminderClaimCorroboratedByHistory,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
