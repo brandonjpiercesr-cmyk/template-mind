@@ -1083,7 +1083,41 @@ function isArrivalDestinationBlock(parsed) {
 //      channel never sets it, so an SMS turn cannot reach this branch at all.
 //   2. the answer matches the arrival contract shape.
 // Context first, then shape. That ordering is the whole correction.
-function repairRawJsonAnswer(answer, context) {
+// ⬡B:core.tool_loop:AIRCODE:PAI_OUTPUT_REPAIR_WONDER_20260815⬡
+// ##DD DOCTRINE DROP 20260815, THE PEN ON HER MIND. This is PAI_OUTPUT_REPAIR_WONDER, named
+// and stamped absent by this file's own comment since 20260723 (COLD-ANEW-REPORT-0075): "The
+// honest fix (return the defect to the PAI cycle and compose through the canonical mind under
+// SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here." It was the file naming its own defect and
+// nobody had built the fix yet.
+//
+// The guard stayed cold because deleting it ships raw JSON to a human, which is worse. What
+// changes here is who writes the sentence a human reads when the guard fires: cold code carried
+// two hardcoded sentences (a calendar line, an ask-again line) and this file's own stamp,
+// finalAns, then rides straight into core/memory.keeper.js#keepTurn as `content.exit.her_answer`
+// -- literally labeled the exit, her answer -- and core/find.js reads that lane back on every
+// future turn as what she actually said. A hardcoded sentence banked as her_answer is exactly
+// the planted memory the drop names.
+//
+// AIRCODE: cold code still does everything it did before except phrase the sentence. It detects
+// the raw JSON, proves or refuses the arrival exemption, and for a calendar-shaped leak it
+// carries the FACT (the open-slot count) rather than the tool result itself, so nothing beyond
+// what was already going out reaches the seat. A named seat is woken once, told the situation,
+// and her one honest sentence becomes the answer. An unreachable seat is a real refusal, never a
+// silent fallback to the old hardcoded line: that fallback would be the 20260814 clean.speech
+// defect moved into this file.
+//
+// THE CALL RIDES THE ONE GUARDED DOOR, NOT A SECOND ONE. tests/a.one.millisecond.call.is.cold
+// .code.choosing.silence.test.js pins that exactly one `.deliberate(` call exists in this whole
+// file (callPaiLadderNetwork) and that every ladder call in a voice-bearing turn respects
+// _voiceModelDeadline through _callPaiLadder: a branch-local call to model.ladder.js directly,
+// which my first cut here was, is precisely the bypass that guard exists to catch, and it did.
+// repairRawJsonAnswer is not itself the closure that owns _callPaiLadder (that lives inside
+// runPAIInner), so the caller must hand it in; callLadder defaults to a bare deliberate call
+// only so the extracted function stays independently callable by these tests without a whole
+// runPAIInner closure.
+var REPAIR_SEAT = 'c2_organ';
+
+async function repairRawJsonAnswer(answer, context, callLadder) {
   var text = answer == null ? '' : String(answer);
   if (!text || !/^[[{]/.test(text.trim())) return { answer: answer, stamp: null, why: null };
   var parsed = null;
@@ -1095,17 +1129,188 @@ function repairRawJsonAnswer(answer, context) {
   }
   if (parsed && typeof parsed === 'object') {
     var why = 'a tool result nearly went out as raw JSON instead of a sentence';
-    if (parsed.next_open_slots || parsed.upcoming_events !== undefined) {
-      var n = Array.isArray(parsed.next_open_slots) ? parsed.next_open_slots.length : 0;
-      return { answer: n > 0
-        ? 'Your calendar is open right now, ' + n + ' free half-hour blocks coming up. Want me to grab one?'
-        : 'Nothing open on your calendar in the window I checked, or it is genuinely clear with no slots computed yet -- tell me what you are trying to book and I will look closer.',
-        stamp: 'raw_json_answer_caught', why: why };
+    var isCalendarShape = !!(parsed.next_open_slots || parsed.upcoming_events !== undefined);
+    var openSlots = Array.isArray(parsed.next_open_slots) ? parsed.next_open_slots.length : 0;
+    var fact = isCalendarShape
+      ? ('FACT: a calendar tool answered with ' + openSlots + ' open half-hour block(s) in the '
+        + 'window checked (0 can mean either a genuinely clear window or slots not yet computed, '
+        + 'the tool result does not say which).')
+      : 'FACT: a tool call finished and returned structured data instead of words, and the '
+        + 'person is waiting on an answer, not the raw data.';
+    var sys = 'You are A\'NU, mid-turn. A tool just answered you with data instead of words, and '
+      + 'you almost sent that raw data to the person instead of speaking to them. Using ONLY the '
+      + 'fact below, say one short honest sentence in your own voice: if there is something '
+      + 'concrete to offer, offer it; if not, say plainly you need to look again and invite them '
+      + 'to ask. Never invent a number, a time or a detail that is not in the fact. Never an em '
+      + 'dash.';
+    // callLadder is REQUIRED to reach this branch, on purpose: no fallback default that
+    // quietly dials model.ladder.js on its own, because that fallback would BE the
+    // branch-local bypass this whole conversion exists to close.
+    if (typeof callLadder !== 'function') throw new Error('repair_ladder_caller_required');
+    var reply = null;
+    try {
+      reply = await callLadder(sys, fact,
+        { seat: REPAIR_SEAT, timeout: 8000, max_tokens: 120, temperature: 0.3 });
+    } catch (eRepair) { reply = null; }
+    var spoken = reply && reply.content ? String(reply.content).trim() : '';
+    // Codex review, live: the first cut here still cold-authored a human-facing sentence
+    // ("I am not able to put that into words right now...") on an unreachable seat, and that
+    // string is exactly what this whole conversion exists to stop -- a sentence nobody said
+    // riding into her memory as her_answer. An unreachable seat now returns NO answer at all,
+    // never a fallback sentence, the same shape as agents/dawn.js#brief's own conversion. The
+    // caller (runPAIInner) already owns the honest path for an empty finalAns: the
+    // terminal_no_answer_single_repair seam gets one more real attempt, and if that also comes
+    // back empty, the council_answer_hollow_protocol gate at the end of the turn refuses
+    // ok:false rather than shipping cold-authored bytes. The raw JSON itself never reaches the
+    // person either way, because an empty answer is not human-facing.
+    if (!spoken) {
+      return { answer: '', stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
     }
-    return { answer: 'I pulled that up, but I need to say it in words instead of handing you raw data. Ask me again and I will answer it properly.',
-      stamp: 'raw_json_answer_caught', why: why };
+    // Codex review, live: the repair seat's own output was never validated. A seat that answers
+    // with JSON instead of a sentence (a misconfigured seat, a model that ignored the system
+    // prompt) would ship that JSON straight to the person -- the exact leak this function exists
+    // to catch, now caused by the fix instead of prevented by it. Same detection this function
+    // already uses on the ORIGINAL answer, applied to the repaired one before it ships.
+    if (/^[[{]/.test(spoken)) {
+      return { answer: '', stamp: 'raw_json_answer_repair_itself_raw', why: why };
+    }
+    return { answer: spoken, stamp: 'raw_json_answer_caught', why: why };
   }
   return { answer: answer, stamp: null, why: null };
+}
+
+// ⬡B:core.tool.loop:AIRCODE:unverified_action_claim_wakes_her:20260815⬡
+// The sibling of repairRawJsonAnswer above, same shape, same reason. See the long note at the
+// call site for the live incident and the two harms. Detection stays cold and unchanged; only
+// the sentence moved from a coder's keyboard to her mouth.
+var UNVERIFIED_ACTION_CLAIM = /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i;
+// ⬡B:core.tool.loop:FIX:the_event_half_named_a_tool_that_never_existed:20260815⬡
+// The 20260712 guard checked for 'create_event'. That tool name appears NOWHERE in this tree:
+// the real event-writing hand is calendar_book, defined in TOOLS in this same file. So the
+// event half of the check could never be satisfied, and every honest confirmation of a REAL
+// booking ("I scheduled that event for Thursday") tripped the guard and was answered by telling
+// the person their real calendar entry did not exist. Naming the tool that actually exists.
+// ⬡B:core.tool.loop:FIX:each_claimed_action_needs_its_own_tool:20260815⬡
+// Codex P1 on the merged #2164: checking "did ANY of these tools run" let one real action cover
+// a different unearned claim. A turn that genuinely called calendar_book and then also said "I
+// have set a reminder" passed clean, because calendar_book was in the list, and the mirror case
+// let create_reminder vouch for an event that was never booked. These tools have different
+// effects on a person's real world, so each claimed action is matched to the tool that actually
+// performs it, and the guard fires when ANY claimed action is missing its own tool.
+var ACTION_CLAIM_KINDS = [
+  { kind: 'reminder', claim: /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?reminder\b/i,
+    tool: 'create_reminder' },
+  { kind: 'event', claim: /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:calendar|event)\b/i,
+    tool: 'calendar_book' }
+];
+
+// ⬡B:core.tool.loop:MERGE:the_corroboration_half_belongs_to_another_lane:20260815⬡
+// THIS FUNCTION IS NOT MINE. It is the work of the lane that opened anew#2162 (session
+// 01Jq3vNB), carried here verbatim in behavior and credited by name. Their words for why it is a
+// FACT and not a meaning call, which is the load-bearing argument: priorTurns is the real,
+// already-guard-passed conversation history, so a false claim in an earlier turn would ALREADY
+// have been rewritten before it was stored; if the same claim phrasing survives unaltered in a
+// prior ASSISTANT turn, the tool truly fired back then and this turn is a corroborated echo, not
+// a hallucination. It carries that fact and never guesses at tense, intent, or meaning. Only her
+// own answer can corroborate: a prior USER turn repeating the words proves nothing.
+//
+// HOW IT GOT HERE, said plainly because it was my mistake. Their fix reached template-mind main
+// through the mirror sync in template-mind#534, while their anew PR #2162 closed unmerged, so the
+// two worlds were already split before I arrived. My own mirrors then copied my anew file whole
+// over the template half and DELETED their function from template-mind main. That is the clobber
+// the standing law forbids. The repair is not to revert mine or re-land theirs alone: the two
+// halves fix different ends of the same bug and belong together, which their own PR anticipated
+// when it left the cold replacement sentence as debt "scoped to the larger PAI_OUTPUT_REPAIR_
+// WONDER mind-wake" -- that wake is exactly what the conversion below is.
+//
+// COMBINED, THE GUARD IS STRICTLY BETTER THAN EITHER HALF: a corroborated echo of her own real
+// earlier work never fires the guard at all and costs no model call, and anything that does fire
+// wakes her instead of being answered for. Their cold denial sentence is retired here, which is
+// the outcome their PR said it was waiting for.
+function reminderClaimCorroboratedByHistory(priorTurns) {
+  return Array.isArray(priorTurns) && priorTurns.some(function (t) {
+    return t && t.role === 'assistant' && typeof t.content === 'string' &&
+      UNVERIFIED_ACTION_CLAIM.test(t.content);
+  });
+}
+
+// PURE COLD DETECTION, no judgment about what she meant. True only when the draft carries the
+// shape of an action claim, no tool that could have performed it ran this turn, AND her own
+// history does not already corroborate the claim.
+function unverifiedActionClaimShape(answer, toolsUsed, priorTurns) {
+  if (!answer || typeof answer !== 'string') return false;
+  if (!UNVERIFIED_ACTION_CLAIM.test(answer)) return false;
+  var used = Array.isArray(toolsUsed) ? toolsUsed : [];
+  // Every action the draft actually claims must be backed by the tool that performs THAT action.
+  // A sentence claiming both needs both; one real action never vouches for the other.
+  var unearned = ACTION_CLAIM_KINDS.some(function (k) {
+    return k.claim.test(answer) && used.indexOf(k.tool) === -1;
+  });
+  if (!unearned) return false;
+  return !reminderClaimCorroboratedByHistory(priorTurns);
+}
+
+// THE WAKE. Carries the fact and her own sentence to a named seat and returns HER answer.
+// callLadder is REQUIRED, matching the sibling: no default that quietly dials a model on its
+// own, because that default would be the branch-local bypass the voice-deadline guard exists
+// to catch. An unreachable seat returns no answer at all, never a replacement sentence.
+async function repairUnverifiedActionClaim(answer, callLadder, opts) {
+  var o = opts || {};
+  if (typeof callLadder !== 'function') throw new Error('action_claim_ladder_caller_required');
+  // THE FACT IS TURN SCOPED AND SAYS SO, OUT LOUD, TWICE. The only thing actually proven is that
+  // no creating tool ran on THIS turn. That is NOT evidence that no such reminder or event
+  // exists: one she set on an earlier turn is real and still standing, and this check cannot see
+  // earlier turns at all. A prompt that told her "nothing exists" would push her to deny a live
+  // reminder, which is the exact false positive this whole conversion exists to end, rebuilt one
+  // layer up in the prompt instead of the code.
+  var fact = 'FACT, SCOPED TO THIS TURN ONLY: your draft matches the shape of a claim that a '
+    + 'reminder or calendar event was set up, and no create_reminder or calendar_book tool ran on '
+    + 'this turn, so nothing was created just now. THIS IS NOT EVIDENCE THAT NO SUCH REMINDER OR '
+    + 'EVENT EXISTS. One you set on an earlier turn would be real and still standing, and this '
+    + 'check cannot see earlier turns. Your sentence may be a claim about work that did not '
+    + 'happen, a true reference to earlier work, or an echo of their own question, and this check '
+    + 'cannot tell those apart.'
+    + String.fromCharCode(10) + 'THE SENTENCE: ' + String(answer);
+  var sys = 'You are A\'NU, mid-turn, about to answer a person. A check caught that your draft '
+    + 'reads like something was just set up, while no creating tool ran on this turn. Read your '
+    + 'own sentence in the fact below and answer in one or two sentences in your own voice. If '
+    + 'you were saying you just set it up, say plainly that it did not get created and ask for '
+    + 'the exact thing and time so you can do it for real. If you were pointing at something from '
+    + 'an earlier turn, say so plainly and do NOT deny it exists. If you were echoing their '
+    + 'question or telling them no, say what you meant. Never say something was created just now, '
+    + 'and never tell them something does not exist when all you know is that it was not created '
+    + 'on this turn. Never an em dash.';
+  // The seat key is only set when the caller actually has one. _callPaiLadder merges as
+  // Object.assign({seat: this turn's resolved seat}, options), so caller options WIN: passing
+  // seat undefined would blank the turn's own resolution rather than defer to it.
+  var ladderOpts = { timeout: 8000, max_tokens: 140, temperature: 0.3, signal: o.signal };
+  if (o.seat) ladderOpts.seat = o.seat;
+  var reply = null;
+  try {
+    reply = await callLadder(sys, fact, ladderOpts);
+  } catch (eClaim) { reply = null; }
+  var spoken = reply && reply.content ? String(reply.content).trim() : '';
+  if (!spoken) {
+    return { answer: '', stamp: 'hallucinated_action_no_mind_reachable' };
+  }
+  // ⬡B:core.tool.loop:FIX:the_post_filter_was_the_nasty_cough_one_layer_up:20260815⬡
+  // An earlier cut of this conversion re-ran UNVERIFIED_ACTION_CLAIM against HER answer and went
+  // silent if it matched. Two things were wrong with that, and the second is the doctrine one.
+  //   1. IT THREW AWAY THE ANSWER THE PROMPT ASKS FOR. The wake explicitly invites her to say
+  //      "I set that reminder earlier this week" when the claim is a true reference to earlier
+  //      work. That sentence matches the pattern by construction, so the post-filter silenced the
+  //      exact honest explanation it had just requested, and a person with a real live reminder
+  //      got a dead turn instead of an answer.
+  //   2. IT WAS COLD CODE JUDGING HER MEANING, one layer up from where it was just removed.
+  //      20260807: a regex may DETECT and WAKE, it may never DECIDE. 20260815: carry, never
+  //      classify. A filter that reads her reply and decides she must have lied is the same
+  //      nasty cough as the branch this conversion deleted, moved behind the wake where it is
+  //      harder to see. The detection before the wake is legitimate because it reads a DRAFT
+  //      against a mechanical fact (no tool ran). Re-reading her considered answer is not.
+  // She was woken, given the turn-scoped fact, and told plainly never to say something was
+  // created just now. Her answer stands. Verification of what she said belongs to the woken WRIT
+  // reviewer and the council downstream, which are minds, not to a pattern in this function.
+  return { answer: spoken, stamp: 'she rewrote her own line after the wake' };
 }
 
 // Keep the canonical PAI tool decision intact when the approved primary
@@ -7301,14 +7506,24 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   }
   // ⬡COLD:speak:become:PAI_OUTPUT_REPAIR_WONDER:20260723⬡
-  // COLD-ANEW-REPORT-0075 stamped, needs-live-verification. When the answer is raw JSON this cold
-  // branch substitutes hardcoded calendar prose or a hardcoded ask-again line, which is cold code
-  // authoring human-facing bytes. The honest fix (return the defect to the PAI cycle and compose
-  // through the canonical mind under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Removing the
-  // guard would ship raw JSON to the human; rerouting to re-synthesis cannot be verified here, so it
-  // is contained by stamp only.
+  // COLD-ANEW-REPORT-0075, BUILT 20260815 under the ##DD PEN ON HER MIND drop. This branch used
+  // to substitute hardcoded calendar prose or a hardcoded ask-again line, cold code authoring
+  // human-facing bytes that then rode into her own memory lane as her_answer. repairRawJsonAnswer
+  // now wakes a named seat (REPAIR_SEAT) with the raw-JSON fact and lets her say the one sentence;
+  // an unreachable seat is an honest refusal, never the old hardcoded substitution. The detection
+  // and the arrival exemption stay cold, as they always were; only the sentence moved.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
-    var _rawRepair = repairRawJsonAnswer(finalAns, identity && identity.council_context);
+    // Codex review, live: this call passed repairRawJsonAnswer's own fixed 8s timeout but not
+    // _modelRequestSignal(), so on a voice turn with less than 8s of budget left it could run
+    // past PAI_VOICE_MODEL_BUDGET_MS where every other recovery call in this closure settles
+    // inside it. The signal is merged in here, at the one guarded door, exactly like the other
+    // _callPaiLadder call sites in this same closure (e.g. the repair call two screens up):
+    // repairRawJsonAnswer itself stays ignorant of voice deadlines, same as before, and the
+    // wrapper supplies the real one at call time.
+    var _rawRepair = await repairRawJsonAnswer(finalAns, identity && identity.council_context,
+      function (sys, user, opts) {
+        return _callPaiLadder(sys, user, Object.assign({}, opts, { signal: _modelRequestSignal() }));
+      });
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
   }
@@ -7320,14 +7535,59 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // correction under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Deleting the guard would let
   // the false claim ship, so it is contained by stamp only.
   // ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡
-  // Founder screenshot: she replied 'I've set a reminder for you to check in on Tameka,
-  // it'll pop up tomorrow 9am' -- but create_reminder NEVER fired, so no reminder
-  // exists. Claiming an action you did not take is the worst failure. Guard: if the
-  // reply claims a reminder/calendar action but the matching tool did not run this
-  // turn, strip the false claim and tell the truth. Cold detection, no LLM.
-  if (!_structuredReachPolicy&&!_worldBuilderMachine&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
-    _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
-    finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
+  // Founder screenshot: she replied that she had set a reminder to check in on someone and
+  // that it would pop up the next morning, but create_reminder NEVER fired, so no reminder
+  // exists. Claiming an action you did not take is the worst failure, and that detection is
+  // still exactly right: the false claim must never ship.
+  //
+  // ⬡B:core.tool.loop:AIRCODE:hallucinated_action_wakes_her_instead_of_being_answered_for:20260815⬡
+  // ##DD DOCTRINE DROP 20260815, THE PEN ON HER MIND, plus the 20260807 ruling that a regex
+  // WAKES and never DECIDES. What shipped before was the whole nasty-cough shape in nine lines:
+  // a pattern read her sentence, cold code concluded she had lied, DELETED her answer, and
+  // substituted a sentence a coder wrote in her first person ("I want to set that reminder for
+  // you..."). Reported live by OTJT.CLAIR.TRUTH-GUARD on the CCWA board 20260815 05:06 as firing
+  // on every channel every turn. Two separate harms, and the second is the worse one:
+  //   1. FALSE POSITIVES MAILED THE OPPOSITE OF A TRUE STATEMENT. Measured against the live
+  //      pattern, not assumed: plain negations do NOT match ("I have not created that event yet"
+  //      and "I have set no reminder" are both false, the negation word breaks the run). What
+  //      DOES match while being perfectly true is a reference to an earlier turn's real work,
+  //      "Earlier this week I set a reminder for that, it is still on", because the check only
+  //      looks at THIS turn's tool list. An echo of the person's own question, "you asked if I
+  //      have set a reminder", matches too. Each of those was deleted and replaced with a
+  //      confession of a failure that never happened, telling the person a reminder that really
+  //      exists does not.
+  //   2. IT BECAME HER MEMORY. finalAns rides into core/memory.keeper.js#keepTurn as
+  //      content.exit.her_answer, literally labeled her answer, and core/find.js reads that lane
+  //      back to her on later turns. A coder's sentence banked under her name is planted memory.
+  //
+  // AIRCODE: cold code keeps doing everything it did except speak. It still detects the shape,
+  // still proves the tool never ran, still refuses to let an unverified claim reach the person.
+  // Then it carries the FACT to a named seat, wakes her, and writes down HER sentence. She is
+  // the one who knows whether she claimed an action, refused one, or was quoting the question.
+  //
+  // NO MIND, NO SUBSTITUTE MOUTH. If the seat is unreachable the turn goes SILENT the way this
+  // file already handles an unrepairable hollow answer twenty lines up
+  // (hollow_protocol_answer_unrepaired). Silence is honest; a coder sentence in her voice is not,
+  // and a fallback line here would rebuild the exact defect this conversion removes.
+  if (!_structuredReachPolicy && !_worldBuilderMachine
+      && unverifiedActionClaimShape(finalAns, tools, priorTurns)) {
+    _stampStep('hallucinated_action_detected','reminder/event claim shape with no matching tool call, waking her');
+    // No seat is passed on purpose: _callPaiLadder already defaults to this turn's own resolved
+    // seat, and because it merges caller options OVER that default, naming a seat here would
+    // override the turn's resolution instead of honoring it. The shared turn signal does ride
+    // along, so a voice turn settles inside PAI_VOICE_MODEL_BUDGET_MS rather than on a private
+    // timeout of its own.
+    var _claimRepair = await repairUnverifiedActionClaim(finalAns,
+      function (sys, user, opts) { return _callPaiLadder(sys, user, opts); },
+      { signal: _modelRequestSignal() });
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_hallucinated_action_wake');
+    if (!_claimRepair.answer) {
+      _stampStep('cycle_end_silent', _claimRepair.stamp);
+      return {ok:false,reason:'hallucinated_action_unrepaired',ham:hamObj,cycleId:_cycleId,
+        requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    finalAns = _claimRepair.answer;
+    _stampStep('hallucinated_action_answered_by_her', _claimRepair.stamp);
   }
   // \u2b21B:core.tool_loop:FIX:evidence_backed_question_gets_one_plain_synthesis:20260717\u2b21
   // Live 1-in-3 on the founder's own chat: iterations gathered REAL tool evidence
@@ -9050,6 +9310,7 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,
   _noNewEvidenceLimit,_repeatQuestionLimit,
   paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
+  unverifiedActionClaimShape,repairUnverifiedActionClaim,reminderClaimCorroboratedByHistory,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
