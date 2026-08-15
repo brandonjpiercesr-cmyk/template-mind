@@ -78,22 +78,65 @@ const REAL_CONTEXTS = [
   }
 ];
 
-// DRIVEN THROUGH THE REAL STAGE, and deliberately WITHOUT a hamUid. With a ham and no receipt
-// bank the stage empties `output` before the mint (writReceiptVerified is false), so every packet
-// reports minted:false / 'no_output_to_bind' and a test asserting only `applies` passes while
-// proving nothing about whether a packet can be made at all. That was the shape of the first
-// draft, and a critic was right to call it a test of the predicate wearing a receipt's clothes.
-async function runStage(context) {
+// DRIVEN THROUGH THE REAL STAGE ON THE REAL PRECONDITION, and this is the third version of this
+// harness. Version one asserted only `applies`, which is the predicate wearing a receipt's
+// clothes. Version two added `minted === true` but ran WITHOUT a hamUid, and that is worse than
+// it looks: `writReceiptVerified = !ctx.hamUid || writOutputBound` makes the hamless branch skip
+// the WRIT verdict bank entirely, and `validateInput` refuses a hamless call at the council's
+// only entrance ('ham_uid_required', blocked_by INPUT, measured). So version two proved minting
+// in a configuration production is structurally incapable of reaching: a receipt from a room
+// nobody can enter, which is the same defect one layer up.
+//
+// So the ham is real and the brain banks for real. That makes `minted` depend on the WRIT verdict
+// actually binding, which IS the production precondition, and it makes the ham-present bank-less
+// case observable as its own row rather than something the next seat meets during an outage.
+function bankingBrain() {
+  const rows = new Map();
+  return {
+    async writeBead(bead) {
+      rows.set(bead.source, { source: bead.source,
+        content: Object.assign({}, bead.content, { edges: bead.edges }) });
+      return { ok: true };
+    },
+    async findBySource(source) { return rows.get(source) || null; }
+  };
+}
+
+// A TRUE ZERO: an invented harness id, never a real person, per the identity-is-env-only law.
+const PIN_HAM = 'A1B2C3D4';
+
+async function runStage(context, opts) {
+  const banked = !opts || opts.banked !== false;
   return T.defaultWritStage({
-    context, answer: 'her words here',
+    context: banked ? Object.assign({ brain: bankingBrain() }, context) : context,
+    answer: 'her words here', hamUid: PIN_HAM,
     requestId: 'req.pin.1', cycleId: 'cyc.pin.1', runtime: {}, channel: 'test'
   });
 }
 
-test('all three gates delegate to one predicate, so they cannot drift apart', () => {
+// RENAMED to what it actually asserts. It used to be called "all three gates delegate to one
+// predicate, so they cannot drift apart" over three typeof checks that pass whether or not
+// anything delegates: the same disease as the tautology a critic killed in the round before,
+// wearing a stronger title. The delegation is pinned by the behavioral tests below, one per gate.
+test('the shared predicate and both its named consumers are exported', () => {
   assert.strictEqual(typeof T.packetWaivedFor, 'function');
   assert.strictEqual(typeof T.humanRecheckWaived, 'function');
   assert.strictEqual(typeof T.requiresHumanRecheckFor, 'function');
+});
+
+test('the META early return delegates too, not only WRIT', async () => {
+  // THE THIRD CONSUMER, and it was the untested one. internalCodingDeliberation gates the META
+  // early return as well as the WRIT one. Every other test here drives WRIT, the mint or the
+  // exit, so a future seat handing META back its own mode-reading predicate would reopen the
+  // exact human_facing regression this pin exists for while all the other rows stayed green.
+  const base = { answer: 'her words here', channel: 'test', runtime: {} };
+  const machine = await T.defaultMetaCommentaryStage(Object.assign(
+    { context: { mode: 'coding', internal_deliberation: true } }, base));
+  assert.strictEqual(machine.reason, 'META_COMMENTARY_INTERNAL_CODING_PASS');
+  const personReads = await T.defaultMetaCommentaryStage(Object.assign(
+    { context: { mode: 'coding', internal_deliberation: true, human_facing: true } }, base));
+  assert.notStrictEqual(personReads.reason, 'META_COMMENTARY_INTERNAL_CODING_PASS',
+    'the META gate must ask packetWaivedFor, not the caller mode');
 });
 
 test('the waiver truth table matches every context that really exists in production', () => {
@@ -121,6 +164,19 @@ test('a packet is really MINTED for every turn a person reads, not merely flagge
         row.name + ' (' + row.caller + ') must actually mint, not just intend to');
       assert.strictEqual(packet.reason, 'minted');
     }
+  });
+
+test('a ham with no bank behind it cannot mint, and that dependency is visible here not in an outage',
+  async () => {
+    // The precondition made observable on purpose. `writReceiptVerified` needs the WRIT verdict
+    // to bind, so a real ham whose brain banks nothing reports minted:false with a reason that
+    // names the SUPPLY rather than the demand. Two versions of this pin hid that behind a hamless
+    // run; a future seat who breaks banking should meet this row, not a dead door.
+    const result = await runStage({ mode: 'coding', bcw: true }, { banked: false });
+    const packet = result.evidence.meaning_packet;
+    assert.strictEqual(packet.applies, true, 'it still applies: a person still reads these bytes');
+    assert.strictEqual(packet.minted, false);
+    assert.strictEqual(packet.reason, 'no_output_to_bind');
   });
 
 test('the machine contract returns early and never reaches the mint', async () => {

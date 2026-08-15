@@ -2903,6 +2903,18 @@ function internalCodingDeliberation(ctx) {
 // artifact now exists and binds.
 //
 // THE WAIVER, and the mint below reads the same marker so the consult door cannot deadlock again.
+// ⬡B:core.pai.outbound.council:HEAL:every_file_line_in_these_stamps_is_anew_relative:20260815⬡
+// A FENCE ON EVERY CITATION IN THIS FUNCTION AND ITS NEIGHBOURS, because this file is byte-synced
+// into the mind-template and inherited by every world. THE COUNCIL IS SHARED, THE CALLERS ARE NOT.
+// Every path named in these stamps is anew-relative. In template-mind the one internal_deliberation
+// producer is `pai/advisors/coding.js` at a different line, and `core/knowledge.compiler.wonder.js`,
+// `core/ham.world.builder.intake.js`, `routes/cara.routes.js`, `routes/clair.console.routes.js` and
+// `routes/chat.bridge.routes.js` DO NOT EXIST there at all.
+// TWO THINGS FOLLOW. Do not "fix" these paths against an inherited tree; they were never meant to
+// resolve there. And do not read the counts as a census of YOUR world: "all three producers" and
+// "exactly two doors" are anew's numbers. Re-count in your own repo before you trust either.
+// I owe this fence: I wrote it into the pin test and not into the file that actually ships, which
+// is the half that reaches strangers.
 function packetWaivedFor(context) {
   if (!context) return false;
   // A turn that says a person reads its bytes is never waivable, whatever else it claims.

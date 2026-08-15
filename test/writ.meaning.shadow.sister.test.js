@@ -272,16 +272,21 @@ test('an inherited cancelled meaning judgment releases C1 for the next turn',
   const firstOut=await first;
   const secondOut=await second;
   // ⬡B:core.pai.outbound.council:HEAL:the_starved_receipt_names_its_cause:20260815⬡
-  // RETIRED ONE COMMIT LATE, AND SAYING SO IS THE POINT. My first version of this comment claimed
-  // "retired in the same commit as the writer it pinned," citing the 20260815 law. A blind critic
-  // checked the history instead of the sentence and it is false by two commits:
-  // meaningShadowUnavailability landed in a076c80, this pin sat red through 6fa97ec, and it is
-  // only being retired here. The law was not honored; it is being caught up to. Invoking a law in
-  // the same breath as breaking it is worse than staying silent, because the citation is what
-  // stops the next reader from checking.
-  // WHAT THAT COSTS, so the lesson is usable: a pin retirement is verified by running the sister
-  // suite inside the writer's own commit, never asserted in a message. This copy lagged its anew
-  // sister, which already asserted the suffixed form.
+  // RETIRED LONG AFTER ITS WRITER, and I got the number wrong TWICE before I stopped guessing it.
+  // Version one of this comment said "retired in the same commit as the writer it pinned," citing
+  // the 20260815 law. Version two said "one commit late" in one sentence and "false by two
+  // commits" in the next, contradicting itself inside one paragraph, and added "it is only being
+  // retired here," which is also false.
+  // THE VERIFIABLE FACTS, and the two commands that produce them, so nobody has to trust my count:
+  //   git log -S meaningShadowUnavailability -- pai/core/pai.outbound.council.js   -> the writer
+  //   git log -- test/writ.meaning.shadow.sister.test.js                          -> this pin
+  // The writer landed in a076c80. This pin was actually retired in 6fa97ec, not in the commit
+  // carrying this comment, and the range a076c80..6fa97ec is not one commit or two. Run the range
+  // yourself rather than reading a number I have now missed twice.
+  // THE LESSON, which is the only part worth keeping: a pin retirement is VERIFIED by running the
+  // sister suite inside the writer's own commit. It is never established by asserting it in a
+  // message, and a law cited in the same breath as it is broken is worse than silence, because the
+  // citation is exactly what stops the next reader from checking.
   // The retirement itself stands and is strictly stronger. This line asserted the blanket
   // 'writ_meaning_shadow_unavailable', which said the judge did not run and refused to say why.
   // meaningShadowUnavailability() now names the cause, and this test is the cancellation case: it
