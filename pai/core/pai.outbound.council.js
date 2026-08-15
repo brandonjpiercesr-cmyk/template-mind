@@ -3131,8 +3131,27 @@ async function defaultWritStage(ctx) {
       metaVerdict.organ_decider === 'model' && metaVerdict.failed_open !== true &&
       metaVerdict.banked === true && metaVerdict.receipt_state === 'completed' &&
       metaOutputBound && metaOutput.trim());
+    // ⬡B:core.pai_outbound_council:FIX:a_new_failed_open_name_silently_reinstated_the_erasure:20260815⬡
+    // FOUND BY CATHY (Codex) at P1, on my own commit, and it had already undone the founder's
+    // own correction one layer up. agents/meta_commentary.js was changed so a bare pattern
+    // match on an unjudgeable hint no longer blanks her draft when no mind is reachable, per
+    // his words: "Who in the hell are we to stop something... your shadow, your WRIT, your meta
+    // commentary, all of that. IF THEY'RE STOPPING, THEY'RE WRONG." That branch fails open and
+    // carries the flags on the receipt so a woken reviewer can judge it later.
+    //
+    // But it introduced a NEW decider name for the identity-risk case, and this gate matched
+    // the old name exactly. So the verdict arrived proven in every other respect (banked, an
+    // 'unavailable' receipt, the output digest bound to her real draft) and still failed here
+    // on the string alone, and the else branch set output to '' anyway. The person received
+    // nothing, decided by a pattern with no mind in the loop, which is precisely the shape the
+    // correction removed. Both bounded failed-open names are the same verdict and both belong.
+    //
+    // The lesson worth keeping: an allowlist keyed on an exact string is a gate that silently
+    // re-closes every time someone adds a legitimate new value to the thing it allows.
+    var META_FAILED_OPEN_DECIDERS = ['organ_unavailable_failed_open',
+      'organ_unavailable_failed_open_identity_risk'];
     var metaUnavailableProven = !!(metaVerdict && metaVerdict.ok === true &&
-      metaVerdict.decider === 'organ_unavailable_failed_open' &&
+      META_FAILED_OPEN_DECIDERS.indexOf(metaVerdict.decider) !== -1 &&
       metaVerdict.failed_open === true && metaVerdict.banked === true &&
       metaVerdict.receipt_state === 'unavailable' && metaOutputBound &&
       metaOutput === writOutput && metaOutput.trim());
