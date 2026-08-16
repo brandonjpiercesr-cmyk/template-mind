@@ -4070,7 +4070,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       // here, only a fact surfaced on a read the cycle already performs.
       var _fieldDue = [];
       try {
-        var _field = require('../logful/field.js');
+        var _field = require('../essentials/logful/field.js');
         var _fFetched = await _field.fieldCheck(_rUid, Date.now(), 4000,
           runtime && runtime.readAuthority);
         if (_fFetched && _fFetched.ok) {
@@ -9163,7 +9163,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
 function _stampGrandmotherLedger(hamUid, message, channel, identity, result) {
   try {
     if (String(process.env.GRANDMOTHER_LEDGER || 'on').toLowerCase() === 'off') return;
-    var _turnLedger = require('../logful/turn.ledger.js');
+    var _turnLedger = require('../essentials/logful/turn.ledger.js');
     var _question = (identity && typeof identity.user_message === 'string'
       && identity.user_message.trim()) ? identity.user_message : String(message || '');
     setImmediate(function () {
