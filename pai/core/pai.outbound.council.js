@@ -3090,6 +3090,98 @@ function humanRecheckWaived(ctx) {
   if (!ctx || typeof ctx.answer !== 'string') return false;
   return packetWaivedFor(ctx.context);
 }
+
+// ⬡B:core.pai.outbound.council:FIX:the_exit_gate_now_asks_the_same_question_the_mint_asked:20260815⬡
+// THE SECOND HALF OF THE 100-PERCENT CYCLE BLOCK, and it was still live after the first fix.
+// Verified against the live mind on 20260815 with a valid consult key: POST /cara/consult
+// answers 200 with ok:false, stage_empty_answer:writ_meaning_shadow_packet_unbound. The coder
+// door to her mind was dead, which is why every lane reporting "I could not reach her" was
+// telling the truth for a reason nobody had named.
+//
+// THE MECHANISM IS ONE LINE, and it is this file already agreeing with itself everywhere except
+// the exit. The WRIT stage decides whether to mint the meaning packet with
+// `requiresHumanRecheck = mode !== 'coding' && mode !== 'internal'` (the packet is minted only
+// when a human recheck is required), and it builds its own WRIT context with
+// `internal: mode === 'coding' || mode === 'internal'`. Both lines already treat 'internal' and
+// 'coding' as one family. My first fix did not: it keyed the bypass on mode 'coding' plus an
+// `internal_deliberation` flag that /cara/consult never sets, so the consult turn fell through
+// to a gate demanding a packet its own mode had just refused to mint.
+//
+// So the gate now asks the SAME question the mint asked. That is the real invariant and it
+// closes the class rather than one more instance of it: an exit may not require an artifact
+// that this file, one stage earlier and by its own rule, declined to create.
+//
+// MODE ALONE IS NOT THE QUESTION, and my first draft of this helper got that wrong in a way
+// that mattered. Codex P1 on #2171 caught it: routes/chat.bridge.routes.js:208 copies the
+// CALLER'S `body.mode` into council_context (`mode: codingMode ? 'coding' : (body.mode ||
+// 'default')`), and /overseer/ask returns that answer to the caller. So a browser POSTing
+// `{mode:'internal'}` would have reached a person-facing reply that skipped the meaning packet.
+// That file warns about this exact thing at its own line 323: "`mode:coding` is a capability
+// flag, not proof of identity." I wrote "the person-facing path is untouched" in the PR body.
+// That claim was false, and this is the correction.
+//
+// So the waiver requires a SERVER-OWNED proof, never a caller-supplied string.
+// `internal_deliberation` is exactly that proof and it already exists for this purpose:
+// core/ham.session.authorization.js:457 states that a signed HAM session deliberately does NOT
+// make arbitrary JSON fields server-owned, naming `internal_deliberation` as a field a browser
+// holding its own session must not be able to submit. It is set in-process by the routes and
+// organs that genuinely have no person on the other end (core/knowledge.compiler.wonder.js:162,
+// core/ham.world.builder.intake.js:1213, and now the consult door at routes/cara.routes.js).
+//
+// WHAT WIDENED IS ONLY THE MODE FAMILY, from 'coding' to 'coding' or 'internal', which is the
+// same family the WRIT stage's own `requiresHumanRecheck` already treats as one when it decides
+// whether to mint the packet at all. That is the real invariant and it closes the class rather
+// than one more instance of it: an exit may not require an artifact that this file, one stage
+// earlier and by its own rule, declined to create. The proof requirement is unchanged from the
+// first fix, so the coding-mode chat bridge is exactly as gated as it was before this commit.
+//
+// NOT A WEAKENING OF THE ANCHOR, said out loud per the 20260814 door law. The meaning shadow
+// guards the bytes a PERSON reads: it proves the words shipped are the words WRIT rendered.
+// 'default', 'voice', 'turn', 'anu_face', 'outbound_text' and every other human-facing mode
+// still require the packet, byte for byte as before, and no caller can talk its way into this
+// branch by naming a mode. The internal turn is still fully judged by WRIT, PAM and SHADOW
+// inside this same council. What is removed is a demand for a key to a room this turn was
+// never sent into.
+// ⬡B:core.pai.outbound.council:FIX:a_coder_is_a_person_so_the_consult_reply_gets_a_real_packet:20260815⬡
+// Codex P1, second round, and it corrected the whole approach rather than one predicate. I had
+// marked the consult door "no person on the other end" and waived the meaning packet. But a
+// CODER IS A PERSON: routes/cara.routes.js returns that reply straight to them. Authentication
+// makes a marker server-owned; it does not make the bytes non-human-facing. Waiving the check
+// there was the same mistake as the caller-mode hole, one layer over.
+//
+// THE REAL DEFECT WAS ONE STRING CARRYING TWO DECISIONS. `mode:'internal'` meant both "let WRIT
+// allow her to name machinery to a coder" AND "mint no meaning packet." The consult door needs
+// the first and must never get the second, so the two are separated: a server-owned
+// `human_facing` says a person reads these bytes and forces the mint whatever the mode says.
+//
+// The repair is now MINT THE PACKET rather than SKIP THE CHECK, and that is what opens the door:
+// the exit gate was refusing to proceed without an artifact that nothing had created, and the
+// artifact now exists and binds.
+//
+// THE WAIVER, and the mint below reads the same marker so the consult door cannot deadlock again.
+// ADDITIVE ON PURPOSE, AND I SCOPED THIS DOWN DELIBERATELY. `human_facing` forces the mint; the
+// old mode rule is otherwise untouched. Making the mint the exact complement of the waiver is
+// the structurally correct end state and I had it written, but it changes behavior on a door I
+// cannot verify from here: a bare `{mode:'coding'}` turn is the CLAIR command center's live
+// path, and if the packet failed to bind there I would have traded a dead consult door for a
+// dead command center. That is a worse outage than the one I am fixing.
+//
+// SO THE PRE-EXISTING DEADLOCK IS NAMED, NOT QUIETLY INHERITED: a bare `{mode:'coding'}` or
+// `{mode:'internal'}` turn that sets no server-owned proof still mints NO packet and is still
+// held at the exit for the packet nobody made. That is the same defect that killed the consult
+// door, it is live on main today, it predates this branch, and it is not mine to close in a PR
+// about a different door. tests/pai.outbound.council.test.js records it so it cannot be
+// forgotten, and closing it needs its own gauntlet against the real command center.
+function requiresHumanRecheckFor(context) {
+  if (context && context.human_facing === true) return true;
+  var mode = context && context.mode;
+  return mode !== 'coding' && mode !== 'internal';
+}
+
+function humanRecheckWaived(ctx) {
+  if (!ctx || typeof ctx.answer !== 'string') return false;
+  return packetWaivedFor(ctx.context);
+}
 async function defaultMetaCommentaryStage(ctx) {
   var worldBuilderFields = hamWorldBuilderFields(ctx);
   if (worldBuilderFields !== null) {

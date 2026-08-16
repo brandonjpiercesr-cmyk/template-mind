@@ -290,7 +290,8 @@ function survivingHints(hintPhrases, renderedText) {
     var phrase = String((entry && (entry.phrase || entry.type)) || entry || '').trim().toLowerCase();
     if (!phrase || phrase.length < 3) return;
     if (lower.indexOf(phrase) < 0) return;
-    // The one hint family whose phrase is her answer rather than a fixed list entry.
+    // The hint families whose phrase must not land verbatim in a durable record.
+    // internal_name: the phrase is lifted out of HER ANSWER and is a real person's first name.
     // clean_speech: the phrase is from a closed wake list and leaks nobody, but this receipt is
     // banked and then read BACK to her by the presenters, and a bank row that replays profanity
     // under a heading about her own recent words is the read-back hazard the 20260815 doctrine
