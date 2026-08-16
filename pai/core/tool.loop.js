@@ -4070,7 +4070,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       // here, only a fact surfaced on a read the cycle already performs.
       var _fieldDue = [];
       try {
-        var _field = require('../logful/field.js');
+        var _field = require('../essentials/logful/field.js');
         var _fFetched = await _field.fieldCheck(_rUid, Date.now(), 4000,
           runtime && runtime.readAuthority);
         if (_fFetched && _fFetched.ok) {
@@ -7321,7 +7321,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // later wake. A sentence a coder typed therefore came back to a mind labelled as her own
   // answer. That is PLANTED MEMORY, and the person read it as her too.
   //
-  // THE SHAPE, copied from core/mema.retire.js#ruleRetirement, the approved reference.
+  // THE SHAPE, copied from essentials/mema/retire.js#ruleRetirement, the approved reference.
   // Cold code carries the FACTS about what happened, states plainly that they are machine facts
   // and not anybody's words, and WAKES a mind on the primary rung. If that rung does not answer,
   // it asks again on the penny rung, a genuinely cheaper seat through the one shared mind door
@@ -9163,7 +9163,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
 function _stampGrandmotherLedger(hamUid, message, channel, identity, result) {
   try {
     if (String(process.env.GRANDMOTHER_LEDGER || 'on').toLowerCase() === 'off') return;
-    var _turnLedger = require('../logful/turn.ledger.js');
+    var _turnLedger = require('../essentials/logful/turn.ledger.js');
     var _question = (identity && typeof identity.user_message === 'string'
       && identity.user_message.trim()) ? identity.user_message : String(message || '');
     setImmediate(function () {

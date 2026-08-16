@@ -1054,8 +1054,8 @@ const NODES = [
     return_gate:'gate.ham.active_channel',
     metadata:{build_state:'half',
       build_gap:'The ledger, ledger mind, FIELD, self-read, enrich and hunch passes are live; the standing whole-estate backfill and a proven cross-world read cadence are not.',
-      wiring:[wire('logful/index.js'), wire('logful/ledger.mind.js'), wire('logful/field.js'),
-        wire('logful/gate.js'), wire('logful/hunch.js')]}
+      wiring:[wire('essentials/logful/index.js'), wire('essentials/logful/ledger.mind.js'), wire('essentials/logful/field.js'),
+        wire('essentials/logful/gate.js'), wire('essentials/logful/hunch.js')]}
   },
   {
     // THE KEEPER. Two-pass consult plus the verifyExcerpts anti-ventriloquism leash. The leash is
