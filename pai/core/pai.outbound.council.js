@@ -355,6 +355,49 @@ function isNonEmpty(value) {
 // entire payload is recognizably tool/function protocol is hollow. The same
 // predicate guards council input, every transforming stage, stored-proof
 // verification, and the tool loop's one grounded regeneration.
+// ⬡B:core.pai_outbound_council:HEAL:the_fourth_break_of_one_guard_so_it_stopped_being_a_regex:20260815⬡
+// I HAVE BROKEN THIS GUARD FOUR TIMES IN ONE SESSION, and every break was the same trade: the
+// pattern that fixed one shape silently admitted or refused another. Original narrowed for an
+// agenda and let seven payloads through; widening for those started refusing her own bracketed
+// sentences; the tail that fixed THOSE let five more through, which I found by attacking my own
+// fix rather than waiting for a critic:
+//   [calling f(a, b)]            [running x "a b" "c d"]      [invoking search_web ]
+//   [calling ]                   [calling [inner]]
+// all SHIPPED to a person. A fifth pattern would have been a fifth trade, so the rule is written
+// out as steps instead. Slower to read and impossible to get subtly wrong by accident.
+//
+// THE DISTINCTION, named once and applied plainly: a TOOL MARKER's content is machine-shaped,
+// and a HUMAN ASIDE is a sentence. Quoted and parenthesised spans are ARGUMENTS and never prose,
+// so they are blanked before judging. Then prose is either sentence punctuation that ENDS a word
+// (a dot BETWEEN word characters is a dotted identifier like brain.write_bead, the opposite
+// signal) or two real words in a row. Everything else is machine.
+// A line qualifies only if it is bracketed groups end to end, so prose after the bracket keeps
+// her agenda legal exactly as before.
+var PROTOCOL_VERB = /^(?:calling|invoking|running|executing)\b/i;
+
+function protocolInnerLooksLikeProse(inner) {
+  var bare = String(inner).replace(/"[^"]*"/g, ' ').replace(/\([^)]*\)/g, ' ');
+  if (/[,;:!?](?:\s|$)/.test(bare) || /\.(?:\s|$)/.test(bare)) return true;
+  if (/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(bare)) return true;
+  return false;
+}
+
+function isToolProtocolLine(line) {
+  var rest = String(line).trim();
+  if (!rest) return false;
+  var sawOne = false;
+  while (rest.length) {
+    if (rest[0] !== '[') break;
+    var close = rest.indexOf(']');
+    var inner = (close === -1 ? rest.slice(1) : rest.slice(1, close)).trim();
+    if (!PROTOCOL_VERB.test(inner)) return false;
+    if (protocolInnerLooksLikeProse(inner.replace(PROTOCOL_VERB, ''))) return false;
+    sawOne = true;
+    rest = close === -1 ? '' : rest.slice(close + 1).replace(/^[ \t]+/, '');
+  }
+  return sawOne && /^[.,;:\]]*$/.test(rest);
+}
+
 function isHumanFacingAnswer(value) {
   if (typeof value !== 'string' || !value.trim()) return false;
   var probe = value.trim();
@@ -440,9 +483,7 @@ function isHumanFacingAnswer(value) {
   // non-space token, plus an optional quoted argument. Dots, hyphens, underscores and parens
   // live inside that token, so every real call shape still matches, and "late, sorry." is two
   // words and can never be a tool name.
-  var probeLines = String(probe).replace(/\r\n?/g, '\n');
-  if (/(?:^|\n)[ \t]*(?:\[(?:calling|invoking|running|executing)\b(?:\s+[^\s\]\n]+(?:\s+"[^"\]\n]*")?)?\]?[ \t]*)+[.,;:]?[ \t]*(?:\n|$)/i
-    .test(probeLines)) {
+  if (String(probe).replace(/\r\n?/g, '\n').split('\n').some(isToolProtocolLine)) {
     return false;
   }
   if (/^\[?\s*(?:tool[_\s-]?call|function[_\s-]?call)\s*\]?\s*$/i.test(probe)) return false;
