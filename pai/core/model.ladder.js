@@ -58,6 +58,35 @@ function stripReasoningTrace(content) {
   return text.trim();
 }
 
+// ⬡B:core.model_ladder:FIX:one_gate_carried_two_facts_and_one_opinion:20260815⬡
+// THE DEAD OPTION, closed. core/tool.loop.js passed `noGuard:true` on the CJK rewrite call and
+// NOTHING IN THIS FILE EVER READ IT (anew #2184 found it and deliberately left it). So the rewrite
+// whose entire job is "render this answer in clear English" ran under the very rule that rejects
+// CJK: any answer whose CORRECT English form must keep one glyph, a name, a dish, a filename, the
+// term the person asked about, was rejected by every rung, deliberate() returned null, and her
+// turn was destroyed. The guard was structurally guaranteed to destroy exactly the class it was
+// written to handle.
+//
+// WHY NOT SIMPLY HONOUR `noGuard`, which is the obvious repair and is WRONG. This gate does not
+// hold one rule, it holds THREE, and only one of them is an opinion:
+//   empty_answer        there is no answer once the reasoning trace is stripped  A STRUCTURAL FACT
+//   non_json_answer     the CALLER declared opts.json and this is not that       A CONTRACT THE CALLER ASKED FOR
+//   non_english_answer  it contains CJK                                          AN OPINION
+// A blanket bypass would waive the first two as well, so an empty string would be "accepted" and
+// cold code would ship nothing as her answer. That is a worse bug than the one being fixed, and it
+// is very likely why nobody ever wired `noGuard` up.
+//
+// SO THE WAIVER IS NARROW AND NAMED. `allowNonEnglish` suppresses the CJK rule and nothing else.
+// Both structural checks keep holding for every caller including this one. The founder has never
+// ruled that her output must be English, per the corpus search recorded in #2184, so the English
+// rule is a coder's assumption and is the caller's to waive. The TRIGGER in core/tool.loop.js is
+// untouched and stays his to rule on, exactly as #2184 left it.
+//
+// A PATTERN MAY DETECT AND REFUSE. THE CALLER MAY WAIVE ONLY THE OPINION.
+function englishRuleWaived(opts) {
+  return !!(opts && opts.allowNonEnglish === true);
+}
+
 // ⬡B:core.model.ladder:GUARD:json_contract_falls_through_provider_ladder:20260715⬡
 // A provider returning non-empty prose is not a successful JSON deliberation.
 // Validate the requested wire contract at each provider boundary so a malformed
@@ -80,7 +109,7 @@ function hasAcceptedContent(content, opts) {
   // reasoning, no closing tag ever written) is caught the same way.
   var stripped = stripReasoningTrace(content);
   if (!stripped) return false;
-  if (outputGuard.containsCjk(stripped)) return false;
+  if (!englishRuleWaived(opts) && outputGuard.containsCjk(stripped)) return false;
   if (!opts || opts.json !== true) return true;
   // ⬡B:core.model_ladder:FIX:reasoning_residue_never_kills_a_good_answer:20260719⬡
   // GLM-5.2 and other reasoning models can wrap the real JSON in a thinking
@@ -130,7 +159,7 @@ function contentVerdict(content, opts) {
   if (typeof content !== 'string') return 'empty_answer';
   var stripped = stripReasoningTrace(content);
   if (!stripped) return 'empty_answer';
-  if (outputGuard.containsCjk(stripped)) return 'non_english_answer';
+  if (!englishRuleWaived(opts) && outputGuard.containsCjk(stripped)) return 'non_english_answer';
   if (!opts || opts.json !== true) return 'accepted';
   return hasAcceptedContent(content, opts) ? 'accepted' : 'non_json_answer';
 }

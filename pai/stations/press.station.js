@@ -125,8 +125,11 @@ async function judgeRelevance(hamUid, moment, candidates, alreadySeen) {
       'JSON array of {headline, why_it_matters, source, freshness}. It is ' + moment.day_name +
       ' ' + moment.part_of_day + '. Prefer fresh, timely items. If NONE genuinely matter, ' +
       'return []. Never invent. Already surfaced (do not repeat): ' +
-      JSON.stringify((alreadySeen || []).slice(0, 20));
-    var out = await ladder.deliberate(persona.voicePrompt(sys), candidates.join('\n'),
+      // ⬡B:press.judge_relevance:FIX:no_second_cut_on_top_of_the_query_bound:20260815⬡
+      // recentlySurfaced's own query already bounds this list to 20 rows; re-slicing to the
+      // same 20 here was still a coder deciding the ceiling twice.
+      JSON.stringify(alreadySeen || []);
+    var out = await ladder.deliberate(persona.voicePrompt(sys + NARRATION_FENCE), candidates.join('\n'),
       { json: true, max_tokens: 700, timeout: 30000 });
     var text = out && out.content != null ? out.content : '';
     var arr = JSON.parse(String(text).replace(/```json|```/g, '').trim());
@@ -155,16 +158,52 @@ function defaultInterests() {
   return String(process.env.PRESS_INTERESTS || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
 }
 
+// ⬡B:press.recently_surfaced:FIX:every_row_names_its_writer:20260815⬡ Founder ruling
+// 20260815, the pen on her mind: doctrine-correct fallback for a source-less row is
+// "(no writer stamp on the row)", never an invented writer name.
+// ⬡B:stations:FIX:bound_the_bytes_mark_the_cut_never_drop_the_row:20260815⬡
+// A row's summary rode into the prompt unbounded. With a busy window a station could
+// serialize hundreds of long summaries into ONE model call, overflow the provider, and hit
+// its own catch path, which reports nothing found. The person then silently loses the whole
+// briefing or sweep, which is a worse and quieter failure than a trimmed one.
+// Bound the BYTES, never the ROWS: every row still rides, none is dropped or ranked away.
+// And the cut is MARKED, never silent. Cold code trimming a mind's stored words and handing
+// them on as whole is the same sin as editing her answer; saying plainly that the row was cut,
+// and by how much, carries the fact instead of hiding it.
+var ROW_SUMMARY_MAX = 400;
+function boundSummary(v) {
+  var s = String(v || '');
+  if (s.length <= ROW_SUMMARY_MAX) return s;
+  return s.slice(0, ROW_SUMMARY_MAX) + ' [row cut here at ' + ROW_SUMMARY_MAX + ' of '
+    + s.length + ' characters, the rest is in the record]';
+}
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[written by ' + writer + '] ' + boundSummary(b && b.summary);
+}
+
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
+
 async function recentlySurfaced(hamUid) {
   try {
     var url = _bu() + '/rest/v1/' + _tbl() +
-      '?select=summary&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
+      '?select=summary,source&ham_uid=eq.'+encodeURIComponent(String(hamUid))+
       '&source=ilike.press.station.item.' + encodeURIComponent(String(hamUid).toLowerCase()) + '*' +
       '&order=id.desc&limit=20';
     var r = await fetch(url, { headers: {
       apikey: _bk(), Authorization: 'Bearer ' + _bk(), 'Accept-Profile': _schema()
     }, signal: AbortSignal.timeout(8000) }).then(function (x) { return x.json(); });
-    return (Array.isArray(r) ? r : []).map(function (b) { return b.summary; });
+    return (Array.isArray(r) ? r : []).map(fenceLine);
   } catch (e) { return []; }
 }
 

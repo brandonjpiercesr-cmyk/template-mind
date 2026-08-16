@@ -6763,13 +6763,60 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try {
         var _englishRewrite = await _callPaiLadder(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
+          // ⬡B:core.tool_loop:FIX:the_waiver_this_call_asked_for_is_now_a_real_one:20260815⬡
+          // This said `noGuard:true`, which core/model.ladder.js never read, so this rewrite ran
+          // under the very CJK rule it exists to satisfy and every rung rejected the correct
+          // answer whenever that answer must keep one glyph. The intent was always right; the
+          // option was dead. It is now `allowNonEnglish`, which waives the CJK OPINION and only
+          // that: an empty answer and a declared JSON contract still refuse for this caller
+          // exactly as for every other one. See the ladder for why a blanket bypass was the wrong
+          // repair. `noGuard` is removed rather than kept beside it, because a dead option sitting
+          // next to a live one is the next coder's trap.
           String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
-            timeout:12000, noGuard:true });
-        msg.content = _englishRewrite && _englishRewrite.content || '';
-        _stampStep('cjk_output_regenerated', msg.content ? 'english' : 'failed_closed');
+            timeout:12000, allowNonEnglish:true });
+        // ⬡B:core.tool_loop:FIX:a_failed_rewrite_never_deletes_a_finished_answer:20260815⬡
+        // Both branches used to assign `''`, so one CJK codepoint plus one ladder failure blanked
+        // a complete answer and the person got the canned working-limit line instead. Waking a
+        // model to rewrite is the correct AIRCODE shape and it stays. Deciding that the human
+        // receives NOTHING when the repair is unavailable is cold code deciding, and it trades a
+        // cosmetic imperfection for a total loss. A stray glyph is smaller than silence.
+        //
+        // AND THE REPAIR CAN NOW ACTUALLY COME BACK, which is what makes the selection below load
+        // bearing rather than decorative. While the waiver above was dead, the rewrite ran under
+        // the ladder's own CJK rule, so `_rewritten` could only ever be CJK-free: anything else
+        // had already been rejected by every rung. anew#2188 closed that, so the seat's output now
+        // arrives as-is and the disposition has to be made HERE, the only place still holding the
+        // original to compare it against.
+        //
+        // Also worth saying plainly, because it shaped how narrow this fix is: the founder has
+        // never said her answers must be English. A corpus search over english, language,
+        // translate, chinese, multilingual returns only "plain English" meaning explain simply,
+        // programming-language vocabulary, and persona accent. The English-only output rule is a
+        // coder's assumption, so this change repairs the destruction and does not touch the
+        // trigger, which is his to rule on.
+        // SELECTION, NOT AUTHORSHIP. Two model outputs are in hand, the original and the repair,
+        // and the caller picks between them on a measurable property. Cold code writes neither.
+        // containsCjk is a boolean, and a boolean cannot tell "correct English that keeps one
+        // proper noun" from "the seat echoed the whole Chinese source back". Both answer yes. So
+        // compare counts: fewer CJK characters means the repair did work, and only then does it
+        // replace the original. A repair that did nothing, or made it worse, loses to the answer
+        // she already produced, which is the same disposition the dead gate encoded by accident.
+        var _rewritten = _englishRewrite && _englishRewrite.content;
+        var _cjkBefore = outputGuard.countCjk(msg.content);
+        var _cjkAfter = _rewritten ? outputGuard.countCjk(_rewritten) : _cjkBefore;
+        if (_rewritten && _cjkAfter < _cjkBefore) {
+          msg.content = _rewritten;
+          // The stamp says what is TRUE of the bytes, not what the step was hoping for. A partial
+          // repair is a real outcome and the receipt names it, because he reads these overnight.
+          _stampStep('cjk_output_regenerated',
+            _cjkAfter === 0 ? 'english' : 'english_partial_cjk_retained_' + _cjkAfter);
+        } else if (_rewritten) {
+          _stampStep('cjk_output_regenerated', 'rewrite_kept_the_cjk_original_kept');
+        } else {
+          _stampStep('cjk_output_regenerated', 'rewrite_unavailable_original_kept');
+        }
       } catch (_eEnglish) {
-        msg.content = '';
-        _stampStep('cjk_output_regenerated', 'failed_closed');
+        _stampStep('cjk_output_regenerated', 'rewrite_threw_original_kept');
       }
     }
     try{_stampStep('corridor_a_post_stitch','content_len='+String(msg&&msg.content||'').length+' has_tc_tag='+(String(msg&&msg.content||'').indexOf('<tool_call>')!==-1)+' has_fn_tag='+(String(msg&&msg.content||'').indexOf('<function')!==-1)+' finish='+String(ch&&ch.finish_reason||'?'));}catch(_eCA){}

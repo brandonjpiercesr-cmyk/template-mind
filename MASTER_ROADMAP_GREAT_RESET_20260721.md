@@ -52,11 +52,11 @@ Sync law (the founder's 911): every phase syncs its state to A'NU in phases so C
 **PROOF:** Open the wall live; every running work is on it, self-marked; write a bead with a bad stamp through the cycle; the gate quarantines it with a reasoned, stamped ruling — nothing lost, nothing silently dropped.
 
 ## PHASE 5 — THE RLS DATA PLANE (the missing wall of the four)
-**WHY:** Per-HAM doctrine: "isolation lives in the data plane and identity plane, not hardware count." Four walls: ATMOSPHERE identity ✅, **RLS data plane ❌ MISSING**, egress council ❌, cell blast-radius ❌. And the February 2026 scar: Eric got Brandon's lesson plan; BJ's OMI got Brandon's MAR reports. That must be structurally impossible, not behaviorally avoided.
+**WHY:** Per-HAM doctrine: "isolation lives in the data plane and identity plane, not hardware count." Four walls: ATMOSPHERE identity ✅, **RLS data plane ❌ MISSING**, egress council ❌, cell blast-radius ❌. And the February 2026 scar: one HAM's credential read another HAM's lesson plan, and a household member's ambient recorder received another HAM's medication-administration reports. That must be structurally impossible, not behaviorally avoided.
 **GAP:** Audit confirmed: service-role keys everywhere, no Row Level Security policies on the brain tables; any code path that forgets a `ham_uid=eq.` filter leaks across HAMs silently. The leak class that burned him in February is still open at the database layer.
 **THE WORK + LEASH (this one is leash-heavy by design — data walls are cold):** RLS policies on every per-HAM table keyed to the HAM's identity claim; per-service scoped keys replacing god-keys; and a small Custodian wonder that continuously probes the walls (tries cross-HAM reads with non-privileged credentials, reports any breach to the wall + ALERT to CODA_FIX_QUEUE) — the thinking partner whose job is distrusting the walls forever.
 **OWNER:** CATHY leads (schema/policy migration is her lane), A'NU/CODA rules on the policy spec, CLAIRE runs the breach-probe audit before/after.
-**PROOF:** The February scenario replayed live fails: Eric's credential cannot read Brandon's rows even through a buggy code path. Custodian's probe log shows zero cross-HAM reads standing.
+**PROOF:** The February scenario replayed live fails: one HAM's credential cannot read another HAM's rows even through a buggy code path. Custodian's probe log shows zero cross-HAM reads standing.
 
 ## PHASE 6 — CELLS, NOT CLONES (CELLMS + blast radius)
 **WHY:** Per-HAM doctrine: a billion HAMs don't get a billion Renders; they get cells — shared machinery, isolated data/identity, bounded blast radius. "Cells not clones."

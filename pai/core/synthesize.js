@@ -193,9 +193,14 @@ async function synthesize(paiResult, question, channel) {
   // committed bytes ship unchanged, because they were never this layer's to edit or to veto.
   //
   // WHAT IS STILL ANCHORED, said plainly so this is not read as opening a door: the real
-  // consequence gates are untouched and still run below this line. secretLiteralScan still
-  // refuses a credential shape, and pamGate still refuses a genuine credential or cross-person
-  // privacy leak. Those are deterministic person-effect anchors, not opinion filters. What
+  // consequence gates are untouched and still run. pamGate runs below this line and refuses a
+  // genuine credential or cross-person privacy leak. secretLiteralScan is exported from here
+  // and runs at the REPLY boundary, routes/cara.routes.js:296 and :598, not inside this
+  // function; the earlier wording said "below this line" for both, which was wrong about where
+  // and would have sent the next reader looking in the wrong file. A gauntlet seat found it by
+  // noticing a test asserting the scan "is still called" that in fact matched this file's own
+  // function declaration. Both are still deterministic person-effect anchors, not opinion
+  // filters, and neither is touched by this conversion. What
   // converts here is taste and internal-vocabulary preference, which is WRIT's job and WRIT
   // already ran inside the council on these exact bytes.
   var shadow = shadowAudit(rawText);

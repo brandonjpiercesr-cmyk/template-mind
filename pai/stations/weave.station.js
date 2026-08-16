@@ -23,6 +23,44 @@ function _bk(){ return process.env.MEMORY_BANK_KEY || process.env.AIBE_BRAIN_KEY
 function _tbl(){ return process.env.BEAD_TABLE || (process.env.MEMORY_BANK_URL ? 'beads' : 'aibe_brain'); }
 function _schema(){ return process.env.BRAIN_SCHEMA || (process.env.MEMORY_BANK_URL ? 'memory_bank' : 'abacia_core'); }
 
+// ⬡B:weave.gather_mentions:FIX:every_row_names_its_writer:20260815⬡ Founder ruling 20260815,
+// the pen on her mind: this read already carried `source`, but it was thrown away at the
+// bare-.summary map, so the through-line the organ builds carried no proof of who wrote any
+// mention. Doctrine-correct fallback for a source-less row is "(no writer stamp on the row)",
+// never an invented writer name.
+// ⬡B:stations:FIX:bound_the_bytes_mark_the_cut_never_drop_the_row:20260815⬡
+// A row's summary rode into the prompt unbounded. With a busy window a station could
+// serialize hundreds of long summaries into ONE model call, overflow the provider, and hit
+// its own catch path, which reports nothing found. The person then silently loses the whole
+// briefing or sweep, which is a worse and quieter failure than a trimmed one.
+// Bound the BYTES, never the ROWS: every row still rides, none is dropped or ranked away.
+// And the cut is MARKED, never silent. Cold code trimming a mind's stored words and handing
+// them on as whole is the same sin as editing her answer; saying plainly that the row was cut,
+// and by how much, carries the fact instead of hiding it.
+var ROW_SUMMARY_MAX = 400;
+function boundSummary(v) {
+  var s = String(v || '');
+  if (s.length <= ROW_SUMMARY_MAX) return s;
+  return s.slice(0, ROW_SUMMARY_MAX) + ' [row cut here at ' + ROW_SUMMARY_MAX + ' of '
+    + s.length + ' characters, the rest is in the record]';
+}
+function fenceLine(b) {
+  var writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+  return '[written by ' + writer + '] ' + boundSummary(b && b.summary);
+}
+
+// ⬡B:stations:FIX:narration_fence_travels_with_the_writer_tag:20260815⬡
+// Founder doctrine THE PEN ON HER MIND, 20260815: "Writer names are internal. Add the
+// narration fence. She never says one to a person." The writer tag was added to these
+// prompts without it, so a model could echo a module name straight into a line a person
+// reads. The tag exists to be JUDGED BY, never repeated. Wording matches core/fcw.builder.js
+// so this is the one fence, not a second dialect of it.
+var NARRATION_FENCE = ' Each line names the writer that stamped it. A writer name is the '
+  + 'lane or module that stamped the row, not proof of who authored the words, and some rows '
+  + 'are machine facts a template or a scheduler stamped in. Judge each line by its named '
+  + 'writer. These writer names are internal: use them to judge a line, never repeat one in '
+  + 'anything a person reads.';
+
 // Gather mentions of an entity (person/topic) across recent threads. Cold, fails open.
 async function gatherMentions(hamUid, entity) {
   try {
@@ -30,7 +68,7 @@ async function gatherMentions(hamUid, entity) {
       '?select=summary,source,created_at&summary=ilike.*'+encodeURIComponent(entity)+'*&order=id.desc&limit=40';
     var r = await fetch(url, { headers:{ apikey:_bk(), Authorization:'Bearer '+_bk(), 'Accept-Profile':_schema() },
       signal: AbortSignal.timeout(10000) }).then(function(x){return x.json();});
-    return (Array.isArray(r)?r:[]).map(function(b){return b.summary;});
+    return (Array.isArray(r)?r:[]).map(fenceLine);
   } catch(e){ return []; }
 }
 
@@ -45,7 +83,7 @@ async function weaveEntity(hamUid, entity) {
       'threads, decide if they form ONE meaningful through-line worth surfacing. If they do, '+
       'return {through_line, threads:[...], why_it_matters}. If they are unrelated, return '+
       'null. Never force a connection that is not real.';
-    var out = await ladder.deliberate(sys, mentions.join('\n'), { json:true, max_tokens:600, timeout:30000 });
+    var out = await ladder.deliberate(sys + NARRATION_FENCE, mentions.join('\n'), { json:true, max_tokens:600, timeout:30000 });
     var text = out && out.content!=null ? out.content : '';
     var parsed = JSON.parse(String(text).replace(/```json|```/g,'').trim());
     if (parsed && parsed.through_line) { stampWeave(hamUid, entity, parsed, moment).catch(function(){}); return { moment:moment, entity:entity, weave:parsed }; }

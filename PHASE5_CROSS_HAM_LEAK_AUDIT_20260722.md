@@ -5,7 +5,7 @@
 ---
 
 ## THE SCAR (why this exists)
-Feb 2026: "Eric got Brandon's lesson plan; BJ's OMI got Brandon's MAR reports." Cross-HAM private-data bleed. The founder's law: **that must be structurally impossible, not behaviorally avoided.** RLS is not yet enabled, so today the ONLY guard against a cross-HAM read is a `ham_uid=eq.` filter in the query string. This audit maps every place that guard is missing.
+Feb 2026: "one HAM's credential read another HAM's lesson plan, and a household member's ambient recorder received another HAM's medication-administration reports." Cross-HAM private-data bleed. The founder's law: **that must be structurally impossible, not behaviorally avoided.** RLS is not yet enabled, so today the ONLY guard against a cross-HAM read is a `ham_uid=eq.` filter in the query string. This audit maps every place that guard is missing.
 
 ## FINDING A — no helper enforces the wall (they ALLOW, they don't REQUIRE)
 - **`core/find.js` `find(queries)`** — applies `ham_uid` only if the caller puts it in the query object (find.js:124). Omit it → the query runs cross-HAM. No default, no rejection.

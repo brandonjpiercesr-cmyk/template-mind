@@ -125,7 +125,17 @@ test('the guard states what it did NOT check, so silence is never read as covera
     'e164': ['call +15555550100 today', 'hardcoded_phone'],
     'us-address-shape': ['home: "742 Nowhere Lane",', 'hardcoded_address'],
     'person-name-shape': ['signed Alfred Q. Nowhere', 'hardcoded_person_name'],
-    'identity-key': ["founder: 'Alfred Nowhere'", 'identity_key_literal']
+    'identity-key': ["founder: 'Alfred Nowhere'", 'identity_key_literal'],
+    // The infra fixture names nobody and points nowhere: the project ref and service id are
+    // invented strings that match only the SHAPE of a real address, so this probe proves the
+    // detector fires without carrying a live system's location into the suite.
+    // Built at runtime, never written as a literal. The infra detector now scans test files
+    // too, so a probe spelled out here would be flagged as a leak by the very guard it
+    // proves. Concatenation keeps a matching string out of every scanned source while the
+    // fixture handed to scanFile is still a real match. It points at nothing: a project ref
+    // of one repeated letter is not an address any running system could hold.
+    'infra-identifier-shape': ['url: "https://' + 'z'.repeat(20) + '.supabase.co",',
+      'hardcoded_infra_identifier']
   };
   // Two detectors cannot be probed with an invented fixture, because they fire only on THIS
   // world's own stored hashes and any fixture that triggered them would have to carry a real

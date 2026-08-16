@@ -5,7 +5,7 @@
 // calendar_read tool calls these helpers from inside that cycle, never from a side gate.
 //
 // v2 — addresses every real failure from v1:
-//   1. HAM bleed: NO hardcoded grant IDs. No fallback to Brandon's calendar for other HAMs.
+//   1. HAM bleed: NO hardcoded grant IDs. No fallback to any one HAM's calendar for another HAM.
 //      Returns 503 if no grant bead found. Isolation guaranteed at DB level via Accept-Profile.
 //   2. Slot source: reads RADAR.{uid}.event.* beads from ham_{uid}.abacia — the brain already
 //      has all calendar events stamped by RADAR. No Nylas API call for availability.
@@ -20,7 +20,12 @@
 const https = require('https');
 const crypto = require('node:crypto');
 
-const ABA_SERVER_URL = process.env.ABA_SERVER_URL || 'https://dnzwyufdzafcwnjaqbxs.supabase.co';
+// ⬡B:identity:FIX:no_fallback_to_one_worlds_server:20260815⬡
+// Founder law 20260722, non-negotiable: identity is env-only, never a literal. This
+// fell back to ONE specific project, so a stranger's world with the var unset pointed
+// at that owner's server. Fails closed now, at the same guard the service-role key
+// already uses two lines down.
+const ABA_SERVER_URL = process.env.ABA_SERVER_URL || '';
 const ABA_SERVER_SRK = process.env.ABA_SERVER_SERVICE_ROLE_KEY;
 const NYLAS_KEY      = process.env.NYLAS_PRODUCTION_KEY || process.env.NYLAS_API_KEY;
 // ⬡B:core.schedule.logic:FIX:calendar_grant_lives_on_production_not_sandbox:20260714⬡
@@ -87,6 +92,7 @@ function parseBody(req) {
 // All ABACIA reads scoped to the HAM's schema via Accept-Profile — no cross-HAM access possible
 function abaGet(schema, path, options) {
   return new Promise((resolve, reject) => {
+    if (!ABA_SERVER_URL) return reject(new Error('ABA_SERVER_URL not configured'));
     if (!ABA_SERVER_SRK) return reject(new Error('ABA_SERVER_SERVICE_ROLE_KEY not configured'));
     const url = new URL(ABA_SERVER_URL);
     const opts = {
@@ -117,6 +123,7 @@ function abaGet(schema, path, options) {
 
 function abaPost(schema, path, payload, options) {
   return new Promise((resolve, reject) => {
+    if (!ABA_SERVER_URL) return reject(new Error('ABA_SERVER_URL not configured'));
     if (!ABA_SERVER_SRK) return reject(new Error('ABA_SERVER_SERVICE_ROLE_KEY not configured'));
     const url = new URL(ABA_SERVER_URL);
     const data = JSON.stringify(payload);
