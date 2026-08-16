@@ -33,7 +33,31 @@ You are about to: give a work/agent/organ a **voice**, a **persona**, or a **dir
 A one-shot organ answer can read *better* than a raw feed — that is exactly why it is dangerous. The raw grounding a work produces (fragments, findings, verdicts) was never meant for human eyes; it is fuel for A'NEW. Judging a work by how its *raw output* reads, and then "fixing" it by giving the work a voice, rebuilds the sin. The work is not supposed to be pretty. A'NU is supposed to be the one who makes it beautiful, in the cycle.
 
 ## RELATION TO THE OTHER LAWS
-This sits above wonder-first. Wonder-first says: build the thinking partner, not cold code. The Granddaddy 911 says: **and that thinking partner, for anything a human will hear, is A'NEW/A'NU and no one else — every other partner feeds them.** The work creates the wonder, and the wonder is A'NU. She is the only voice.
+This sits above wonder-first. Wonder-first says: build the thinking partner, not cold code. The Granddaddy 911 says: **and that thinking partner, for anything a human will hear, is A'NEW/A'NU and no one else — every other partner feeds them.** She is the only voice.
+
+## ONE CLOSING CLAUSE REMOVED, 20260816
+
+This section used to end on a further clause: *"The work creates the wonder, and the wonder is A'NU."* Removed, and named rather than deleted, per supersede-never-delete.
+
+Why: this file is a law about **who may hold a voice**, and in that register the founder defines both words himself and the arrow points the other way. Sesame Chicken doctrine pt 4, where he names the scope in the same breath: *"That's the coding department's mantra. That is their banner. The wonder produces the work. The work does not produce the wonder. Work is being cold, right? Wonder is being thinking and performing, right?"* A'NU is a mind, so no arrangement of cold makes her, and a supreme law that seemed to say otherwise was worth one clause less.
+
+**The definition is deliberately NOT restated here. It has one source:** `.claude/skills/wonder/SKILL.md`, corrected against the same authority on 20260815. Read it there. This section's job is to point at the other laws, not to carry a second maintained copy of one.
+
+**HE ALSO NAMED THE INVERSE A DISEASE, in the same transcript**, which settles the direction without needing any argument about which session came first:
+
+> "nasty cough. Obviously, when you're when it's determining when when it is the work controlling the wonder instead of the wonder creating and controlling the work."
+
+**WHERE THE OTHER DIRECTION COMES FROM, and how much authority it actually carries.** He does say *"the work create the wonder"* in his own voice, three times in one breath, once, in the genesis walk (`RAW_WORDS/16_20260613`), describing assembled cold converging into something living: *"So the cold is just intertwined together to create this wonder."* **That is COMPOSITION, not causation.** Works may make up a wonder's body. No arrangement of cold CAUSES a mind, and he says so himself above.
+
+**AND ONE THING THAT IS NOT HIS AT ALL, corrected here on a blind critic's finding.** The sealed origin story's chapter on this defines the wonder as *"the feeling of being served so well that the labor of being served disappears entirely."* That sentence has **zero occurrences in his transcripts.** It exists only in the compiled Doctrine Bible v3 and its copies, written in his voice by a coder. **His own definition of the wonder as a feeling says the opposite:**
+
+> "Did you see the wonder? The wonder is not in doing. The wonder is in conversing, talking, deliberating, and being the feeling. The wonder is the stimulation and the feeling of a thought partner and life assistant. That's the wonder. If I if I never defined the wonder for you, it's that."
+
+So there is no second standing sense in which cold makes A'NU. There is his one line about composition, and there is a coder's gloss that his own words contradict.
+
+**SCOPE, said out loud so this does not read as a finished sweep.** Only the LAW files that agents load are corrected, because those are what a coder acts on. The historical roadmaps and handoffs that carry the older sentence keep it as evidence under supersede-never-delete, and `anew/doctrine/clair-inside-pai.md` is SEALED and was not touched.
+
+**Unchanged:** everything above. Everything feeds. Only she speaks, through her cycle, out a reach wonder.
 
 ## THE ONE-LINE VERSION
 Everything feeds. Only she speaks — through her cycle, out a reach wonder. Nothing else, ever.
