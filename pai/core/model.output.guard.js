@@ -3,8 +3,21 @@
 // CLAIR_reach R3B: one boundary for provider output rules. Keep recovery strict:
 // only a documented qwen3 XML tool call, a tool_calls finish reason, and a tool
 // declared on this exact request may become an executable structured call.
+var CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
+
 function containsCjk(value) {
-  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(String(value || ''));
+  return CJK_RE.test(String(value || ''));
+}
+
+// \u2b21B:core.model_output_guard:FIX:a_boolean_cannot_tell_a_repair_from_an_echo:20260815\u2b21
+// containsCjk answers yes/no, which is the right question for "does this need repair" and the
+// WRONG question for "did the repair work". A correct English rewrite that keeps one proper noun
+// and a model that echoed the entire Chinese source both answer yes. The caller in
+// core/tool.loop.js needs to compare BEFORE against AFTER, so it needs a count, and the count
+// lives here beside the range rather than as a second copy of the same character class.
+function countCjk(value) {
+  var found = String(value || '').match(new RegExp(CJK_RE.source, 'gu'));
+  return found ? found.length : 0;
 }
 
 function englishSystem(value) {
@@ -67,6 +80,7 @@ function recoverQwen3XmlToolCalls(content, finishReason, tools) {
 
 module.exports = {
   containsCjk: containsCjk,
+  countCjk: countCjk,
   englishSystem: englishSystem,
   explicitNonEnglishRequest: explicitNonEnglishRequest,
   ornithSampling: ornithSampling,
