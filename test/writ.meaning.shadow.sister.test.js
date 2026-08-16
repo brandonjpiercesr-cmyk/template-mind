@@ -271,7 +271,34 @@ test('an inherited cancelled meaning judgment releases C1 for the next turn',
   firstController.abort();
   const firstOut=await first;
   const secondOut=await second;
-  assert.equal(firstOut.reason,'writ_meaning_shadow_unavailable');
+  // ⬡B:core.pai.outbound.council:HEAL:the_starved_receipt_names_its_cause:20260815⬡
+  // RETIRED LONG AFTER ITS WRITER, and I got the number wrong TWICE before I stopped guessing it.
+  // Version one of this comment said "retired in the same commit as the writer it pinned," citing
+  // the 20260815 law. Version two said "one commit late" in one sentence and "false by two
+  // commits" in the next, contradicting itself inside one paragraph, and added "it is only being
+  // retired here," which is also false.
+  // THE VERIFIABLE FACTS, and the two commands that produce them, so nobody has to trust my count:
+  //   git log -S meaningShadowUnavailability -- pai/core/pai.outbound.council.js   -> the writer
+  //   git log -- test/writ.meaning.shadow.sister.test.js                          -> this pin
+  // The writer landed in a076c80. This pin was actually retired in 6fa97ec, not in the commit
+  // carrying this comment, and the range a076c80..6fa97ec is not one commit or two. Run the range
+  // yourself rather than reading a number I have now missed twice.
+  // THE LESSON, which is the only part worth keeping: a pin retirement is VERIFIED by running the
+  // sister suite inside the writer's own commit. It is never established by asserting it in a
+  // message, and a law cited in the same breath as it is broken is worse than silence, because the
+  // citation is exactly what stops the next reader from checking.
+  // The retirement itself stands and is strictly stronger. This line asserted the blanket
+  // 'writ_meaning_shadow_unavailable', which said the judge did not run and refused to say why.
+  // meaningShadowUnavailability() now names the cause, and this test is the cancellation case: it
+  // calls firstController.abort() eleven lines up, so 'caller_cancelled' is what actually
+  // happened. A receipt that cannot tell a cancelled judgment from a dead seat, an out-of-credit
+  // seat or a timeout is the same defect as 'writ_meaning_shadow_packet_unbound' describing a
+  // demand and saying nothing about the supply, and that one hid a live outage for a full day.
+  // The FAMILY is asserted too, so widening the vocabulary can never quietly move this turn out
+  // of the starved class and into a clean pass.
+  assert.ok(firstOut.reason.startsWith('writ_meaning_shadow_unavailable'),
+    'the turn is still in the starved family: '+firstOut.reason);
+  assert.equal(firstOut.reason,'writ_meaning_shadow_unavailable_caller_cancelled');
   assert.equal(secondOut.ok,true,JSON.stringify(secondOut));
   assert.deepEqual(starts,[
     'request-template-cancel-first.writ-meaning-shadow',

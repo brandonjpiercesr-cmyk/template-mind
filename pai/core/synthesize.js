@@ -56,22 +56,46 @@ function shadowAudit(text) {
 // hex/base64 scan, because a generic scan would fail-closed on ordinary content like a commit
 // SHA or a bead ID and this door would go silent on harmless answers. A miss here is not a
 // promise of safety: it is a backstop, not the privacy or identity gate.
-var SECRET_LITERAL_PATTERNS = [
-  /\bsk-[A-Za-z0-9]{20,}\b/,
-  /\bsk_[a-f0-9]{16,}\b/i,
-  /\bgh[oprsu]_[A-Za-z0-9]{20,}\b/,
-  /\bAKIA[0-9A-Z]{16}\b/,
-  /\bAIza[0-9A-Za-z_-]{30,}\b/,
-  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
-  /\brnd_[A-Za-z0-9]{20,}\b/,
-  /\bnyk_v0_[A-Za-z0-9]{10,}\b/,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/
-];
+// ⬡B:core.synthesize:FIX:the_anchor_could_not_see_this_estate_s_own_live_key:20260815⬡
+// SUPERSEDES the hand-maintained list kept just above. It was BACKWARDS in both directions, and
+// the direction that matters is the second one. MEASURED against real shapes:
+//   MISSED  sk-or-v1-...        the estate's LIVE shared OPENROUTER_API_KEY
+//   MISSED  sk-ant-api03-...    MISSED sk-proj-...    MISSED github_pat_...
+//   MISSED  postgres://user:pw@host/db                MISSED -----BEGIN RSA PRIVATE KEY-----
+// because /\bsk-[A-Za-z0-9]{20,}\b/ needs 20+ characters with NO hyphen, and every modern key
+// shape puts a hyphen right after the prefix. So the one door in this estate that exists to stop
+// a credential could not see the credential this estate actually holds.
+// And in the other direction it blocked ordinary coder prose ABOUT credentials:
+//   BLOCKED  "In .env put SLACK_BOT_TOKEN=xoxb-your-token-here and restart."  (Slack's own docs)
+//   BLOCKED  "not the docs sample AKIAIOSFODNN7EXAMPLE."                      (AWS's own docs)
+//   BLOCKED  she cannot quote her OWN test fixture for this door, to the coder who maintains it
+// on /cara/consult, the door the CCWA handshake law makes MANDATORY for every coder. It blocked
+// the harmless and passed the dangerous.
+//
+// THE BLOCK ITSELF STAYS AND IT STAYS HARD, and that was the finding, not the assumption. I went
+// looking to convert this into a detect-and-wake like the rest of tonight's work and the estate
+// had already answered it: core/secret.material.guard.js (20260804) exists to keep credential
+// material out of MODEL EVIDENCE ENTIRELY, and it is enforced by refusing to CARRY the material,
+// not by redacting it. Handing a detected key to a mind to be re-rendered would put it in a
+// second provider's prompt, on a seat the ladder picks at runtime, with its own retention. That
+// is a NEW exposure: today the bytes die in this process, never sent, never banked, never logged.
+// A credential is an irreversible person-effect, which is an ANCHOR under the 20260814 door law,
+// and "IF THEY'RE STOPPING, THEY'RE WRONG" does not reach it. This one is right to stop.
+// So the fix is not to soften the door. It is to make the door SEE, and to tell the coder what
+// happened (routes/cara.routes.js) instead of returning nothing.
+//
+// ONE SOURCE: three hand-maintained credential lists in this estate is two too many. This now
+// delegates to the canonical guard, which catches every shape above and passes both docs
+// placeholders. It stays a DETECTOR: still no `clean` key, still nothing to send instead, which
+// a test pins on purpose.
+var secretGuard = require('./secret.material.guard.js');
 
 function secretLiteralScan(text) {
   var s = typeof text === 'string' ? text : '';
-  var found = SECRET_LITERAL_PATTERNS.some(function (re) { return re.test(s); });
-  return { found: found };
+  var reason = secretGuard.stringReason(s);
+  // `reason` is a bounded CLASS name, never one byte of the matched text, so it is safe to put
+  // on a receipt and safe to show a coder. Adding it does not offer a mutated variant to send.
+  return { found: reason !== null && reason !== undefined, reason: reason || null };
 }
 
 // SIGIL — stamps every response with source tracing
@@ -190,9 +214,59 @@ async function synthesize(paiResult, question, channel) {
     note: shadowStage && shadowStage.reason || 'council_shadow_missing'
   };
 
-  // PAM gate
+  // ⬡B:core.synthesize:FIX:a_second_copy_of_a_gate_that_already_woke_a_mind_can_only_silence_her:20260815⬡
+  // THE TIER GATE IS AN ANCHOR AND IT STAYS. It runs at core/tool.loop.js#_prepareHumanAnswerOnce,
+  // the one seam every human answer passes, on these exact bytes and this exact hamObj, and when
+  // it holds it WAKES A MIND to say the boundary in her own voice and ask for the passcode.
+  // THIS SECOND COPY COULD NEVER ADD PROTECTION AND COULD ONLY SUBTRACT IT, both cases counted:
+  //   (a) the gate did NOT hold upstream. Then this call sees identical bytes and an identical
+  //       tier (paiResult.ham IS hamObj, the same object reference, and pamGate opens with
+  //       parseInt(t)||0 so every falsy tier collapses to the same 0). It is arithmetically
+  //       incapable of holding. Dead code.
+  //   (b) the gate DID hold upstream. Then finalAns is now HER passcode sentence, which the gate
+  //       has never seen, and 'account' is the most natural word in English for the thing she
+  //       was just instructed to say. MEASURED on plausible renderings of that very sentence:
+  //         "...I need to confirm your account before I can share it..."   -> GATED
+  //         "...I need your passcode to confirm you have access to this account." -> GATED
+  //         "...I cannot send this until I know it is really you..."       -> passes
+  //       and core/wren/reply.js turns an ok:false synth into {silent:true}. So a real person
+  //       texted, the boundary worked, a mind wrote the sentence, and cold code deleted it on the
+  //       way out. Nothing shown, no reason given. The gate silences her MORE the more plainly
+  //       she names the access boundary, which is exactly what the upstream wake instructs.
+  // Founder, 20260815: "Who in the hell are we to stop something? ... IF THEY'RE STOPPING,
+  // THEY'RE WRONG." The verdict rides out as metadata on the receipt below, where a monitor and a
+  // woken reviewer can read it. It never takes her turn again.
+  // WHAT IS NOT COVERED HERE, said plainly rather than pretended away: this proof rests on all
+  // six callers being fed by runPAI, which they are today. A seventh caller composing bytes some
+  // other way would arrive with no tier gate behind it. That residual is real, it is NOT solved
+  // by a content regex (such a caller also bypasses the council receipt check above, which fails
+  // closed and is a far stronger door), and the honest fix is a PROVENANCE anchor refusing a
+  // paiResult with no council binding at all. Separate change, not bundled in under this name.
   var pam = pamGate(text, trustTier);
-  if (pam.gated) {
+  // ⬡B:core.synthesize:HEAL:I_demoted_this_veto_on_a_proof_WRIT_refutes:20260815⬡
+  // I WAS WRONG AND A BLIND CRITIC DROVE IT. I demoted this gate on the argument that case (a)
+  // above is "arithmetically incapable of holding" because the bytes are identical to the ones
+  // the upstream gate already passed. THEY ARE NOT IDENTICAL. The outbound council runs between
+  // the two calls and WRIT returns a full model rewrite, which core/tool.loop.js assigns back
+  // over the answer. So this gate sees bytes the upstream gate NEVER SAW. Measured at tier 2:
+  //   pre-council   "She has about four thousand two hundred fifteen dollars left this month."
+  //                    -> passes, correctly
+  //   post-council  "Your account balance is $4,215 this month."   (WRIT tightened the prose)
+  //                    -> HOLDS
+  // Under my demotion that second line shipped to an unauthenticated channel below trust 5.
+  // That is a person-effect ANCHOR under the 20260814 door law, and I removed it while writing
+  // that the change could only subtract harm. It could subtract protection too.
+  //
+  // SO THE VETO IS BACK, SCOPED TO THE ONE CASE THAT WAS GENUINELY BROKEN. Case (b) was real:
+  // when the upstream gate holds, a mind writes HER passcode sentence, and explaining an access
+  // boundary naturally uses the word "account", so this gate deleted her own explanation and
+  // core/wren/reply.js turned that into silence. That case, and only that case, is now waived,
+  // by a SERVER-OWNED marker set at the seam that produced those bytes (tier_gate_sentence, set
+  // in _prepareHumanAnswerOnce only when the wake succeeded), never by anything a caller can
+  // name. Every other held turn holds again.
+  // The receipt still carries pam_gate with its reason, which is the part of the demotion that
+  // was worth keeping: the verdict used to be thrown away with the turn.
+  if (pam.gated && paiResult.tier_gate_sentence !== true) {
     return { ok: false, reason: 'post_council_pam_mutation_rejected' };
   }
 
@@ -229,6 +303,9 @@ async function synthesize(paiResult, question, channel) {
     shadow: { violations: shadow.violations, passed: shadow.passed },
     hallucination_check: { passed: hallucinationCheck.pass, note: hallucinationCheck.note || hallucinationCheck.verdict || null },
     pam_gated: pam.gated,
+    // The reason used to be thrown away with the turn. It rides the receipt now.
+    pam_gate: { gated: pam.gated, reason: pam.gated ? pam.reason : null,
+      checked_at: 'post_council', anchor: 'core/tool.loop.js#_prepareHumanAnswerOnce' },
     ham_uid: hamUid,
     tools_used: paiResult.tools_used,
     ms: paiResult.ms,

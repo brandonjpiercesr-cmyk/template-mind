@@ -265,14 +265,36 @@ function findPhrases(lowerContent, list, label) {
 // verdict: it exists so a receipt can PROVE the mind overruled the scanner
 // rather than merely asserting that it may. Bounded and deduped, phrases only,
 // never answer bytes, so this can ride an internal receipt safely.
+// ⬡B:board.writ:HEAL:a_name_hint_IS_an_answer_byte_and_this_banked_it:20260815⬡
+// THE SENTENCE ABOVE STOPPED BEING TRUE THE DAY I ADDED THE NAME WAKE, and a blind critic
+// named it. Every other hint here is a fixed phrase from a fixed list ("just to recap"), so
+// "phrases only, never answer bytes" held. A name hint is a SUBSTRING LIFTED OUT OF HER ANSWER,
+// and for the wake it exists for, that substring is a real person's first name. It rode
+// overruled_hints into the durable bank through writCheckAndBank, so every turn where WRIT kept
+// a reader's daughter's name wrote that name into a bead as a flag code.
+// WORSE, I MADE IT CERTAIN. Ranking name hints FIRST into a list capped at 8, which was the
+// right fix for the proof being evicted, also guaranteed the name is always the thing banked.
+// I named this in the commit and deferred it. Deferring it was wrong: it is one function.
+//
+// THE PROOF SURVIVES WITHOUT THE NAME. A name hint now lands as the CLASS token
+// `internal_name_kept`, which says exactly what the receipt needs to say, that a mind read the
+// sentence and chose to keep a name a word list flagged. Which name is not the receipt's
+// business, it is hers, and dedupe collapses every kept name to that one token so names can
+// never crowd the other proof out of the cap either. Nothing is filtered and nothing is capped
+// on HER side: the organ still sees every name in its prompt and still decides.
 function survivingHints(hintPhrases, renderedText) {
   var lower = String(renderedText || '').toLowerCase();
   var seen = {};
   var survivors = [];
   (hintPhrases || []).forEach(function (entry) {
     var phrase = String((entry && (entry.phrase || entry.type)) || entry || '').trim().toLowerCase();
-    if (!phrase || phrase.length < 3 || seen[phrase]) return;
-    if (lower.indexOf(phrase) >= 0) { seen[phrase] = true; survivors.push(phrase); }
+    if (!phrase || phrase.length < 3) return;
+    if (lower.indexOf(phrase) < 0) return;
+    // The one hint family whose phrase is her answer rather than a fixed list entry.
+    var token = (entry && entry.type === 'internal_name') ? 'internal_name_kept' : phrase;
+    if (seen[token]) return;
+    seen[token] = true;
+    survivors.push(token);
   });
   return survivors.slice(0, 8);
 }
@@ -395,6 +417,16 @@ async function writCheck(text, context) {
   var _hintProc = findPhrases(lower, PROCESS_NARRATION, 'process_narration');
   var _hintBans = findPhrases(lower, SUPER_BANS, 'ai_filler');
   var _hintHeaders = checkBannedHeaders(cleaned);
+  // ⬡B:board.writ:PEN:the_internal_name_wake_is_a_hint_you_may_overrule:20260815⬡
+  // core/persona.js used to REPLACE an internal organ name found in her finished answer. That
+  // word list also renamed the reader's own daughter, because it cannot tell NOVA the organ from
+  // Nova the child, and it ran BEFORE this council, so the receipt vouched for the rename. The
+  // detection now arrives here as a HINT, in the same shape as every other hint on this line,
+  // and YOU decide by reading the sentence. survivingHints below then records what you kept.
+  var _wakeNames = (context.internal_name_wake &&
+    Array.isArray(context.internal_name_wake.hits))
+    ? context.internal_name_wake.hits.slice(0, 8) : [];
+  var _hintNames = _wakeNames.map(function (n) { return { type:'internal_name', phrase:n }; });
   var _greeting = checkColdGreeting(cleaned);
   var _hintGreeting = _greeting.ok ? null : _greeting.flag;
   var _rhythm = approximateChoppyDensity(cleaned);
@@ -427,8 +459,19 @@ async function writCheck(text, context) {
   var semanticChanges = [];
   // The phrase hints the organ is handed, gathered once so the overrule receipt
   // is derived against exactly what the prompt named, never a second list.
+  // ⬡B:board.writ:HEAL:the_name_overrule_was_first_out_of_a_capped_receipt:20260815⬡
+  // A BLIND CRITIC BROKE MY OWN HEADLINE CLAIM. I wrote that a name WRIT chose to KEEP lands in
+  // overruled_hints, so "the LLM decided, the regex did not" is PROVABLE rather than asserted.
+  // survivingHints ends in .slice(0, 8), and _hintNames was concatenated LAST, so name overrules
+  // were the first thing evicted. Measured on a long chatty answer carrying six real weak-ending
+  // phrases and three real process-narration phrases plus "Your daughter Nova has a recital":
+  //   overruled_hints -> eight filler phrases, and "nova" NOWHERE on the receipt
+  // WRIT kept the daughter's name and the receipt did not say so. The claim held only on short
+  // answers, and her normal register is not short.
+  // Names go FIRST now. If a cap has to drop something, it drops a filler phrase whose absence
+  // costs an audit nothing, never the one hint that proves a mind made the call.
   var _hintsForReceipt = []
-    .concat(_hintCTA, _hintProc, _hintBans, _hintHeaders || []);
+    .concat(_hintNames, _hintCTA, _hintProc, _hintBans, _hintHeaders || []);
   if (!isInternal) {
     try {
       var _ladder = require('../../core/model.ladder.js');
@@ -456,6 +499,10 @@ async function writCheck(text, context) {
         + 'possible short punchy rhythm=' + JSON.stringify(_hintChoppy ? { ratio:Number(_hintChoppy.ratio.toFixed(2)), short_sentences:_hintChoppy.choppyCount, of:_hintChoppy.totalSentences } : null) + '. '
         + 'On the greeting hint: he opens warm and by name, Hey Will, not a bare Will, and not a lowercase hey will. Judge whether this reader and this channel want that; it is a relationship call, not a rule. '
         + 'On the rhythm hint: short mean punchy direct sentences are not his voice, he talks in flowing comma prose. Only smooth it if it actually reads clipped. '
+        + 'possible internal organ name in her mouth=' + JSON.stringify(_wakeNames) + '. '
+        + 'On the internal-name hint: there is one voice, so an internal organ, adviser or coder name never appears in something she said, as if a second assistant were speaking. '
+        + 'That list is a raw word match and it cannot tell an organ from a person. Several of those words are ordinary human first names, and saying who called, who texted, or whose recital is on Friday is the whole job. '
+        + 'Read the sentence. If the word is a person in this reader\'s life, leave it exactly as it is. Rewrite only if the draft is genuinely handing a reader an internal name. '
         + 'Reply with ONLY the corrected answer text, nothing else. If the text already obeys every law, return it unchanged. '
         + 'Return the single word HOLD only if the text cannot be fixed because it leaks a real secret or another world\'s private data.';
       var _deliberate = typeof context.deliberate === 'function' ? context.deliberate : _ladder.deliberate;
@@ -509,6 +556,17 @@ async function writCheck(text, context) {
     (cleaned.match(/\u2014/g)||[]).length);
 
   advisoryFlags = advisoryFlags.concat(_hintJargon.map(function (f) { return { type: 'jargon_leak', phrase: f }; }));
+  // ⬡B:board.writ:AUDIT:a_wake_no_mind_could_judge_says_so_on_the_receipt:20260815⬡
+  // The organ fails OPEN when it is unreachable, which is correct: a broken judge must never
+  // silence her. But that means a genuine internal name CAN ship on that branch, which is the
+  // founder's original 20260726 complaint reappearing. So the unjudged fact rides the receipt
+  // instead of vanishing, and the complaint stays auditable rather than being quietly
+  // reintroduced. It is a flag, not a hold: nothing here stops her.
+  if (_hintNames.length && organFailedOpen) {
+    advisoryFlags = advisoryFlags.concat(_hintNames.map(function (f) {
+      return { type: 'internal_name_unjudged', phrase: f.phrase };
+    }));
+  }
 
   var verdict = hardFails.length > 0 ? qualityVerdict :
     (qualityVerdict === 'WRIT_UNAVAILABLE' ? qualityVerdict :

@@ -277,6 +277,66 @@ async function cancelResponseBody(body) {
     } catch (error) {}
 }
 
+// ⬡B:core.brain_client:LAW:an_answer_that_is_not_rows_is_never_zero_rows:20260815⬡
+// THIS FILE IS A FORK OF THE SISTER REPOSITORY'S core/brain.client.js, NOT A SYNCED PAIR.
+// brain.client.js appears in none of the 45 entries of that repository's pai_sync.map.json, and
+// the two copies have genuinely diverged (this one carries the older env-read helpers instead of
+// a bankConfig object, and it does not carry the 20260802 legacy abcd_tag gate fix). So the cure
+// below was PORTED deliberately, reasoned against this file's own shape, never byte-copied over
+// it. Copying the sister file wholesale would have dragged in unrelated changes nobody reviewed
+// and erased this repository's own history. One further divergence is left standing on purpose
+// and is NOT part of this fix: findBySource here binds ham_uid only when a ham is supplied, where
+// the sister copy fails closed to null on a missing ham. That is a separate ruling with its own
+// callers, and quietly folding it into a defect port would be a second change wearing this one's
+// name.
+//
+// THE DEFECT THIS RETIRES. readBead used to end
+// `return Array.isArray(data) ? data : (data.rows || [])`, so a 200 carrying anything that was
+// not a list was flattened to an EMPTY ARRAY and handed back to the caller as the sentence
+// "there are no rows." The caller then could not tell an empty collection from an unreadable
+// answer, and every reader in this world that asks "does this record exist" got NO where the
+// truth was I COULD NOT TELL. This repository is the mind-template every world inherits, so the
+// defect shipped into every world born from it. Measured shapes of the old line, driven through
+// the real path with real bodies: a PostgREST error envelope
+// {"code":"PGRST301","message":"JWT expired"} became [], a bare string became [], a bare number
+// became [], and `null` threw a bare TypeError reading 'rows' that named nothing about the brain.
+//
+// WHY THIS THROWS RATHER THAN RETURNING A MARKER OR A NEW SHAPE. Verified against THIS file, not
+// inherited as a conclusion: readBead here ALREADY throws for every other unreadable answer it can
+// meet. A non-2xx status throws in readBead itself, and boundedResponseJson throws on a body over
+// maxBytes, on an abort, on a missing stream, and, through JSON.parse, on a body that is not JSON
+// at all. So before this fix a 200 whose body was unparseable threw, while a 200 whose body parsed
+// into the wrong shape silently became zero rows. That was an incoherence, not a design. Making
+// the wrong shape throw makes this one door answer the same way about every answer it cannot read.
+//
+// THE RETURN TYPE IS UNCHANGED: readBead still resolves to an array and only to an array, so
+// every call site doing `rows.length` and `rows.forEach` is untouched. Counted in this repository
+// before choosing: 19 direct call sites in the shipped runtime (6 readBead, 13 findBySource under
+// pai/), 24 repository-wide, across 33 files that require this client. A non-enumerable
+// marker on the array was rejected because a marker nobody reads is still indistinguishable at the
+// point a caller decides, and it does not survive a spread, a filter or a JSON round trip.
+//
+// Cold code carrying a fact, never inventing one: an absence and an unknown are different facts,
+// and both of them are real answers.
+function readShapeless(data) {
+    const error = new Error('brain_read_answer_is_not_rows');
+    error.code = 'brain_read_answer_is_not_rows';
+    error.body_type = data === null ? 'null' : Array.isArray(data) ? 'array' : typeof data;
+    return error;
+}
+
+// The one place that turns a parsed body into rows. An object carrying a real `rows` array is
+// still honored, because that envelope was part of this door's contract before today and a
+// {"rows":[]} is a genuine measurement of zero. Everything else is an answer this door cannot
+// read, and it says so instead of saying "nothing is there." This carries, it never classifies:
+// it never inspects a row's contents, never filters a row out of a real array, and never caps how
+// many rows come back.
+function rowsFromBody(data) {
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object' && Array.isArray(data.rows)) return data.rows;
+    throw readShapeless(data);
+}
+
 async function boundedResponseJson(response, maxBytes, signal) {
     const limit = readLimit(maxBytes);
     if (!limit) return response.json();
@@ -329,8 +389,8 @@ async function readBead(filter = {}, options = {}) {
     }
     const data = await boundedResponseJson(response, options && options.maxBytes,
         options && options.signal);
-    // Assume the response body is an array of rows
-    return Array.isArray(data) ? data : (data.rows || []);
+    // An answer that is not rows is not zero rows. See rowsFromBody above for the whole story.
+    return rowsFromBody(data);
 }
 
 /**
@@ -347,6 +407,15 @@ async function findBySource(source, hamUid, options) {
     // A source is an address inside one HAM world, not a global identity. The
     // STAMP synchronization briefly removed this filter; CODA sensor receipts
     // restore it before any source can authorize a cross-HAM readback.
+    // ⬡B:core.brain_client:LAW:this_null_is_a_measured_absence_never_an_unreadable_answer:20260815⬡
+    // findBySource has exactly one null and every caller in this world reads it as "no such
+    // record." That sentence is only true because readBead now THROWS on an answer it cannot read
+    // (see rowsFromBody above) instead of flattening it to an empty array: before today an
+    // unreadable brain answer arrived here as `results.length === 0` and this line reported it as
+    // a confident "that record does not exist." The throw is deliberately NOT caught here, so a
+    // caller sees a rejected promise for "I could not tell" and this null for "I looked and it is
+    // not there." Do not wrap this call in a try/catch that returns null: that rebuilds the exact
+    // defect one layer up.
     const filter = { source: 'eq.' + source, limit: '1' };
     const exactHam = normalizeHamUid(hamUid);
     if (exactHam) filter.ham_uid = 'eq.' + exactHam;
@@ -400,6 +469,14 @@ function validateStamp(aclStamp) {
   return { ok: CANON_STAMP_RE.test(s), acl_stamp: s };
 }
 
+// ⬡B:core.brain_client:AUDIT:the_counting_readers_needed_no_edit_only_a_door_that_speaks:20260815⬡
+// auditUnstamped and stampStats are the other two read paths in this file, and both were carrying
+// the same defect one layer up: measured before the fix, an unreadable 200 gave them checked:0 and
+// sample_size:0 with the error field EMPTY, which is a machine stating as fact that it looked and
+// found nothing. Neither function is edited, because neither was wrong: they already catch a thrown
+// read and already carry an error field, and the flattening below them was what starved it. Now the
+// same bodies come back as checked:0 WITH error 'brain_read_answer_is_not_rows', and a genuinely
+// empty read still reports zero with no error, so a reader can tell the two apart.
 // audit_unstamped: find recent beads missing an abcd_tag, so STAMP can self-review its
 // own coverage (the exit/rally shape for a cold utility: it looks back at its own prior
 // work and reports the gap, rather than firing once and never checking itself again).
@@ -456,5 +533,6 @@ module.exports = {
     beadTable,
     _test: { normalizeHamUid, readLimit, readTooLarge, readAborted, readStreamUnavailable,
         cancelResponseBody, boundedResponseJson, brainTimeoutMs, boundedSignal,
+        readShapeless, rowsFromBody,
         DEFAULT_BRAIN_HTTP_TIMEOUT_MS }
 };

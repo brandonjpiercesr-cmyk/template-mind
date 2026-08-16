@@ -201,7 +201,29 @@ async function writProse(hamUid, stage, text, options) {
     return { ok: true, banked: false, reason: 'writ_verdict_no_ham', verdict: verdict };
   }
   const bank = opts.brain || require('./brain.client.js');
-  const source = 'writ.verdict.' + ham.toLowerCase() + '.' + verdict.stage + '.' + Date.now();
+  // ⬡B:core.prose_quality:HEAL:writ_verdict_source_collided_inside_one_millisecond:20260815⬡
+  // FOUND BY TWO SEATS INDEPENDENTLY, FIXED BY NEITHER. This source was
+  // 'writ.verdict.' + ham + '.' + stage + '.' + Date.now(), and Date.now() only resolves to
+  // the millisecond. Two WRIT banks for the SAME ham and the SAME stage inside one
+  // millisecond minted the IDENTICAL string. A bead source is an ADDRESS and this estate
+  // reads beads back BY SOURCE (findBySource, a few lines below), so the collision was never
+  // cosmetic: a readback could return the wrong verdict or two rows where the caller wants
+  // one, an idempotent write could overwrite or duplicate, and the re-mint evidence chain,
+  // whose entire job is to prove the SHIPPED bytes were the JUDGED bytes, could name a row
+  // describing different bytes. The re-mint (a hold that heals and re-banks in the same tick)
+  // is exactly the path that collides. The intermittent failure of
+  // tests/pai.council.meaning.hold.heals.test.js was not the bug; it was the only thing that
+  // noticed the bug.
+  // THE ESTATE ALREADY SOLVED THIS AND IS NOT SOLVED A SIXTH WAY HERE: the millisecond plus
+  // random hex shape is the one core/outreach.js:1128 and core/contractors/engagement.js:111
+  // already mint ids with. Still stable, still addressable, still human-readable, still
+  // sorted by the leading millisecond, and unique per write inside a single tick. It does not
+  // become unpredictable to a caller that must address the row it just wrote: the exact
+  // string is handed back on every return path below, which is how findBySource already
+  // reaches it. Nothing parses the trailing segment; every source parser in this repo reads
+  // token [0] only.
+  const source = 'writ.verdict.' + ham.toLowerCase() + '.' + verdict.stage + '.' +
+    Date.now() + '.' + require('crypto').randomBytes(6).toString('hex');
   const state = verdict.state || (verdict.unavailable ? 'unavailable' :
     (verdict.passes ? 'completed' : 'held'));
   const payload = {

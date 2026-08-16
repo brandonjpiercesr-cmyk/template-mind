@@ -122,7 +122,33 @@ var realNameBoundary = require('./real.name.boundary.js');
 var CANONICAL_ASSISTANT_NAME = "A'NU";
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
+// ⬡B:core.tool_loop:HEAL:the_code_and_the_prompt_disagreed_about_two_closed_lanes:20260815⬡
+// A BLIND CRITIC CAUGHT A SIDE EFFECT OF MY OWN FIX. The closed-world read-authority token was
+// built as a bare object literal that isReadAuthority could never accept, so context.fusion
+// returned nothing for every lane using it. I made the token mintable, correctly, because a
+// token nothing can mint starves five lanes and reads as "there is no context" instead of
+// "nobody could mint the token". But fixing the token also handed ambient fused context to two
+// lanes whose OWN PROMPTS FORBID IT:
+//   _reachIncidentIntake   closed-world over its exact granted packet
+//   _internalCodaTurn      "Do not infer ambient Memory Bank facts, recent activity, prior
+//                           conversation, or human intent outside that packet."
+// The other three the fix touched (GMGU tutor, room-safe voice, native live voice) were already
+// suppressed right here, so they were never affected, and my commit message overstated that as
+// "five lanes". Two, not five.
+//
+// DECIDED OUT LOUD RATHER THAN LEFT AS A SIDE EFFECT, which is what a critic asked for and what
+// the code deserved. The design intent was never ambiguous: the token is literally named
+// `closed_world`, the comment at its definition says these lanes intentionally perform no
+// ambient read, and both prompts say so in words. What was ambiguous was the MECHANISM: the
+// suppression was happening by accident, through a token nobody could mint, in a different file.
+// An intent enforced by a bug is not enforced. It is one refactor away from silently reversing,
+// which is exactly what my refactor did.
+// So the suppression moves to the place that already expresses this decision for three other
+// lanes, and the code now says what the prompt says. Nothing is newly restricted: this restores
+// what these two lanes always had, on purpose this time, in one readable place.
 function shouldIncludeWorldContext(channel, identity, hamUid, question) {
+  if (reachIncidentIntakeMode(channel, identity)) return false;
+  if (codaInternalDeliberation(identity)) return false;
   if (verifiedGmguTutorTurn(channel, identity, hamUid)) return false;
   if (String(channel || '').toLowerCase() !== 'voice') return true;
   if (voiceRoomSafe.isAuthorized(identity)) return false;
@@ -2316,25 +2342,59 @@ function isPureConversationalContinuation(message) {
 // table, and she -- the one deciding wonder -- chooses to act and which scene. Cold code renders and
 // reads back; it never decides.
 
-// ⬡B:core.tool.loop:PURGE:a_regex_may_not_grant_write_authorization:20260815⬡
-// CODELESS PURGE 20260815. Deleted from here: intentRequiresLiveTool, requiredReadToolForMessage
-// and requiredActionToolForMessage. The last of those read `^remind me\b` and
-// `^(save|remember|keep|record|store|write)\b` and returned 'create_reminder' or
-// 'write_to_brain', and its own comment called that "that exact, unambiguous authorization".
-// A regex deciding that a person authorized a WRITE is the strongest form of cold code deciding
-// meaning, and it is exactly what the 20260807 law forbids: cold code validates identity,
-// authority, tool arguments, receipts and consequences, never the human's meaning.
-//
-// Verified before deleting, because the honest finding is smaller and worse than it looks:
-// none of the three had a single production caller. The live path sets
-// _routedRequiredActionTool = null and _routedRequiresLiveTool = false unconditionally, and
-// _routedRequiredReadTool only ever from currentCapabilityQuestion. So every branch these fed
-// was already unreachable, and the functions survived only as exports and as TESTS. That is the
-// real hazard: tests/r4d.intent.router.test.js asserted the write-authorization return value as
-// REQUIRED behavior, so the suite promised a violation that the code had already stopped
-// committing, and any lane restoring what the suite promised would have switched it back on.
-// The doctrine is explicit that a test pinning cold behavior is itself nasty cough and is
-// retired with the writer it protects. Both go in this commit.
+function intentRequiresLiveTool(intent) {
+  // These two routes are unambiguously current external facts and contain only
+  // one read-only tool each. Requiring a call cannot release a mutation and
+  // prevents the model from denying a capability that is visibly attached.
+  return intent === 'weather' || intent === 'sports';
+}
+
+function requiredReadToolForMessage(message, intent) {
+  var text = String(message || '').trim().toLowerCase();
+  if (intent === 'weather') return weatherArgsFromMessage(text).place ? 'weather_check' : null;
+  if (intent === 'sports') return sportsArgsFromMessage(text).league ? 'nash_sports' : null;
+  if (intent === 'schedule' && /^(?:please\s+)?(?:schedule|book|create|add|move|reschedule|cancel|delete)\b/.test(text)) return null;
+  if (intent === 'schedule' && /\b(calendar|schedule|scheduled|meetings?|availability|free|open (?:time|slot)|events?)\b/.test(text)) return 'calendar_read';
+  if (intent === 'email' && /\b(read|show|list|check|get|what)\b.*\bdrafts?\b/.test(text) &&
+      !/\b(send|write|create|delete|approve)\b/.test(text) && draftArgsFromMessage(text).org) return 'get_pending_drafts';
+  if (intent === 'email' && /\b(inbox|unread emails?|recent emails?)\b/.test(text) && !/\b(send|reply|draft)\b/.test(text)) return 'inbox_read';
+  if (intent === 'reminders' && /\b(what|read|show|list|check|current|active|pending)\b/.test(text) && !/\b(create|add|set|stop|remove|delete)\b/.test(text)) return 'read_reminders';
+  if (intent === 'budget' && /\b(payments? (?:are )?(?:due|coming)|due soon|upcoming|bnpl)\b/.test(text)) return 'get_budget_upcoming';
+  if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track|income|expenses?|paychecks?|salary|take[- ]?home|bills?|net (income|pay)|cash ?flow|afford|savings?|money|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'get_budget_summary';
+  if (intent === 'memory' && /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text)) return null;
+  if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
+  if (intent === 'code' && currentCapabilityQuestion(text)) return 'read_current_capabilities';
+  if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat|next to fix|left to fix|who(?:'s| is) working|who(?:'s| is) building|working on (?:it|this|that|the build|the system))\b/.test(text)) return 'read_lane_board';
+  if (intent === 'code' && /\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team|talk to your (?:whole |entire )?team)\b/.test(text)) return 'read_wonder_departments';
+  return null;
+}
+
+// ⬡B:core.tool_loop:FIX:an_explicit_reminder_command_cannot_be_answered_without_the_reminder_hand:20260730⬡
+// LIVE FOUNDER RECEIPTS, 20260730. "Remind me to build business websites" shipped the
+// literal text "[Calling" with tools_used:[], and "Remind me at 6pm ... call my kids"
+// called calendar_read, then told him A'NU could not set reminders. The intent router had
+// correctly put create_reminder on the table, but it treated an explicit imperative as an
+// optional choice. That is not judgment: the person already chose the action in their own
+// words. This function identifies only that exact, unambiguous authorization. It never
+// executes the mutation; the model still supplies the reminder artifact, and the existing
+// POST_COUNCIL transaction still withholds the write until the full council commits.
+function requiredActionToolForMessage(message, intent) {
+  var text = String(message || '').trim().toLowerCase();
+  if (intent === 'memory' &&
+      /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text) &&
+      /\b(?:memory|brain|remember|keep|record|store|save)\b/.test(text)) {
+    return 'write_to_brain';
+  }
+  if (intent !== 'reminders') return null;
+  if (/^(?:please\s+)?remind\s+me\s+(?:why|how|what|who|where|when)\b/.test(text)) {
+    return null;
+  }
+  if (/^(?:please\s+)?remind\s+me\b/.test(text) ||
+      /^(?:please\s+)?(?:set|add|create)\s+(?:me\s+)?(?:a\s+)?reminder\b/.test(text)) {
+    return 'create_reminder';
+  }
+  return null;
+}
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
 // Read tools contribute during deliberation. Every mutation is queued as
 // evidence, reviewed by the outbound council, and executed only after the
@@ -5332,11 +5392,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // identity fields never grant read authority. The same result governs the builder and every
   // later tool read.
   var _peopleTiers = require('./privacy/people.tier.js');
-  var _readAuthority = {tier:_peopleTiers.STRICTEST,source:'closed_world'};
+  // ⬡B:core.tool_loop:FIX:a_bare_literal_is_not_an_authority_token_and_never_was:20260815⬡
+  // These two lines built the read-authority token as PLAIN OBJECT LITERALS. The token carries a
+  // Symbol stamped only inside core/privacy/people.tier.js#readAuthority, so a literal can never
+  // satisfy isReadAuthority(). Measured on the real modules:
+  //   isReadAuthority({tier:STRICTEST,source:'closed_world'}, HAM)  ->  false
+  //   isReadAuthority(resolveReadTier(...), HAM)                    ->  true
+  // core/context.fusion.js#readTierFor then returns null, and getLatestSummary and
+  // readChannelActivity hand back "" and {} with no reason attached. So on the five lanes that
+  // use the closed-world literal (reach incident intake, signed voice closed turn, room-safe
+  // voice, internal CODA turn, GMGU native tutor) she silently lost her whole fused world and it
+  // read as "there is no context" rather than "nobody could mint the token." Same
+  // describes-the-demand-never-the-supply shape that hid two starved council doors for a day.
+  // THE TIER IS UNCHANGED, and that matters: STRICTEST in, STRICTEST out. This makes the token
+  // READABLE, it does not make it more permissive.
+  var _readAuthority = _peopleTiers.closedWorldAuthority(hamUid);
   if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn &&
       !_roomSafeVoice && !_internalCodaTurn && !_gmguNativeTutorTurn) {
     try { _readAuthority = await _peopleTiers.resolveReadTier(identity, hamUid); }
-    catch (eReadTier) { _readAuthority = {tier:_peopleTiers.STRICTEST,source:'unresolved'}; }
+    catch (eReadTier) {
+      _readAuthority = _peopleTiers.unresolvedAuthority(hamUid);
+    }
   }
   var _effectiveViewerTier = _peopleTiers.effectiveTier(_readAuthority && _readAuthority.tier);
   var _fcwT0=Date.now();
@@ -6164,7 +6240,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         + 'queued action shown in the completed tool result. Do not expose tool protocol.' }]);
     }
     var _routedToolIntent = null;
+    var _routedRequiresLiveTool = false;
     var _routedRequiredReadTool = null;
+    var _routedRequiredActionTool = null;
     var _routeEveryVoicePass = String(channel || '').toLowerCase() === 'voice';
     if ((iter === 1 || _routeEveryVoicePass) && Array.isArray(body.tools) && body.tools.length &&
         !_structuredReachPolicy && !_reachIncidentIntake &&
@@ -6178,15 +6256,25 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _routedRequiredReadTool = currentCapabilityQuestion(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message)
         ? 'read_current_capabilities' : null;
+      _routedRequiredActionTool = null;
+      _routedRequiresLiveTool = false;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
       var _pureVoiceContinuation = false;
+      if ((_routedRequiredReadTool &&
+          _routedRequiredReadTool !== 'read_current_capabilities') ||
+          _routedRequiredActionTool) {
+        var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
+        body.tools = body.tools.filter(function (tool) {
+          return tool && tool.function && tool.function.name === _routedExactTool;
+        });
+      }
       // ⬡B:core.tool_loop:WONDER:surface_tools_always_on_the_table:20260721⬡ Her surface tools
       // (set_background, update_screen) ride along on every conversational turn so she can act on a
       // surface request in ANY phrasing -- "switch me to the lake", no keyword, no cue -- without a
       // routing regex having to catch it first. This is availability, not a decision: she still
       // reasons about whether to use them in the canonical model pass, and it is
       // her call, never a force. Skipped only when a single read tool is required for the turn.
-      if (!_routedRequiredReadTool &&
+      if (!_routedRequiredReadTool && !_routedRequiredActionTool &&
           !_pureVoiceContinuation &&
           Array.isArray(_turnToolDefinitions)) {
         var _haveSurfaceTool = {};
@@ -6286,29 +6374,78 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // just answer -- the mandatory lookup on text/email is completely unchanged.
       var _liveNow = false;
       try { _liveNow = require('./stream/screen.awareness.js').hasLiveScreen(hamUid); } catch (eLn) {}
-      // ⬡B:core.tool.loop:PURGE:the_dead_meaning_classifiers_and_the_founder_literal:20260815⬡
-      // CODELESS PURGE 20260815. Deleted from here: eight computed observations
-      // (_mSt, _looksLikeInfoQ, _isScreenCmd, _isDayQ, _isLaneBoardQ, _isCodingBuildQ,
-      // _hasPersonalAnchor, _looksPublicKnowledgeQ) built from roughly forty regexes that
-      // classified what the person MEANT: a day question, a lane question, a coding question,
-      // a screen command, a public-knowledge question, and whether the words carried a
-      // "personal anchor". Cold code never classifies her meaning (20260807), and a previous
-      // lane had already accepted that: the note that used to sit below this block said the
-      // observations "remain diagnostic telemetry only. They do not select, remove, prefer,
-      // or require a hand." That was true, and it is exactly why they had to go. Verified
-      // before deleting: _mSt and _isScreenCmd had ZERO references after the block, and
-      // _looksPublicKnowledgeQ was assigned and never read by anything, not even a stamp.
-      // They were not telemetry, because nothing consumed them. They were a classifier kept
-      // warm, one line from being re-wired into a decision.
-      //
-      // AND IT CARRIED A REAL PERSON. _hasPersonalAnchor hardcoded the founder's first name
-      // and a list of his org and family-shaped names directly into a regex in shippable code.
-      // IDENTITY IS ENV-ONLY is non-negotiable founder law: every world is someone else's, and
-      // this template ships to real people. That leak is gone with the block.
-      //
-      // The seated mind receives the complete armory and decides what the person's words mean
-      // from its employment record. The only nudge below is a typed roadmap activation already
-      // chosen and approved by a seated CODA turn, which is authority validation, not meaning.
+      // ⬡B:core.tool.loop:FIX:live_screen_suppressed_lookup_gaslit_founder_questions:20260713⬡
+      // Founder-caught live 8am: on a VOICE call (which registers as a live screen) he
+      // asked "what's the fix" and got "I don't have it, you point me to the code" -- six
+      // no_tool_turn diagnostics, zero tools fired. Root cause: the live-screen skip below
+      // turned OFF the forced find_in_brain for EVERY live turn, including real questions,
+      // so she answered from nothing and it read as gaslighting. The skip exists for a real
+      // reason -- forcing a lookup on a UI command ("change background to a vibe") pulled
+      // unrelated brain content and derailed. So the split is by intent, cold, no LLM: a
+      // real information question still forces the read even on a live screen; a screen/UI
+      // manipulation command stays unforced so it never derails. Text/email path unchanged.
+      // B:core.tool_loop:FIX:hallucinated_meeting_911_20260714 Founder caught her
+      // CONFIDENTLY INVENTING a fake meeting ("Mark Gerzon at 2:30", "7 assets",
+      // "ten BDIF emails") that do not exist anywhere in his real calendar or inbox.
+      // ROOT CAUSE: the info-question detector was anchored to the START of the
+      // message (^who|what|...), so "Hey. What's going on today?" never matched --
+      // the greeting defeated the anchor -- find_in_brain was never forced, and the
+      // model free-talked a plausible-sounding lie instead of reading real data.
+      // Fixed to match ANYWHERE in the message, not just the start. AND: any question
+      // that could be answered by his real calendar (today/schedule/meeting/free/
+      // busy/calendar) now forces calendar_read specifically -- never find_in_brain
+      // alone -- so a day-shaped question can only ever be answered from real events.
+      // ⬡B:core.tool_loop:FIX:intent_detection_uses_raw_words_not_fusion_wrapped_message:20260719⬡
+      // NUCLEAR 911 (founder caught it): the air/portal door answered "which chat
+      // lanes are working on your build" with the CALENDAR. Root cause: the portal
+      // path (slowPath) enriches the message with a big world-context + live-facts
+      // prefix before runPAI, so `message` here begins with calendar/day facts. Intent
+      // detection was testing that wrapped `message`, so the day-question regex matched
+      // the injected context and the turn flipped to a calendar answer, burying the
+      // real question. The raw user words are already available as _exactUserMessage
+      // (slowPath sets identity.user_message = the original input), and every council
+      // check already trusts those bytes. So intent detection must read the RAW words
+      // on EVERY channel, not just voice. This makes the lane/coding/day nudges fire on
+      // what the person actually asked, not on the fusion prefix.
+      var _mSt = String((_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : (message || '')).trim();
+      var _looksLikeInfoQ = /\?\s*$/.test(_mSt)
+        || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
+      var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
+      var _isDayQ = dayQuestionIntent(_mSt, _isScreenCmd);
+      // ⬡B:core.tool_loop:WIRE:lane_board_intent_hint_not_a_rail:20260719⬡ A lane
+      // question is about the BUILD chats/lanes, not the day. HINT in the same shape as
+      // _isDayQ (she keeps ALL tools and still chooses), just puts read_lane_board top of
+      // mind so she does not fall through to the calendar.
+      var _isLaneBoardQ = /\b(lane|lanes|which chat|what chat|chats|other chat|acl name|working on (your|the) build|working on (it|this|that)|who is building|who's building|who is working|who's working|next to fix|left to fix|building your|lane board|coordinat)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd;
+      // ⬡B:core.tool_loop:WIRE:coding_build_nudge_she_uses_her_coding_team:20260719⬡
+      // Founder caught her NOT using her coding tools: asked to consult MACE/CODA and run
+      // the coding process, she fell through to find_in_brain and answered with the
+      // calendar. She holds consult_mace (CODA lead), run_cookoff, run_wonder_games,
+      // assemble_bcw but never picked them. A build/code/consult request nudges the
+      // coding lead. HINT not a rail, she keeps all tools. Named machinery or an ask
+      // with an explicit technical object routes here. Human verbs such as build,
+      // implement, refactor, and ship are not coding evidence by themselves.
+      // _isCodaInternalCycle is computed once, at the top of this whole nudge lane (see the
+      // FIX comment on entry to this block), and CODA's own internal deliberation never
+      // reaches this line at all. Kept here only as a defensive second check: named machinery
+      // (MACE, CODA, cook-off, wonder games, BCW) or an explicit software object routes here
+      // for a real human.
+      var _isCodingBuildQ =
+        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|bcw|code (a|an|the|this|up)|write (the )?code|wire up (the )?(api|route|screen|page|service|module|function)|new (software |coding )?agent|coding (process|team|department)|repo|repository|pull request|commit|deploy|api endpoint|database migration|web app|website|javascript|typescript|python|html|css)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
+      // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
+      // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
+      // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
+      // PERSONAL brain, finding nothing (his brain holds no iPad specs), and reporting
+      // the miss ("I don't have access to product databases"). A public-world question
+      // must never be forced through a personal-brain lookup. Cold intent split, no LLM,
+      // same shape as the screen-command and day-question splits already here: a
+      // question that references HIM, his orgs, his data, his people, his money, his
+      // history, or his calendar stays a personal lookup and still forces find_in_brain;
+      // a question with none of those personal anchors is public knowledge and is
+      // answered from the model's own knowledge, with the full council still guarding
+      // fabrication. This does not touch action requests or day questions above.
+      var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
+      var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
       // The observations above remain diagnostic telemetry only. They do not select,
       // remove, prefer, or require a hand. The seated mind receives the complete armory
       // and decides what the person's words mean from its employment record.
@@ -6342,6 +6479,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }
       }
     }
+    if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
+      var _liveReaderName = _routedRequiredReadTool;
+      var _liveReaderArgs = DATA_READER_TOOLS[_liveReaderName](
+        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
+      if (_liveReaderArgs && Object.keys(_liveReaderArgs).every(function (key) {
+        return _liveReaderArgs[key] !== '' && _liveReaderArgs[key] !== null;
+      })) {
+        body._dataReaderNudge = _liveReaderName;
+      }
+      body.tool_choice = 'required';
+      body.messages = body.messages.concat([{ role:'system',
+        content:'This exact request asks for owned or current data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
+      _stampStep('tool_intent_live_read_required', _routedToolIntent);
+    }
     // A current-capability question has one exact, read-only owner and no model judgment is
     // needed to decide whether to consult it. Read once before the first composition so the
     // affordable path is one grounded draft, with the ordinary single repair still available
@@ -6369,6 +6520,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       msgs.push({role:'system',content:
         'Answer only from the live capability rows above. Each positive capability sentence must be supported by one live row. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
       _currentCapabilityReadPrefetched=true;
+      _routedRequiresLiveTool=false;
       body.messages=msgs;
       // Keep every authorized hand visible after the state snapshot. The snapshot
       // prevents unsupported claims; it does not replace A'NU's judgment about what
@@ -6377,6 +6529,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       delete body.tool_choice;
       delete body._dataReaderNudge;
       _stampStep('required_capability_read_prefetched','bound_exact_user_message');
+    }
+    if (_routedRequiredActionTool && Array.isArray(body.tools) && body.tools.length) {
+      body.tool_choice = 'required';
+      body._requiredActionTool = _routedRequiredActionTool;
+      body.messages = body.messages.concat([{ role:'system', content:
+        'The person explicitly authorized this exact action in their own words. Emit a real '
+        + _routedRequiredActionTool + ' tool call now. Do not narrate, imitate, or print a tool '
+        + 'call. The mutation will remain queued until the outbound council commits.' }]);
+      _stampStep('tool_intent_explicit_action_required', _routedRequiredActionTool);
     }
     var r=null;
     // A typed roadmap mutation is not fabricated into a provider response. CODA
@@ -7267,6 +7428,77 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         _repairResult.text) || '';
     } catch (eRepairLadder) { return ''; }
   }
+  // ⬡B:core.tool_loop:AIRCODE:cold_code_carries_the_fact_and_a_mind_writes_the_sentence:20260815⬡
+  // ⬡B:core.tool_loop:LAW:no_cold_hand_ever_authors_the_sentence_a_turn_commits:20260815⬡
+  //
+  // THE DEFECT THIS EXISTS TO END (founder doctrine 20260815, THE PEN ON HER MIND).
+  // Two closing paths in this file used to hard-set finalAns to a coder-written sentence: the
+  // exhaustion limit line and the tier-gate line. finalAns is not a status string. It is the
+  // committed answer of the turn, and core/memory.keeper.js#turnSummary banks it into the turn
+  // record as '... || SHE ANSWERED: ' + answer at MEMORY_CONTRACT.TURN_IMPORTANCE, which clears
+  // the reader floor, so core/fcw.builder.js replays that summary back into RECENT CONTEXT on a
+  // later wake. A sentence a coder typed therefore came back to a mind labelled as her own
+  // answer. That is PLANTED MEMORY, and the person read it as her too.
+  //
+  // THE SHAPE, copied from core/mema.retire.js#ruleRetirement, the approved reference.
+  // Cold code carries the FACTS about what happened, states plainly that they are machine facts
+  // and not anybody's words, and WAKES a mind on the primary rung. If that rung does not answer,
+  // it asks again on the penny rung, a genuinely cheaper seat through the one shared mind door
+  // (core/model.ladder.js#deliberate), exactly as MEMA does. HER SENTENCE becomes the answer and
+  // nothing else does.
+  //
+  // WHEN NO MIND ANSWERS ON EITHER RUNG the honest outcome is ABSENCE. The caller returns
+  // ok:false with a named machine reason, no turn record is written, and nothing is banked.
+  // Silence over a substitute mouth. There is no third rung made of a coder's sentence.
+  async function _herOwnClosingSentence(instruction, machineFacts, options) {
+    var _hocOpts = options || {};
+    var _hocSystem = 'You are finishing your own turn, in your own voice, speaking directly to '
+      + 'the person you are talking with. ' + instruction + ' '
+      + 'Write one to three plain sentences and nothing else. No headings, no labels, no lists, '
+      + 'no JSON, no tool syntax, no process narration, and no mention of models, seats, '
+      + 'iterations, passes or code. Do not ask the person to narrow, repeat, or pick one piece '
+      + 'of what they asked for. '
+      + 'What you write is exactly what this person reads, and it is also what gets written down '
+      + 'afterwards as what you said this turn, so say what you actually mean.';
+    var _hocUser = 'MACHINE FACTS ABOUT THIS TURN. Cold code recorded these. They are machine '
+      + 'facts, not anybody\'s words, and not one of them is a sentence for you to repeat:\n'
+      + String(machineFacts || '')
+      + (_hocOpts.omitRequest ? ''
+        : '\n\nWHAT THIS PERSON ASKED FOR THIS TURN:\n' + String(message || ''));
+    var _hocPrimary = '';
+    try {
+      _hocPrimary = await _completeBoundHistoryOnLadder(
+        [{role:'system',content:_hocSystem},{role:'user',content:_hocUser}], 260, 0.3, false);
+    } catch (eHocPrimary) { _hocPrimary = ''; }
+    if (_hocPrimary && String(_hocPrimary).trim()) {
+      return {ok:true,seat:'primary',sentence:String(_hocPrimary).trim()};
+    }
+    try {
+      if (await _turnCancelled(true)) return {ok:false,seat:null,reason:'turn_cancelled'};
+    } catch (eHocCancel) {}
+    // The penny rung. A cheaper seat is still a mind; a coder's template is not, at any price.
+    try {
+      var _hocPennyOrder = process.env.CLOSING_SENTENCE_PENNY_ORDER
+        || process.env.MEMA_PENNY_ORDER || 'qwen';
+      // THROUGH THE ONE GUARDED DOOR, never around it. _callPaiLadder is the single ladder
+      // entrance in this file: it refuses an expired voice deadline before a rung starts, and
+      // callPaiLadderNetwork beneath it demands a seat, so this cheap rung still carries this
+      // turn's own spend identity. A branch-local require('./model.ladder.js').deliberate here
+      // bypassed both, and the suite says so out loud in two places
+      // (tests/a.one.millisecond.call.is.cold.code.choosing.silence.test.js: no branch-local
+      // ladder call may bypass the guarded common door, and
+      // tests/anchored.model.call.gate.test.js: zero unanchored ladder calls in production).
+      // The rung is cheap; the anchor is not optional. ORDER is the rung, SEAT is the identity.
+      var _hocPenny = await _callPaiLadder(_hocSystem, _hocUser,
+        {order:_hocPennyOrder,temperature:0.3,max_tokens:260,timeout:45000,
+          signal:_modelRequestSignal()});
+      var _hocPennyText = _hocPenny && (_hocPenny.content || _hocPenny.answer || _hocPenny.text);
+      if (_hocPennyText && String(_hocPennyText).trim()) {
+        return {ok:true,seat:'penny',sentence:String(_hocPennyText).trim()};
+      }
+    } catch (eHocPenny) {}
+    return {ok:false,seat:null,reason:'no_mind_answered_on_either_rung'};
+  }
   async function _repairHumanOnce(candidate, failureCode) {
     if (_preCouncilHumanRepairUsed) return {answer:'',repaired:false};
     _preCouncilHumanRepairUsed = true;
@@ -7655,15 +7887,45 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           _stampStep('exhaustion_forced_synthesis', 'len=' + finalAns.length + ' iter=' + iter +
             ' closed_by=' + String(_closingReason || 'no_draft'));
         } else {
-          finalAns = 'I hit my working limit on this turn. I have logged your full request so nothing is lost, and I am not asking you to narrow it down.';
-          // NAME THE REAL WALL. This sentence was on her wall three times in one afternoon
-          // and the stamp beside it said only "synthesis_empty", which told the founder
-          // nothing about whether she ran out of room, stopped converging, or was never
-          // asked. Reaching this line now means her closing pass, the 380-token evidence
-          // synthesis AND the full-cap forced synthesis all came back with nothing.
-          _stampStep('exhaustion_honest_limit', 'synthesis_empty iter=' + iter +
+          // NAME THE REAL WALL. The stamp beside this path used to say only "synthesis_empty",
+          // which told the founder nothing about whether she ran out of room, stopped
+          // converging, or was never asked. Reaching this line means her closing pass, the
+          // 380-token evidence synthesis AND the full-cap forced synthesis all came back with
+          // nothing. Those are the FACTS, and they are all cold code is entitled to.
+          var _exhaustionFacts = 'synthesis_empty iter=' + iter +
             ' closed_by=' + String(_closingReason || 'no_draft') +
-            ' tools_used=' + tools.length + ' closing_pass=' + (_closingPassRan ? 'ran' : 'never'));
+            ' tools_used=' + tools.length + ' closing_pass=' + (_closingPassRan ? 'ran' : 'never');
+          _stampStep('exhaustion_honest_limit', _exhaustionFacts);
+          // ⬡B:core.tool_loop:PEN:the_limit_sentence_was_a_coders_and_it_banked_as_hers:20260815⬡
+          // This line used to hard-set a coder-written sentence about hitting a working limit.
+          // It became the committed answer, core/memory.keeper.js#turnSummary banked it as
+          // 'SHE ANSWERED: ...' at turn importance, and core/fcw.builder.js replayed it into
+          // RECENT CONTEXT on the next wake. She then read a sentence she never said as her own
+          // words. Cold code now carries the facts and a mind writes the sentence.
+          var _exhaustionSaid = await _herOwnClosingSentence(
+            'You could not finish this turn: every attempt to compose an answer from what you '
+            + 'gathered came back empty. The whole request has been logged so nothing about it '
+            + 'is lost. Tell this person honestly where you got to and what happens next.',
+            'This turn reached its working limit before an answer existed.\n'
+            + 'Closing facts recorded by cold code: ' + _exhaustionFacts + '\n'
+            + 'The full request was logged as a BLOCKED tracker entry, so nothing about it is '
+            + 'lost.\n'
+            + 'Nothing was sent to anyone and no action was taken on this request.');
+          if (_exhaustionSaid && _exhaustionSaid.ok) {
+            finalAns = _exhaustionSaid.sentence;
+            _stampStep('exhaustion_limit_spoken_by_a_mind',
+              'seat=' + _exhaustionSaid.seat + ' len=' + finalAns.length);
+          } else {
+            // ⬡B:core.tool_loop:LAW:no_mind_answered_so_no_turn_is_committed:20260815⬡
+            // ABSENCE, with a machine reason in the third person about the machine. The turn
+            // returns ok:false from here, so nothing downstream commits and NO TURN RECORD is
+            // written: her wall never learns a sentence nobody said.
+            _stampStep('cycle_end_silent', 'exhaustion_no_mind_answered ' +
+              String(_exhaustionSaid && _exhaustionSaid.reason || 'no_mind_answered'));
+            return {ok:false,reason:'exhaustion_no_mind_answered',ham:hamObj,
+              cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+              ms:Date.now()-t0};
+          }
         }
         _blockedFallback = true;
       }
@@ -7808,7 +8070,28 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // named failure and run the complete sequence once more before council.
   var _screenPushed = 0;
   var _screenBlock = null;
-  function _prepareHumanAnswerOnce(candidate) {
+  // ⬡B:core.tool_loop:PEN:the_name_wake_is_a_fact_carried_to_a_mind:20260815⬡ Set inside the
+  // preparation, read once at the council door. Reset per preparation run so a wake raised by a
+  // first attempt can never ride a healed second draft that is already clean.
+  var _internalNameWake = null;
+  // Set only when the tier gate held and a mind wrote the replacement sentence. Read once, at
+  // the success result, so the post-council gate can tell HER boundary sentence apart from
+  // bytes WRIT rewrote after the gate last saw them.
+  var _tierGateSentence = false;
+  // async ONLY because the tier gate below now wakes a mind instead of holding her pen. Both
+  // call sites already sit in an async function and both now await it.
+  async function _prepareHumanAnswerOnce(candidate) {
+    // ⬡B:core.tool_loop:HEAL:the_waiver_was_sticky_and_rode_a_healed_draft:20260815⬡
+    // I RESET ITS NEIGHBOUR AND NOT THIS ONE, four lines apart, in the same block. A blind
+    // critic traced the leak: _tierGateSentence is declared outside this function, set inside
+    // it, and this function runs TWICE in a turn (once, then again on the healing resubmit). So
+    // a first attempt that tripped the tier gate and got her boundary sentence, then failed a
+    // later guard, healed into a clean second draft that CARRIED THE WAIVER. The post-council
+    // veto then waived a genuine hold, and "Your account balance is $4,215" could ship to an
+    // unauthenticated channel below trust 5. That is line for line the leak I restored the veto
+    // to prevent, re-opened by the marker I added to scope it.
+    // The waiver must belong to the bytes it was minted for and to nothing else.
+    _tierGateSentence = false;
     var finalAns = typeof candidate === 'string' ? candidate.trim() : '';
     var preparedScreenBlock = null;
     try {
@@ -7852,12 +8135,52 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           _shadowPrepared.violations.join(','));
       }
     } catch (ePrepShadow) {}
+    // ⬡B:core.tool_loop:PEN:the_gate_is_an_anchor_and_the_sentence_was_never_the_gate:20260815⬡
+    // CLASSIFY ONCE, OUT LOUD. core/synthesize.js#pamGate is an AUTHORITY BOUNDARY and it
+    // STAYS: below trust tier 5 the channel has not established who is speaking, so financial
+    // and personal detail does not travel. Removing that is not "shipping on", it is removing a
+    // basic truth. What had to go is the coder-written sentence that replaced her answer when
+    // the gate held. That sentence became the committed answer, banked through
+    // core/memory.keeper.js#turnSummary as 'SHE ANSWERED: ...', and replayed to her by
+    // core/fcw.builder.js as her own words on the next wake. The gate keeps its verdict; a mind
+    // gets the pen. The gated text itself is never carried to the wake, only the fact.
+    var _tierGate = null;
     try {
-      var _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
-      if (_tierGate && _tierGate.gated) {
-        finalAns = 'I have some information for you but need to verify your access. Reply with your passcode.';
+      _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
+    } catch (ePrepPam) { _tierGate = null; }
+    if (_tierGate && _tierGate.gated) {
+      var _gateSaid = null;
+      try {
+        _gateSaid = await _herOwnClosingSentence(
+          'You have an answer ready for this person, and on this channel you have not yet '
+          + 'established who you are speaking to, so it cannot travel until they confirm their '
+          + 'access. Tell them that plainly and ask them for their passcode. Do not repeat, '
+          + 'summarise, hint at or gesture toward what the held answer said.',
+          'A tier gate held this turn\'s answer on this channel.\n'
+          + 'Recorded reason: ' + String(_tierGate.reason || 'below_required_trust_tier') + '\n'
+          + 'This person\'s tier does not clear this content on this channel, and a passcode '
+          + 'confirms their access.\n'
+          + 'The held answer itself was deliberately not carried into this request, so you are '
+          + 'not being shown it and must not reconstruct it.\n'
+          + 'Nothing was sent and nothing was disclosed.',
+          {omitRequest:true});
+      } catch (eGateWake) { _gateSaid = null; }
+      if (_gateSaid && _gateSaid.ok) {
+        // ⬡B:core.tool_loop:WIRE:mark_the_sentence_the_gate_itself_caused:20260815⬡
+        // These bytes ARE the tier boundary being explained, so the post-council copy of the
+        // same gate must not hold them: naming an access boundary tends to use the word
+        // "account", and that silenced her own explanation. Marked here rather than guessed
+        // downstream, because only this seam knows the wake produced this sentence.
+        _tierGateSentence = true;
+        finalAns = _gateSaid.sentence;
+      } else {
+        // ABSENCE, never a substitute mouth. The gate still held, nothing is disclosed, and
+        // nothing is banked, because the caller treats an ok:false preparation as a silent
+        // close and no turn record is written.
+        return {ok:false,answer:'',screenBlock:preparedScreenBlock,
+          reason:'pam_gated_no_mind_answered'};
       }
-    } catch (ePrepPam) {}
+    }
     // ⬡B:core.tool_loop:FIX:identity_scrub_is_universal_not_a_persona_option:20260726⬡
     // FOUNDER 20260726: "why am I seeing EANEW everywhere?" THIS LINE IS WHY, on the chat
     // path. persona.js says it in its own source, out loud: "identity scrubbing is universal,
@@ -7866,10 +8189,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // scrub never ran at all, on any answer, ever. The scrub now always runs. The persona
     // choice is still read and still carried, because it is real context for the receipts,
     // it just no longer decides whether her own name reaches him correctly.
+    // ⬡B:core.tool_loop:PEN:the_identity_scrub_became_a_wake:20260815⬡
+    // SUPERSEDES the 20260726 fix written just above. That fix was RIGHT that the founder's
+    // complaint was real ("why am I seeing EANEW everywhere?") and right that the scrub was
+    // wrongly gated behind a persona choice. It was WRONG about the remedy, and this line is
+    // where a word list held the pen on her finished sentence. Measured live before this change:
+    //   "Cathy called about lunch on Thursday."    left here as "A'NU called about lunch..."
+    //   "Your daughter Nova has a recital Friday." left here as "Your daughter A'NU has..."
+    // The council runs AFTER this point, so it deliberated over and stamped a renamed daughter.
+    //
+    // NOW: applyPersona carries her bytes unchanged, cold code DETECTS and names the fact, and
+    // the fact rides _councilContext.internal_name_wake into the WRIT organ, which reads the
+    // whole sentence and decides. WRIT derives overruled_hints from what it actually returned,
+    // so a name WRIT chose to KEEP lands on the receipt as a mind's decision rather than as a
+    // filter's silence. The persona choice is still read and still carried: it is real receipt
+    // context, it just never decided whether her reader's daughter keeps her name.
     try {
       var _personaChoice = identity && identity.persona || hamObj && hamObj.persona || null;
-      finalAns = require('./persona.js').applyPersona(finalAns,
+      var _personaMod = require('./persona.js');
+      finalAns = _personaMod.applyPersona(finalAns,
         { hamUid:hamUid,persona:_personaChoice,contributions:{} });
+      _internalNameWake = null;
+      var _nameWake = typeof _personaMod.internalNameWake === 'function'
+        ? _personaMod.internalNameWake(finalAns,
+          { hamUid:hamUid, channel:channel, surface:'pre_council.her_answer' }) : null;
+      if (_nameWake && _nameWake.fired) {
+        _internalNameWake = _nameWake;
+        _stampStep('internal_name_wake', 'fired terms:' + _nameWake.count
+          + ' surface:' + _nameWake.surface + ' decided_by:' + _nameWake.decided_by);
+      }
     } catch (ePrepPersona) {}
     if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns, {
       internalDeliberation:internalDeliberation(identity)
@@ -7923,14 +8271,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     finalAns=_preparedWorldDecision.text;
   } else {
-    var _preparedHuman = _prepareHumanAnswerOnce(finalAns);
+    var _preparedHuman = await _prepareHumanAnswerOnce(finalAns);
     if (!_preparedHuman.ok && !_preCouncilHumanRepairUsed) {
       _stampStep('preparation_answer_healing', _preparedHuman.reason);
       var _lateRepair = await _repairHumanOnce(finalAns, _preparedHuman.reason);
       if (await _turnCancelled(true)) return _turnCancelledResult('after_preparation_repair');
       var _repairOutcome = 'empty';
       if (_lateRepair && _lateRepair.answer) {
-        _preparedHuman = _prepareHumanAnswerOnce(_lateRepair.answer);
+        _preparedHuman = await _prepareHumanAnswerOnce(_lateRepair.answer);
         _repairOutcome = _preparedHuman.ok ? 'passed'
           : 'rejected:' + String(_preparedHuman.reason || 'unknown').slice(0, 120);
         if (_preparedHuman.ok) {
@@ -7964,8 +8312,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
             // draft and its one repair attempt was rewritten to the anonymous
             // 'hollow_protocol_answer' right here, one step after the fail-closed fix above
             // set it, defeating the fix on exactly the path it exists for.
+            // ⬡B:core.tool_loop:PEN:an_absence_keeps_its_own_name:20260815⬡
+            // Same law again, applied to the tier gate. When the gate held and no mind was
+            // reachable to say so in her own voice, the honest outcome is an absence with a
+            // MACHINE reason in the third person. Folding it into 'hollow_protocol_answer'
+            // would hide the one fact the receipt exists to carry: the gate did its job and no
+            // mind answered, so nothing was said and nothing was banked.
             : (_terminalPreparationReason.indexOf('named_') === 0 ||
-                _terminalPreparationReason === 'name_boundary_check_failed_fail_closed')
+                _terminalPreparationReason === 'name_boundary_check_failed_fail_closed' ||
+                _terminalPreparationReason === 'pam_gated_no_mind_answered')
               ? _terminalPreparationReason : 'hollow_protocol_answer';
       return {ok:false,reason:_terminalReason,ham:hamObj,cycleId:_cycleId,
         requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
@@ -8140,6 +8495,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return {name:String(fn.name || ''),description:String(fn.description || '')};
     }).filter(function (hand) { return hand.name && hand.description; });
   _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
+  // ⬡B:core.tool_loop:WIRE:the_name_wake_travels_to_the_organ_that_may_overrule_it:20260815⬡
+  // Guarded off the structured-reach-policy branch on purpose, matching every field above it:
+  // that context is deliberately restricted to server-owned fields, and the WRIT stage returns
+  // early for it anyway. Carried only when it FIRED, so a clean turn adds nothing to the prompt.
+  if (!_structuredReachPolicy && _internalNameWake && _internalNameWake.fired) {
+    _councilContext.internal_name_wake = _internalNameWake;
+  }
   _councilContext = bindGmguCouncilDeliberation(channel, _councilContext,
     _callPaiLadder);
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
@@ -8780,6 +9142,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   var _heldScreenEffect = _screenCommitFailure || _queuedScreenHolds[0] || null;
   var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,
+    // Carried to core/synthesize.js so the post-council tier gate can recognise the ONE case
+    // where its holding would delete her own boundary sentence. False on every ordinary turn.
+    tier_gate_sentence:_tierGateSentence,
     screen_effect:_heldScreenEffect ? {
       ok:false,reason:_heldScreenEffect.result.reason,
       pushed:_heldScreenEffect.result.pushed||0,
@@ -9261,14 +9626,15 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,
   fetchPaiSeatCandidate,
   prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
-  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,
+  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
   isPureConversationalContinuation,
   currentCapabilityQuestion,currentCapabilityEvidence,categoricalCurrentCapabilityClaim,
   verifiedCurrentCapabilityRows,verifiedCurrentCapabilityEvidenceCount,
   currentCapabilityHumanProjection,_currentCapabilityProjectionSafe,
   currentCapabilityClaimFindings,guardCurrentCapabilityClaim,
   agentFindClosedWorldReason,
-  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,
+  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
+  requiredActionToolForMessage,
   prioritizeVerifiedEvidence,prioritizeCouncilEvidence,regenerateHollowAnswer,
   regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,

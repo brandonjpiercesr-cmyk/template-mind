@@ -56,6 +56,8 @@ jobs:
           test/fusion.span.today.test.js
           test/mind.entry.cycle-auth.test.js
           test/writ.meaning.shadow.sister.test.js
+          test/brain.client.answer.is.not.rows.test.js
+          test/writ.meaning.packet.mint.complement.test.js
           tests/model.control.central.adapter.test.js
           tests/world.builder.central.adapter.test.js
           tests/pending.effects.receipt.parity.test.js
