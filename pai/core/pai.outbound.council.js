@@ -420,10 +420,28 @@ function isHumanFacingAnswer(value) {
   // punctuation, so a line that is nothing but markers is still a line of markers.
   // The three human shapes stay legal for the same reason as before: prose CONTINUES after the
   // bracket, and a marker followed by words is not a line of markers.
-  // 17 cases pinned in the test, 11 protocol and 6 human, so a widening in either direction
-  // turns red rather than being discovered in an outage.
+  // 23 cases pinned in the test, 13 protocol and 10 human, DRIVEN THROUGH THIS FUNCTION rather
+  // than through a copy of this regex, so a widening in either direction turns red rather than
+  // being discovered in an outage. (My first version said "17, 11 and 6". A critic counted: 11
+  // was the number of source LINES, because one line carried three entries. The count lives in
+  // an assertion now, not in prose where nobody checks it.)
+  // ⬡B:core.pai_outbound_council:HEAL:a_bracketed_human_clause_is_not_a_marker:20260815⬡
+  // MY WIDENING OVERSHOT AND A CRITIC MEASURED IT. Opening the marker body to [^\]\n]* to admit
+  // dotted names, parens and quotes also admitted SPACES, COMMAS AND PERIODS, so any line that
+  // is a bracketed human clause became "protocol" and her whole answer was refused:
+  //   "[Running late, sorry.]"                          DISCARDED
+  //   "[Calling it a night.]"                           DISCARDED
+  //   "[Executing on the three things you asked for]"   DISCARDED
+  // That is the SAME CLASS as the agenda defect two commits ago, in a different shape, reopened
+  // by the fix for the shape after it. My six pinned human cases all had prose OUTSIDE the
+  // brackets, so not one of them could catch a bracket that is the whole line.
+  // THE REAL DISTINCTION, and it is simple once named: a tool marker names ONE TOKEN after the
+  // verb. A human clause is a SENTENCE. So the tail is optional whitespace plus a single
+  // non-space token, plus an optional quoted argument. Dots, hyphens, underscores and parens
+  // live inside that token, so every real call shape still matches, and "late, sorry." is two
+  // words and can never be a tool name.
   var probeLines = String(probe).replace(/\r\n?/g, '\n');
-  if (/(?:^|\n)[ \t]*(?:\[(?:calling|invoking|running|executing)\b[^\]\n]*\]?[ \t]*)+[.,;:]?[ \t]*(?:\n|$)/i
+  if (/(?:^|\n)[ \t]*(?:\[(?:calling|invoking|running|executing)\b(?:\s+[^\s\]\n]+(?:\s+"[^"\]\n]*")?)?\]?[ \t]*)+[.,;:]?[ \t]*(?:\n|$)/i
     .test(probeLines)) {
     return false;
   }

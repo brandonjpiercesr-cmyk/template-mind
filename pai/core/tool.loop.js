@@ -8034,6 +8034,17 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // async ONLY because the tier gate below now wakes a mind instead of holding her pen. Both
   // call sites already sit in an async function and both now await it.
   async function _prepareHumanAnswerOnce(candidate) {
+    // ⬡B:core.tool_loop:HEAL:the_waiver_was_sticky_and_rode_a_healed_draft:20260815⬡
+    // I RESET ITS NEIGHBOUR AND NOT THIS ONE, four lines apart, in the same block. A blind
+    // critic traced the leak: _tierGateSentence is declared outside this function, set inside
+    // it, and this function runs TWICE in a turn (once, then again on the healing resubmit). So
+    // a first attempt that tripped the tier gate and got her boundary sentence, then failed a
+    // later guard, healed into a clean second draft that CARRIED THE WAIVER. The post-council
+    // veto then waived a genuine hold, and "Your account balance is $4,215" could ship to an
+    // unauthenticated channel below trust 5. That is line for line the leak I restored the veto
+    // to prevent, re-opened by the marker I added to scope it.
+    // The waiver must belong to the bytes it was minted for and to nothing else.
+    _tierGateSentence = false;
     var finalAns = typeof candidate === 'string' ? candidate.trim() : '';
     var preparedScreenBlock = null;
     try {
