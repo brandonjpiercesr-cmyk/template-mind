@@ -290,8 +290,16 @@ function survivingHints(hintPhrases, renderedText) {
     var phrase = String((entry && (entry.phrase || entry.type)) || entry || '').trim().toLowerCase();
     if (!phrase || phrase.length < 3) return;
     if (lower.indexOf(phrase) < 0) return;
-    // The one hint family whose phrase is her answer rather than a fixed list entry.
-    var token = (entry && entry.type === 'internal_name') ? 'internal_name_kept' : phrase;
+    // The hint families whose phrase must not land verbatim in a durable record.
+    // internal_name: the phrase is lifted out of HER ANSWER and is a real person's first name.
+    // clean_speech: the phrase is from a closed wake list and leaks nobody, but this receipt is
+    // banked and then read BACK to her by the presenters, and a bank row that replays profanity
+    // under a heading about her own recent words is the read-back hazard the 20260815 doctrine
+    // drop names. The full terms already ride the clean_speech_wake flag for audit; the receipt
+    // only has to prove a mind read the sentence and made the call.
+    var token = (entry && entry.type === 'internal_name') ? 'internal_name_kept'
+      : (entry && entry.type === 'clean_speech') ? 'clean_speech_kept'
+        : phrase;
     if (seen[token]) return;
     seen[token] = true;
     survivors.push(token);
@@ -427,6 +435,22 @@ async function writCheck(text, context) {
     Array.isArray(context.internal_name_wake.hits))
     ? context.internal_name_wake.hits.slice(0, 8) : [];
   var _hintNames = _wakeNames.map(function (n) { return { type:'internal_name', phrase:n }; });
+  // ⬡B:board.writ:FIX:the_clean_speech_wake_never_reached_the_prompt_it_named:20260816⬡
+  // core/clean.speech.js#reviewCleanSpeech hands writCheck a `clean_speech_wake` flag and its
+  // own comment says it is "named so the reviewer knows why she was woken and can weigh the
+  // terms rather than obey them." Nothing in this file has ever read that key. Grepped: the
+  // string appears in clean.speech.js, tool.loop.js, veer.director.js and two route files, and
+  // in ZERO lines of board/writ/*. So the detector woke the reviewer, the reviewer was handed
+  // the raw draft with no idea why, and CLEAN MOUTH was judged blind. A wake nobody reads is
+  // the same defect as the internal-name forwarding line a critic proved could be deleted with
+  // every test green, and it sat one screen away from where I fixed that one.
+  //
+  // Same shape as the name hint deliberately: HINTS, never verdicts. The terms come from a
+  // closed wake list, not from her bytes, so naming them in the prompt leaks nothing of hers.
+  var _wakeCurses = (context.clean_speech_wake &&
+    Array.isArray(context.clean_speech_wake.hits))
+    ? context.clean_speech_wake.hits.slice(0, 8) : [];
+  var _hintCurses = _wakeCurses.map(function (t) { return { type:'clean_speech', phrase:t }; });
   var _greeting = checkColdGreeting(cleaned);
   var _hintGreeting = _greeting.ok ? null : _greeting.flag;
   var _rhythm = approximateChoppyDensity(cleaned);
@@ -471,7 +495,7 @@ async function writCheck(text, context) {
   // Names go FIRST now. If a cap has to drop something, it drops a filler phrase whose absence
   // costs an audit nothing, never the one hint that proves a mind made the call.
   var _hintsForReceipt = []
-    .concat(_hintNames, _hintCTA, _hintProc, _hintBans, _hintHeaders || []);
+    .concat(_hintNames, _hintCurses, _hintCTA, _hintProc, _hintBans, _hintHeaders || []);
   if (!isInternal) {
     try {
       var _ladder = require('../../core/model.ladder.js');
@@ -503,6 +527,10 @@ async function writCheck(text, context) {
         + 'On the internal-name hint: there is one voice, so an internal organ, adviser or coder name never appears in something she said, as if a second assistant were speaking. '
         + 'That list is a raw word match and it cannot tell an organ from a person. Several of those words are ordinary human first names, and saying who called, who texted, or whose recital is on Friday is the whole job. '
         + 'Read the sentence. If the word is a person in this reader\'s life, leave it exactly as it is. Rewrite only if the draft is genuinely handing a reader an internal name. '
+        + 'possible unclean speech in her mouth=' + JSON.stringify(_wakeCurses) + '. '
+        + 'On the unclean-speech hint: CLEAN MOUTH above is the founder floor and it is yours to apply, and it is not this word list that applies it. '
+        + 'That list is a raw word match with no idea who the word is aimed at. A quoted title, a place name, a word inside something the reader themselves said, or heat aimed at a situation rather than at the person is yours to keep. '
+        + 'Rewrite only if the draft aims a curse at the reader or at the founder, and when you do keep the full meaning and heat of the sentence rather than gutting the point to sanitize it. '
         + 'Reply with ONLY the corrected answer text, nothing else. If the text already obeys every law, return it unchanged. '
         + 'Return the single word HOLD only if the text cannot be fixed because it leaks a real secret or another world\'s private data.';
       var _deliberate = typeof context.deliberate === 'function' ? context.deliberate : _ladder.deliberate;
