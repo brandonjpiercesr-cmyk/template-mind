@@ -7321,7 +7321,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // later wake. A sentence a coder typed therefore came back to a mind labelled as her own
   // answer. That is PLANTED MEMORY, and the person read it as her too.
   //
-  // THE SHAPE, copied from core/mema.retire.js#ruleRetirement, the approved reference.
+  // THE SHAPE, copied from essentials/mema/retire.js#ruleRetirement, the approved reference.
   // Cold code carries the FACTS about what happened, states plainly that they are machine facts
   // and not anybody's words, and WAKES a mind on the primary rung. If that rung does not answer,
   // it asks again on the penny rung, a genuinely cheaper seat through the one shared mind door
