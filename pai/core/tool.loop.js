@@ -1398,8 +1398,12 @@ function applyGmguTutorProviderPolicy(providerBody, channel) {
   target.max_tokens=640;
   target.reasoning={effort:'minimal',exclude:true};
   delete target.chat_template_kwargs;
-  target.provider=Object.assign({},target.provider||{},
-    {sort:'latency',require_parameters:true});
+  // GMGU tutor turns proved live on Alibaba for its dedicated Qwen seat while
+  // OpenRouter's dynamic latency route returned a blank 503 from both its
+  // selected primary and the declared model rescue.  This is a complete
+  // GMGU-only routing contract, not a merge with caller supplied provider
+  // preferences: learner turns must not drift to an unproved upstream.
+  target.provider={order:['alibaba'],allow_fallbacks:false,require_parameters:true};
   return target;
 }
 
