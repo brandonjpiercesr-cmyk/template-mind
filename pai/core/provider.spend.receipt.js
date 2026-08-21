@@ -228,7 +228,10 @@ function keyAlias(provider, init, parsed, attribution, env) {
   var secret = requestCredential(provider, init, parsed);
   if (!secret) return {ok:false,reason:'provider_spend_key_alias_missing'};
   if (provider === 'openrouter') {
-    var owner = openrouterSeatSpend.keyOwner(secret, runtime);
+    // The receipt is written inside the same server-owned paid egress scope as
+    // the seat runner. A legacy duplicate may use that existing ALS seat, but
+    // an unscoped or caller-supplied attribution remains a strict refusal.
+    var owner = openrouterSeatSpend.attributedKeyOwner(secret, runtime);
     if (!owner.ok) return {ok:false,reason:owner.reason};
     var ambientSeat = clean(attribution && attribution.seat).replace(/\.fallback$/, '');
     if (!ambientSeat || ambientSeat !== owner.seat.seat) {
@@ -921,7 +924,8 @@ async function recoverDelayedOpenRouterCost(receipt, requestInit, options) {
   var authorization=headerValue(requestInit,'authorization');
   if(!/^Bearer\s+\S+$/i.test(authorization))return empty;
   var runtime=options&&options.env||process.env;
-  var owner=openrouterSeatSpend.keyOwner(authorization.replace(/^Bearer\s+/i,''),runtime);
+  var owner=openrouterSeatSpend.attributedKeyOwner(
+    authorization.replace(/^Bearer\s+/i,''),runtime);
   var expectedAlias=owner&&owner.ok===true?'seat.'+owner.seat.seat:null;
   if(!expectedAlias||expectedAlias!==receipt.key_alias){
     return{ok:false,attempted:0,recovered:0,
