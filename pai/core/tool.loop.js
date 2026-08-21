@@ -6521,7 +6521,31 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         _noteCycleFailure('pai_seat_empty_content');r=null;
       } else { _noteCycleFailure(null); }
     } else if(r&&r.error){
-      _noteCycleFailure('pai_seat:'+JSON.stringify(r.error).slice(0,180));
+      // An upstream error object can carry the provider's prose, and the current
+      // learner turn can carry private lesson context. Neither belongs in the
+      // operational receipt. Preserve only bounded transport facts and a shape
+      // summary of the exact request that reached the provider.
+      var _providerError=r.error&&typeof r.error==='object'?r.error:{};
+      var _providerCode=String(_providerError.code||'').trim().toLowerCase();
+      if(!/^[a-z0-9._:-]{1,96}$/.test(_providerCode))_providerCode='';
+      var _providerStatus=Number(_providerError.status);
+      if(!Number.isInteger(_providerStatus)||_providerStatus<100||_providerStatus>599){
+        _providerStatus=null;
+      }
+      var _providerMessages=Array.isArray(_providerBody&&_providerBody.messages)
+        ?_providerBody.messages:[];
+      var _providerMessageChars=_providerMessages.reduce(function(total,item){
+        return total+Math.min(1000000,String(item&&item.content||'').length);
+      },0);
+      _noteCycleFailure('pai_seat:'+JSON.stringify({code:_providerCode||null,
+        status:_providerStatus,seat:String(_providerError.seat||'').slice(0,48)||null,
+        contract:{messageCount:_providerMessages.length,messageChars:_providerMessageChars,
+          toolCount:Array.isArray(_providerBody&&_providerBody.tools)
+            ?_providerBody.tools.length:0,
+          hasReasoning:!!(_providerBody&&_providerBody.reasoning),
+          requiresParameters:!!(_providerBody&&_providerBody.provider&&
+            _providerBody.provider.require_parameters===true),
+          maxTokens:Number(_providerBody&&_providerBody.max_tokens)||null}}));
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
@@ -9355,11 +9379,32 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           var parsed=JSON.parse(raw.slice('pai_seat:'.length));
           var code=String(parsed && parsed.code || '').trim().toLowerCase();
           if (/^[a-z0-9._:-]{1,96}$/.test(code)) return code;
+          var status=Number(parsed && parsed.status);
+          if (Number.isInteger(status) && status >= 100 && status <= 599) {
+            return 'http_' + status;
+          }
         } catch (eGmguReasonClass) {}
         return 'pai_seat_unclassified';
       }
       var head=raw.split(/[\s:]/,1)[0];
       return /^[a-z0-9._-]{1,96}$/.test(head) ? head : 'noncanonical';
+    };
+    var _gmguProviderFacts=function (value) {
+      var raw=String(value == null ? '' : value).trim();
+      if (raw.indexOf('pai_seat:')!==0) return null;
+      try {
+        var parsed=JSON.parse(raw.slice('pai_seat:'.length));
+        var contract=parsed&&parsed.contract&&typeof parsed.contract==='object'
+          ?parsed.contract:{};
+        var status=Number(parsed&&parsed.status);
+        return {status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
+          messageCount:Number.isInteger(contract.messageCount)?contract.messageCount:null,
+          messageChars:Number.isInteger(contract.messageChars)?contract.messageChars:null,
+          toolCount:Number.isInteger(contract.toolCount)?contract.toolCount:null,
+          hasReasoning:contract.hasReasoning===true,
+          requiresParameters:contract.requiresParameters===true,
+          maxTokens:Number.isInteger(contract.maxTokens)?contract.maxTokens:null};
+      } catch (eGmguProviderFacts) { return null; }
     };
     console.warn('[GMGU] tutor PAI outcome', JSON.stringify({
       cycleId:cycleId,
@@ -9371,7 +9416,8 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
       reason:/^[a-z0-9._:-]{1,120}$/.test(_gmguReason)
         ? _gmguReason : _gmguReason ? 'reason_noncanonical' : 'reason_absent',
       reasonClass:_gmguReasonClass(_gmguReason),
-      debugClass:_gmguReasonClass(_gmguResult && _gmguResult._dbg)
+      debugClass:_gmguReasonClass(_gmguResult && _gmguResult._dbg),
+      providerFacts:_gmguProviderFacts(_gmguResult && _gmguResult._dbg)
     }));
   }
   _stampGrandmotherLedger(hamUid, message, channel, identity, result);
