@@ -984,6 +984,15 @@ function paiOutcomeUnknownFailure(result) {
     .filter(Boolean).join(':').toLowerCase();
   return reason.indexOf('provider_spend_outcome_unknown')!==-1;
 }
+function paiFailoverReceipt(result) {
+  var error=result&&result.error&&typeof result.error==='object'?result.error:{};
+  var status=Number(error.status);
+  var code=String(error.code||'').trim().toLowerCase();
+  return {attempted:true,
+    usable:paiSeatUsable(result),
+    status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
+    code:/^[a-z0-9._:-]{1,96}$/.test(code)?code:null};
+}
 async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   var primary = await attempt(primaryCandidate);
   if (paiSeatUsable(primary)) return primary;
@@ -997,7 +1006,14 @@ async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   // The rescue only wins if it actually carries an answer. If it does not, the caller gets
   // the PRIMARY's own result back, byte for byte, so every downstream path (the hollow-answer
   // repair, the ladder, the named silent wall) sees exactly what it saw before this change.
-  if (!paiSeatUsable(recovered)) return primary;
+  if (!paiSeatUsable(recovered)) {
+    // Preserve the existing primary wall for callers while carrying one content-free receipt
+    // of the declared rescue attempt for the GMGU operational log. Non-enumerable keeps it
+    // out of route serialization and all existing provider contracts.
+    try { Object.defineProperty(primary,'_paiFailover',{enumerable:false,
+      value:paiFailoverReceipt(recovered)}); } catch (ePaiFailoverReceipt) {}
+    return primary;
+  }
   return recovered;
 }
 
@@ -6532,6 +6548,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       if(!Number.isInteger(_providerStatus)||_providerStatus<100||_providerStatus>599){
         _providerStatus=null;
       }
+      var _providerFailover=r&&r._paiFailover&&typeof r._paiFailover==='object'
+        ?r._paiFailover:null;
+      var _providerFailoverStatus=Number(_providerFailover&&_providerFailover.status);
+      if(!Number.isInteger(_providerFailoverStatus)||_providerFailoverStatus<100||
+          _providerFailoverStatus>599){ _providerFailoverStatus=null; }
+      var _providerFailoverCode=String(_providerFailover&&_providerFailover.code||'')
+        .trim().toLowerCase();
+      if(!/^[a-z0-9._:-]{1,96}$/.test(_providerFailoverCode)){
+        _providerFailoverCode=null;
+      }
       var _providerMessages=Array.isArray(_providerBody&&_providerBody.messages)
         ?_providerBody.messages:[];
       var _providerMessageChars=_providerMessages.reduce(function(total,item){
@@ -6539,6 +6565,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       },0);
       _noteCycleFailure('pai_seat:'+JSON.stringify({code:_providerCode||null,
         status:_providerStatus,seat:String(_providerError.seat||'').slice(0,48)||null,
+        failover:_providerFailover&&_providerFailover.attempted===true?{
+          attempted:true,usable:_providerFailover.usable===true,
+          status:_providerFailoverStatus,code:_providerFailoverCode}:null,
         contract:{messageCount:_providerMessages.length,messageChars:_providerMessageChars,
           toolCount:Array.isArray(_providerBody&&_providerBody.tools)
             ?_providerBody.tools.length:0,
@@ -9396,8 +9425,15 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var parsed=JSON.parse(raw.slice('pai_seat:'.length));
         var contract=parsed&&parsed.contract&&typeof parsed.contract==='object'
           ?parsed.contract:{};
+        var failover=parsed&&parsed.failover&&typeof parsed.failover==='object'
+          ?parsed.failover:{};
         var status=Number(parsed&&parsed.status);
+        var fallbackStatus=Number(failover.status);
         return {status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
+          fallbackAttempted:failover.attempted===true,
+          fallbackUsable:failover.usable===true,
+          fallbackStatus:Number.isInteger(fallbackStatus)&&fallbackStatus>=100&&
+            fallbackStatus<=599?fallbackStatus:null,
           messageCount:Number.isInteger(contract.messageCount)?contract.messageCount:null,
           messageChars:Number.isInteger(contract.messageChars)?contract.messageChars:null,
           toolCount:Number.isInteger(contract.toolCount)?contract.toolCount:null,
