@@ -316,6 +316,12 @@ var SEATS = {
   // request parameters on 20260821.
   c3_mind:     { role: 'C3 mind / A NU synth', envModel: 'SEAT_C3_MODEL',      model: 'x-ai/grok-4.6',            provider: 'openrouter', keyEnv: 'OR_KEY_MIND_GROK',   via: 'openrouter', capEnv:'SEAT_C3_MIND_DAILY_CAP_USD', dailyCapUsd:6, vision:true, tools:true,
                  fallbackModel: 'qwen/qwen3.5-flash-02-23', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_MIND_GROK', fallbackTools:true },
+  // A live GMGU learner turn proved that C3 Grok and its declared Qwen rescue each received
+  // HTTP 503 in sequence. The existing named Qwen wallet answered a GMGU contract canary on
+  // 20260821. GMGU now starts there, with C3 as the one declared rescue, so a learner is not
+  // made to wait through the failed Grok hop before reaching the working tutor route.
+  gmgu_tutor:{ role: 'GMGU tutor',             envModel: 'SEAT_GMGU_TUTOR_MODEL', model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_GMGU_TUTOR', via: 'openrouter', capEnv:'SEAT_GMGU_TUTOR_DAILY_CAP_USD', dailyCapUsd:4, vision:true, tools:true,
+                 fallbackModel: 'x-ai/grok-4.6', fallbackProvider: 'openrouter', fallbackKeyEnv: 'OR_KEY_GMGU_TUTOR', fallbackTools:true },
   c4_watch:    { role: 'C4 CLAIR watch',       envModel: 'SEAT_C4_MODEL',      model: 'qwen/qwen3.5-flash-02-23', provider: 'openrouter', keyEnv: 'OR_KEY_C4_WATCH',    via: 'openrouter', capEnv:'SEAT_C4_WATCH_DAILY_CAP_USD', dailyCapUsd:2, vision:true, tools:true },
   // W3-L4 OVERSEER (docs/roadmaps/THE_COMPANY_ROADMAP_20260731.md, census B-109/B-82/B-143),
   // the exit decider: which pass-off channel a high-importance finding gets. Before this seat,
