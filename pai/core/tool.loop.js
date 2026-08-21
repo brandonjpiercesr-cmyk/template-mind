@@ -991,7 +991,11 @@ function paiFailoverReceipt(result) {
   return {attempted:true,
     usable:paiSeatUsable(result),
     status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
-    code:/^[a-z0-9._:-]{1,96}$/.test(code)?code:null};
+    code:/^[a-z0-9._:-]{1,96}$/.test(code)?code:null,
+    generationId:/^[A-Za-z0-9._-]{1,160}$/.test(String(error.generation_id||''))
+      ?String(error.generation_id):null,
+    seat:/^[a-z0-9._-]{1,96}$/.test(String(error.seat||''))
+      ?String(error.seat):null};
 }
 async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   var primary = await attempt(primaryCandidate);
@@ -5190,6 +5194,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         }
         payload.error.status=response.status;
         payload.error.seat=candidate.seat.seat;
+        var generationId=response.headers&&typeof response.headers.get==='function'
+          ?String(response.headers.get('x-generation-id')||'').trim():'';
+        if(/^[A-Za-z0-9._-]{1,160}$/.test(generationId)){
+          payload.error.generation_id=generationId;
+        }
       }
       if (payload && typeof payload === 'object') {
         payload._provider='openrouter:' + candidate.seat.seat;
@@ -6566,6 +6575,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       if(!/^[a-z0-9._:-]{1,96}$/.test(_providerFailoverCode)){
         _providerFailoverCode=null;
       }
+      var _providerGenerationId=String(_providerError.generation_id||'').trim();
+      if(!/^[A-Za-z0-9._-]{1,160}$/.test(_providerGenerationId)){
+        _providerGenerationId=null;
+      }
+      var _providerFailoverGenerationId=String(_providerFailover&&
+        _providerFailover.generationId||'').trim();
+      if(!/^[A-Za-z0-9._-]{1,160}$/.test(_providerFailoverGenerationId)){
+        _providerFailoverGenerationId=null;
+      }
       var _providerMessages=Array.isArray(_providerBody&&_providerBody.messages)
         ?_providerBody.messages:[];
       var _providerMessageChars=_providerMessages.reduce(function(total,item){
@@ -6573,9 +6591,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       },0);
       _noteCycleFailure('pai_seat:'+JSON.stringify({code:_providerCode||null,
         status:_providerStatus,seat:String(_providerError.seat||'').slice(0,48)||null,
+        generationId:_providerGenerationId,
         failover:_providerFailover&&_providerFailover.attempted===true?{
           attempted:true,usable:_providerFailover.usable===true,
-          status:_providerFailoverStatus,code:_providerFailoverCode}:null,
+          status:_providerFailoverStatus,code:_providerFailoverCode,
+          generationId:_providerFailoverGenerationId,
+          seat:_providerFailover.seat||null}:null,
         contract:{messageCount:_providerMessages.length,messageChars:_providerMessageChars,
           toolCount:Array.isArray(_providerBody&&_providerBody.tools)
             ?_providerBody.tools.length:0,
