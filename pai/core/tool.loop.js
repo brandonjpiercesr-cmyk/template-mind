@@ -9429,7 +9429,10 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
           ?parsed.failover:{};
         var status=Number(parsed&&parsed.status);
         var fallbackStatus=Number(failover.status);
-        return {status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
+        var seat=String(parsed&&parsed.seat||'').trim().toLowerCase();
+        if(!/^[a-z0-9_.-]{1,64}$/.test(seat))seat=null;
+        return {seat:seat,
+          status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
           fallbackAttempted:failover.attempted===true,
           fallbackUsable:failover.usable===true,
           fallbackStatus:Number.isInteger(fallbackStatus)&&fallbackStatus>=100&&
