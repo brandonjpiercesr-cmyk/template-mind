@@ -1392,18 +1392,21 @@ function applyProviderThinkingPolicy(providerBody, model) {
   return target;
 }
 
-function applyGmguTutorProviderPolicy(providerBody, channel) {
+function applyGmguTutorProviderPolicy(providerBody, channel, model) {
   var target=providerBody||{};
   if(String(channel||'').trim().toLowerCase()!=='gmgu')return target;
   target.max_tokens=640;
   target.reasoning={effort:'minimal',exclude:true};
   delete target.chat_template_kwargs;
-  // GMGU tutor turns proved live on Alibaba for its dedicated Qwen seat while
-  // OpenRouter's dynamic latency route returned a blank 503 from both its
-  // selected primary and the declared model rescue.  This is a complete
-  // GMGU-only routing contract, not a merge with caller supplied provider
-  // preferences: learner turns must not drift to an unproved upstream.
-  target.provider={order:['alibaba'],allow_fallbacks:false,require_parameters:true};
+  // GMGU has two independently proven production routes. Its Qwen teaching
+  // seat runs on Alibaba; its declared Grok rescue runs on xAI. The former
+  // implementation incorrectly applied Alibaba to both models, turning the
+  // rescue into a guaranteed provider mismatch. This complete GMGU-only
+  // routing contract also prevents caller supplied provider preferences from
+  // changing a learner turn.
+  var exactModel=String(model||target.model||'').trim().toLowerCase();
+  var provider=exactModel.indexOf('x-ai/')===0 ? 'xai' : 'alibaba';
+  target.provider={order:[provider],allow_fallbacks:false,require_parameters:true};
   return target;
 }
 
@@ -1418,7 +1421,7 @@ function fetchPaiSeatCandidate(requestBody, candidate, channel, options, fetchIm
   // contract then wins last so its bounded response and low-latency request
   // cannot be discarded by the adapter immediately before fetch.
   applyProviderThinkingPolicy(providerBody, candidate.seat.model);
-  applyGmguTutorProviderPolicy(providerBody, channel);
+  applyGmguTutorProviderPolicy(providerBody, channel, candidate.seat.model);
   var env = runtime || process.env;
   var transport = typeof fetchImpl === 'function' ? fetchImpl : fetch;
   return transport('https://openrouter.ai/api/v1/chat/completions', {
@@ -6489,7 +6492,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _providerCandidate&&_providerCandidate.seat.model||'');
     applyProviderThinkingPolicy(_providerBody,
       _providerCandidate&&_providerCandidate.seat.model||'');
-    applyGmguTutorProviderPolicy(_providerBody,channel);
+    applyGmguTutorProviderPolicy(_providerBody,channel,
+      _providerCandidate&&_providerCandidate.seat.model||'');
     if(_structuredReachPolicy){
       var _policyFormat=_structuredReachResponseFormat();
       if(_policyFormat)_providerBody.response_format=_policyFormat;
