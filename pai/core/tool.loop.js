@@ -9343,6 +9343,21 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     try { require('./freestyle.chatter.js').emitReplace({cycleId:cycleId}); }
     catch (eFreestyleCollapse) {}
   }
+  if (_channelLower === 'gmgu' && (!result || result.ok !== true)) {
+    var _gmguResult = result && typeof result === 'object' ? result : null;
+    var _gmguReason = typeof (_gmguResult && _gmguResult.reason) === 'string'
+      ? _gmguResult.reason.trim().toLowerCase() : '';
+    console.warn('[GMGU] tutor PAI outcome', JSON.stringify({
+      cycleId:cycleId,
+      requestId:requestId,
+      resultType:result === null ? 'null' : typeof result,
+      resultKeys:_gmguResult ? Object.keys(_gmguResult).filter(function (key) {
+        return /^[a-z_]{1,48}$/i.test(key);
+      }).sort().slice(0, 20) : [],
+      reason:/^[a-z0-9._:-]{1,120}$/.test(_gmguReason)
+        ? _gmguReason : _gmguReason ? 'reason_noncanonical' : 'reason_absent'
+    }));
+  }
   _stampGrandmotherLedger(hamUid, message, channel, identity, result);
   // Her bytes are already gone. SHADOW plans the same assignment blind, then watches.
   _shadowIndependentReview(hamUid, message, channel, identity, result,
