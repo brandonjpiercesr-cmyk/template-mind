@@ -9431,10 +9431,13 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         var fallbackStatus=Number(failover.status);
         var seat=String(parsed&&parsed.seat||'').trim().toLowerCase();
         if(!/^[a-z0-9_.-]{1,64}$/.test(seat))seat=null;
-        return {seat:seat,
+        return {seat:seat,code:/^[a-z0-9._:-]{1,96}$/.test(String(parsed&&parsed.code||''))
+            ?String(parsed.code):null,
           status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
           fallbackAttempted:failover.attempted===true,
           fallbackUsable:failover.usable===true,
+          fallbackCode:/^[a-z0-9._:-]{1,96}$/.test(String(failover.code||''))
+            ?String(failover.code):null,
           fallbackStatus:Number.isInteger(fallbackStatus)&&fallbackStatus>=100&&
             fallbackStatus<=599?fallbackStatus:null,
           messageCount:Number.isInteger(contract.messageCount)?contract.messageCount:null,
