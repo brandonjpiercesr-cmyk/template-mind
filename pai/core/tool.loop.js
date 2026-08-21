@@ -9347,6 +9347,20 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     var _gmguResult = result && typeof result === 'object' ? result : null;
     var _gmguReason = typeof (_gmguResult && _gmguResult.reason) === 'string'
       ? _gmguResult.reason.trim().toLowerCase() : '';
+    var _gmguReasonClass=function (value) {
+      var raw=String(value == null ? '' : value).trim().toLowerCase();
+      if (!raw) return 'absent';
+      if (raw.indexOf('pai_seat:')===0) {
+        try {
+          var parsed=JSON.parse(raw.slice('pai_seat:'.length));
+          var code=String(parsed && parsed.code || '').trim().toLowerCase();
+          if (/^[a-z0-9._:-]{1,96}$/.test(code)) return code;
+        } catch (eGmguReasonClass) {}
+        return 'pai_seat_unclassified';
+      }
+      var head=raw.split(/[\s:]/,1)[0];
+      return /^[a-z0-9._-]{1,96}$/.test(head) ? head : 'noncanonical';
+    };
     console.warn('[GMGU] tutor PAI outcome', JSON.stringify({
       cycleId:cycleId,
       requestId:requestId,
@@ -9355,7 +9369,9 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
         return /^[a-z_]{1,48}$/i.test(key);
       }).sort().slice(0, 20) : [],
       reason:/^[a-z0-9._:-]{1,120}$/.test(_gmguReason)
-        ? _gmguReason : _gmguReason ? 'reason_noncanonical' : 'reason_absent'
+        ? _gmguReason : _gmguReason ? 'reason_noncanonical' : 'reason_absent',
+      reasonClass:_gmguReasonClass(_gmguReason),
+      debugClass:_gmguReasonClass(_gmguResult && _gmguResult._dbg)
     }));
   }
   _stampGrandmotherLedger(hamUid, message, channel, identity, result);
