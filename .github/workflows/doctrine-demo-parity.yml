@@ -55,6 +55,7 @@ jobs:
           test/day.memory.union.test.js
           test/fusion.span.today.test.js
           test/mind.entry.cycle-auth.test.js
+          test/exact.ham.signin.session.test.js
           test/writ.meaning.shadow.sister.test.js
           test/brain.client.answer.is.not.rows.test.js
           test/writ.meaning.packet.mint.complement.test.js
