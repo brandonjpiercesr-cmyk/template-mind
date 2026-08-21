@@ -1,0 +1,31 @@
+name: awa-residency-lock-guard
+# ⬡B:ci.awa_residency_lock_guard:BUILD:a_regression_lock_pai_agents_awa_verify_test_had_nothing_wiring_it_in:20260729⬡
+# pai/agents/awa/verify.test.js proves the 20260716 fix: 11 REAL Idealist postings where
+# structured TELECOMMUTE + Country:US was contradicted by a prose residency lock (state-only
+# hiring dressed up as nationwide remote). Before that fix, 96 of 97 live postings were
+# wrongly rejected; the risk this test guards against is the same filter regressing the other
+# direction and silently re-admitting state-locked postings as nationwide remote. This repo has
+# no .github/workflows directory at all before this file, so this test has never run in CI once
+# since it was written -- a regression lock nothing runs is prose, not a gate.
+#
+# No npm install: verify.js and its test have zero requires beyond Node's built-in `assert`,
+# proven by `node --test` passing in a bare worktree with no node_modules. See the anew repo's
+# docs/THE_SANDBOX_BLIND_SPOT.md for why every gate in the sibling repo deliberately skips
+# npm ci when a suite does not need it.
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+jobs:
+  awa-residency-lock-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: A structured TELECOMMUTE claim never overrides a prose residency lock
+        run: node --test pai/agents/awa/verify.test.js

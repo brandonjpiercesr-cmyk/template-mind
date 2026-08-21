@@ -1,0 +1,39 @@
+name: mind-entry-webhook-guard
+# ⬡B:ci.mind_entry_webhook_guard:BUILD:two_regression_locks_on_mind_entry_had_nothing_wiring_them_in:20260729⬡
+# test/mind.entry.raw-body.test.js (20260720) proves the per-HAM JSON boundary preserves the
+# exact raw bytes of an inbound webhook body (captured via express.json's verify hook) before
+# any signed route mounts, and that mind.entry.js never falls back to a bare
+# `app.use(express.json())` that would silently discard those bytes -- a bare parser would
+# defeat signature verification on every signed provider webhook (IMAN included).
+# test/mind.entry.wren-route.test.js (20260720) proves the canonical WREN text-ingress route is
+# mounted exactly once (no leftover partial route), and that inside wren.routes.js webhook
+# authentication precedes the durable replay claim, which precedes any reply/delivery effect --
+# the ordering that stops a duplicate or unauthenticated webhook from firing a real effect.
+#
+# Both suites read mind.entry.js and pai/routes/wren.routes.js as plain text via fs and assert
+# on source order/shape; no express app is booted and no network call is made. This repo had no
+# .github/workflows directory at all before this file, so neither regression lock has ever run
+# in CI since it was written -- a security-relevant regression lock nothing runs is prose, not
+# a gate.
+#
+# No npm install: both suites use only node:assert/strict, node:fs, node:path, node:test --
+# proven by `node --test` passing in a bare worktree with no node_modules.
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+jobs:
+  mind-entry-webhook-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: The raw webhook byte boundary is captured before any signed route mounts
+        run: node --test test/mind.entry.raw-body.test.js
+      - name: The canonical WREN route is mounted once, auth before claim before effect
+        run: node --test test/mind.entry.wren-route.test.js
