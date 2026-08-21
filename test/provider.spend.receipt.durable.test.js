@@ -248,6 +248,65 @@ test('prepare fails closed on missing lineage, model, or named credential alias'
     'provider_spend_key_alias_missing');
 });
 
+test('a legacy GMGU duplicate key needs exact server attribution before receipt preparation',
+  async function () {
+    const store = require(RECEIPT_PATH);
+    const spend = require(SPEND_PATH);
+    const env = Object.assign({},fixtureEnv(),{
+      OR_KEY_GMGU_TUTOR:'shared-gmgu-judge-key',
+      OR_KEY_JUDGE_QWEN:'shared-gmgu-judge-key',
+      SEAT_GMGU_TUTOR_DAILY_CAP_USD:'4',
+      SEAT_JUDGE_DAILY_CAP_USD:'4'
+    });
+    const scopedAttribution = Object.assign({},attribution(),{seat:'gmgu_tutor'});
+    const spec = {url:'https://openrouter.ai/api/v1/chat/completions',kind:'text',
+      init:{method:'POST',headers:{Authorization:'Bearer shared-gmgu-judge-key'},
+        body:JSON.stringify({model:'qwen/qwen3.5-flash-02-23',messages:[
+          {role:'user',content:'receipt fixture'}]})},
+      attribution:scopedAttribution,attempt_order:1,env:env};
+
+    const unscoped = store.prepare(spec);
+    assert.equal(unscoped.ok,false);
+    assert.equal(unscoped.reason,'openrouter_key_shared_across_seats');
+
+    const forged = await spend.withAttribution(
+      Object.assign({},scopedAttribution,{seat:'judge'}),async function () {
+        return store.prepare(spec);
+      });
+    assert.equal(forged.ok,false);
+    assert.equal(forged.reason,'provider_spend_seat_owner_mismatch');
+
+    const preparedReceipt = await spend.withAttribution(scopedAttribution,
+      async function () { return store.prepare(spec); });
+    assert.equal(preparedReceipt.ok,true,preparedReceipt.reason);
+    assert.equal(preparedReceipt.receipt.key_alias,'seat.gmgu_tutor');
+
+    const recoveryReceipt = {attempt_id:'d'.repeat(64),provider:'openrouter',
+      key_alias:'seat.gmgu_tutor'};
+    const recoveryInit = {headers:{Authorization:'Bearer shared-gmgu-judge-key'}};
+    let recoveryReads = 0;
+    const recoveryFetch = async function (url, init) {
+      recoveryReads += 1;
+      assert.match(String(url),/provider_spend_receipts_billable/);
+      assert.equal(init.headers.Prefer,'count=exact');
+      return json(200,[],{'Content-Range':'*/0'});
+    };
+    const unscopedRecovery = await store.recoverDelayedOpenRouterCost(recoveryReceipt,
+      recoveryInit,{env:env,fetchImpl:recoveryFetch});
+    assert.deepEqual(unscopedRecovery,{ok:false,attempted:0,recovered:0,
+      reason:'provider_spend_reconciliation_seat_mismatch'});
+    assert.equal(recoveryReads,0,'an unscoped duplicate never reads the receipt bank');
+
+    const scopedRecovery = await spend.withAttribution(scopedAttribution,
+      async function () {
+        return store.recoverDelayedOpenRouterCost(recoveryReceipt,recoveryInit,
+          {env:env,fetchImpl:recoveryFetch});
+      });
+    assert.deepEqual(scopedRecovery,{ok:true,attempted:0,recovered:0,reason:null});
+    assert.equal(recoveryReads,1,
+      'the server-owned GMGU attribution reaches delayed receipt recovery');
+  });
+
 test('atomic intent claim survives module reload and a duplicate never authorizes resend',
   async function () {
     const bank = fakeBank();

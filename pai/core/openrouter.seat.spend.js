@@ -73,6 +73,13 @@ function attributedSeat() {
   }
 }
 
+// A legacy duplicate may be named only by the server-owned attribution already
+// running in this process. This helper deliberately accepts no caller seat.
+// Unscoped inspection stays on keyOwner(), which remains strictly refusing.
+function attributedKeyOwner(key, env) {
+  return resolveKeyOwner(key, env, attributedSeat());
+}
+
 function usageNumber(value) {
   var parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
@@ -203,7 +210,8 @@ async function run(url, init, fetchImpl, execute, env) {
 
 function reset() { queues.clear(); }
 
-module.exports = {run:run,keyOwner:keyOwner,bearer:bearer,currentUsage:currentUsage,
+module.exports = {run:run,keyOwner:keyOwner,attributedKeyOwner:attributedKeyOwner,
+  bearer:bearer,currentUsage:currentUsage,
   dryAccountBlockArmed:dryAccountBlockArmed,
   _test:{sameSecret:sameSecret,usageNumber:usageNumber,usageSignal:usageSignal,
     balanceMaxAgeMs:balanceMaxAgeMs,queueSeat:queueSeat,reset:reset}};
