@@ -4868,6 +4868,7 @@ function agentFindClosedWorldReason(flags) {
   if(state.reachIncidentIntake===true)return'reach_incident_intake';
   if(state.roomSafeVoice===true)return'room_safe_voice';
   if(state.internalCodaTurn===true)return'coda_internal_operational_wall';
+  if(state.gmguNativeTutor===true)return'gmgu_native_tutor';
   return null;
 }
 
@@ -6522,7 +6523,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _closedWorldReason=agentFindClosedWorldReason({
       structuredReachPolicy:_structuredReachPolicy,
       reachIncidentIntake:_reachIncidentIntake,roomSafeVoice:_roomSafeVoice,
-      internalCodaTurn:_internalCodaTurn});
+      internalCodaTurn:_internalCodaTurn,gmguNativeTutor:_gmguNativeTutorTurn});
     if(_closedWorldReason){
       var _closedSeatNodeId=_agentFindSeatNodeId();
       var _closedSeat=require('./wonders/registry.js').resolve(_closedSeatNodeId);

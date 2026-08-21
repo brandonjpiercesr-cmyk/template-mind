@@ -2,6 +2,8 @@
 
 const test=require('node:test');
 const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
 const toolLoop=require('../pai/core/tool.loop.js');
 
 function freshLadder(){
@@ -13,6 +15,19 @@ function freshLadder(){
 function response(content){
   return {ok:true,status:200,async json(){return {choices:[{message:{content:content}}]};}};
 }
+
+test('signed GMGU tutor binds its closed world before the paid provider boundary',function(){
+  assert.equal(toolLoop._test.agentFindClosedWorldReason({gmguNativeTutor:true}),
+    'gmgu_native_tutor');
+  const source=fs.readFileSync(path.join(__dirname,'..','pai','core','tool.loop.js'),'utf8');
+  assert.match(source,
+    /internalCodaTurn:_internalCodaTurn,gmguNativeTutor:_gmguNativeTutorTurn/,
+    'the signed GMGU marker must reach the pre-egress closed-world binding');
+  const bind=source.indexOf('bindClosedWorld({');
+  const paid=source.indexOf('r=await _callPaiProvider(_providerBody,_providerSeat);');
+  assert.ok(bind>0&&paid>bind,
+    'the GMGU binding must happen before the provider request can leave');
+});
 
 test('the final C3 fetch preserves the GMGU contract on primary and fallback',async function(){
   const calls=[];
@@ -41,8 +56,11 @@ test('the final C3 fetch preserves the GMGU contract on primary and fallback',as
     assert.equal(call.body.max_tokens,640);
     assert.deepEqual(call.body.reasoning,{effort:'minimal',exclude:true});
     assert.equal(Object.hasOwn(call.body,'chat_template_kwargs'),false);
-    assert.deepEqual(call.body.provider,{sort:'latency',require_parameters:true});
   });
+  assert.deepEqual(calls[0].body.provider,
+    {order:['xai'],allow_fallbacks:false,require_parameters:true});
+  assert.deepEqual(calls[1].body.provider,
+    {order:['alibaba'],allow_fallbacks:false,require_parameters:true});
 });
 
 test('the Qwen rung forwards the bounded GMGU Penny latency contract to OpenRouter',async function(){
