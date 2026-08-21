@@ -7469,6 +7469,26 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _oneRepairCap;
     var _nameBoundaryRepair = /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
       String(failureCode || ''));
+    // The rejected draft and the original request can both carry a private name. A repair
+    // prompt that includes either one gives the next model call the same unsafe material that
+    // the boundary just held. Wake A'NU with only the machine fact and the existing bounded
+    // learning purpose instead. She still writes the sentence, and her fresh bytes still pass
+    // every preparation, council, and receipt gate below.
+    if (_nameBoundaryRepair) {
+      var _nameFreeRepair = await _herOwnClosingSentence(
+        'A privacy boundary held the prior draft. Give one direct, practical sentence that helps '
+          + 'the learner take their next step in the work in front of them. Do not name or describe '
+          + 'who created, owns, built, founded, employs, or runs you. Do not mention this boundary '
+          + 'or the held draft.',
+        'A privacy boundary held a previous draft because it carried an unsafe attribution. '
+          + 'The original request and held draft are deliberately unavailable for this retry. '
+          + 'Answer only from the bounded learning purpose already established for this turn. '
+          + 'Do not reconstruct, name, or mention either unavailable text.',
+        {omitRequest:true});
+      return _nameFreeRepair && _nameFreeRepair.ok
+        ? {answer:_nameFreeRepair.sentence,repaired:true,lane:'name_free_closing'}
+        : {answer:'',repaired:false};
+    }
     var _capabilityBoundaryRepair = /(?:current_capability_evidence_missing|stale_single_file_claim|unsupported_exhaustive_claim|unsupported_capability_clause|unsupported_negative_capability_claim|internal_capability_surface_exposed|ambiguous_capability_subject|supported_capability_clause_missing)/
       .test(String(failureCode || ''));
     // A privacy-held attribution is evidence of what must NOT be repeated. Feeding

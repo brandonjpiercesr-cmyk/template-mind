@@ -485,6 +485,23 @@ test('the pre-council name-boundary catch block fails closed, not open', functio
   assert.equal(result, 'name_boundary_check_failed_fail_closed');
 });
 
+test('the name-boundary repair wakes a fresh A\'NU turn without carrying private source text', function () {
+  const src = fs.readFileSync(TOOL_LOOP_PATH, 'utf8');
+  const start = src.indexOf('if (_nameBoundaryRepair) {');
+  const end = src.indexOf('var _capabilityBoundaryRepair', start);
+  assert.notEqual(start, -1, 'expected the dedicated name-boundary repair branch');
+  assert.ok(end > start, 'expected the name-boundary repair to finish before other repairs');
+  const branch = src.slice(start, end);
+  assert.match(branch, /_herOwnClosingSentence\(/,
+    'the repair must wake A\'NU, not synthesize a cold fallback');
+  assert.match(branch, /\{omitRequest:true\}/,
+    'the repair must not transmit the raw learner request into its fresh retry');
+  assert.doesNotMatch(branch, /regenerateHollowAnswer/,
+    'the repair must not rebuild a history around the held draft');
+  assert.doesNotMatch(branch, /\bmsgs\b|\bcandidate\b/,
+    'the repair must not feed the original transcript or rejected answer back to the model');
+});
+
 test('the post-council name-boundary catch block fails closed, not open', function () {
   const src = fs.readFileSync(TOOL_LOOP_PATH, 'utf8');
   const catchSrc = extractCatchBlock(src,
