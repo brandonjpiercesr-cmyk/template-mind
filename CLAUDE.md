@@ -16,6 +16,14 @@ harness into this session - read it before you touch anything. One board, all co
 - **Report to the founder in the flag format** (founder direct, 20260728, asked four times). Flags first, real emoji, one line each, no prose wall above them. 🟢 green done and live-verified with the receipt on the line (full URL plus status code, or merged PR link). 🟠 orange in flight, says what is running AND what is not done yet. ⚫ black blocked, names what blocks it and who can unblock it. 🔴 red is ONLY for what he must physically do himself (an env var on his own dashboard, a sign-in as himself, a real spend), written click-by-click for a non-coder on a phone: what to click, what he should see, what to type, how to save, whether to exit. A bare link is a violation. He does not make technical decisions: decide it yourself with documented reasoning or ask HER, never red-flag "which approach should we take." End every update with DONE or STALE; stale means go get work, never idle and never ask him for an assignment.
 - Source of record for the full protocol and the full flag rules (one source, never twinned): the `anew` repo `docs/CCWA_COMMAND_CENTER_HANDSHAKE.md` section "HOW THE FOUNDER WANTS UPDATES", and the live board itself.
 
+## LUMA, THE RECAP FORMAT (mandatory, every stamp to the founder)
+One shape for every check-in a coder stamps to the founder, source of record in the `anew` repo
+`docs/os/LUMA_RECAP_FORMAT_20260727.md`, never twinned here. A mark (one emoji so a wall of
+stamps sorts by eye), the throughline (anchored in the whole session's arc), the coding report,
+an explainer in plain words, the grounding (his own literal words, or A'NU's real answer, or
+standing law, named honestly), and who really contributed most this cycle. Say "Following the
+LUMA format now" at the top of your first stamp in a chat until he acknowledges you.
+
 ## STANDING LAWS
 - **ENVOLVE** - always with the E. The I is always an E. Never display the scrambled form.
 - **Never clobber another coder's lane.** Read the board and check open PRs before touching hot files (`pai/core/tool.loop.js`, `pai/reach/*`, `pai/routes/*`). Upgrade the ground, never twin it.
