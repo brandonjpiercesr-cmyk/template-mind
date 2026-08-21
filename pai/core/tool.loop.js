@@ -9480,13 +9480,13 @@ function paiReasoningSeat(channel, opts) {
   if (normalizedChannel === 'voice') return 'voice_fast';
   if (normalizedChannel === 'coding') return 'coda';
   // GMG University is a live teaching relationship, not the estate's general
-  // work queue. Three production tutor canaries exhausted the shared C2 face
-  // boundary without one committed answer. The existing A'NU synthesis mind
-  // owns this teaching judgment for the pilot while the per-learner world and
+  // work queue. A live learner receipt showed C3 Grok and then its Qwen rescue
+  // each receiving HTTP 503. The dedicated GMGU tutor starts on the verified
+  // Qwen route and keeps C3 as its declared rescue. The per learner world and
   // exact council receipts continue to bind every turn. This selects a seated
   // Wonder. It does not bypass runPAI, narrow the council, or manufacture a
   // reply in cold code.
-  if (normalizedChannel === 'gmgu') return 'c3_mind';
+  if (normalizedChannel === 'gmgu') return 'gmgu_tutor';
   if (opts.decisionReconsideration === true) return 'c3_mind';
   if (opts.bodyHasTools !== true && opts.mindArmed === true) return 'c3_mind';
   return 'c2_organ';
