@@ -132,7 +132,9 @@ function pamGate(text, trustTier) {
   // Below trust 5 the channel has not established who is speaking: no financial details,
   // no personal data summaries, regardless of what the answer says about itself.
   if (tier < 5) {
-    var sensitive = /\$[0-9,]+|bank|account|ssn|social security/gi;
+    // Match a financial term as a term, not as a substring of ordinary lesson
+    // language. In particular, collective accountability is not an account record.
+    var sensitive = /\$[0-9,]+|\bbank\b|\baccount\b|\bssn\b|\bsocial security\b/gi;
     if (sensitive.test(text)) {
       return { ok: false, gated: true, reason: 'sensitive_content_below_trust5' };
     }
