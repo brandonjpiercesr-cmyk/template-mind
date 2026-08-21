@@ -3,6 +3,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { TextDecoder } = require('node:util');
+const exactHam = require('./exact.ham.uid.js');
 
 const COOKIE_NAME = 'anu_ham';
 const GMGU_COOKIE_NAME = 'anu_gmgu';
@@ -68,6 +70,7 @@ const TIER_WORLD_ID = 'world_id';
 const TIER_GMGU = 'gmgu';
 const TIER_GMGU_PUBLIC = 'gmgu_public';
 const TIER_SEPARATOR = '~';
+const EXACT_SIGN_IN_MARK = 'e2';
 const WORLD_ID_MARK = 'w1';
 const GMGU_MARK = 'g1';
 const GMGU_PUBLIC_MARK = 'g2';
@@ -76,6 +79,10 @@ const WORLD_ID_TTL_SECONDS = 12 * 60 * 60;
 const GMGU_TTL_SECONDS = 30 * 24 * 60 * 60;
 const INTERNAL_CYCLE_VERSION = 'anew.ham.internal-cycle-context.v1';
 const INTERNAL_CYCLE_MAX_LIFETIME_MS = 2 * 60 * 1000;
+const MAX_EXACT_SIGN_IN_DATA_LENGTH = Math.ceil(exactHam.MAX_EXACT_HAM_UID_BYTES * 4 / 3);
+const MAX_SESSION_TOKEN_LENGTH = EXACT_SIGN_IN_MARK.length + TIER_SEPARATOR.length
+  + MAX_EXACT_SIGN_IN_DATA_LENGTH + 1 + 64;
+const CANONICAL_BASE64URL = /^[A-Za-z0-9_-]+$/;
 // ⬡B:core.ham_session_authorization:FIX:uppercasing_before_checking_let_case_folding_invent_a_world:20260726⬡
 // The SAME shape of the world ID pattern, but written to be tested against the input BEFORE
 // it is uppercased, which is the whole point of its existing.
@@ -143,6 +150,17 @@ function signHamSession(hamUid) {
   const mac = normalized ? macFor(normalized) : null;
   if (!normalized || !mac) return null;
   return normalized + '.' + mac;
+}
+
+// The explicit exact-HAM full-trust format is for an already authenticated sign_in identity
+// source. A typed world ID must keep using signWorldIdSession below and can never call this.
+// The old signHamSession format above remains byte-identical for every existing caller.
+function signExactHamSession(hamUid) {
+  if (!exactHam.isValidExactHamUid(hamUid)) return null;
+  const data = Buffer.from(hamUid, 'utf8').toString('base64url');
+  const payload = EXACT_SIGN_IN_MARK + TIER_SEPARATOR + data;
+  const mac = macFor(payload);
+  return mac ? payload + '.' + mac : null;
 }
 
 // THE WEAKER TIER. Same signer, same secret, same cookie name, same verifier. Three differences
@@ -264,6 +282,26 @@ function worldIdSessionCookie(hamUid, opts) {
 // against. Returning the canonical form rather than re-serialising at the call site is what
 // stops a lenient parser from accepting one string and verifying a different one.
 function parseSessionPayload(payload) {
+  if (payload.startsWith(EXACT_SIGN_IN_MARK + TIER_SEPARATOR)) {
+    const exactParts = payload.split(TIER_SEPARATOR);
+    if (exactParts.length !== 2 || exactParts[0] !== EXACT_SIGN_IN_MARK
+      || exactParts[1].length > MAX_EXACT_SIGN_IN_DATA_LENGTH
+      || !CANONICAL_BASE64URL.test(exactParts[1])) return null;
+    let bytes;
+    let hamUid;
+    try {
+      bytes = Buffer.from(exactParts[1], 'base64url');
+      if (bytes.byteLength < 1 || bytes.byteLength > exactHam.MAX_EXACT_HAM_UID_BYTES
+        || bytes.toString('base64url') !== exactParts[1]) return null;
+      hamUid = new TextDecoder('utf-8', { fatal:true }).decode(bytes);
+    } catch (e) {
+      return null;
+    }
+    if (!exactHam.isValidExactHamUid(hamUid)
+      || Buffer.compare(Buffer.from(hamUid, 'utf8'), bytes) !== 0) return null;
+    return { hamUid:hamUid, via:TIER_SIGN_IN, expiresAt:null,
+      canonical:payload, exactSignIn:true };
+  }
   if (payload.indexOf(TIER_SEPARATOR) === -1) {
     const hamUid = normalizeHamUid(payload);
     if (!hamUid) return null;
@@ -296,13 +334,15 @@ function verifyAnySessionToken(token) {
   const secret = signingSecret();
   if (!secret) return { ok:false, status:503, reason:'ham_session_secret_unconfigured' };
   const raw = typeof token === 'string' ? token.trim() : '';
-  if (!raw || raw.length > 320) {
+  if (!raw || raw.length > MAX_SESSION_TOKEN_LENGTH) {
     return { ok:false, status:401, reason:'ham_session_invalid' };
   }
   const separator = raw.lastIndexOf('.');
   if (separator <= 0) return { ok:false, status:401, reason:'ham_session_invalid' };
   const parsed = parseSessionPayload(raw.slice(0, separator));
-  const suppliedMac = raw.slice(separator + 1).toLowerCase();
+  const suppliedMacRaw = raw.slice(separator + 1);
+  const suppliedMac = parsed && parsed.exactSignIn
+    ? suppliedMacRaw : suppliedMacRaw.toLowerCase();
   if (!parsed || !MAC_PATTERN.test(suppliedMac)) {
     return { ok:false, status:401, reason:'ham_session_invalid' };
   }
@@ -1257,6 +1297,8 @@ module.exports = {
   TIER_WORLD_ID,
   TIER_GMGU,
   TIER_GMGU_PUBLIC,
+  EXACT_SIGN_IN_MARK,
+  MAX_SESSION_TOKEN_LENGTH,
   WORLD_ID_TTL_SECONDS,
   GMGU_TTL_SECONDS,
   signingSecret,
@@ -1264,6 +1306,7 @@ module.exports = {
   isPublicGmguHamUid,
   worldIdForPage,
   signHamSession,
+  signExactHamSession,
   signWorldIdSession,
   signGmguSession,
   signGmguPublicSession,
