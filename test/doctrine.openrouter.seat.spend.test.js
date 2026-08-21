@@ -53,6 +53,36 @@ test('exact named seat owns its key and shared or duplicate keys fail closed',
     } finally { restoreEnv(saved); }
   });
 
+test('only an existing server attribution may resolve a legacy shared named key',
+  {concurrency:false}, async function () {
+    const runtime={
+      OR_KEY_GMGU_TUTOR:'shared-gmgu-judge-key',
+      OR_KEY_JUDGE_QWEN:'shared-gmgu-judge-key',
+      SEAT_GMGU_TUTOR_DAILY_CAP_USD:'4',
+      SEAT_JUDGE_DAILY_CAP_USD:'4'
+    };
+    const guard=require(GUARD_PATH);
+    const spend=require(SPEND_PATH);
+    assert.equal(guard.keyOwner('shared-gmgu-judge-key',runtime).reason,
+      'openrouter_key_shared_across_seats');
+    let paid=0;
+    const rejected=await guard.run('https://openrouter.ai/api/v1/chat/completions',
+      {headers:{Authorization:'Bearer shared-gmgu-judge-key','x-seat':'gmgu_tutor'}},
+      async function () { throw new Error('must_not_read_usage'); },
+      async function () { paid+=1; return new Response('paid'); },runtime);
+    assert.equal(rejected.blocked,true);
+    assert.equal(rejected.reason,'openrouter_key_shared_across_seats');
+    await spend.withAttribution({seat:'gmgu_tutor',component:'pai.cycle'},async function () {
+      const resolved=await guard.run('https://openrouter.ai/api/v1/chat/completions',
+        {headers:{Authorization:'Bearer shared-gmgu-judge-key'}},
+        async function () { return keyResponse(0.01); },
+        async function () { paid+=1; return new Response('paid'); },runtime);
+      assert.equal(resolved.blocked,false);
+      assert.equal(resolved.seat,'gmgu_tutor');
+    });
+    assert.equal(paid,1);
+  });
+
 test('provider-reported daily usage blocks the exact seat before paid egress',
   {concurrency:false}, async function () {
     const saved = preserveEnv();
