@@ -4390,7 +4390,14 @@ function createDefaultDependencies(overrides) {
     // require('./model.ladder.js') and process.env exactly as before, so the
     // default runtime path is unchanged; only the injection seam is restored.
     modelLadder: overrides.modelLadder,
-    env: overrides.env
+    env: overrides.env,
+    // The final answer may be transformed by any of the six council stages. The
+    // cycle owner can therefore supply a narrow, final-byte name-boundary fact
+    // before STAMP starts durable receipt work. This callback does not author,
+    // edit, or judge the answer. It only carries the boundary finding back to
+    // the cycle so A'NU can decide the one permitted rewrite.
+    preCommitNameBoundary: typeof overrides.preCommitNameBoundary === 'function'
+      ? overrides.preCommitNameBoundary : null
   };
 }
 
@@ -5580,6 +5587,55 @@ async function runOutboundCouncil(input, injected) {
       ? hollowStageReason(stampResult.answer, stampResult.reason)
       : (stampResult.reason || 'stamp_preflight_held'),
     'STAMP', stages, input, currentAnswer);
+  }
+
+  // The STAMP preflight has passed, but no receipt row exists yet. A council
+  // stage can have changed a clean draft into a real-name attribution, so the
+  // final-byte boundary belongs here, before the durable council commit. Cold
+  // code carries only a bounded finding. The caller owns the one name-free
+  // A'NU rewrite and must resubmit it through the complete council.
+  if (typeof deps.preCommitNameBoundary === 'function') {
+    var _preCommitNameBoundary;
+    try {
+      _preCommitNameBoundary = await deps.preCommitNameBoundary({
+        hamUid: input.hamUid,
+        requestId: input.requestId,
+        cycleId: input.cycleId,
+        question: input.question,
+        answer: currentAnswer,
+        channel: input.channel || 'ccwa',
+        activeWorld: input.activeWorld || null
+      });
+    } catch (preCommitNameBoundaryError) {
+      _preCommitNameBoundary = {
+        ok: false,
+        reason: 'name_boundary_check_failed_fail_closed'
+      };
+    }
+    if (councilCancellationRequested(input)) {
+      return failureResult('council_cancelled', 'CANCELLED', stages, input, currentAnswer);
+    }
+    if (!_preCommitNameBoundary || _preCommitNameBoundary.ok !== true) {
+      var _rawPreCommitNameReason = _preCommitNameBoundary &&
+        _preCommitNameBoundary.reason;
+      var _preCommitNameReason = /^(?:named_[a-z0-9_]+|name_boundary_check_failed_fail_closed)$/
+        .test(String(_rawPreCommitNameReason || ''))
+        ? String(_rawPreCommitNameReason)
+        : 'name_boundary_check_failed_fail_closed';
+      var _preCommitHeldStamp = makeStageReceipt('STAMP', stampIndex, true, true, false,
+        currentAnswer, currentAnswer, stampStarted, stampEnded, _preCommitNameReason,
+        Object.assign({}, stampResult.evidence || {}, {
+          state: 'HELD_PRE_COMMIT_NAME_BOUNDARY',
+          name_boundary_reason: _preCommitNameReason
+        }));
+      _preCommitHeldStamp.state = 'HELD_PRE_COMMIT_NAME_BOUNDARY';
+      stages.push(_preCommitHeldStamp);
+      var _preCommitNameHold = failureResult(_preCommitNameReason, 'STAMP', stages,
+        input, currentAnswer);
+      _preCommitNameHold.pre_commit_name_boundary = true;
+      _preCommitNameHold.pre_commit_name_boundary_reason = _preCommitNameReason;
+      return _preCommitNameHold;
+    }
   }
 
   // ⬡COLD:remember:become:PAI_OUTBOUND_COUNCIL_WONDER:20260724⬡
