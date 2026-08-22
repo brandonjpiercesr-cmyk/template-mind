@@ -118,7 +118,7 @@ function rowField(row, snake, camel) {
   return row && row[snake] != null ? row[snake] : row && row[camel];
 }
 
-async function persist(exactPacket, judged, options) {
+async function persist(exactPacket, judged, options, independentReview) {
   var bound = exactPacket.binding;
   var edges = [
     {type:'ABOUT',target:'pai.cycle.' + bound.cycle_id},
@@ -135,6 +135,7 @@ async function persist(exactPacket, judged, options) {
     shadow_verdict:receiptVerdict(judged),
     final_human_output:receiptText(exactPacket.final_human_output),
     decision:judged.decision,resume_condition:resume,edges:edges};
+  if (independentReview) content.independent_review = independentReview;
   content.receipt_digest = digest(content);
   var source = 'writ.meaning.shadow.' + bound.ham_uid.toLowerCase() + '.' + content.receipt_digest;
   var brain = options.brain || require('./brain.client.js');
@@ -266,8 +267,9 @@ async function judge(input, options) {
   //
   // WHY THIS IS NOT A WEAKENING, and the distinction is the whole point. It would have been
   // easy and wrong to release her bytes when the judge is unreachable. That is not what this
-  // does. UNCERTAIN still holds exactly as the 20260807 gate requires, because UNCERTAIN is a
-  // judgment a mind FORMED after looking. UNREACHABLE is the absence of any judgment at all.
+  // does. A first UNCERTAIN asks C4 for one independent verdict on the same packet. It is not
+  // a clearance by itself. An unresolved or second UNCERTAIN still holds, because UNCERTAIN is
+  // a judgment a mind FORMED after looking. UNREACHABLE is the absence of any judgment at all.
   // The repair is not to decide in the judge's place. It is to make the judge REACHABLE.
   //
   // NOTHING ABOUT THE QUESTION CHANGES. The system prompt and the user payload above are passed
@@ -286,19 +288,24 @@ async function judge(input, options) {
   var raw;
   var judgeSeats = ['c1_cellm', 'c4_watch'];
   var lastJudgeError = null;
+  var answeringSeat = null;
+  var chatSeat = opts.chatSeat || require('./model.router.js').chatSeat;
+  var askSeat = async function (judgeSeat) {
+    return await chatSeat(judgeSeat,[
+      {role:'system',content:system},{role:'user',content:user}
+    ],{temperature:0,maxTokens:320,reasoning:{effort:'none',exclude:true},
+      requireParameters:true,signal:opts.signal || undefined,
+      attribution:{component:'writ.meaning.shadow',
+      ham_uid:bound.ham_uid,request_id:bound.request_id + '.writ-meaning-shadow',
+      cycle_id:bound.cycle_id,seat:judgeSeat,owner_node_id:'agent.penny_shadow',
+      target_wonder_id:'agent.penny_shadow'}});
+  };
   for (var seatIndex = 0; seatIndex < judgeSeats.length; seatIndex++) {
     var judgeSeat = judgeSeats[seatIndex];
     try {
-      var chatSeat = opts.chatSeat || require('./model.router.js').chatSeat;
-      raw = await chatSeat(judgeSeat,[
-        {role:'system',content:system},{role:'user',content:user}
-      ],{temperature:0,maxTokens:320,reasoning:{effort:'none',exclude:true},
-        requireParameters:true,signal:opts.signal || undefined,
-        attribution:{component:'writ.meaning.shadow',
-        ham_uid:bound.ham_uid,request_id:bound.request_id + '.writ-meaning-shadow',
-        cycle_id:bound.cycle_id,seat:judgeSeat,owner_node_id:'agent.penny_shadow',
-        target_wonder_id:'agent.penny_shadow'}});
+      raw = await askSeat(judgeSeat);
       lastJudgeError = null;
+      answeringSeat = judgeSeat;
       break;
     } catch (error) {
       lastJudgeError = error;
@@ -333,7 +340,33 @@ async function judge(input, options) {
     if (!attempt.ok) return {ok:false,reason:attempt.reason};
     return {ok:false,reason:invalidReason,attempt:attempt};
   }
-  var receipt = await persist(exactPacket,judged,opts);
+  // A valid C1 uncertainty is a formed semantic judgment, not a transport failure.
+  // It therefore cannot release the answer on its own. C4 receives the same frozen
+  // four-text packet once, with no hint about C1's conclusion, and may independently
+  // clear or hold it. A missing, malformed, or uncertain C4 review preserves C1's hold.
+  // This is one second opinion, not a retry loop and not a code-authored clearance.
+  var independentReview = null;
+  if (judged.decision === 'UNCERTAIN' && answeringSeat === 'c1_cellm' &&
+      !(opts.signal && opts.signal.aborted)) {
+    var firstUncertain = receiptVerdict(judged);
+    try {
+      var reviewRaw = await askSeat('c4_watch');
+      var reviewCompletion = completionTruth(reviewRaw);
+      var reviewJudged = reviewCompletion.complete ? verdict(reviewRaw) : null;
+      if (reviewJudged) {
+        independentReview = {initial_uncertain:firstUncertain,reviewer_seat:'c4_watch',
+          outcome:'verdict',reviewer_verdict:receiptVerdict(reviewJudged)};
+        judged = reviewJudged;
+      } else {
+        independentReview = {initial_uncertain:firstUncertain,reviewer_seat:'c4_watch',
+          outcome:reviewCompletion.complete ? 'invalid' : 'incomplete'};
+      }
+    } catch (reviewError) {
+      independentReview = {initial_uncertain:firstUncertain,reviewer_seat:'c4_watch',
+        outcome:'unavailable'};
+    }
+  }
+  var receipt = await persist(exactPacket,judged,opts,independentReview);
   var publicShadow = receiptVerdict(judged);
   if (!receipt.ok) return {ok:false,reason:receipt.reason,shadow:publicShadow};
   if (judged.decision !== 'AGREE') return {ok:false,

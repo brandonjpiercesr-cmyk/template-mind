@@ -3850,8 +3850,10 @@ async function defaultWritStage(ctx) {
 //   DISAGREE + consequential === false SHADOW disagrees, and says the difference is tone,
 //                                      warmth, length, or ordinary wording, not a changed
 //                                      fact, number, date, name, commitment, or authority
-// UNCERTAIN is never a clearance. The shadow's own prompt reserves it for "the comparison
-// cannot be made honestly," and an unverifiable meaning is precisely what must not ship.
+// An unresolved UNCERTAIN is never a clearance. The shadow's own prompt reserves it for
+// "the comparison cannot be made honestly," and an unverifiable meaning is precisely what
+// must not ship. The shadow may obtain one independent C4 verdict before this function sees
+// the final decision. This allowlist still releases only that final affirmative clearance.
 // consequential must be the literal boolean false; a missing, null, or truthy value holds.
 // ⬡B:core.pai_outbound_council:FIX:a_different_byte_is_not_a_repair:20260808⬡
 // BLIND CRITIC SEV-2. The re-mint's stop guard was exact byte equality, so a one-character
@@ -4122,9 +4124,9 @@ async function defaultAnuExpressionStage(ctx) {
     // The gate is now a positive CLEARANCE, not the absence of a named break. Bytes ship
     // only when SHADOW agreed, or when it disagreed and affirmatively marked the
     // disagreement non-consequential (tone, warmth, length, ordinary wording). Anything
-    // else, UNCERTAIN included, holds exactly as it did before the rebuild. This is the
-    // "strictly safer-or-equal" property the first cut claimed but did not have: the only
-    // case that ships now and did not ship before is a proven tone-only disagreement.
+    // else, including a final unresolved UNCERTAIN, holds exactly as it did before the rebuild.
+    // This is the "strictly safer-or-equal" property the first cut claimed but did not have:
+    // the only case that ships now and did not ship before is a proven tone-only disagreement.
     var meaningRanBound = !!(meaning && finalBytesBound);
     if (meaning && meaning.ok !== true &&
         meaning.reason === 'writ_meaning_shadow_unavailable') {
@@ -5178,7 +5180,7 @@ async function runOutboundCouncil(input, injected) {
       // META privacy organ, and freezes a fresh packet bound to the healed bytes and to this
       // run. ANU_EXPRESSION then formats those bytes and SHADOW judges the repaired answer
       // honestly against a chain that actually describes it. Nothing is waived: the release
-      // gate is still the positive meaningCleared allowlist, UNCERTAIN still never releases,
+      // gate is still the positive meaningCleared allowlist, a final unresolved UNCERTAIN never releases,
       // and a second disagreement still ends the turn. One repair, never a retry loop.
       // ⬡B:core.pai_outbound_council:FIX:only_a_verdict_is_healable_never_a_broken_chain:20260808⬡
       // BLIND CRITIC SEV-1, caught within the hour of the re-mint landing. The trigger was
@@ -5203,7 +5205,7 @@ async function runOutboundCouncil(input, injected) {
       // THE LINE, stated precisely: did SHADOW actually RUN and render a verdict ON THE REAL
       // BYTES? DISAGREE and UNCERTAIN both mean yes, so both are craft problems a rewrite can
       // genuinely cure, and both still have to clear the positive meaningCleared allowlist on
-      // resubmission, which UNCERTAIN can never do. Every other reason means SHADOW did not
+      // resubmission, which a final unresolved UNCERTAIN can never do. Every other reason means SHADOW did not
       // get a real look, and no amount of rewriting the sentence cures a dead organ, an
       // unbound packet or a failed receipt readback.
       var _MEANING_HEALABLE_REASONS = ['writ_meaning_shadow_disagreement',
