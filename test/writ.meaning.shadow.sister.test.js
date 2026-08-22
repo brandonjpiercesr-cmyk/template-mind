@@ -85,6 +85,36 @@ test('the inherited Penny SHADOW holds a model-owned meaning reversal', async fu
   assert.equal(JSON.stringify(out.receipt).includes('The surgery'),false);
 });
 
+test('the inherited Penny asks C4 once when C1 is uncertain, and only C4 can clear it',async function(){
+  const calls=[];
+  const out=await meaning.judge(packet(),{brain:exactBrain(),chatSeat:async function(seat,messages,options){
+    calls.push({seat:seat,messages:messages,options:options});
+    return{content:JSON.stringify(seat==='c1_cellm'
+      ?{decision:'UNCERTAIN',reason:'The first reading is not clear.'}
+      :{decision:'AGREE',reason:'The independent reading preserves meaning.'})};
+  }});
+  assert.equal(out.ok,true);
+  assert.deepEqual(calls.map(function(call){return call.seat;}),['c1_cellm','c4_watch']);
+  assert.equal(calls[0].messages[0].content,calls[1].messages[0].content);
+  assert.equal(calls[0].messages[1].content,calls[1].messages[1].content);
+  assert.equal(calls[0].options.attribution.seat,'c1_cellm');
+  assert.equal(calls[1].options.attribution.seat,'c4_watch');
+  assert.equal(out.receipt.content.independent_review.initial_uncertain.decision,'UNCERTAIN');
+  assert.equal(out.receipt.content.independent_review.reviewer_verdict.decision,'AGREE');
+});
+
+test('the inherited Penny holds when C1 and C4 are both uncertain',async function(){
+  const calls=[];
+  const out=await meaning.judge(packet(),{brain:exactBrain(),chatSeat:async function(seat){
+    calls.push(seat);
+    return{content:JSON.stringify({decision:'UNCERTAIN',reason:'The comparison is not clear.'})};
+  }});
+  assert.equal(out.ok,false);
+  assert.equal(out.reason,'writ_meaning_shadow_uncertain');
+  assert.deepEqual(calls,['c1_cellm','c4_watch']);
+  assert.equal(out.receipt.content.independent_review.reviewer_verdict.decision,'UNCERTAIN');
+});
+
 test('the inherited Penny seat carries validated reasoning controls through the real router',async function(){
   await withEnvAsync({OR_KEY_C1_CELLM:'template-penny-test-key'},async function(){
     const priorFetch=global.fetch;let body;
