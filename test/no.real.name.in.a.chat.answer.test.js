@@ -502,6 +502,22 @@ test('the name-boundary repair wakes a fresh A\'NU turn without carrying private
     'the repair must not feed the original transcript or rejected answer back to the model');
 });
 
+test('the name-boundary repair has one private retry after the generic repair budget', function () {
+  const src = fs.readFileSync(TOOL_LOOP_PATH, 'utf8');
+  assert.match(src, /var _preCouncilNameBoundaryRepairUsed = false;/,
+    'name-boundary repair needs its own bounded retry record');
+  assert.match(src, /function _isNameBoundaryFailure\(code\)/,
+    'the special retry must classify only a boundary-owned failure');
+  assert.match(src, /if \(_nameBoundaryRepair\) \{\s*if \(_preCouncilNameBoundaryRepairUsed\) return \{answer:'',repaired:false\};\s*_preCouncilNameBoundaryRepairUsed = true;/,
+    'a second private retry must fail closed');
+  const preparation = src.slice(src.indexOf('var _preparedHuman = await _prepareHumanAnswerOnce(finalAns);'),
+    src.indexOf('if (!_preparedHuman.ok) {', src.indexOf('var _preparedHuman = await _prepareHumanAnswerOnce(finalAns);')));
+  assert.match(preparation, /_isNameBoundaryFailure\(_preparedHuman.reason\)/,
+    'a name hold after a generic repair must still reach the private retry');
+  assert.match(preparation, /!_preCouncilNameBoundaryRepairUsed/,
+    'the private retry must remain bounded to one attempt');
+});
+
 test('the post-council name-boundary catch block fails closed, not open', function () {
   const src = fs.readFileSync(TOOL_LOOP_PATH, 'utf8');
   const catchSrc = extractCatchBlock(src,
