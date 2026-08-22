@@ -7363,6 +7363,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (await _turnCancelled()) return _turnCancelledResult('after_deliberation');
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
   var _preCouncilHumanRepairUsed = false;
+  var _preCouncilNameBoundaryRepairUsed = false;
+  function _isNameBoundaryFailure(code) {
+    return /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
+      String(code || ''));
+  }
   // ⬡B:core.tool_loop:FIX:the_forced_synthesis_could_not_run_on_the_path_it_was_written_for:20260726⬡
   // MEASURED BY READING, not guessed, and it is why the founder met a canned sentence.
   // exhaustion_forced_synthesis is the good recovery: full token cap, "answer the whole
@@ -7464,11 +7469,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     return {ok:false,seat:null,reason:'no_mind_answered_on_either_rung'};
   }
   async function _repairHumanOnce(candidate, failureCode) {
-    if (_preCouncilHumanRepairUsed) return {answer:'',repaired:false};
+    var _nameBoundaryRepair = _isNameBoundaryFailure(failureCode);
+    if (_nameBoundaryRepair) {
+      if (_preCouncilNameBoundaryRepairUsed) return {answer:'',repaired:false};
+      _preCouncilNameBoundaryRepairUsed = true;
+    } else if (_preCouncilHumanRepairUsed) {
+      return {answer:'',repaired:false};
+    }
     _preCouncilHumanRepairUsed = true;
     var _oneRepairCap;
-    var _nameBoundaryRepair = /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
-      String(failureCode || ''));
     // The rejected draft and the original request can both carry a private name. A repair
     // prompt that includes either one gives the next model call the same unsafe material that
     // the boundary just held. Wake A'NU with only the machine fact and the existing bounded
@@ -8256,7 +8265,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     finalAns=_preparedWorldDecision.text;
   } else {
     var _preparedHuman = await _prepareHumanAnswerOnce(finalAns);
-    if (!_preparedHuman.ok && !_preCouncilHumanRepairUsed) {
+    if (!_preparedHuman.ok && (!_preCouncilHumanRepairUsed ||
+      (_isNameBoundaryFailure(_preparedHuman.reason) &&
+        !_preCouncilNameBoundaryRepairUsed))) {
       _stampStep('preparation_answer_healing', _preparedHuman.reason);
       var _lateRepair = await _repairHumanOnce(finalAns, _preparedHuman.reason);
       if (await _turnCancelled(true)) return _turnCancelledResult('after_preparation_repair');
