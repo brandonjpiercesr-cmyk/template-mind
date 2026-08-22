@@ -5292,6 +5292,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
             String(detail||''))) {
         detail = String(detail).slice(0, 132);
       }
+      else if (step === 'outbound_council_name_boundary_healing' &&
+          /^(?:named_[a-z0-9_]+|name_boundary_check_failed_fail_closed)$/.test(
+            String(detail||''))) {
+        detail = String(detail).slice(0, 120);
+      }
+      else if (step === 'outbound_council_name_boundary_heal_outcome' &&
+          /^(?:empty|passed|rejected:(?:named_[a-z0-9_]+|name_boundary_check_failed_fail_closed))$/.test(
+            String(detail||''))) {
+        detail = String(detail).slice(0, 132);
+      }
       else if (/^(?:outbound_council_blocked|cycle_end_silent|post_council_effect_failed)$/.test(step)) {
         var _voiceCodes = String(detail || '').toLowerCase().match(/[a-z0-9][a-z0-9_.:-]{0,79}/g) || [];
         detail = _voiceCodes.slice(0, 4).join(',') || step;
@@ -7364,6 +7374,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
   var _preCouncilHumanRepairUsed = false;
   var _preCouncilNameBoundaryRepairUsed = false;
+  var _postCouncilNameBoundaryRepairUsed = false;
   function _isNameBoundaryFailure(code) {
     return /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
       String(code || ''));
@@ -7468,6 +7479,26 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     } catch (eHocPenny) {}
     return {ok:false,seat:null,reason:'no_mind_answered_on_either_rung'};
   }
+  // The rejected draft and the original request can both carry a private name. A repair
+  // prompt that includes either one gives the next model call the same unsafe material that
+  // the boundary just held. Wake A'NU with only the machine fact and the existing bounded
+  // learning purpose instead. She still writes the sentence, and her fresh bytes still pass
+  // every preparation, council, and receipt gate below.
+  async function _nameFreeHumanRepair() {
+    var _nameFreeRepair = await _herOwnClosingSentence(
+      'A privacy boundary held the prior draft. Give one direct, practical sentence that helps '
+        + 'the learner take their next step in the work in front of them. Do not name or describe '
+        + 'who created, owns, built, founded, employs, or runs you. Do not mention this boundary '
+        + 'or the held draft.',
+      'A privacy boundary held a previous draft because it carried an unsafe attribution. '
+        + 'The original request and held draft are deliberately unavailable for this retry. '
+        + 'Answer only from the bounded learning purpose already established for this turn. '
+        + 'Do not reconstruct, name, or mention either unavailable text.',
+      {omitRequest:true});
+    return _nameFreeRepair && _nameFreeRepair.ok
+      ? {answer:_nameFreeRepair.sentence,repaired:true,lane:'name_free_closing'}
+      : {answer:'',repaired:false};
+  }
   async function _repairHumanOnce(candidate, failureCode) {
     var _nameBoundaryRepair = _isNameBoundaryFailure(failureCode);
     if (_nameBoundaryRepair) {
@@ -7478,26 +7509,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     _preCouncilHumanRepairUsed = true;
     var _oneRepairCap;
-    // The rejected draft and the original request can both carry a private name. A repair
-    // prompt that includes either one gives the next model call the same unsafe material that
-    // the boundary just held. Wake A'NU with only the machine fact and the existing bounded
-    // learning purpose instead. She still writes the sentence, and her fresh bytes still pass
-    // every preparation, council, and receipt gate below.
-    if (_nameBoundaryRepair) {
-      var _nameFreeRepair = await _herOwnClosingSentence(
-        'A privacy boundary held the prior draft. Give one direct, practical sentence that helps '
-          + 'the learner take their next step in the work in front of them. Do not name or describe '
-          + 'who created, owns, built, founded, employs, or runs you. Do not mention this boundary '
-          + 'or the held draft.',
-        'A privacy boundary held a previous draft because it carried an unsafe attribution. '
-          + 'The original request and held draft are deliberately unavailable for this retry. '
-          + 'Answer only from the bounded learning purpose already established for this turn. '
-          + 'Do not reconstruct, name, or mention either unavailable text.',
-        {omitRequest:true});
-      return _nameFreeRepair && _nameFreeRepair.ok
-        ? {answer:_nameFreeRepair.sentence,repaired:true,lane:'name_free_closing'}
-        : {answer:'',repaired:false};
-    }
+    if (_nameBoundaryRepair) return _nameFreeHumanRepair();
     var _capabilityBoundaryRepair = /(?:current_capability_evidence_missing|stale_single_file_claim|unsupported_exhaustive_claim|unsupported_capability_clause|unsupported_negative_capability_claim|internal_capability_surface_exposed|ambiguous_capability_subject|supported_capability_clause_missing)/
       .test(String(failureCode || ''));
     // A privacy-held attribution is evidence of what must NOT be repeated. Feeding
@@ -7523,6 +7535,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       + 'repair, or describe yourself as an AI/model.' + _nameRepairInstruction
       + _capabilityRepairInstruction });
     return _repairedHuman;
+  }
+  async function _repairPostCouncilNameBoundaryOnce(failureCode) {
+    if (!_isNameBoundaryFailure(failureCode) || _postCouncilNameBoundaryRepairUsed) {
+      return {answer:'',repaired:false};
+    }
+    _postCouncilNameBoundaryRepairUsed = true;
+    return _nameFreeHumanRepair();
   }
   // ⬡B:core.tool_loop:WIRE:loop_exit_receipt:20260718⬡ bisection instrument:
   // names whether the kill is inside the loop or in the post-loop passes.
@@ -8501,21 +8520,90 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     _callPaiLadder);
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
   var _worldBuilderDraftBytes=_worldBuilderMachine?finalAns:null;
+  // The council may change otherwise clean A'NU bytes. Run the exact same
+  // boundary on its final candidate before STAMP begins durable council work.
+  // This cold callback only returns the bounded fact. It neither changes the
+  // candidate nor decides its replacement. A'NU owns the one permitted
+  // name-free retry below.
+  function _preCommitCouncilNameBoundary(candidate) {
+    if (_structuredReachPolicy || _worldBuilderMachine) return {ok:true};
+    var _candidateAnswer = candidate && candidate.answer;
+    if (typeof _candidateAnswer !== 'string') {
+      return {ok:false,reason:'name_boundary_check_failed_fail_closed'};
+    }
+    try {
+      var _preCommitCouncilNameLeak = realNameBoundary.violation(_proofQuestion,
+        _candidateAnswer, { personName:hamObj && hamObj.name, env:process.env,
+          assistantName:CANONICAL_ASSISTANT_NAME });
+      return _preCommitCouncilNameLeak
+        ? {ok:false,reason:_preCommitCouncilNameLeak} : {ok:true};
+    } catch (ePreCommitCouncilName) {
+      return {ok:false,reason:'name_boundary_check_failed_fail_closed'};
+    }
+  }
+  function _councilInputFor(answer) {
+    return {
+      hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
+      deliberationInput:String(message||''),
+      answer:answer,channel:channel,activeWorld:_activeWorld,
+      delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext,
+      signal:_turnAbortSignal,
+      currentCapabilityAnswerBinding:_currentCapabilityAnswerBinding
+    };
+  }
+  async function _runCouncilWithPreCommitNameBoundary(answer) {
+    return runOutboundCouncil(_councilInputFor(answer), {
+      preCommitNameBoundary:_preCommitCouncilNameBoundary
+    });
+  }
+  function _isPreCommitCouncilNameHold(result) {
+    return !!(result && result.pre_commit_name_boundary === true &&
+      _isNameBoundaryFailure(result.pre_commit_name_boundary_reason || result.reason));
+  }
   if (await _turnCancelled(true)) return _turnCancelledResult('before_council');
   if (_reachIncidentIntake&&
       !await reachIncidentFence(identity,'before_council'))return{ok:false,
     reason:'reach_incident_claim_lost',blocked_by:'REACH_INCIDENT_FENCE',ham:hamObj,
     cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
     ms:Date.now()-t0};
-  var _council = await runOutboundCouncil({
-    hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
-    deliberationInput:String(message||''),
-    answer:finalAns,channel:channel,activeWorld:_activeWorld,
-    delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext,
-    signal:_turnAbortSignal,
-    currentCapabilityAnswerBinding:_currentCapabilityAnswerBinding
-  });
+  var _council = await _runCouncilWithPreCommitNameBoundary(finalAns);
   if (await _turnCancelled(true)) return _turnCancelledResult('after_council');
+  // A clean A'NU draft can be made unsafe by a council stage. The council has
+  // deliberately returned before writing any of its receipt rows, so A'NU can
+  // author exactly one name-free answer and submit that new answer through the
+  // full council. A capability-bound answer is exact-byte evidence and cannot
+  // be rewritten without invalidating that independent proof.
+  if (!_currentCapabilityAnswerBinding && !_structuredReachPolicy &&
+      !_worldBuilderMachine && _isPreCommitCouncilNameHold(_council)) {
+    var _postCouncilNameReason = String(_council.pre_commit_name_boundary_reason ||
+      _council.reason || 'name_boundary_check_failed_fail_closed');
+    _stampStep('outbound_council_name_boundary_healing', _postCouncilNameReason);
+    var _postCouncilNameRepairAlreadyUsed = _postCouncilNameBoundaryRepairUsed;
+    var _postCouncilNameRepair = await _repairPostCouncilNameBoundaryOnce(
+      _postCouncilNameReason);
+    if (await _turnCancelled(true)) {
+      return _turnCancelledResult('after_outbound_council_name_repair');
+    }
+    var _postCouncilNameOutcome = _postCouncilNameRepairAlreadyUsed
+      ? 'rejected:' + _postCouncilNameReason : 'empty';
+    if (_postCouncilNameRepair && _postCouncilNameRepair.answer) {
+      var _preparedPostCouncilNameRepair = await _prepareHumanAnswerOnce(
+        _postCouncilNameRepair.answer);
+      _postCouncilNameOutcome = _preparedPostCouncilNameRepair.ok ? 'passed'
+        : 'rejected:' + String(_preparedPostCouncilNameRepair.reason || 'unknown').slice(0, 120);
+      if (_preparedPostCouncilNameRepair.ok) {
+        finalAns = _preparedPostCouncilNameRepair.answer;
+        _screenBlock = _preparedPostCouncilNameRepair.screenBlock || null;
+        _council = await _runCouncilWithPreCommitNameBoundary(finalAns);
+        if (await _turnCancelled(true)) return _turnCancelledResult('after_council');
+      } else {
+        _council = {ok:false,reason:_preparedPostCouncilNameRepair.reason ||
+          'hollow_protocol_after_preparation',blocked_by:'A\'NU',
+          stages:(_council&&_council.stages)||[]};
+      }
+    }
+    _stampStep('outbound_council_name_boundary_heal_outcome', _postCouncilNameOutcome);
+  }
   var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
   var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
     question:_exactUserMessage,deliberationInput:String(message||''),
@@ -8652,11 +8740,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // which made the whole guard a check on bytes nobody reads. It runs again here, on the
   // exact bytes that leave.
   //
-  // AND IT REFUSES INSTEAD OF REPAIRING, unlike the pre council seam. The council has already
-  // committed; there is no honest way to hand these bytes back for a rewrite without running
-  // the whole cycle again. Silence is the floor this estate already chose for a held answer,
-  // and a leaked human is exactly what the floor is for. The reason is named, not anonymous,
-  // so the receipt says which boundary stopped it.
+  // The normal post-council repair happens one seam earlier, before STAMP's durable commit.
+  // This remains a final strict defense for an impossible or later mutation. The council has
+  // already committed by this point, so it must fail closed rather than create a second
+  // unbounded loop. The reason is named, not anonymous, so the receipt says which boundary
+  // stopped it.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
     var _postCouncilNameLeak = null;
     // ⬡B:core.tool_loop:FIX:a_leak_guard_that_fails_open_is_not_a_guard:20260729⬡
