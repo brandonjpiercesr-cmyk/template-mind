@@ -560,39 +560,51 @@ function hollowHoldReason(reason) {
 // to carry a named cause (stage_empty_answer:x, stage_threw:x, WRIT_HOLD:x), and match any
 // of them against the allowlist. This decides ONLY whether a channel may re-ask the real
 // question once. It never softens a gate, never lets a held answer through, and every
-// reason outside the list (shadow_deterministic_hold, PAM_HOLD, an action-claim hold, a
-// hollow protocol answer) still fails closed to honest silence exactly as before.
+// reason outside the list and its families (PAM_HOLD, an action-claim hold, an identity or
+// authority refusal) still fails closed to honest silence exactly as before.
 // ⬡B:core.pai_outbound_council:FIX:the_one_hold_this_gate_can_still_rescue:20260825⬡
 // A 20260825 census traced seven live paths in this file that end a turn with NO WORDS reaching
-// the person, and asked why not one of them is in this list. The honest answer, measured rather
-// than assumed, is that this list is NOT the lever for six of them, and widening it would have
-// made the person WORSE off. The one door that consumes this gate is core/wren/reply.js, and it
-// holds a hard ceiling of TWO council attempts per inbound. A retry spends the second one, and
-// its own boundary-speech seam then declines with 'pai_attempt_ceiling_reached'. So on that
-// door, being re-askable and getting a boundary sentence are MUTUALLY EXCLUSIVE, and
-// core/boundary.speech.js already speaks for every hold except STAMP, its own four
-// never-speaks causes, and the causes that are terminal by construction. Adding
-// shadow_deterministic_hold or the writ_meaning families here would trade a sentence the person
-// reliably receives, composed by HER, for a coin flip that ends in nothing when it loses.
-// Measured on the real suites before it was reverted: five wren rows went from delivering her
-// boundary sentence to delivering silence.
-// SO ONE ENTRY IS ADDED, and it is the only one of the seven that is a pure gain here.
-// 'answer_hollow_protocol' is refused at the INPUT gate, INPUT is not a stage in STAGE_ORDER,
-// and boundary.speech declines any non-stage with 'not_a_named_council_stage'. That turn gets no
-// sentence, no retry and no words at all today. It now gets the one re-ask, on top of the one
-// in-council repair added at the gate itself.
+// the person, and asked why not one of them is in this list. The first pass on this fix measured
+// rather than assumed, and found that the one door consuming this gate, core/wren/reply.js, held
+// a hard ceiling of TWO council attempts per inbound, so a retry spent the second attempt and
+// the boundary-speech seam then declined with 'pai_attempt_ceiling_reached': being re-askable
+// and getting a boundary sentence were MUTUALLY EXCLUSIVE, and the wider list was reverted after
+// five wren rows measurably went from delivering her boundary sentence to delivering silence.
+// Only 'answer_hollow_protocol' was added then: refused at the INPUT gate, INPUT is not a stage
+// in STAGE_ORDER, boundary.speech declines any non-stage with 'not_a_named_council_stage', so
+// that turn had no sentence, no retry and no words at all, and the re-ask was a pure gain.
+// ⬡B:core.pai_outbound_council:FIX:the_boundary_budget_landed_so_the_widening_is_safe:20260825⬡
+// SUPERSEDES the revert above, same day, because its one precondition fell. core/wren/reply.js
+// now charges the boundary sentence to its OWN budget of at most one further cycle (see the
+// 20260825 fix at its boundary gate: the sentence is not a judged answer attempt), so a re-ask
+// no longer eats the sentence and the mutual exclusion that forced the revert is gone. The
+// measured trade that reverted the widening cannot recur: the same five wren rows now deliver
+// her boundary sentence with the retry attempted first, re-proven on the wren wire suites after
+// this change. So the widening lands: 'shadow_deterministic_hold' joins the list (six holds),
+// and the writ_post_meta_ and writ_meaning_shadow_ families join through
+// CLEAN_BOARD_HOLD_REASON_FAMILIES below. All of them are one honest re-run of the REAL
+// question through the full council: nothing held ever ships, every gate re-runs, and a hold
+// that repeats simply holds again with the boundary sentence still available.
 // WHAT IS LEFT, NAMED SO IT IS NOT LOST: the /cara/chat door and the faces consult neither this
 // gate nor core/boundary.speech.js. routes/cara.routes.js returns {ok:false, reason, detail:null}
 // with no reply field, so a hold there is silence no matter what this list says. Wiring that door
-// to boundary.speech, and raising or reordering wren's two-attempt ceiling so a re-ask and a
-// boundary sentence can both happen, are the two rows that finish this, and both live outside
-// this file.
+// to boundary.speech is the row that finishes this, and it lives outside this file.
 var CLEAN_BOARD_HOLD_REASONS = Object.freeze([
   'shadow_model_hold',
   'shadow_wonder_hold',
   'writ_hold',
   'content_too_short',
-  'answer_hollow_protocol'
+  'answer_hollow_protocol',
+  'shadow_deterministic_hold'
+]);
+
+// The two reason FAMILIES a channel may also re-ask, prefix matched per colon part by
+// isCleanBoardHold below. A family entry must be a strict prefix of a longer named code
+// ('writ_post_meta_model_hold', 'writ_meaning_shadow_packet_unbound'); the bare prefix alone
+// names nothing and never matches. Frozen for the same reason the list above is frozen.
+var CLEAN_BOARD_HOLD_REASON_FAMILIES = Object.freeze([
+  'writ_post_meta_',
+  'writ_meaning_shadow_'
 ]);
 
 // ⬡B:core.pai_outbound_council:FIX:one_reader_for_every_hold_reason_in_the_house:20260725⬡
@@ -626,10 +638,28 @@ function namedCauseIn(reason, causes) {
   return null;
 }
 
+// Same colon-part law as namedCauseIn, for the FAMILY entries: a part matches when it starts
+// with the family prefix and carries a named code after it. Returns the family matched, or
+// null. Bounded machine codes only, never answer bytes.
+function namedFamilyIn(reason, families) {
+  var raw = String(reason == null ? '' : reason).trim().toLowerCase();
+  if (!raw || !Array.isArray(families)) return null;
+  var parts = raw.split(':');
+  for (var i = 0; i < parts.length; i++) {
+    var code = parts[i].trim();
+    for (var j = 0; j < families.length; j++) {
+      var family = families[j];
+      if (code.length > family.length && code.indexOf(family) === 0) return family;
+    }
+  }
+  return null;
+}
+
 function isCleanBoardHold(reason) {
   var normalized = String(reason == null ? '' : reason).trim().toLowerCase()
     .replace(/(^|:)writ_unavailable_hold(?=:|$)/g, '$1writ_hold');
-  return namedCauseIn(normalized, CLEAN_BOARD_HOLD_REASONS) !== null;
+  return namedCauseIn(normalized, CLEAN_BOARD_HOLD_REASONS) !== null ||
+    namedFamilyIn(normalized, CLEAN_BOARD_HOLD_REASON_FAMILIES) !== null;
 }
 
 // ⬡B:core.pai_outbound_council:FIX:a_retry_that_cannot_win_is_not_a_retry:20260725⬡
@@ -1943,11 +1973,16 @@ async function defaultPamStage(ctx) {
   // holds. If PAM itself disappears or throws despite its total contract, that is a
   // missing verdict rather than invented evidence, so this stage records a fail-open.
   var realHold = verdict && verdict.ok === false;
+  // Advisory findings are detections carried, never verdicts: they ride this receipt so the
+  // SHADOW judge downstream reads them (privacy_advisories) and rules on the sentence.
   return {
     ok: !realHold,
     answer: ctx.answer,
     reason: realHold ? (verdict.verdict || 'PAM_HOLD') : (verdict && verdict.verdict ? verdict.verdict : 'PAM_PASS_NO_SECURITY_FLAG'),
-    evidence: { verdict: verdict && verdict.verdict, flags: (verdict && verdict.flags) || [], failed_open: !verdict }
+    evidence: { verdict: verdict && verdict.verdict, flags: (verdict && verdict.flags) || [],
+      advisories: (verdict && verdict.advisories) || [],
+      advisory_findings: (verdict && verdict.advisory_findings) || [],
+      failed_open: !verdict }
   };
 }
 
@@ -2551,6 +2586,18 @@ async function defaultShadowStage(ctx, injected) {
       }
     } catch (eThreeSourceReach) { threeSourceFlags = []; }
   }
+  // ⬡B:core.pai_outbound_council:WIRE:the_pam_advisory_rides_to_the_mind_that_rules:20260825⬡
+  // PAM runs before SHADOW in STAGE_ORDER, so its receipt is already in ctx.stages here. Its
+  // advisory findings (a configured cross-world token detected in the answer, demoted the same
+  // day from a cold auto-verdict) are handed to the judge below as privacy_advisories, which is
+  // what makes "detect and wake" real for that family: the detector detected, and this is the
+  // mind it wakes.
+  var priorPamReceipt = (Array.isArray(ctx.stages) ? ctx.stages : []).filter(function (receipt) {
+    return receipt && receipt.stage === 'PAM';
+  })[0];
+  var privacyAdvisories = priorPamReceipt && priorPamReceipt.evidence &&
+    Array.isArray(priorPamReceipt.evidence.advisory_findings)
+    ? priorPamReceipt.evidence.advisory_findings : [];
   var provenanceLedger = ctx.context && ctx.context.identity_provenance;
   var provenanceCheck = identityProvenance.validateDraft(ctx.answer, provenanceLedger);
   var provenanceFlags = provenanceCheck.findings || [];
@@ -2584,8 +2631,20 @@ async function defaultShadowStage(ctx, injected) {
   // WHAT IS DELIBERATELY PRESERVED: a path where NO mind was reachable is a different
   // question. Nobody ruled there, so there is no verdict to overrule, and these findings still
   // hold exactly as they did. judgeRuled below is the line between the two cases.
-  var judgeWeighedFindings = [].concat(namedContextFlags, preferencePhrasingFlags,
-    memoryAbsenceFindings);
+  // ⬡B:core.pai_outbound_council:FIX:the_board_family_joins_the_same_law:20260825⬡
+  // THE LAST STANDING COLD VOTE, ENDED THE SAME WAY. The 20260825 fix above stopped three
+  // families and left the fourth standing: board/shadow.js's own regex flags stayed inside
+  // boardCleanOfUnjudged, so the woken judge was handed the board's flags as
+  // deterministic_findings, ruled, approved, and the regex's vote discarded the verdict with
+  // reason shadow_deterministic_hold:board. When this landed that reason was not re-askable
+  // (it has since joined CLEAN_BOARD_HOLD_REASONS, 20260825, after the wren boundary budget
+  // made the re-ask safe) and on the /cara/chat door a hold is silence.
+  // Proven by execution before this change: a board-flagged turn with an approving judge held;
+  // after: it ships on the judge's verdict. The board keeps DETECTING, its flags keep riding to
+  // the judge and onto the receipt, and the no-mind path is byte-equivalent: with no judgment
+  // back, the board conjuncts below bind exactly as they always did.
+  var judgeWeighedFindings = [].concat(((boardResult && boardResult.flags) || []),
+    namedContextFlags, preferencePhrasingFlags, memoryAbsenceFindings);
   var independentFindings = deterministicFindings.filter(function (finding) {
     return judgeWeighedFindings.indexOf(finding) === -1;
   });
@@ -2621,13 +2680,14 @@ async function defaultShadowStage(ctx, injected) {
     var fired = deterministicFamilies();
     return fired.length ? ('shadow_deterministic_hold:' + fired.join(',')) : 'shadow_deterministic_hold';
   }
-  // Clean on everything no mind is asked about. namedContextFlags and the preference PHRASINGS
-  // are gone from this conjunction: the judge is handed both and instructed on both, so they
-  // are its business now. The preference LOOKUPS stay, because a named option that appears in
-  // no verified evidence is a mechanical evidence fact, not a reading of her sentence.
-  // categorical memory absence was never in this conjunction and still is not.
-  var boardCleanOfUnjudged = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
-    ((boardResult && boardResult.flags) || []).length === 0 &&
+  // Clean on everything no mind is asked about. namedContextFlags, the preference PHRASINGS,
+  // and now the board's own flags are gone from this conjunction: the judge is handed all of
+  // them and instructed on all of them, so they are its business now. The preference LOOKUPS
+  // stay, because a named option that appears in no verified evidence is a mechanical evidence
+  // fact, not a reading of her sentence. categorical memory absence was never in this
+  // conjunction and still is not. The board conjuncts move into boardPassed below, where they
+  // bind exactly as before whenever no judgment came back.
+  var boardCleanOfUnjudged = !!(boardResult && boardResult.ok === true &&
     preferenceEvidenceFlags.length === 0 && relayRoleFlags.length === 0 &&
     provenanceFlags.length === 0 && identityReceiptFlags.length === 0 &&
     actionClaimFlags.length === 0 && threeSourceFlags.length === 0);
@@ -2684,6 +2744,14 @@ async function defaultShadowStage(ctx, injected) {
     'Named context evidence was deterministically extracted from the bound deliberation input; reject any answer that denies or contradicts it. ' +
     'Identity provenance is deterministic: stored memory and current bound role context may not be collapsed into one identity claim. ' +
     'A current self-preference must name a choice and state whether it is a fresh judgment or stored preference. ' +
+    // ⬡B:core.pai_outbound_council:WIRE:carried_facts_reach_the_judge_as_facts:20260825⬡
+    // Two new fields, both DETECTIONS CARRIED and never verdicts: board_carried_facts is the
+    // deterministic board saying "this figure is an exact sum or difference of real evidence
+    // figures" or "this count had no evidence at all to check against", and
+    // privacy_advisories is PAM saying "a configured cross-world token appears in these
+    // bytes". The mind weighs them; cold code stopped auto-verdicting them the same day.
+    'board_carried_facts lists mechanical observations that are not verdicts: a money figure that is an exact sum or difference of real evidence figures (her own arithmetic over real numbers), or a stated count in a turn that carried no tool evidence to check it against. Weigh them as facts; they are never by themselves grounds to hold. ' +
+    'privacy_advisories lists detections from the privacy gate, such as a configured cross-world token appearing in the answer. Read the sentence and judge whether it is genuinely another world\'s business leaking; an ordinary English word or a public name used in this person\'s own context is not a leak. ' +
     'Return only JSON with this exact shape: {"approved":true|false,"reason":"one concise factual-integrity sentence","claim":"when approved is false, the exact contiguous text copied verbatim from the proposed answer that the bound evidence contradicts or cannot support; empty string when approved is true","decision_approved":true|false,"decision_reason":"one concise explanation of whether the chosen hand or no-hand decision fits the whole request","recommended_hand":"a named available hand, no_hand, or empty string","escalate":true|false}.';
   if (structuredPolicy) {
     system += ' STRUCTURED REACH POLICY RULE: the exact deliberation_evidence is the complete closed-world authority for this candidate. Every factual claim in reason and message, and the selected action and channel, must be supported by and relevant to that same candidate evidence. Treat policy copied from an older or different event as unsupported even if it would be plausible or operationally available.';
@@ -2696,6 +2764,8 @@ async function defaultShadowStage(ctx, injected) {
     available_hands: boundedEvidence(ctx.context && ctx.context.available_hands || []),
     hands_chosen: boundedEvidence(ctx.context && ctx.context.tools_used || []),
     deterministic_findings: deterministicFindings,
+    board_carried_facts: boundedEvidence((boardResult && boardResult.facts) || []),
+    privacy_advisories: boundedEvidence(privacyAdvisories),
     named_context_evidence: boundedEvidence(namedContextEvidence),
     categorical_memory_absence: boundedEvidence(memoryAbsenceFlag),
     current_preference_provenance: boundedEvidence(preferenceFlags),
@@ -2748,7 +2818,9 @@ async function defaultShadowStage(ctx, injected) {
   // the three classifier findings, so they still hold her exactly as they did before this fix.
   var judgeRuled = !!(judgment && parsed);
   var boardPassed = boardCleanOfUnjudged &&
-    (judgeRuled || (namedContextFlags.length === 0 && preferencePhrasingFlags.length === 0));
+    (judgeRuled || (namedContextFlags.length === 0 && preferencePhrasingFlags.length === 0 &&
+      (boardResult && boardResult.verdict) === 'PASS' &&
+      ((boardResult && boardResult.flags) || []).length === 0));
   // The findings a hold may rest on with NO mind in the loop. When a mind ruled, the three it
   // was handed and instructed on stop counting here, because its verdict already weighed them.
   // When no mind ruled, this is the whole list, byte for byte what it was before.
@@ -2920,6 +2992,7 @@ async function defaultShadowStage(ctx, injected) {
       deterministic: {
         verdict: (namedContextFlags.length || preferenceFlags.length || relayRoleFlags.length || provenanceFlags.length || identityReceiptFlags.length || actionClaimFlags.length || threeSourceFlags.length) ? 'FLAG' : boardResult && boardResult.verdict,
         flags: deterministicFindings,
+        facts: (boardResult && boardResult.facts) || [],
         claims_checked: (boardResult && boardResult.claimsChecked) || 0
       },
       judgment: deterministicVoicePassReason ? {
@@ -3407,10 +3480,14 @@ async function defaultQuillStage(ctx) {
       evidence:{verdict:worldQuillResult&&worldQuillResult.verdict,
         score:worldQuillResult&&worldQuillResult.score,
         issues:worldQuillResult&&worldQuillResult.issues||[],
+        hints:worldQuillResult&&worldQuillResult.hints||[],
         exact_machine_contract:worldQuillPassed}};
   }
   var quill = require('../board/quill.js');
   var result = await quill.quill(ctx.answer, ctx.context || {});
+  // hints are detections carried, never verdicts: a word that MIGHT be a broken render but is
+  // load-bearing English at least as often. They ride the receipt for the mind that reads it
+  // and move nothing here.
   return {
     ok: !!(result && result.ok === true && result.verdict === 'PASS'),
     answer: ctx.answer,
@@ -3418,7 +3495,8 @@ async function defaultQuillStage(ctx) {
     evidence: {
       verdict: result && result.verdict,
       score: result && result.score,
-      issues: (result && result.issues) || []
+      issues: (result && result.issues) || [],
+      hints: (result && result.hints) || []
     }
   };
 }
@@ -4464,7 +4542,9 @@ async function defaultStampPreflight(ctx) {
       stage_receipt_count: sources.length,
       final_source: plan.finalSource,
       privacy:{ verdict:verdict && verdict.verdict || null,
-        flags:privacyFlags, failed_open:pamUnavailable }
+        flags:privacyFlags,
+        advisories:(verdict && verdict.advisories) || [],
+        failed_open:pamUnavailable }
     }
   };
 }
@@ -6740,6 +6820,7 @@ module.exports = {
   isHumanFacingAnswer: isHumanFacingAnswer,
   isCleanBoardHold: isCleanBoardHold,
   CLEAN_BOARD_HOLD_REASONS: CLEAN_BOARD_HOLD_REASONS,
+  CLEAN_BOARD_HOLD_REASON_FAMILIES: CLEAN_BOARD_HOLD_REASON_FAMILIES,
   namedCauseIn: namedCauseIn,
   terminalHoldCause: terminalHoldCause,
   mayRetryHold: mayRetryHold,

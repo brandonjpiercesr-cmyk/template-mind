@@ -495,7 +495,8 @@ async function writCheck(text, context) {
   // Names go FIRST now. If a cap has to drop something, it drops a filler phrase whose absence
   // costs an audit nothing, never the one hint that proves a mind made the call.
   var _hintsForReceipt = []
-    .concat(_hintNames, _hintCurses, _hintCTA, _hintProc, _hintBans, _hintHeaders || []);
+    .concat(_hintNames, _hintCurses, mechanicalLeaks, _hintCTA, _hintProc, _hintBans,
+      _hintHeaders || []);
   if (!isInternal) {
     try {
       var _ladder = require('../../core/model.ladder.js');
@@ -527,6 +528,8 @@ async function writCheck(text, context) {
         + 'On the internal-name hint: there is one voice, so an internal organ, adviser or coder name never appears in something she said, as if a second assistant were speaking. '
         + 'That list is a raw word match and it cannot tell an organ from a person. Several of those words are ordinary human first names, and saying who called, who texted, or whose recital is on Friday is the whole job. '
         + 'Read the sentence. If the word is a person in this reader\'s life, leave it exactly as it is. Rewrite only if the draft is genuinely handing a reader an internal name. '
+        + 'possible internal system vocabulary=' + JSON.stringify(mechanicalLeaks.map(function(f){return f.phrase||f;}).slice(0,6)) + '. '
+        + 'On the internal-vocabulary hint: that list is a raw substring match and several of its entries are ordinary English (an event planner\'s run of show, a company\'s coding department). Read the sentence. If the words are the person\'s own plain English, leave them exactly as they are. Rewrite only if the draft genuinely names this house\'s internal machinery to someone standing outside it, and a real secret still returns HOLD. '
         + 'possible unclean speech in her mouth=' + JSON.stringify(_wakeCurses) + '. '
         + 'On the unclean-speech hint: CLEAN MOUTH above is the founder floor and it is yours to apply, and it is not this word list that applies it. '
         + 'That list is a raw word match with no idea who the word is aimed at. A quoted title, a place name, a word inside something the reader themselves said, or heat aimed at a situation rather than at the person is yours to keep. '
@@ -562,14 +565,12 @@ async function writCheck(text, context) {
       } else {
         organDecider = 'model_unavailable';
         organFailedOpen = true;
-        qualityVerdict = mechanicalLeaks.length ? 'WRIT_UNAVAILABLE_HOLD' : 'WRIT_UNAVAILABLE';
-        if (mechanicalLeaks.length) hardFails = hardFails.concat(mechanicalLeaks);
+        qualityVerdict = 'WRIT_UNAVAILABLE';
       }
     } catch (eOrgan) {
       organDecider = 'model_unavailable';
       organFailedOpen = true;
-      qualityVerdict = mechanicalLeaks.length ? 'WRIT_UNAVAILABLE_HOLD' : 'WRIT_UNAVAILABLE';
-      if (mechanicalLeaks.length) hardFails = hardFails.concat(mechanicalLeaks);
+      qualityVerdict = 'WRIT_UNAVAILABLE';
     }
   }
 
@@ -593,6 +594,24 @@ async function writCheck(text, context) {
   if (_hintNames.length && organFailedOpen) {
     advisoryFlags = advisoryFlags.concat(_hintNames.map(function (f) {
       return { type: 'internal_name_unjudged', phrase: f.phrase };
+    }));
+  }
+  // ⬡B:board.writ:FIX:an_unavailable_reviewer_is_a_fact_to_carry_never_a_verdict:20260825⬡
+  // Until 20260825 the two model_unavailable branches above converted the INTERNAL_SYSTEM_TERMS
+  // substring detections into hardFails, so "the run of show for your gala" hard-failed
+  // TERMINALLY (internal_system_leak sits in the council's TERMINAL_HOLD_CAUSES, no retry)
+  // exactly and only when no mind was reachable to read the sentence. That inverted this
+  // file's own written law at writCheckAndBank: "A failed bank returns a named reason and
+  // NEVER converts into a passing grade or blocks a real answer... Cold code may fail to
+  // write; it may not decide the writing was fine because it did." The mirror holds the same
+  // way: cold code may fail to judge; it may not decide the writing was BAD because it did.
+  // The detection is not dropped. When the organ runs it reads these terms as a hint above
+  // and rules on the sentence. When the organ is down the unjudged fact rides the receipt
+  // here, in the exact shape internal_name_unjudged established one block up: a flag, not a
+  // hold, so the founder's complaint stays auditable and nothing silences her.
+  if (mechanicalLeaks.length && organFailedOpen) {
+    advisoryFlags = advisoryFlags.concat(mechanicalLeaks.map(function (f) {
+      return { type: 'internal_term_unjudged', phrase: f.phrase };
     }));
   }
 

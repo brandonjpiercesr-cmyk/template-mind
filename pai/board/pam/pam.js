@@ -6,13 +6,60 @@
 // This file merges both. board/pam.js root is now a re-export of this file.
 // Cold regex only. No LLM. No async. ANYHAM: no hardcoded identity.
 
-// World domain patterns for EBC firewall
-var WORLD_PATTERNS = Object.freeze({
-  bdif: Object.freeze(['briandawkins', 'brian dawkins', 'bdif', 'dawkins impact']),
-  mediators: Object.freeze(['mediator', 'mediatorsfoundation', 'mediators foundation', 'better together america']),
-  mh_action: Object.freeze(['mhaction', 'mh_action', 'mh action', 'mhany', 'tidescenter']),
-  gmg: Object.freeze(['globalmajority', 'globalmajoritygroup', 'global majority'])
-});
+// ⬡B:board.pam:FIX:the_world_patterns_come_from_configuration_by_name_never_literals:20260825⬡
+// World domain patterns for the EBC firewall. Until 20260825 this was a frozen literal object
+// carrying a real, named human being and three real organizations in shippable code, which the
+// identity law (founder, 20260722) forbids outright: every world is someone else's, and a
+// hardcoded person is a real human leaked into every stranger's deploy. It also carried common
+// English words ("mediator") that a substring compare then ruled to BE a cross-world leak,
+// killing turns on plain conversation. Both defects end here.
+// The patterns now come from configuration BY NAME: the EBC_WORLD_PATTERNS env var carries a
+// JSON object mapping a world name to its token list, e.g. {"worldname":["token", ...]}.
+// Nothing is hardcoded; a deployment that configures nothing polices nothing, which is the
+// true-zero shape the template law demands. A present-but-unreadable configuration is a
+// carried fact (ebc_patterns_unreadable, an advisory below), never a silent open and never an
+// invented verdict.
+// One cache keyed on the raw env string so a hot path never re-parses the same bytes; tests
+// that swap the env in-process get a fresh parse the moment the bytes change.
+var _ebcPatternsCacheKey = null;
+var _ebcPatternsCache = null;
+var _ebcPatternsUnreadable = false;
+function worldPatterns(env) {
+  var raw = ((env || process.env) || {}).EBC_WORLD_PATTERNS;
+  raw = typeof raw === 'string' ? raw : '';
+  if (raw === _ebcPatternsCacheKey && _ebcPatternsCache) return _ebcPatternsCache;
+  var out = {};
+  var unreadable = false;
+  if (raw.trim()) {
+    try {
+      var parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (var world in parsed) {
+          var key = String(world).trim().toLowerCase();
+          var list = Array.isArray(parsed[world]) ? parsed[world] : [];
+          var tokens = [];
+          for (var i = 0; i < list.length; i++) {
+            var token = String(list[i] == null ? '' : list[i]).trim().toLowerCase();
+            if (token) tokens.push(token);
+          }
+          if (key && tokens.length) out[key] = Object.freeze(tokens);
+        }
+      } else {
+        unreadable = true;
+      }
+    } catch (e) {
+      unreadable = true;
+    }
+  }
+  _ebcPatternsCacheKey = raw;
+  _ebcPatternsCache = Object.freeze(out);
+  _ebcPatternsUnreadable = unreadable;
+  return _ebcPatternsCache;
+}
+function worldPatternsUnreadable(env) {
+  worldPatterns(env);
+  return _ebcPatternsUnreadable;
+}
 
 // ⬡B:board.pam:PEN:a_fact_about_a_person_is_not_a_credential:20260815⬡
 // CREDENTIAL_PATTERNS is an ANCHOR list and it stays one: every entry is a provider SECRET, a
@@ -131,18 +178,24 @@ function checkMetaCommentary() {
     reason: 'meta_commentary_deferred' };
 }
 
+// The DETECTOR. It reports a fact ({ok:false, reason:'ebc_cross_world_leak', from_world}) and
+// decides nothing about what the fact means: each consumer owns that. pamCheck below carries a
+// token match as an ADVISORY for the mind that rules (the SHADOW judge reads it as
+// privacy_advisories); pamRelease keeps it a hard withhold because there a bead row is
+// physically crossing worlds; the inbound mail edge keeps its own hold for the same reason.
 function checkEbcFirewall(content, activeWorld) {
   try {
     if (typeof activeWorld !== 'string') return { ok:true };
     var normalizedWorld = activeWorld.trim().toLowerCase();
-    if (!Object.prototype.hasOwnProperty.call(WORLD_PATTERNS, normalizedWorld)) return { ok:true };
+    var patterns = worldPatterns();
+    if (!Object.prototype.hasOwnProperty.call(patterns, normalizedWorld)) return { ok:true };
     var scan = safeContentText(content);
     if (!scan.ok) return { ok:false, reason:'ebc_scan_unavailable',
       active_world:normalizedWorld };
     var str = scan.text.toLowerCase();
-    for (var world in WORLD_PATTERNS) {
+    for (var world in patterns) {
       if (world === normalizedWorld) continue;
-      var otherPatterns = WORLD_PATTERNS[world];
+      var otherPatterns = patterns[world];
       for (var i = 0; i < otherPatterns.length; i++) {
         if (str.indexOf(otherPatterns[i]) >= 0) {
           return { ok: false, reason: 'ebc_cross_world_leak', from_world: world,
@@ -167,16 +220,37 @@ function pamCheck(content, activeWorld) {
   try {
     var flags = [];
     var advisories = [];
+    var advisoryFindings = [];
     var credCheck = checkCredentials(content);
     if (!credCheck.ok) flags.push(credCheck);
-    else if (Array.isArray(credCheck.advisories)) advisories = credCheck.advisories;
+    else if (Array.isArray(credCheck.advisories)) advisories = credCheck.advisories.slice();
+    // ⬡B:board.pam:FIX:a_token_match_on_her_sentence_is_a_detection_never_a_verdict:20260825⬡
+    // Proven by execution before this change: "You could ask a mediator about the dispute"
+    // in the bdif world returned PAM_HOLD, the heal had a mind delete the word from her mouth,
+    // and at STAMP (excluded from healing) the turn died outright. A substring cannot read a
+    // sentence. The token MATCH is now an advisory that rides this receipt to the SHADOW
+    // judge (privacy_advisories), and the mind rules on what the word means. The two
+    // INABILITY facts stay holds, because a scan that could not run cleared nothing: a
+    // content shape that cannot be scanned (ebc_scan_unavailable) and a configured pattern
+    // set that cannot be read (ebc_patterns_unreadable, carried as an advisory when no world
+    // was policed at all so a pass never silently claims a scan that never happened).
     var ebcCheck = checkEbcFirewall(content, activeWorld);
-    if (!ebcCheck.ok) flags.push(ebcCheck);
+    if (!ebcCheck.ok) {
+      if (ebcCheck.reason === 'ebc_cross_world_leak') {
+        advisories.push('ebc_cross_world_leak');
+        advisoryFindings.push({ reason: 'ebc_cross_world_leak',
+          from_world: ebcCheck.from_world, active_world: ebcCheck.active_world });
+      } else {
+        flags.push(ebcCheck);
+      }
+    }
+    if (worldPatternsUnreadable()) advisories.push('ebc_patterns_unreadable');
     var out = { ok: flags.length === 0,
       verdict: flags.length === 0 ? 'PAM_PASS' : 'PAM_HOLD', flags: flags };
     // Advisory only, and only when present: a clean answer keeps the exact three-key shape two
     // existing deepEqual pins assert on, so nothing had to be loosened to carry this fact.
     if (advisories.length) out.advisories = advisories;
+    if (advisoryFindings.length) out.advisory_findings = advisoryFindings;
     return out;
   } catch (e) {
     return { ok:false, verdict:'PAM_HOLD',
@@ -341,10 +415,20 @@ async function pamRelease(candidates, ctx, options) {
       var body = _text(row);
       if (!body.trim()) { withheld++; continue; }
 
-      // Deterministic facts still hold: a credential or a cross-world name is never
-      // released no matter what any mind thinks about it.
+      // Deterministic facts still hold: a credential is never released no matter what any
+      // mind thinks about it.
       var hard = pamCheck(body, c.viewerWorld || null);
       if (!hard.ok) { withheld++; continue; }
+
+      // ⬡B:board.pam:KEEP:a_bead_row_physically_crossing_worlds_stays_a_hard_fact_here:20260825⬡
+      // On the council stages the same token match became an advisory a mind rules on,
+      // because there the bytes are HER OWN sentence to the person in the room. Here the
+      // bytes are a BANKED ROW of one world's memory about to travel into another world's
+      // read, a privacy boundary with an irreversible person-effect on the other side, and
+      // this path already fails closed by design on every uncertainty. So a cross-world
+      // token match stays a silent withhold on this path, exactly as before the demotion.
+      var ebcRow = checkEbcFirewall(body, c.viewerWorld || null);
+      if (!ebcRow.ok) { withheld++; continue; }
 
       // Sanctioned: the founder wants this found. Released verbatim, no mind spent, because
       // a model quietly softening something he deliberately opened is its own failure.
@@ -381,6 +465,15 @@ async function pamRelease(candidates, ctx, options) {
   };
 }
 
-module.exports = { pamCheck: pamCheck, checkCredentials: checkCredentials, checkMetaCommentary: checkMetaCommentary, checkEbcFirewall: checkEbcFirewall, WORLD_PATTERNS: WORLD_PATTERNS, ADVISORY_PATTERNS: ADVISORY_PATTERNS,
+module.exports = { pamCheck: pamCheck, checkCredentials: checkCredentials, checkMetaCommentary: checkMetaCommentary, checkEbcFirewall: checkEbcFirewall,
+  worldPatterns: worldPatterns, ADVISORY_PATTERNS: ADVISORY_PATTERNS,
   pamRelease: pamRelease, RELEASE_SYSTEM: RELEASE_SYSTEM,
   _test: { _extractJson: _extractJson, _text: _text, _judgeRelease: _judgeRelease } };
+
+// WORLD_PATTERNS keeps its historical name for every existing reader (the council resolves a
+// scoped world through it, tests read it), but it is now a live view of the configuration by
+// name, never a literal. A getter, so a changed env is seen without a module reload.
+Object.defineProperty(module.exports, 'WORLD_PATTERNS', {
+  enumerable: true,
+  get: function () { return worldPatterns(); }
+});

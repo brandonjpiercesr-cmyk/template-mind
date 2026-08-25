@@ -152,6 +152,32 @@ function _isGroundedValue(value, evSet) {
   return false;
 }
 
+// ⬡B:board.shadow:FIX:her_arithmetic_over_real_figures_is_a_fact_not_a_fabrication:20260825⬡
+// The census proved this trap by execution: evidence carrying the real bills 1500 and 1350,
+// answer saying "together that is $2,850", held as fabricated even after the woken judge, who
+// can add, approved. Grounding stays exactly as tight as it was (this adds nothing to evSet and
+// reopens no Codex P1 hole). A figure that is the exact sum or difference of two real evidence
+// money values is DETECTED and carried as a FACT for the judge to weigh. It is never a
+// grounding, never an auto-verdict. Detect and wake, never detect and decide. A figure that is
+// neither grounded nor derivable stays a fabrication flag, exactly as before.
+function _derivedFromEvidence(value, evSet) {
+  var vals = [];
+  for (var k in evSet) {
+    var e = Number(k);
+    if (isFinite(e) && e > 0) vals.push(e);
+  }
+  for (var i = 0; i < vals.length; i++) {
+    for (var j = i; j < vals.length; j++) {
+      if (vals[i] + vals[j] === value) return { relation: 'sum', terms: [vals[i], vals[j]] };
+      var diff = vals[i] > vals[j] ? vals[i] - vals[j] : vals[j] - vals[i];
+      if (diff === value && diff > 0) {
+        return { relation: 'difference', terms: [vals[i], vals[j]] };
+      }
+    }
+  }
+  return null;
+}
+
 // Financial fabrication: with budget evidence present, EVERY dollar figure in the
 // answer must trace to a real evidence number. Codex P1 (correct): a majority
 // threshold let a mostly-real answer smuggle one invented line through (real
@@ -159,22 +185,35 @@ function _isGroundedValue(value, evSet) {
 // founder's own money a single ungrounded figure is a fabrication and must hold.
 // So: flag whenever ANY dollar figure is ungrounded. She quotes his real figures
 // (all direct matches) or holds honestly; no invented dollar ever reaches him.
-function financialFabricationFlags(content, evidenceText) {
-  if (!_hasFinancialEvidence(evidenceText)) return [];
+function financialFabricationFindings(content, evidenceText) {
+  if (!_hasFinancialEvidence(evidenceText)) return { flags: [], facts: [] };
   var answerMoney = _extractMoneyInts(content);
-  if (!answerMoney.length) return [];
+  if (!answerMoney.length) return { flags: [], facts: [] };
   var evSet = _evidenceMoneySet(evidenceText);
   var ungrounded = [];
+  var derived = [];
   for (var i = 0; i < answerMoney.length; i++) {
-    if (!_isGroundedValue(answerMoney[i], evSet)) ungrounded.push(answerMoney[i]);
+    if (_isGroundedValue(answerMoney[i], evSet)) continue;
+    var relation = _derivedFromEvidence(answerMoney[i], evSet);
+    if (relation) derived.push({ value: answerMoney[i], relation: relation.relation,
+      terms: relation.terms });
+    else ungrounded.push(answerMoney[i]);
   }
+  var out = { flags: [], facts: [] };
   if (ungrounded.length) {
-    return [{
+    out.flags.push({
       claim: 'dollar figure(s) not grounded in real budget evidence: $' + ungrounded.slice(0, 6).join(', $'),
       reason: 'fabricated_financial_figures'
-    }];
+    });
   }
-  return [];
+  if (derived.length) {
+    out.facts.push({
+      claim: 'dollar figure(s) not verbatim in budget evidence but exactly derivable from it by arithmetic: $' + derived.slice(0, 6).map(function (d) { return d.value; }).join(', $'),
+      reason: 'derived_financial_figure',
+      derived: derived.slice(0, 6)
+    });
+  }
+  return out;
 }
 
 // ⬡B:board.shadow:FIX:count_fabrication_requires_matching_cardinality_evidence:20260724⬡
@@ -242,8 +281,16 @@ function _countBacked(n, token, nounLower, evidenceText) {
   return hits >= n;
 }
 
-function countFabricationFlags(content, evidenceText) {
-  var out = [], seen = Object.create(null);
+// ⬡B:board.shadow:FIX:a_count_nothing_could_check_is_a_fact_not_a_verdict:20260825⬡
+// The census proved this trap by execution: "let us break this into four tasks" in a
+// conversational turn with NO tool evidence at all flagged shadow_count_unverified, because
+// _countBacked returns false on empty evidence. An empty relay contradicts nothing; there is
+// nothing to check the count against, so the honest output is a carried FACT for the judge
+// ("the answer states a count and this turn carried no evidence to check it"), never a
+// fabrication verdict. Evidence that EXISTS and fails to back the count keeps flagging exactly
+// as before: that is the real detection this check was built for.
+function countFindings(content, evidenceText) {
+  var out = { flags: [], facts: [] }, seen = Object.create(null);
   // Anchor on a NUMBER token only (digit run or number word), never an arbitrary leading
   // word, so "found three tests" is read as the count "three tests", not swallowed as the
   // pair "found three". The following token is the candidate counted noun.
@@ -265,16 +312,29 @@ function countFabricationFlags(content, evidenceText) {
     if (seen[key]) continue;
     seen[key] = true;
     if (!_countBacked(value, token, nounLower, evidenceText)) {
-      out.push({ claim: sentence.trim().substring(0, 80), count: value, reason: 'shadow_count_unverified' });
+      if (!evidenceText) {
+        out.facts.push({ claim: sentence.trim().substring(0, 80), count: value,
+          reason: 'shadow_count_unchecked_no_evidence' });
+      } else {
+        out.flags.push({ claim: sentence.trim().substring(0, 80), count: value,
+          reason: 'shadow_count_unverified' });
+      }
     }
   }
   return out;
+}
+
+// Compatibility wrapper: the historical export returns the VERDICT flags only. The carried
+// facts travel through shadow() below.
+function countFabricationFlags(content, evidenceText) {
+  return countFindings(content, evidenceText).flags;
 }
 
 async function shadow(content, context) {
   context = context || {};
   var claims = extractClaims(content);
   var flags = [];
+  var facts = [];
   // MONEY must include the decimals: `/\$[\d,]+/` truncated "$17,744.67" to "$17,744"
   // (17744), which never matched the evidence's rounded 17745 and held a real exact quote.
   var MONEY = /\$[\d,]+(?:\.\d+)?[kKmM]?/;
@@ -285,8 +345,9 @@ async function shadow(content, context) {
   // hold. context.sourcedClaims stays as the existing caller-vouched escape.
   var evidenceText = typeof context.evidence_text === 'string' ? context.evidence_text : '';
   var evSet = _evidenceMoneySet(evidenceText);
-  function traced(claim) {
-    if (!evidenceText) return false;
+  function traceClaim(claim) {
+    if (!evidenceText) return { traced: false, derived: [] };
+    var derived = [];
     for (var k = 0; k < statPatterns.length; k++) {
       var m = claim.match(statPatterns[k]);
       if (!m) continue;
@@ -295,18 +356,31 @@ async function shadow(content, context) {
       // compare. Non-money stats keep the exact-bytes rule.
       if (statPatterns[k] === MONEY) {
         var v = _moneyToInt(m[0]);
-        if (v === null || !_isGroundedValue(v, evSet)) return false;
+        if (v === null) return { traced: false, derived: [] };
+        if (!_isGroundedValue(v, evSet)) {
+          // Not grounded. Her arithmetic over real figures is a carried fact, never a
+          // verdict; anything else stays untraced and flags exactly as before.
+          var relation = _derivedFromEvidence(v, evSet);
+          if (!relation) return { traced: false, derived: [] };
+          derived.push({ value: v, relation: relation.relation, terms: relation.terms });
+        }
       } else if (evidenceText.indexOf(m[0]) === -1) {
-        return false;
+        return { traced: false, derived: [] };
       }
     }
-    return true;
+    return { traced: true, derived: derived };
   }
   for (var i = 0; i < claims.length; i++) {
     for (var j = 0; j < statPatterns.length; j++) {
       if (statPatterns[j].test(claims[i]) && !isExplicitIllustration(claims[i]) &&
-          !context.sourcedClaims && !traced(claims[i])) {
-        flags.push({ claim: claims[i].trim().substring(0, 80), reason: 'unsourced_statistic' });
+          !context.sourcedClaims) {
+        var trace = traceClaim(claims[i]);
+        if (!trace.traced) {
+          flags.push({ claim: claims[i].trim().substring(0, 80), reason: 'unsourced_statistic' });
+        } else if (trace.derived.length) {
+          facts.push({ claim: claims[i].trim().substring(0, 80),
+            reason: 'derived_financial_figure', derived: trace.derived.slice(0, 4) });
+        }
         break;
       }
     }
@@ -314,10 +388,16 @@ async function shadow(content, context) {
   // Catch the list/label-formatted budget fabrication that never reaches the
   // linking-verb claim extractor above. Scoped to financial-evidence turns.
   if (!context.sourcedClaims) {
-    flags = flags.concat(financialFabricationFlags(content, evidenceText));
-    flags = flags.concat(countFabricationFlags(content, evidenceText));
+    var financial = financialFabricationFindings(content, evidenceText);
+    flags = flags.concat(financial.flags);
+    facts = facts.concat(financial.facts);
+    var counts = countFindings(content, evidenceText);
+    flags = flags.concat(counts.flags);
+    facts = facts.concat(counts.facts);
   }
-  return { ok: true, verdict: flags.length === 0 ? 'PASS' : 'FLAG', content: content, flags: flags, claimsChecked: claims.length };
+  // facts are DETECTIONS CARRIED, never verdicts: they ride to the judge and onto the
+  // receipt and they never move this verdict. Only flags do.
+  return { ok: true, verdict: flags.length === 0 ? 'PASS' : 'FLAG', content: content, flags: flags, facts: facts, claimsChecked: claims.length };
 }
 
 module.exports = { shadow, extractClaims, isExplicitIllustration, countFabricationFlags };
