@@ -257,23 +257,88 @@ function applyDashRulingOutsideFences(dashMod, segments, ruling) {
   return totals;
 }
 
+// \u2b21B:board.writ:FIX:one_paid_call_for_the_whole_document_not_one_per_fence:20260824\u2b21
+// CODEX FINDING ON 500, CONFIRMED: this woke a mind once PER PROSE SEGMENT, so a document
+// with N code fences cost N+1 paid calls. Worse than the money, each call judged its own
+// fragment with no sight of the rest, so the same dash could be ruled differently on either
+// side of a code block. One document is one judgment.
+//
+// THE INDEX MAPPING IS THE WHOLE TRICK, and it is why an earlier attempt at this was wrong.
+// Flags carry ABSOLUTE indices into the text they were scanned from. So the masked document
+// built here is byte-for-byte the SAME LENGTH as the real one: fenced regions keep their
+// exact character count and only their dash characters are neutralised, so no flag is ever
+// raised inside a fence and every prose offset is identical in both. That makes a verdict's
+// absolute index convertible to a segment-local one by simple subtraction, with no guessing.
+// The fenced bytes themselves are never touched: applyRuling only ever runs on prose
+// segments, exactly as before.
+function maskFencedSegments(segments) {
+  var masked = [];
+  var offsets = [];
+  var cursor = 0;
+  for (var i = 0; i < segments.length; i++) {
+    var seg = segments[i];
+    offsets.push(cursor);
+    // Length preserved exactly. A fence's dashes become a letter so the scanner cannot see
+    // them and the model is never asked to rule on punctuation inside code.
+    masked.push(seg.prose ? seg.text : seg.text.replace(/[\u2014\u2013-]/g, 'x'));
+    cursor += seg.text.length + 1; // the newline joinSegments puts back between segments
+  }
+  return { text: masked.join('\n'), offsets: offsets };
+}
+
 async function decideDashesOutsideFences(dashMod, segments, opts) {
   var totals = { ruled: false, decider: null, kept: 0, replaced: 0, unruled: 0,
-    failed_open: false };
+    failed_open: false, model_calls: 0 };
+
+  var anyProseFlags = false;
+  for (var p = 0; p < segments.length; p++) {
+    if (!segments[p].prose) continue;
+    if (dashMod.flagDashes(segments[p].text).flags.length) { anyProseFlags = true; break; }
+  }
+  if (!anyProseFlags) {
+    totals.text = joinSegments(segments);
+    return totals;
+  }
+
+  var maskedDoc = maskFencedSegments(segments);
+  var ruled = await dashMod.decideDashes(maskedDoc.text, opts);
+  totals.model_calls = 1;
+  totals.ruled = !!(ruled && ruled.ruled);
+  totals.decider = (ruled && ruled.decider) || null;
+  totals.failed_open = !!(ruled && ruled.failed_open);
+
+  // No mind ruled, so nothing is edited. Cold code does not get the pen on punctuation.
+  if (!totals.ruled || !ruled || !Array.isArray(ruled.flags)) {
+    totals.unruled = (ruled && ruled.unruled) || 0;
+    totals.text = joinSegments(segments);
+    return totals;
+  }
+
+  // Rebuild the mind's verdicts from the flags it just decided, keyed by ABSOLUTE index.
+  var verdicts = ruled.flags.filter(function (f) {
+    return f && (f.verdict === 'keep' || f.verdict === 'replace');
+  }).map(function (f) {
+    return { index: f.index, verdict: f.verdict, replacement: f.replacement, why: f.ruling_why };
+  });
+
   var out = [];
   for (var i = 0; i < segments.length; i++) {
     var seg = segments[i];
     if (!seg.prose) { out.push(seg); continue; }
     var scan = dashMod.flagDashes(seg.text);
     if (!scan.flags.length) { out.push(seg); continue; }
-    var ruled = await dashMod.decideDashes(seg.text, opts);
-    totals.ruled = totals.ruled || !!(ruled && ruled.ruled);
-    totals.decider = totals.decider || (ruled && ruled.decider) || null;
-    totals.kept += (ruled && ruled.kept) || 0;
-    totals.replaced += (ruled && ruled.replaced) || 0;
-    totals.unruled += (ruled && ruled.unruled) || 0;
-    totals.failed_open = totals.failed_open || !!(ruled && ruled.failed_open);
-    out.push({ prose: true, text: (ruled && typeof ruled.text === 'string') ? ruled.text : seg.text });
+    var start = maskedDoc.offsets[i];
+    var local = verdicts.filter(function (v) {
+      return v.index >= start && v.index < start + seg.text.length;
+    }).map(function (v) {
+      return { index: v.index - start, verdict: v.verdict, replacement: v.replacement, why: v.why };
+    });
+    var applied = dashMod.applyRuling(seg.text, scan.flags,
+      { decider: totals.decider, verdicts: local });
+    totals.kept += applied.kept || 0;
+    totals.replaced += applied.replaced || 0;
+    totals.unruled += applied.unruled || 0;
+    out.push({ prose: true, text: applied.text });
   }
   totals.text = joinSegments(out);
   return totals;
@@ -774,6 +839,7 @@ async function writCheckAndBank(hamUid, text, context, options) {
 
 module.exports = { writCheck: writCheck, writCheckAndBank: writCheckAndBank,
   _test: { segmentFences: segmentFences, decideDashesOutsideFences: decideDashesOutsideFences,
+    maskFencedSegments: maskFencedSegments,
     applyDashRulingOutsideFences: applyDashRulingOutsideFences },
   removeEmDash: removeEmDash, coffeeshopTest: coffeeshopTest,
   writHoldCauses: writHoldCauses,
