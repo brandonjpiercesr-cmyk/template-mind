@@ -197,6 +197,153 @@ function transformOutsideFences(content, transform) {
   return output.join('\n');
 }
 
+// The fence walk again, but returning the pieces instead of transforming in place, so an
+// ASYNC judge (the dash mind) can rule over prose segments and the fenced bytes are
+// reassembled untouched. Same fence grammar as transformOutsideFences above; one grammar,
+// two consumers, no drift.
+function segmentFences(content) {
+  var lines = String(content).split('\n');
+  var segments = [];
+  var buffer = [];
+  var bufferProse = true;
+  var fence = null;
+  function flush() {
+    if (buffer.length) segments.push({ prose: bufferProse, text: buffer.join('\n') });
+    buffer = [];
+  }
+  lines.forEach(function (line) {
+    var bare = line.endsWith('\r') ? line.slice(0, -1) : line;
+    var marker = bare.match(/^[ \t]*(`{3,}|~{3,})/);
+    if (!fence && marker) {
+      if (bufferProse) { flush(); bufferProse = false; }
+      fence = { character: marker[1][0], length: marker[1].length };
+      buffer.push(line);
+      return;
+    }
+    if (fence) {
+      buffer.push(line);
+      var trimmed = bare.trim();
+      var isMatchingClose = trimmed.length >= fence.length &&
+        trimmed.split('').every(function (character) { return character === fence.character; });
+      if (isMatchingClose) { fence = null; flush(); bufferProse = true; }
+      return;
+    }
+    if (!bufferProse) { flush(); bufferProse = true; }
+    buffer.push(line);
+  });
+  flush();
+  return segments;
+}
+
+function joinSegments(segments) {
+  return segments.map(function (seg) { return seg.text; }).join('\n');
+}
+
+function applyDashRulingOutsideFences(dashMod, segments, ruling) {
+  var totals = { ruled: false, decider: null, kept: 0, replaced: 0, unruled: 0 };
+  var out = segments.map(function (seg) {
+    if (!seg.prose) return seg;
+    var scan = dashMod.flagDashes(seg.text);
+    if (!scan.flags.length) return seg;
+    var applied = dashMod.applyRuling(seg.text, scan.flags, ruling);
+    totals.ruled = totals.ruled || applied.ruled;
+    totals.decider = totals.decider || applied.decider;
+    totals.kept += applied.kept || 0;
+    totals.replaced += applied.replaced || 0;
+    totals.unruled += applied.unruled || 0;
+    return { prose: true, text: applied.text };
+  });
+  totals.text = joinSegments(out);
+  return totals;
+}
+
+// \u2b21B:board.writ:FIX:one_paid_call_for_the_whole_document_not_one_per_fence:20260824\u2b21
+// CODEX FINDING ON 500, CONFIRMED: this woke a mind once PER PROSE SEGMENT, so a document
+// with N code fences cost N+1 paid calls. Worse than the money, each call judged its own
+// fragment with no sight of the rest, so the same dash could be ruled differently on either
+// side of a code block. One document is one judgment.
+//
+// THE INDEX MAPPING IS THE WHOLE TRICK, and it is why an earlier attempt at this was wrong.
+// Flags carry ABSOLUTE indices into the text they were scanned from. So the masked document
+// built here is byte-for-byte the SAME LENGTH as the real one: fenced regions keep their
+// exact character count and only their dash characters are neutralised, so no flag is ever
+// raised inside a fence and every prose offset is identical in both. That makes a verdict's
+// absolute index convertible to a segment-local one by simple subtraction, with no guessing.
+// The fenced bytes themselves are never touched: applyRuling only ever runs on prose
+// segments, exactly as before.
+function maskFencedSegments(segments) {
+  var masked = [];
+  var offsets = [];
+  var cursor = 0;
+  for (var i = 0; i < segments.length; i++) {
+    var seg = segments[i];
+    offsets.push(cursor);
+    // Length preserved exactly. A fence's dashes become a letter so the scanner cannot see
+    // them and the model is never asked to rule on punctuation inside code.
+    masked.push(seg.prose ? seg.text : seg.text.replace(/[\u2014\u2013-]/g, 'x'));
+    cursor += seg.text.length + 1; // the newline joinSegments puts back between segments
+  }
+  return { text: masked.join('\n'), offsets: offsets };
+}
+
+async function decideDashesOutsideFences(dashMod, segments, opts) {
+  var totals = { ruled: false, decider: null, kept: 0, replaced: 0, unruled: 0,
+    failed_open: false, model_calls: 0 };
+
+  var anyProseFlags = false;
+  for (var p = 0; p < segments.length; p++) {
+    if (!segments[p].prose) continue;
+    if (dashMod.flagDashes(segments[p].text).flags.length) { anyProseFlags = true; break; }
+  }
+  if (!anyProseFlags) {
+    totals.text = joinSegments(segments);
+    return totals;
+  }
+
+  var maskedDoc = maskFencedSegments(segments);
+  var ruled = await dashMod.decideDashes(maskedDoc.text, opts);
+  totals.model_calls = 1;
+  totals.ruled = !!(ruled && ruled.ruled);
+  totals.decider = (ruled && ruled.decider) || null;
+  totals.failed_open = !!(ruled && ruled.failed_open);
+
+  // No mind ruled, so nothing is edited. Cold code does not get the pen on punctuation.
+  if (!totals.ruled || !ruled || !Array.isArray(ruled.flags)) {
+    totals.unruled = (ruled && ruled.unruled) || 0;
+    totals.text = joinSegments(segments);
+    return totals;
+  }
+
+  // Rebuild the mind's verdicts from the flags it just decided, keyed by ABSOLUTE index.
+  var verdicts = ruled.flags.filter(function (f) {
+    return f && (f.verdict === 'keep' || f.verdict === 'replace');
+  }).map(function (f) {
+    return { index: f.index, verdict: f.verdict, replacement: f.replacement, why: f.ruling_why };
+  });
+
+  var out = [];
+  for (var i = 0; i < segments.length; i++) {
+    var seg = segments[i];
+    if (!seg.prose) { out.push(seg); continue; }
+    var scan = dashMod.flagDashes(seg.text);
+    if (!scan.flags.length) { out.push(seg); continue; }
+    var start = maskedDoc.offsets[i];
+    var local = verdicts.filter(function (v) {
+      return v.index >= start && v.index < start + seg.text.length;
+    }).map(function (v) {
+      return { index: v.index - start, verdict: v.verdict, replacement: v.replacement, why: v.why };
+    });
+    var applied = dashMod.applyRuling(seg.text, scan.flags,
+      { decider: totals.decider, verdicts: local });
+    totals.kept += applied.kept || 0;
+    totals.replaced += applied.replaced || 0;
+    totals.unruled += applied.unruled || 0;
+    out.push({ prose: true, text: applied.text });
+  }
+  totals.text = joinSegments(out);
+  return totals;
+}
+
 // ⬡B:board.writ:BUILD:dash_ruling_channel_so_a_mind_can_keep_one:20260808⬡
 // THE RULING CHANNEL. Until today there was no way for anything, model or human,
 // to decide that a dash belonged: removeEmDash below rewrote every one of them to
@@ -574,6 +721,59 @@ async function writCheck(text, context) {
     }
   }
 
+  // ⬡B:board.writ:PROPOSED-RG:the_dash_ruling_finally_sits_on_the_real_path:20260808⬡
+  // PROPOSED-RG pending founder conversion. CAUGHT BY CATHY (Codex) on #2045, P2:
+  // decideDashes and context.dashRuling had no production caller; the mind-ruling
+  // path for dashes was unreachable and the cold behavior it supersedes still ran
+  // untouched. This is the real WRIT flow (core/council.js, board/compose.js, the
+  // advisors, and core/pai.outbound.council.js all come through writCheck), so the
+  // ruling lives here now. Penny-hustled per the regex-wakes-mind-decides ruling:
+  // flagDashes is a free cold scan, and the mind wakes ONLY when a dash actually
+  // survived into the rendered text. KEEP is a reachable verdict, and on any
+  // failure the text ships unchanged with the flags on the receipt, never a cold
+  // rewrite. A caller that already holds a ruling passes context.dashRuling and
+  // spends nothing.
+  var dashRulingReceipt = null;
+  if (!isInternal) {
+    try {
+      var _dashMod = require('./dash.ruling.js');
+      // FENCES ARE NOT PROSE. The whole-text scan used to flag the double hyphen in a
+      // fenced shell command like a git flag, and a replace verdict would then mutate
+      // bytes inside the fence, handing a human a broken command. The voice law below
+      // already refuses to transform inside fences; the ruling obeys the same line. The
+      // scan and any ruling run over the prose segments only, and fenced content is
+      // reassembled byte for byte.
+      var _dashSplit = segmentFences(cleaned);
+      var _dashProse = _dashSplit.filter(function (seg) { return seg.prose; })
+        .map(function (seg) { return seg.text; }).join('\n');
+      var _dashScan = _dashMod.flagDashes(_dashProse);
+      if (_dashScan.flags.length) {
+        if (context.dashRuling && Array.isArray(context.dashRuling.verdicts)) {
+          var _dashApplied = applyDashRulingOutsideFences(_dashMod, _dashSplit, context.dashRuling);
+          cleaned = _dashApplied.text;
+          dashRulingReceipt = { ruled: _dashApplied.ruled, decider: _dashApplied.decider,
+            kept: _dashApplied.kept, replaced: _dashApplied.replaced,
+            unruled: _dashApplied.unruled, flagged: _dashScan.flags.length };
+        } else {
+          var _dashOut = await decideDashesOutsideFences(_dashMod, _dashSplit,
+            { deliberate: typeof context.deliberate === 'function' ? context.deliberate : null });
+          if (_dashOut && typeof _dashOut.text === 'string') cleaned = _dashOut.text;
+          dashRulingReceipt = { ruled: !!(_dashOut && _dashOut.ruled),
+            decider: (_dashOut && _dashOut.decider) || null,
+            kept: (_dashOut && _dashOut.kept) || 0,
+            replaced: (_dashOut && _dashOut.replaced) || 0,
+            unruled: (_dashOut && _dashOut.unruled) || 0,
+            failed_open: !!(_dashOut && _dashOut.failed_open),
+            flagged: _dashScan.flags.length };
+        }
+      }
+    } catch (eDash) {
+      // Fail open on taste, exactly like the quality organ above: a broken judge
+      // never rewrites her punctuation and never blocks the answer.
+      dashRulingReceipt = { ruled: false, failed_open: true, reason: 'dash_ruling_threw' };
+    }
+  }
+
   // WRIT owns the rendered bytes. Cold transport does not get a second editing
   // pass after the model has spoken because whitespace, punctuation, flags,
   // URLs, emoji, identifiers, and code can all carry meaning. Downstream Penny
@@ -643,6 +843,9 @@ async function writCheck(text, context) {
     // without re-deriving. Additive: they are HINTS, they never move the verdict.
     voiceHints: { greeting: _hintGreeting, rhythm: _hintChoppy,
       cta: _hintCTA, process_narration: _hintProc, filler: _hintBans, headers: _hintHeaders },
+    // The dash ruling's receipt: counts and the decider only, never answer bytes.
+    // null means no dash survived to be ruled on and no model was spent.
+    dash_ruling: dashRulingReceipt,
     emojis_removed: emoji.count,
     em_dashes_removed: dashCount,
     meta_removed: meta.removed,
@@ -740,6 +943,9 @@ async function writCheckAndBank(hamUid, text, context, options) {
 }
 
 module.exports = { writCheck: writCheck, writCheckAndBank: writCheckAndBank,
+  _test: { segmentFences: segmentFences, decideDashesOutsideFences: decideDashesOutsideFences,
+    maskFencedSegments: maskFencedSegments,
+    applyDashRulingOutsideFences: applyDashRulingOutsideFences },
   removeEmDash: removeEmDash, coffeeshopTest: coffeeshopTest,
   writHoldCauses: writHoldCauses,
   checkColdGreeting: checkColdGreeting, approximateChoppyDensity: approximateChoppyDensity,
