@@ -210,6 +210,92 @@ function candidateFacts(row, receipt, terms, anchors) {
   return {contributor:contributor,reasons:reasons,score:score,text:text};
 }
 
+// ⬡B:core.agent.find:FIX:a_row_dropped_by_score_is_a_gap_she_is_owed_20260815⬡
+// CODELESS PURGE. Two omission lists were computed, carried on the plan, reported in the
+// receipt, and never once said to her: `compact_omitted` (rows candidateFacts scored lowest
+// when the compact envelope filled) and `omitted` (what the expand phase could not fit).
+// Cold code decided which of her own records she would never see, and the decision was
+// invisible, so she could not overrule it or even know it happened.
+//
+// TWO LISTS, TWO DIFFERENT RULES, NEVER SUMMED. Codex P2 on the first cut of this fix, and it
+// was right: `compact_omitted` is chosen by the word-overlap and record-kind score, and its
+// entries are her stored records. `omitted` comes from the expand phase in
+// core/find.js#expandFcwEvidence, chosen by accumulated serialized size in read order, and its
+// entries can be synthetic last-AIR manifest and chunk rows rather than one stored record each.
+// Adding them and calling the total "your records, ranked by that score" would hand her an
+// inaccurate count and a false explanation of her own memory, which is the exact sin this fix
+// exists to remove, committed one layer up. So each is counted and described on its own terms.
+//
+// NOTHING IS OFFERED THAT NOTHING HONORS. The first cut read `full_history_expansion_available`
+// and told her to ask for the dropped rows before answering. Codex P2 again, also right:
+// `walkFcwEvidence` is exported and never invoked anywhere, the omitted ids never enter the
+// prompt, and find_in_brain cannot query by id, so that instruction was a dead promise from
+// cold code. A promise she cannot cash is a lie told to a mind, so the offer is gone and the
+// honest limit is stated instead. Wiring a real reread path is separate work, not a sentence.
+//
+// COUNTS ONLY, not the rows: the doctrine's own trap warning forbids a long per-row stamp, and
+// shipping dropped rows back through the envelope that just rejected them defeats the budget.
+// Extracted as two pure functions so the disclosure is testable without a live bank, per the
+// 20260726 law that a guard whose rule cannot be run by a test is a guard nobody has run.
+function wallGapsFor(fcw) {
+  const wall = fcw || {};
+  const receipt = wall.agent_find || {};
+  const count = function (value) { return Array.isArray(value) ? value.length : 0; };
+  return {
+    partial: wall.partial === true,
+    unavailable: list(wall.unavailableContributors),
+    degraded: list(wall.partialContributors),
+    storage_limitations: list(receipt.storage_limitations),
+    // Her stored records, dropped by the compact score. Counted and named as records.
+    set_aside_by_rank: count(receipt.compact_omitted),
+    // Expand-phase material, dropped by size in read order. NOT a count of her records.
+    set_aside_by_size: count(receipt.omitted)
+  };
+}
+
+function gapAppendixFor(wallGaps) {
+  const gaps = wallGaps || {};
+  const storageGap = (gaps.storage_limitations || []).indexOf('legacy_supersession_unavailable') >= 0
+    ? ' This memory store could not verify whether an older record was later corrected. Treat '
+      + 'its history as useful but not complete current truth, and say that plainly if it matters.'
+    : '';
+  // Its own sentence and its own trigger: a turn can fit every contributor it asked for (no
+  // unavailable, no degraded) and STILL have dropped material. That is exactly the case that
+  // used to pass in silence, because the appendix below was gated on the other gaps alone.
+  const rankGap = gaps.set_aside_by_rank
+    ? ('\n\n' + gaps.set_aside_by_rank + ' of your own stored records were set aside when the '
+       + 'space for this turn filled. A fixed scoring rule ordered them, and it weighs only these '
+       + 'things: how many of this turn\'s search terms the record matched, what kind of record it '
+       + 'is, the importance number stored on it, whether it happened to be the first of its kind '
+       + 'the scan reached, and how recently it was created. It never weighs what the record means '
+       + 'to you, so it is not a judgement about what matters and it may well have dropped the one '
+       + 'that did.')
+    : '';
+  const sizeGap = gaps.set_aside_by_size
+    ? ('\n\n' + gaps.set_aside_by_size + ' further entries did not fit the space for this turn '
+       + 'and were left out, chosen by size in the order they were read, never by what they mean. '
+       + 'Some of those entries are internal pieces of a larger record rather than one record '
+       + 'each, so treat that as a rough measure of missing material and not as a count of your '
+       + 'records.')
+    : '';
+  // No offer to fetch them: no reader honors such a request today, and telling a mind to ask
+  // for something nothing can deliver is cold code making a promise it cannot keep.
+  const limitLine = (gaps.set_aside_by_rank || gaps.set_aside_by_size)
+    ? ' None of it can be pulled back on this turn, so if any of it bears on the answer, say '
+      + 'plainly that some of your history was not in front of you rather than answering as '
+      + 'though you had all of it.'
+    : '';
+  const setAsideGap = rankGap + sizeGap + limitLine;
+  return (gaps.partial || (gaps.unavailable || []).length ||
+    (gaps.degraded || []).length || (gaps.storage_limitations || []).length)
+    ? ('\n\nSome of what you normally read was not available for this turn' +
+       ((gaps.unavailable || []).length ? ', missing: ' + gaps.unavailable.join(', ') : '') +
+       ((gaps.degraded || []).length ? ', incomplete: ' + gaps.degraded.join(', ') : '') +
+       '. Answer on what you do have and say plainly what you could not check. Never fill a gap ' +
+       'with a guess.' + storageGap + setAsideGap)
+    : setAsideGap;
+}
+
 function compareCandidates(a, b) {
   if (a.score !== b.score) return b.score - a.score;
   const created = String(b.created_at || '').localeCompare(String(a.created_at || ''));
@@ -294,8 +380,9 @@ async function planWallEvidence(input, options) {
             prior.score = Math.max(prior.score, facts.score);
             return;
           }
-          const entry = {id:row.id,contributors:[facts.contributor],reasons:facts.reasons,
-            score:facts.score,created_at:row.created_at || null,source:row.source || null};
+          const entry = {id:row.id,ham_uid:hamUid,contributors:[facts.contributor],
+            reasons:facts.reasons,score:facts.score,created_at:row.created_at || null,
+            source:row.source || null};
           entry.compact_bytes = Buffer.byteLength(stableStringify(entry), 'utf8');
           selected.set(key, entry);
           compactOmitted.delete(key);
@@ -320,7 +407,8 @@ async function planWallEvidence(input, options) {
   }
   const selection = Array.from(selected.values()).sort(compareCandidates);
   const expanded = await finder.expandFcwEvidence(selection, value.viewer_tier, {
-    signal:opts.signal,max_bytes:budgets.fcw_bytes
+    signal:opts.signal,max_bytes:budgets.fcw_bytes,
+    last_air_fact_sink:opts.last_air_fact_sink
   });
   heapHighWater = Math.max(heapHighWater, process.memoryUsage().heapUsed);
   if (!expanded || expanded.ok !== true || expanded.available !== true) return expanded;
@@ -357,6 +445,9 @@ async function planWallEvidence(input, options) {
     compact_omitted:compactOmissions,
     continuations:Array.isArray(scan.continuations) ? scan.continuations : [],
     full_history_expansion_available:typeof finder.walkFcwEvidence === 'function',
+    last_air_cycle:expanded.last_air_cycle || null,
+    last_air_cycle_progressive:expanded.last_air_cycle_progressive === true,
+    last_air_cycle_sink:expanded.last_air_cycle_sink || null,
     heap_start_bytes:heapStart,heap_high_water_bytes:heapHighWater,
     contributors:contributors,scan:scan};
 }
@@ -472,8 +563,12 @@ function employmentPrompt(record, truth) {
   const duties = record.jd && list(record.jd.duties);
   const never = record.jd && list(record.jd.never);
   const recent = truth.rows.map(function (row) {
+    // A legacy row can arrive with an empty source, and the heading above promises every
+    // row a named writer; a blank would silently break that promise, so the missing state
+    // renders in the founder's exact words instead (pen fence, 20260815).
     return '- ' + (row.created_at ? row.created_at + ' ' : '') + row.stamp_type + ' ' +
-      row.source + (row.summary ? ': ' + row.summary : '');
+      (row.source || '(no writer stamp on the row)') +
+      (row.summary ? ': ' + row.summary : '');
   });
   return [
     '',
@@ -497,12 +592,28 @@ function employmentPrompt(record, truth) {
     lines('SEATS YOU MAY ONLY RECOMMEND', record.capabilities.may_recommend),
     lines('RUN OF SHOW, WAKES', record.capabilities.wakes),
     lines('RUN OF SHOW, HANDS TO', record.capabilities.hands_to),
-    'RECENT CYCLE TRUTH FROM THE WALL' + (truth.partial ? ' (PARTIAL READ)' : '') + ':',
+    'RECENT CYCLE TRUTH FROM THE WALL' + (truth.partial ? ' (PARTIAL READ)' : '') + ': each '
+      + 'row below carries its stamping source. A source names the lane or module that '
+      + 'stamped the row, never proof of who authored the words; some rows are machine facts '
+      + 'and some are a mind\'s real words, and YOU judge each one by its named source. These '
+      + 'names are internal, never said to a person.',
     truth.policy_excluded
       ? '- POLICY EXCLUDED FOR THIS CLOSED-WORLD DELIBERATION: ' + truth.exclusion_reason +
         '. Use only the exact evidence in this request.'
       : (recent.length ? recent.join('\n')
-        : '- AVAILABLE, SUCCESSFUL EMPTY. No prior cycle rows matched.'),
+        : (truth.partial
+          ? '- EMPTY ON AN INCOMPLETE READ. Zero rows arrived, and not every query completed, '
+            + 'so this emptiness is NOT proof of an empty record.'
+          : '- AVAILABLE, SUCCESSFUL EMPTY. No prior cycle rows matched.')),
+    (!truth.policy_excluded && truth.partial)
+      ? '- PARTIAL READ: not every recent-truth query completed'
+        + ((Array.isArray(truth.failures) && truth.failures.length)
+          ? ' (' + truth.failures.map(function (failure) {
+            return clean(failure && failure.reason, 120) || 'reason unrecorded';
+          }).join('; ') + ')' : '')
+        + '. The rows above are what carried through, not the whole record. Never treat a row '
+        + 'you do not see here as proof it does not exist, and say plainly if this gap matters.'
+      : '',
     'This wake record is internal context. Never narrate Agent FIND, registry ids, policies, or '
       + 'cycle rows to the person. Use them to do the job, and return through the registered gate.',
     ''
@@ -548,12 +659,18 @@ async function bindWall(input, options) {
   // the deliberation can see precisely what was missing and say so rather than guessing, and the
   // gap is observable instead of silent. A wall that is entirely absent or unusable is still
   // refused above; that is a different fact and it stays refused.
-  const wallGaps = {
-    partial: fcw.partial === true,
-    unavailable: list(fcw.unavailableContributors),
-    degraded: list(fcw.partialContributors),
-    storage_limitations:list(fcw.agent_find&&fcw.agent_find.storage_limitations)
-  };
+  // ⬡B:core.agent.find:FIX:a_row_dropped_by_score_is_a_gap_she_is_owed_20260815⬡
+  // CODELESS PURGE. Two omission lists were computed, carried on the plan, reported in the
+  // receipt, and never once said to her: `compact_omitted` (rows candidateFacts scored lowest
+  // when the compact envelope filled, agent.find.js:304-313) and `omitted` (rows the expand
+  // phase could not fit). Cold code decided which of her own records she would never see, and
+  // the decision was invisible, so she could not overrule it or even know to ask. These are
+  // COUNTS ONLY, carried as facts beside the existing named gaps: the doctrine's own trap
+  // warning says never repeat a long stamp per row, and the fix for a silent drop is to say it
+  // happened, not to ship the dropped rows back through the same envelope that rejected them.
+  // `full_history_expansion_available` already proves an expansion path exists that she was
+  // never offered; now she can ask for it.
+  const wallGaps = wallGapsFor(fcw);
   if (wallGaps.partial || wallGaps.unavailable.length || wallGaps.degraded.length) {
     console.error('[agent.find] wall is thin, proceeding on named gaps rather than silencing her:',
       JSON.stringify({unavailable: wallGaps.unavailable, degraded: wallGaps.degraded,
@@ -570,9 +687,22 @@ async function bindWall(input, options) {
     return {ok:false,available:false,
       reason:clean(recent && recent.reason || 'agent_find_recent_truth_unavailable', 160)};
   }
-  if (recent.partial === true || (Array.isArray(recent.failures) && recent.failures.length)) {
-    return {ok:false,available:false,reason:'agent_find_recent_truth_partial'};
-  }
+  // ⬡B:core.agent_find:FIX:a_partial_recent_truth_read_may_not_cost_her_the_whole_cycle:20260815⬡
+  // This is the SAME disease the founder-felt 20260802 outage cured for the FCW wall directly
+  // above, left uncured here. A slow or failing recent-truth query does not make the rows that
+  // DID arrive false; it makes the read incomplete. Refusing over it was not a small drop:
+  // bindWall returning ok:false is the wake boundary, and tool.loop refuses every non-ok wall
+  // before its first provider call, so one thin sub-read was killing the entire cycle.
+  //
+  // Carry, never classify (founder Doctrine Drop 20260815): the gap rides through NAMED instead.
+  // recentTruthRecord already threads partial and failures, and employmentPrompt already renders
+  // "(PARTIAL READ)" beside the rows that did arrive; that carrying code was unreachable because
+  // this refusal fired first. No row is dropped and the section is never withheld for being
+  // incomplete. She is told plainly what did not complete and judges from there.
+  //
+  // The branch ABOVE stays refusing on purpose, and it is a different fact, exactly as this
+  // file's own 20260802 comment already draws the line: when available is false there are no
+  // rows at all to carry, so there is nothing to hand her but a refusal.
   const employment = employmentRecord(registry, target, providerSeat);
   const truth = recentTruthRecord(recent);
   const wall = wallRecord(fcw);
@@ -619,19 +749,9 @@ async function bindWall(input, options) {
   } catch (error) {}
   // The thin-wall gap rides on the returned wall so nothing downstream has to guess whether it
   // is looking at a complete picture, and so a thin turn is distinguishable from a full one in
-  // the receipt rather than only in a log line.
-  const storageGap=wallGaps.storage_limitations.indexOf('legacy_supersession_unavailable')>=0
-    ? ' This memory store could not verify whether an older record was later corrected. Treat '
-      + 'its history as useful but not complete current truth, and say that plainly if it matters.'
-    : '';
-  const gapAppendix = (wallGaps.partial || wallGaps.unavailable.length ||
-    wallGaps.degraded.length || wallGaps.storage_limitations.length)
-    ? ('\n\nSome of what you normally read was not available for this turn' +
-       (wallGaps.unavailable.length ? ', missing: ' + wallGaps.unavailable.join(', ') : '') +
-       (wallGaps.degraded.length ? ', incomplete: ' + wallGaps.degraded.join(', ') : '') +
-       '. Answer on what you do have and say plainly what you could not check. Never fill a gap ' +
-       'with a guess.'+storageGap)
-    : '';
+  // the receipt rather than only in a log line. Composed by gapAppendixFor (above), which also
+  // names records set aside for space so a silent drop is never silent again.
+  const gapAppendix = gapAppendixFor(wallGaps);
   return Object.assign({}, fcw, {
     agent_find_wall_gaps: wallGaps,
     system_prompt:fcw.system_prompt + promptAppendix + gapAppendix,
@@ -827,4 +947,5 @@ module.exports = {AGENT_FIND_NODE_ID:AGENT_FIND_NODE_ID,
     scopedRecentRows:scopedRecentRows,belongsToRequest:belongsToRequest,
     questionTerms:questionTerms,candidateFacts:candidateFacts,compareCandidates:compareCandidates,
     runtimeContextBudgets:runtimeContextBudgets,
+    wallGapsFor:wallGapsFor,gapAppendixFor:gapAppendixFor,
     digest:digest}};

@@ -47,6 +47,35 @@ var hamWorldBuilderContract = require('./ham.world.builder.contract.js');
 var shadowDecisionDialogue = require('./shadow.decision.dialogue.js');
 var outputGuard = require('./model.output.guard.js');
 var LIVE_VOICE_SESSION = Symbol.for('anew.verified.live.voice.session');
+var GMGU_CURRICULUM_PROPOSAL_CAPABILITIES = new WeakMap();
+var gmguNativeTutorMarker = require('./gmgu/native.tutor.marker.js');
+
+function verifiedGmguTutorTurn(channel, identity, hamUid) {
+  return String(channel || '').trim().toLowerCase() === 'gmgu' &&
+    gmguNativeTutorMarker.verify(identity, hamUid);
+}
+
+function bindGmguCurriculumProposalCapability(identity, hamUid, requestId, commit) {
+  var boundHam = String(hamUid || '').trim().toUpperCase();
+  var boundRequest = String(requestId || '').trim();
+  if (!identity || typeof identity !== 'object' || !boundHam || !boundRequest ||
+      String(identity.uid || '').trim().toUpperCase() !== boundHam ||
+      String(identity.request_id || identity.requestId || '').trim() !== boundRequest ||
+      typeof commit !== 'function') return false;
+  GMGU_CURRICULUM_PROPOSAL_CAPABILITIES.set(identity, Object.freeze({
+    ham_uid:boundHam, request_id:boundRequest, commit:commit }));
+  return true;
+}
+
+function gmguCurriculumProposalCapability(identity, hamUid) {
+  var capability = identity && GMGU_CURRICULUM_PROPOSAL_CAPABILITIES.get(identity);
+  var boundHam = String(hamUid || identity && identity.uid || '').trim().toUpperCase();
+  var requestId = String(identity && (identity.request_id || identity.requestId) || '').trim();
+  if (!capability || typeof capability.commit !== 'function' || !boundHam ||
+      capability.ham_uid !== boundHam || !requestId ||
+      capability.request_id !== requestId) return null;
+  return capability;
+}
 
 // The verified route attaches this proof through a symbol. Object.assign carries
 // the symbol through the World Builder identity clone, while JSON serialization
@@ -93,7 +122,34 @@ var realNameBoundary = require('./real.name.boundary.js');
 var CANONICAL_ASSISTANT_NAME = "A'NU";
 var cookoffClient = require('./cookoff.client.js');
 var wonderGamesClient = require('./wonder.games.client.js');
+// ⬡B:core.tool_loop:HEAL:the_code_and_the_prompt_disagreed_about_two_closed_lanes:20260815⬡
+// A BLIND CRITIC CAUGHT A SIDE EFFECT OF MY OWN FIX. The closed-world read-authority token was
+// built as a bare object literal that isReadAuthority could never accept, so context.fusion
+// returned nothing for every lane using it. I made the token mintable, correctly, because a
+// token nothing can mint starves five lanes and reads as "there is no context" instead of
+// "nobody could mint the token". But fixing the token also handed ambient fused context to two
+// lanes whose OWN PROMPTS FORBID IT:
+//   _reachIncidentIntake   closed-world over its exact granted packet
+//   _internalCodaTurn      "Do not infer ambient Memory Bank facts, recent activity, prior
+//                           conversation, or human intent outside that packet."
+// The other three the fix touched (GMGU tutor, room-safe voice, native live voice) were already
+// suppressed right here, so they were never affected, and my commit message overstated that as
+// "five lanes". Two, not five.
+//
+// DECIDED OUT LOUD RATHER THAN LEFT AS A SIDE EFFECT, which is what a critic asked for and what
+// the code deserved. The design intent was never ambiguous: the token is literally named
+// `closed_world`, the comment at its definition says these lanes intentionally perform no
+// ambient read, and both prompts say so in words. What was ambiguous was the MECHANISM: the
+// suppression was happening by accident, through a token nobody could mint, in a different file.
+// An intent enforced by a bug is not enforced. It is one refactor away from silently reversing,
+// which is exactly what my refactor did.
+// So the suppression moves to the place that already expresses this decision for three other
+// lanes, and the code now says what the prompt says. Nothing is newly restricted: this restores
+// what these two lanes always had, on purpose this time, in one readable place.
 function shouldIncludeWorldContext(channel, identity, hamUid, question) {
+  if (reachIncidentIntakeMode(channel, identity)) return false;
+  if (codaInternalDeliberation(identity)) return false;
+  if (verifiedGmguTutorTurn(channel, identity, hamUid)) return false;
   if (String(channel || '').toLowerCase() !== 'voice') return true;
   if (voiceRoomSafe.isAuthorized(identity)) return false;
   if (identity && identity.council_context &&
@@ -928,6 +984,19 @@ function paiOutcomeUnknownFailure(result) {
     .filter(Boolean).join(':').toLowerCase();
   return reason.indexOf('provider_spend_outcome_unknown')!==-1;
 }
+function paiFailoverReceipt(result) {
+  var error=result&&result.error&&typeof result.error==='object'?result.error:{};
+  var status=Number(error.status);
+  var code=String(error.code||'').trim().toLowerCase();
+  return {attempted:true,
+    usable:paiSeatUsable(result),
+    status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
+    code:/^[a-z0-9._:-]{1,96}$/.test(code)?code:null,
+    generationId:/^[A-Za-z0-9._-]{1,160}$/.test(String(error.generation_id||''))
+      ?String(error.generation_id):null,
+    seat:/^[a-z0-9._-]{1,96}$/.test(String(error.seat||''))
+      ?String(error.seat):null};
+}
 async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   var primary = await attempt(primaryCandidate);
   if (paiSeatUsable(primary)) return primary;
@@ -941,7 +1010,14 @@ async function paiSeatFailover(attempt, primaryCandidate, fallbackCandidate) {
   // The rescue only wins if it actually carries an answer. If it does not, the caller gets
   // the PRIMARY's own result back, byte for byte, so every downstream path (the hollow-answer
   // repair, the ladder, the named silent wall) sees exactly what it saw before this change.
-  if (!paiSeatUsable(recovered)) return primary;
+  if (!paiSeatUsable(recovered)) {
+    // Preserve the existing primary wall for callers while carrying one content-free receipt
+    // of the declared rescue attempt for the GMGU operational log. Non-enumerable keeps it
+    // out of route serialization and all existing provider contracts.
+    try { Object.defineProperty(primary,'_paiFailover',{enumerable:false,
+      value:paiFailoverReceipt(recovered)}); } catch (ePaiFailoverReceipt) {}
+    return primary;
+  }
   return recovered;
 }
 
@@ -1053,7 +1129,41 @@ function isArrivalDestinationBlock(parsed) {
 //      channel never sets it, so an SMS turn cannot reach this branch at all.
 //   2. the answer matches the arrival contract shape.
 // Context first, then shape. That ordering is the whole correction.
-function repairRawJsonAnswer(answer, context) {
+// ⬡B:core.tool_loop:AIRCODE:PAI_OUTPUT_REPAIR_WONDER_20260815⬡
+// ##DD DOCTRINE DROP 20260815, THE PEN ON HER MIND. This is PAI_OUTPUT_REPAIR_WONDER, named
+// and stamped absent by this file's own comment since 20260723 (COLD-ANEW-REPORT-0075): "The
+// honest fix (return the defect to the PAI cycle and compose through the canonical mind under
+// SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here." It was the file naming its own defect and
+// nobody had built the fix yet.
+//
+// The guard stayed cold because deleting it ships raw JSON to a human, which is worse. What
+// changes here is who writes the sentence a human reads when the guard fires: cold code carried
+// two hardcoded sentences (a calendar line, an ask-again line) and this file's own stamp,
+// finalAns, then rides straight into core/memory.keeper.js#keepTurn as `content.exit.her_answer`
+// -- literally labeled the exit, her answer -- and core/find.js reads that lane back on every
+// future turn as what she actually said. A hardcoded sentence banked as her_answer is exactly
+// the planted memory the drop names.
+//
+// AIRCODE: cold code still does everything it did before except phrase the sentence. It detects
+// the raw JSON, proves or refuses the arrival exemption, and for a calendar-shaped leak it
+// carries the FACT (the open-slot count) rather than the tool result itself, so nothing beyond
+// what was already going out reaches the seat. A named seat is woken once, told the situation,
+// and her one honest sentence becomes the answer. An unreachable seat is a real refusal, never a
+// silent fallback to the old hardcoded line: that fallback would be the 20260814 clean.speech
+// defect moved into this file.
+//
+// THE CALL RIDES THE ONE GUARDED DOOR, NOT A SECOND ONE. tests/a.one.millisecond.call.is.cold
+// .code.choosing.silence.test.js pins that exactly one `.deliberate(` call exists in this whole
+// file (callPaiLadderNetwork) and that every ladder call in a voice-bearing turn respects
+// _voiceModelDeadline through _callPaiLadder: a branch-local call to model.ladder.js directly,
+// which my first cut here was, is precisely the bypass that guard exists to catch, and it did.
+// repairRawJsonAnswer is not itself the closure that owns _callPaiLadder (that lives inside
+// runPAIInner), so the caller must hand it in; callLadder defaults to a bare deliberate call
+// only so the extracted function stays independently callable by these tests without a whole
+// runPAIInner closure.
+var REPAIR_SEAT = 'c2_organ';
+
+async function repairRawJsonAnswer(answer, context, callLadder) {
   var text = answer == null ? '' : String(answer);
   if (!text || !/^[[{]/.test(text.trim())) return { answer: answer, stamp: null, why: null };
   var parsed = null;
@@ -1065,17 +1175,188 @@ function repairRawJsonAnswer(answer, context) {
   }
   if (parsed && typeof parsed === 'object') {
     var why = 'a tool result nearly went out as raw JSON instead of a sentence';
-    if (parsed.next_open_slots || parsed.upcoming_events !== undefined) {
-      var n = Array.isArray(parsed.next_open_slots) ? parsed.next_open_slots.length : 0;
-      return { answer: n > 0
-        ? 'Your calendar is open right now, ' + n + ' free half-hour blocks coming up. Want me to grab one?'
-        : 'Nothing open on your calendar in the window I checked, or it is genuinely clear with no slots computed yet -- tell me what you are trying to book and I will look closer.',
-        stamp: 'raw_json_answer_caught', why: why };
+    var isCalendarShape = !!(parsed.next_open_slots || parsed.upcoming_events !== undefined);
+    var openSlots = Array.isArray(parsed.next_open_slots) ? parsed.next_open_slots.length : 0;
+    var fact = isCalendarShape
+      ? ('FACT: a calendar tool answered with ' + openSlots + ' open half-hour block(s) in the '
+        + 'window checked (0 can mean either a genuinely clear window or slots not yet computed, '
+        + 'the tool result does not say which).')
+      : 'FACT: a tool call finished and returned structured data instead of words, and the '
+        + 'person is waiting on an answer, not the raw data.';
+    var sys = 'You are A\'NU, mid-turn. A tool just answered you with data instead of words, and '
+      + 'you almost sent that raw data to the person instead of speaking to them. Using ONLY the '
+      + 'fact below, say one short honest sentence in your own voice: if there is something '
+      + 'concrete to offer, offer it; if not, say plainly you need to look again and invite them '
+      + 'to ask. Never invent a number, a time or a detail that is not in the fact. Never an em '
+      + 'dash.';
+    // callLadder is REQUIRED to reach this branch, on purpose: no fallback default that
+    // quietly dials model.ladder.js on its own, because that fallback would BE the
+    // branch-local bypass this whole conversion exists to close.
+    if (typeof callLadder !== 'function') throw new Error('repair_ladder_caller_required');
+    var reply = null;
+    try {
+      reply = await callLadder(sys, fact,
+        { seat: REPAIR_SEAT, timeout: 8000, max_tokens: 120, temperature: 0.3 });
+    } catch (eRepair) { reply = null; }
+    var spoken = reply && reply.content ? String(reply.content).trim() : '';
+    // Codex review, live: the first cut here still cold-authored a human-facing sentence
+    // ("I am not able to put that into words right now...") on an unreachable seat, and that
+    // string is exactly what this whole conversion exists to stop -- a sentence nobody said
+    // riding into her memory as her_answer. An unreachable seat now returns NO answer at all,
+    // never a fallback sentence, the same shape as agents/dawn.js#brief's own conversion. The
+    // caller (runPAIInner) already owns the honest path for an empty finalAns: the
+    // terminal_no_answer_single_repair seam gets one more real attempt, and if that also comes
+    // back empty, the council_answer_hollow_protocol gate at the end of the turn refuses
+    // ok:false rather than shipping cold-authored bytes. The raw JSON itself never reaches the
+    // person either way, because an empty answer is not human-facing.
+    if (!spoken) {
+      return { answer: '', stamp: 'raw_json_answer_repair_mind_unavailable', why: why };
     }
-    return { answer: 'I pulled that up, but I need to say it in words instead of handing you raw data. Ask me again and I will answer it properly.',
-      stamp: 'raw_json_answer_caught', why: why };
+    // Codex review, live: the repair seat's own output was never validated. A seat that answers
+    // with JSON instead of a sentence (a misconfigured seat, a model that ignored the system
+    // prompt) would ship that JSON straight to the person -- the exact leak this function exists
+    // to catch, now caused by the fix instead of prevented by it. Same detection this function
+    // already uses on the ORIGINAL answer, applied to the repaired one before it ships.
+    if (/^[[{]/.test(spoken)) {
+      return { answer: '', stamp: 'raw_json_answer_repair_itself_raw', why: why };
+    }
+    return { answer: spoken, stamp: 'raw_json_answer_caught', why: why };
   }
   return { answer: answer, stamp: null, why: null };
+}
+
+// ⬡B:core.tool.loop:AIRCODE:unverified_action_claim_wakes_her:20260815⬡
+// The sibling of repairRawJsonAnswer above, same shape, same reason. See the long note at the
+// call site for the live incident and the two harms. Detection stays cold and unchanged; only
+// the sentence moved from a coder's keyboard to her mouth.
+var UNVERIFIED_ACTION_CLAIM = /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i;
+// ⬡B:core.tool.loop:FIX:the_event_half_named_a_tool_that_never_existed:20260815⬡
+// The 20260712 guard checked for 'create_event'. That tool name appears NOWHERE in this tree:
+// the real event-writing hand is calendar_book, defined in TOOLS in this same file. So the
+// event half of the check could never be satisfied, and every honest confirmation of a REAL
+// booking ("I scheduled that event for Thursday") tripped the guard and was answered by telling
+// the person their real calendar entry did not exist. Naming the tool that actually exists.
+// ⬡B:core.tool.loop:FIX:each_claimed_action_needs_its_own_tool:20260815⬡
+// Codex P1 on the merged #2164: checking "did ANY of these tools run" let one real action cover
+// a different unearned claim. A turn that genuinely called calendar_book and then also said "I
+// have set a reminder" passed clean, because calendar_book was in the list, and the mirror case
+// let create_reminder vouch for an event that was never booked. These tools have different
+// effects on a person's real world, so each claimed action is matched to the tool that actually
+// performs it, and the guard fires when ANY claimed action is missing its own tool.
+var ACTION_CLAIM_KINDS = [
+  { kind: 'reminder', claim: /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?reminder\b/i,
+    tool: 'create_reminder' },
+  { kind: 'event', claim: /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:calendar|event)\b/i,
+    tool: 'calendar_book' }
+];
+
+// ⬡B:core.tool.loop:MERGE:the_corroboration_half_belongs_to_another_lane:20260815⬡
+// THIS FUNCTION IS NOT MINE. It is the work of the lane that opened anew#2162 (session
+// 01Jq3vNB), carried here verbatim in behavior and credited by name. Their words for why it is a
+// FACT and not a meaning call, which is the load-bearing argument: priorTurns is the real,
+// already-guard-passed conversation history, so a false claim in an earlier turn would ALREADY
+// have been rewritten before it was stored; if the same claim phrasing survives unaltered in a
+// prior ASSISTANT turn, the tool truly fired back then and this turn is a corroborated echo, not
+// a hallucination. It carries that fact and never guesses at tense, intent, or meaning. Only her
+// own answer can corroborate: a prior USER turn repeating the words proves nothing.
+//
+// HOW IT GOT HERE, said plainly because it was my mistake. Their fix reached template-mind main
+// through the mirror sync in template-mind#534, while their anew PR #2162 closed unmerged, so the
+// two worlds were already split before I arrived. My own mirrors then copied my anew file whole
+// over the template half and DELETED their function from template-mind main. That is the clobber
+// the standing law forbids. The repair is not to revert mine or re-land theirs alone: the two
+// halves fix different ends of the same bug and belong together, which their own PR anticipated
+// when it left the cold replacement sentence as debt "scoped to the larger PAI_OUTPUT_REPAIR_
+// WONDER mind-wake" -- that wake is exactly what the conversion below is.
+//
+// COMBINED, THE GUARD IS STRICTLY BETTER THAN EITHER HALF: a corroborated echo of her own real
+// earlier work never fires the guard at all and costs no model call, and anything that does fire
+// wakes her instead of being answered for. Their cold denial sentence is retired here, which is
+// the outcome their PR said it was waiting for.
+function reminderClaimCorroboratedByHistory(priorTurns) {
+  return Array.isArray(priorTurns) && priorTurns.some(function (t) {
+    return t && t.role === 'assistant' && typeof t.content === 'string' &&
+      UNVERIFIED_ACTION_CLAIM.test(t.content);
+  });
+}
+
+// PURE COLD DETECTION, no judgment about what she meant. True only when the draft carries the
+// shape of an action claim, no tool that could have performed it ran this turn, AND her own
+// history does not already corroborate the claim.
+function unverifiedActionClaimShape(answer, toolsUsed, priorTurns) {
+  if (!answer || typeof answer !== 'string') return false;
+  if (!UNVERIFIED_ACTION_CLAIM.test(answer)) return false;
+  var used = Array.isArray(toolsUsed) ? toolsUsed : [];
+  // Every action the draft actually claims must be backed by the tool that performs THAT action.
+  // A sentence claiming both needs both; one real action never vouches for the other.
+  var unearned = ACTION_CLAIM_KINDS.some(function (k) {
+    return k.claim.test(answer) && used.indexOf(k.tool) === -1;
+  });
+  if (!unearned) return false;
+  return !reminderClaimCorroboratedByHistory(priorTurns);
+}
+
+// THE WAKE. Carries the fact and her own sentence to a named seat and returns HER answer.
+// callLadder is REQUIRED, matching the sibling: no default that quietly dials a model on its
+// own, because that default would be the branch-local bypass the voice-deadline guard exists
+// to catch. An unreachable seat returns no answer at all, never a replacement sentence.
+async function repairUnverifiedActionClaim(answer, callLadder, opts) {
+  var o = opts || {};
+  if (typeof callLadder !== 'function') throw new Error('action_claim_ladder_caller_required');
+  // THE FACT IS TURN SCOPED AND SAYS SO, OUT LOUD, TWICE. The only thing actually proven is that
+  // no creating tool ran on THIS turn. That is NOT evidence that no such reminder or event
+  // exists: one she set on an earlier turn is real and still standing, and this check cannot see
+  // earlier turns at all. A prompt that told her "nothing exists" would push her to deny a live
+  // reminder, which is the exact false positive this whole conversion exists to end, rebuilt one
+  // layer up in the prompt instead of the code.
+  var fact = 'FACT, SCOPED TO THIS TURN ONLY: your draft matches the shape of a claim that a '
+    + 'reminder or calendar event was set up, and no create_reminder or calendar_book tool ran on '
+    + 'this turn, so nothing was created just now. THIS IS NOT EVIDENCE THAT NO SUCH REMINDER OR '
+    + 'EVENT EXISTS. One you set on an earlier turn would be real and still standing, and this '
+    + 'check cannot see earlier turns. Your sentence may be a claim about work that did not '
+    + 'happen, a true reference to earlier work, or an echo of their own question, and this check '
+    + 'cannot tell those apart.'
+    + String.fromCharCode(10) + 'THE SENTENCE: ' + String(answer);
+  var sys = 'You are A\'NU, mid-turn, about to answer a person. A check caught that your draft '
+    + 'reads like something was just set up, while no creating tool ran on this turn. Read your '
+    + 'own sentence in the fact below and answer in one or two sentences in your own voice. If '
+    + 'you were saying you just set it up, say plainly that it did not get created and ask for '
+    + 'the exact thing and time so you can do it for real. If you were pointing at something from '
+    + 'an earlier turn, say so plainly and do NOT deny it exists. If you were echoing their '
+    + 'question or telling them no, say what you meant. Never say something was created just now, '
+    + 'and never tell them something does not exist when all you know is that it was not created '
+    + 'on this turn. Never an em dash.';
+  // The seat key is only set when the caller actually has one. _callPaiLadder merges as
+  // Object.assign({seat: this turn's resolved seat}, options), so caller options WIN: passing
+  // seat undefined would blank the turn's own resolution rather than defer to it.
+  var ladderOpts = { timeout: 8000, max_tokens: 140, temperature: 0.3, signal: o.signal };
+  if (o.seat) ladderOpts.seat = o.seat;
+  var reply = null;
+  try {
+    reply = await callLadder(sys, fact, ladderOpts);
+  } catch (eClaim) { reply = null; }
+  var spoken = reply && reply.content ? String(reply.content).trim() : '';
+  if (!spoken) {
+    return { answer: '', stamp: 'hallucinated_action_no_mind_reachable' };
+  }
+  // ⬡B:core.tool.loop:FIX:the_post_filter_was_the_nasty_cough_one_layer_up:20260815⬡
+  // An earlier cut of this conversion re-ran UNVERIFIED_ACTION_CLAIM against HER answer and went
+  // silent if it matched. Two things were wrong with that, and the second is the doctrine one.
+  //   1. IT THREW AWAY THE ANSWER THE PROMPT ASKS FOR. The wake explicitly invites her to say
+  //      "I set that reminder earlier this week" when the claim is a true reference to earlier
+  //      work. That sentence matches the pattern by construction, so the post-filter silenced the
+  //      exact honest explanation it had just requested, and a person with a real live reminder
+  //      got a dead turn instead of an answer.
+  //   2. IT WAS COLD CODE JUDGING HER MEANING, one layer up from where it was just removed.
+  //      20260807: a regex may DETECT and WAKE, it may never DECIDE. 20260815: carry, never
+  //      classify. A filter that reads her reply and decides she must have lied is the same
+  //      nasty cough as the branch this conversion deleted, moved behind the wake where it is
+  //      harder to see. The detection before the wake is legitimate because it reads a DRAFT
+  //      against a mechanical fact (no tool ran). Re-reading her considered answer is not.
+  // She was woken, given the turn-scoped fact, and told plainly never to say something was
+  // created just now. Her answer stands. Verification of what she said belongs to the woken WRIT
+  // reviewer and the council downstream, which are minds, not to a pattern in this function.
+  return { answer: spoken, stamp: 'she rewrote her own line after the wake' };
 }
 
 // Keep the canonical PAI tool decision intact when the approved primary
@@ -1113,6 +1394,47 @@ function applyProviderThinkingPolicy(providerBody, model) {
     delete target.chat_template_kwargs;
   }
   return target;
+}
+
+function applyGmguTutorProviderPolicy(providerBody, channel, model) {
+  var target=providerBody||{};
+  if(String(channel||'').trim().toLowerCase()!=='gmgu')return target;
+  target.max_tokens=640;
+  target.reasoning={effort:'minimal',exclude:true};
+  delete target.chat_template_kwargs;
+  // GMGU has two independently proven production routes. Its Qwen teaching
+  // seat runs on Alibaba; its declared Grok rescue runs on xAI. The former
+  // implementation incorrectly applied Alibaba to both models, turning the
+  // rescue into a guaranteed provider mismatch. This complete GMGU-only
+  // routing contract also prevents caller supplied provider preferences from
+  // changing a learner turn.
+  var exactModel=String(model||target.model||'').trim().toLowerCase();
+  var provider=exactModel.indexOf('x-ai/')===0 ? 'xai' : 'alibaba';
+  target.provider={order:[provider],allow_fallbacks:false,require_parameters:true};
+  return target;
+}
+
+function fetchPaiSeatCandidate(requestBody, candidate, channel, options, fetchImpl, runtime) {
+  if (!candidate || !candidate.seat || !candidate.seat.model || !candidate.key) {
+    throw new Error('pai_seat_candidate_invalid');
+  }
+  var providerBody = primaryProviderBody(requestBody,
+    requestBody && requestBody.messages || [], candidate.seat.model);
+  // This is the final provider boundary for both the primary seat and its
+  // declared fallback. Model-family normalization runs first; the GMGU tutor
+  // contract then wins last so its bounded response and low-latency request
+  // cannot be discarded by the adapter immediately before fetch.
+  applyProviderThinkingPolicy(providerBody, candidate.seat.model);
+  applyGmguTutorProviderPolicy(providerBody, channel, candidate.seat.model);
+  var env = runtime || process.env;
+  var transport = typeof fetchImpl === 'function' ? fetchImpl : fetch;
+  return transport('https://openrouter.ai/api/v1/chat/completions', {
+    method:'POST',
+    headers:{Authorization:'Bearer ' + candidate.key,'Content-Type':'application/json',
+      'HTTP-Referer':env.SELF_BASE_URL||env.AIBEBASE_URL||'https://aibebase.onrender.com',
+      'X-Title':'ANEW Envolve'},
+    body:JSON.stringify(providerBody),signal:options && options.signal
+  });
 }
 
 function prepareRoadmapActivationBody(body, approved) {
@@ -1400,6 +1722,11 @@ var TOOLS = [
     parameters:{type:'object',required:['ham_uid','stamp_type','summary','content'],
     properties:{ham_uid:{type:'string'},stamp_type:{type:'string'},
       summary:{type:'string'},content:{type:'string'},importance:{type:'number'}}}}},
+  {type:'function',function:{name:'submit_gmgu_curriculum_proposal',
+    description:'Privately submit one structured GMG University curriculum proposal from your current judgment. Use this only when you decide the exact evidence supports a reviewable curriculum candidate. Your visible answer remains natural prose. This hand does not publish curriculum.',
+    parameters:{type:'object',required:['curriculum','rationale'],properties:{
+      curriculum:{type:'object',description:'The complete proposed curriculum block, preserving every unsupported part of the published curriculum.'},
+      rationale:{type:'string',description:'Why the exact supplied evidence supports this bounded proposal.'}}}}},
   {type:'function',function:{name:'create_chat_file',description:'Create a real downloadable file in the active A\'NU chat or project. Use when the person asks you to make, export, draft, or give them a file. The active workspace and conversation are bound by the server; provide the complete file content, not a preview.',
     parameters:{type:'object',required:['filename','content'],properties:{
       filename:{type:'string',description:'Safe filename including extension, such as roadmap.md or brief.csv'},
@@ -2042,59 +2369,25 @@ function isPureConversationalContinuation(message) {
 // table, and she -- the one deciding wonder -- chooses to act and which scene. Cold code renders and
 // reads back; it never decides.
 
-function intentRequiresLiveTool(intent) {
-  // These two routes are unambiguously current external facts and contain only
-  // one read-only tool each. Requiring a call cannot release a mutation and
-  // prevents the model from denying a capability that is visibly attached.
-  return intent === 'weather' || intent === 'sports';
-}
-
-function requiredReadToolForMessage(message, intent) {
-  var text = String(message || '').trim().toLowerCase();
-  if (intent === 'weather') return weatherArgsFromMessage(text).place ? 'weather_check' : null;
-  if (intent === 'sports') return sportsArgsFromMessage(text).league ? 'nash_sports' : null;
-  if (intent === 'schedule' && /^(?:please\s+)?(?:schedule|book|create|add|move|reschedule|cancel|delete)\b/.test(text)) return null;
-  if (intent === 'schedule' && /\b(calendar|schedule|scheduled|meetings?|availability|free|open (?:time|slot)|events?)\b/.test(text)) return 'calendar_read';
-  if (intent === 'email' && /\b(read|show|list|check|get|what)\b.*\bdrafts?\b/.test(text) &&
-      !/\b(send|write|create|delete|approve)\b/.test(text) && draftArgsFromMessage(text).org) return 'get_pending_drafts';
-  if (intent === 'email' && /\b(inbox|unread emails?|recent emails?)\b/.test(text) && !/\b(send|reply|draft)\b/.test(text)) return 'inbox_read';
-  if (intent === 'reminders' && /\b(what|read|show|list|check|current|active|pending)\b/.test(text) && !/\b(create|add|set|stop|remove|delete)\b/.test(text)) return 'read_reminders';
-  if (intent === 'budget' && /\b(payments? (?:are )?(?:due|coming)|due soon|upcoming|bnpl)\b/.test(text)) return 'get_budget_upcoming';
-  if (intent === 'budget' && /\b(budget|income vs expenses|spending by category|on track|income|expenses?|paychecks?|salary|take[- ]?home|bills?|net (income|pay)|cash ?flow|afford|savings?|money|how much (do i|i) (make|earn|bring in|spend|have left)|what do i (make|earn))\b/.test(text)) return 'get_budget_summary';
-  if (intent === 'memory' && /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text)) return null;
-  if (intent === 'memory' && /\b(decision|preference|history|result|failure|flagged|built|did we|most recent|recently)\b/.test(text)) return 'find_in_brain';
-  if (intent === 'code' && currentCapabilityQuestion(text)) return 'read_current_capabilities';
-  if (intent === 'code' && /\b(coding lanes?|lane board|which chat|what chat|next to fix|left to fix|who(?:'s| is) working|who(?:'s| is) building|working on (?:it|this|that|the build|the system))\b/.test(text)) return 'read_lane_board';
-  if (intent === 'code' && /\b(your (?:whole |entire )?team|wonder (?:department|network|team)s?|your wonders?|your departments?|who works for you|who is on your team|talk to your (?:whole |entire )?team)\b/.test(text)) return 'read_wonder_departments';
-  return null;
-}
-
-// ⬡B:core.tool_loop:FIX:an_explicit_reminder_command_cannot_be_answered_without_the_reminder_hand:20260730⬡
-// LIVE FOUNDER RECEIPTS, 20260730. "Remind me to build business websites" shipped the
-// literal text "[Calling" with tools_used:[], and "Remind me at 6pm ... call my kids"
-// called calendar_read, then told him A'NU could not set reminders. The intent router had
-// correctly put create_reminder on the table, but it treated an explicit imperative as an
-// optional choice. That is not judgment: the person already chose the action in their own
-// words. This function identifies only that exact, unambiguous authorization. It never
-// executes the mutation; the model still supplies the reminder artifact, and the existing
-// POST_COUNCIL transaction still withholds the write until the full council commits.
-function requiredActionToolForMessage(message, intent) {
-  var text = String(message || '').trim().toLowerCase();
-  if (intent === 'memory' &&
-      /^(?:please\s+)?(?:save|remember|keep|record|store|write)\b/.test(text) &&
-      /\b(?:memory|brain|remember|keep|record|store|save)\b/.test(text)) {
-    return 'write_to_brain';
-  }
-  if (intent !== 'reminders') return null;
-  if (/^(?:please\s+)?remind\s+me\s+(?:why|how|what|who|where|when)\b/.test(text)) {
-    return null;
-  }
-  if (/^(?:please\s+)?remind\s+me\b/.test(text) ||
-      /^(?:please\s+)?(?:set|add|create)\s+(?:me\s+)?(?:a\s+)?reminder\b/.test(text)) {
-    return 'create_reminder';
-  }
-  return null;
-}
+// ⬡B:core.tool.loop:PURGE:a_regex_may_not_grant_write_authorization:20260815⬡
+// CODELESS PURGE 20260815. Deleted from here: intentRequiresLiveTool, requiredReadToolForMessage
+// and requiredActionToolForMessage. The last of those read `^remind me\b` and
+// `^(save|remember|keep|record|store|write)\b` and returned 'create_reminder' or
+// 'write_to_brain', and its own comment called that "that exact, unambiguous authorization".
+// A regex deciding that a person authorized a WRITE is the strongest form of cold code deciding
+// meaning, and it is exactly what the 20260807 law forbids: cold code validates identity,
+// authority, tool arguments, receipts and consequences, never the human's meaning.
+//
+// Verified before deleting, because the honest finding is smaller and worse than it looks:
+// none of the three had a single production caller. The live path sets
+// _routedRequiredActionTool = null and _routedRequiresLiveTool = false unconditionally, and
+// _routedRequiredReadTool only ever from currentCapabilityQuestion. So every branch these fed
+// was already unreachable, and the functions survived only as exports and as TESTS. That is the
+// real hazard: tests/r4d.intent.router.test.js asserted the write-authorization return value as
+// REQUIRED behavior, so the suite promised a violation that the code had already stopped
+// committing, and any lane restoring what the suite promised would have switched it back on.
+// The doctrine is explicit that a test pinning cold behavior is itself nasty cough and is
+// retired with the writer it protects. Both go in this commit.
 // ⬡B:core.tool.loop:GUARD:mutations_release_after_council_commit:20260715⬡
 // Read tools contribute during deliberation. Every mutation is queued as
 // evidence, reviewed by the outbound council, and executed only after the
@@ -2107,6 +2400,7 @@ function requiredActionToolForMessage(message, intent) {
 // contains COLD-ANEW-TOOL-LOOP-0005 (their handlers are only reached at phase==='commit').
 var POST_COUNCIL_TOOLS = Object.freeze({
   write_to_brain:true,
+  submit_gmgu_curriculum_proposal:true,
   record_income:true,
   set_recurring_bill:true,
   log_expense:true,
@@ -2195,6 +2489,51 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
   if (runtime && runtime.phase === 'commit' &&
       await runtimeCancellationRequested(runtime)) {
     return cancelledToolResult(name);
+  }
+  if (name === 'submit_gmgu_curriculum_proposal') {
+    var _gmguProposalCapability = runtime && runtime.gmguCurriculumProposal;
+    if (!_gmguProposalCapability || typeof _gmguProposalCapability.commit !== 'function' ||
+        _gmguProposalCapability.ham_uid !== String(hamUid || '').trim().toUpperCase()) {
+      return JSON.stringify({ok:false,reason:'gmgu_curriculum_proposal_capability_required'});
+    }
+    if (!args || !args.curriculum || typeof args.curriculum !== 'object' ||
+        Array.isArray(args.curriculum) || typeof args.rationale !== 'string' ||
+        !args.rationale.trim()) {
+      return JSON.stringify({ok:false,reason:'gmgu_curriculum_proposal_artifact_invalid'});
+    }
+    if (!runtime || runtime.phase !== 'commit') {
+      if (!runtime || !Array.isArray(runtime.pendingEffects)) {
+        return JSON.stringify({ok:false,reason:'post_council_runtime_required',tool:name});
+      }
+      var _gmguQueuedArgs;
+      try { _gmguQueuedArgs = JSON.parse(JSON.stringify({
+        curriculum:args.curriculum, rationale:args.rationale.trim() })); }
+      catch (eGmguArgs) {
+        return JSON.stringify({ok:false,reason:'tool_args_not_serializable',tool:name});
+      }
+      var _gmguPriorIndex = runtime.pendingEffects.findIndex(function (effect) {
+        return effect && effect.name === name;
+      });
+      var _gmguEffect = { name:name, args:_gmguQueuedArgs,
+        key:name + ':' + JSON.stringify(_gmguQueuedArgs) };
+      if (_gmguPriorIndex >= 0) runtime.pendingEffects[_gmguPriorIndex] = _gmguEffect;
+      else runtime.pendingEffects.push(_gmguEffect);
+      return JSON.stringify({ok:true,accepted_for_commit:true,executed:false,
+        replacement:_gmguPriorIndex >= 0,tool:name,
+        note:'The private curriculum proposal is accepted for this same turn. Continue speaking naturally. Do not print, describe, or imitate the tool call.'});
+    }
+    try {
+      var _gmguCommitted = await _gmguProposalCapability.commit({
+        curriculum:args.curriculum, rationale:args.rationale.trim(),
+        councilResult:runtime.councilResult, hamUid:hamUid,
+        requestId:runtime.parentRequestId || runtime.requestId || null,
+        cycleId:runtime.parentCycleId || runtime.cycleId || null });
+      return JSON.stringify(_gmguCommitted || {
+        ok:false,reason:'gmgu_curriculum_proposal_commit_empty' });
+    } catch (eGmguCommit) {
+      return JSON.stringify({ok:false,
+        reason:eGmguCommit && eGmguCommit.message || 'gmgu_curriculum_proposal_commit_failed'});
+    }
   }
 // ⬡B:tool.loop:WIRE:mace_real_routes_verified_live_20260717⬡
   // Exact contracts, each confirmed with a real live POST before this was written:
@@ -3596,11 +3935,25 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     // hardcode); an advisor that is not real for this HAM returns a clean, honest miss
     // with the actual available list, never a fabricated brief.
     try {
+      var _normalizeConsultHam = require('./ham.session.authorization.js').normalizeHamUid;
+      var _activeConsultHam = _normalizeConsultHam(hamUid);
+      var _requestedConsultPresent = !!(args
+        && Object.prototype.hasOwnProperty.call(args,'ham_uid')
+        && String(args.ham_uid || '').trim());
+      var _requestedConsultHam = _requestedConsultPresent
+        ? _normalizeConsultHam(args.ham_uid) : _activeConsultHam;
+      if (!_activeConsultHam) {
+        return JSON.stringify({ok:false,reason:'valid_active_ham_uid_required'});
+      }
+      if (!_requestedConsultHam || _requestedConsultHam !== _activeConsultHam) {
+        return JSON.stringify({ok:false,reason:'ham_uid_mismatch',
+          bound_ham_uid:_activeConsultHam});
+      }
       var _ar = require('../advisors/advisor-router.js');
       var _station = typeof _ar.resolveStation === 'function'
         ? _ar.resolveStation(args.advisor)
         : String(args.advisor||'').toLowerCase().replace(/[^a-z_]/g,'');
-      var _cHam = args.ham_uid || hamUid;
+      var _cHam = _activeConsultHam;
       if (!_station || !_cHam) return JSON.stringify({ok:false,reason:'need advisor and ham_uid'});
       var _worlds = await _ar.discoverStations(_cHam);
       if (_worlds.indexOf(_station) === -1) return JSON.stringify({ok:false,reason:'no_such_advisor',advisor:_station,available:_worlds});
@@ -3744,7 +4097,7 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       // here, only a fact surfaced on a read the cycle already performs.
       var _fieldDue = [];
       try {
-        var _field = require('../logful/field.js');
+        var _field = require('../essentials/logful/field.js');
         var _fFetched = await _field.fieldCheck(_rUid, Date.now(), 4000,
           runtime && runtime.readAuthority);
         if (_fFetched && _fFetched.ok) {
@@ -4404,6 +4757,12 @@ function memoryTurnRequired(channel, identity, state) {
   var mode = String(context.mode || '').trim().toLowerCase();
   var flags = state || {};
   if (!normalizedChannel) return false;
+  // The signed tutor already writes and reads back its exact learner, cohort,
+  // lesson, and request-bound dialogue through core/gmgu/tutor.continuity.js.
+  // Copying the same private lesson into general PAI minutes would create a
+  // second history lane that other apps could later retrieve.
+  if (verifiedGmguTutorTurn(normalizedChannel, identity,
+      identity && identity.uid)) return false;
   if (!personalIntentEligible(identity)) return false;
   if (flags.structuredReachPolicy === true || flags.reachIncidentIntake === true) return false;
   if (identity && identity.outbound_finalize === true) return false;
@@ -4469,13 +4828,27 @@ function preWriteCouncilEligible(answerSelected, structuredReachPolicy, reachInc
   // post-write council before any bytes are authorized for TTS.
   var liveVoice = String(channel || '').toLowerCase() === 'voice' &&
     !!verifiedLiveVoiceContext(identity, hamUid);
+  // GMGU's signed lesson route already provides the learner, lesson, voice, privacy,
+  // and continuity context to its seated C3 tutor. The reader and voice organs also
+  // refuse GMGU without making a model call, but entering their async wrapper still
+  // creates two needless pre-write passes on every interactive lesson turn. Keep the
+  // same zero-prewrite policy at the canonical eligibility boundary, before either
+  // organ is entered. The complete ordered post-write council remains unchanged.
+  var gmguInteractiveTutor = String(channel || '').trim().toLowerCase() === 'gmgu';
   return !answerSelected && !structuredReachPolicy && !reachIncidentIntake &&
-    !internalDeliberation(identity) && !liveVoice;
+    !internalDeliberation(identity) && !liveVoice && !gmguInteractiveTutor;
 }
 
 function toolDefinitionsForTurn(tools, readOnlyNames, identity, flags) {
   var state = flags || {};
-  if (state.reachIncidentIntake === true || state.roomSafeVoice === true) return [];
+  if (state.reachIncidentIntake === true || state.roomSafeVoice === true ||
+      state.gmguNativeTutor === true) return [];
+  if (gmguCurriculumProposalCapability(identity)) {
+    return (tools || []).filter(function (tool) {
+      return tool && tool.function &&
+        tool.function.name === 'submit_gmgu_curriculum_proposal';
+    });
+  }
   var readOnly = !!(identity && (identity.outbound_finalize === true ||
     identity._conversationOnly === true || identity._worldBuilderRestricted === true));
   if (!readOnly) return tools;
@@ -4495,6 +4868,7 @@ function agentFindClosedWorldReason(flags) {
   if(state.reachIncidentIntake===true)return'reach_incident_intake';
   if(state.roomSafeVoice===true)return'room_safe_voice';
   if(state.internalCodaTurn===true)return'coda_internal_operational_wall';
+  if(state.gmguNativeTutor===true)return'gmgu_native_tutor';
   return null;
 }
 
@@ -4503,6 +4877,36 @@ function callPaiLadderNetwork(system, user, options) {
   if(!opts.seat)throw new Error('pai_ladder_seat_required');
   return require('./model.ladder.js').deliberate(system,user,
     Object.assign({},opts,{seat:opts.seat}));
+}
+
+// GMG University's tutor draft belongs to the C3 synthesis mind, while the ordered
+// outbound council belongs to the Penny Hustle judging seat. Keep that distinction in
+// server-owned process state. A browser can submit JSON council context, but JSON cannot
+// mint this function, observe it through serialization, or choose its seat. The server
+// replaces any same-named caller value for GMGU before the council starts.
+function bindGmguCouncilDeliberation(channel, context, deliberate) {
+  var councilContext = context && typeof context === 'object' ? context : {};
+  if (String(channel || '').trim().toLowerCase() !== 'gmgu') return councilContext;
+  if (typeof deliberate !== 'function') throw new Error('gmgu_council_deliberation_required');
+  Object.defineProperty(councilContext, 'deliberate', {
+    enumerable:false,
+    configurable:false,
+    writable:false,
+    value:function (system, user, options) {
+      var opts=Object.assign({},options||{});
+      var requested=opts.max_tokens!==undefined?Number(opts.max_tokens):
+        (opts.maxTokens!==undefined?Number(opts.maxTokens):640);
+      opts.max_tokens=Number.isSafeInteger(requested)&&requested>0
+        ?Math.min(requested,640):640;
+      delete opts.maxTokens;
+      opts.reasoning={effort:'none',exclude:true};
+      opts.chat_template_kwargs={enable_thinking:false};
+      opts.provider={sort:'latency',require_parameters:true};
+      return deliberate(system, user,
+        Object.assign({}, opts, {seat:'c1_cellm'}));
+    }
+  });
+  return councilContext;
 }
 
 async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPortal, spendIdentity) {
@@ -4523,6 +4927,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // WeakSet. A JSON field named room_safe is never sufficient to close a world.
   var _roomSafeVoice=String(channel||'').toLowerCase()==='voice' &&
     voiceRoomSafe.isAuthorized(identity);
+  // This proof is attached only by the signed GMGU route after exact HAM,
+  // cohort membership, learner profile, and curriculum resolution. A client
+  // field with the same words cannot create it.
+  var _gmguNativeTutorTurn=verifiedGmguTutorTurn(channel,identity,hamUid);
   // Server-owned machine intake is candidate-eligible, but it is not a general
   // face turn. The route constructs this non-JSON identity marker after HMAC and
   // exact-HAM validation; no caller field is copied into the marker.
@@ -4763,22 +5171,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return { error: { code: 'pai_seat_cannot_call_tools', seat: candidate.seat.seat,
         detail: String(candidate.seat.model || '').slice(0, 80) } };
     }
-    var providerBody = primaryProviderBody(requestBody,
-      requestBody && requestBody.messages || [], candidate.seat.model);
-    // The fallback is a different model contract. Re-apply reasoning policy at
-    // the exact provider boundary so a Qwen primary cannot hand Qwen-only
-    // template fields to a non-Qwen rescue (or vice versa).
-    applyProviderThinkingPolicy(providerBody, candidate.seat.model);
     try {
       var startProvider=function(){
         if(_worldBuilderMachine)_worldBuilderProviderCalls++;
-        return fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method:'POST',
-          headers:{Authorization:'Bearer ' + candidate.key,'Content-Type':'application/json',
-            'HTTP-Referer':process.env.SELF_BASE_URL||process.env.AIBEBASE_URL||'https://aibebase.onrender.com',
-            'X-Title':'ANEW Envolve'},
-          body:JSON.stringify(providerBody),signal:_providerAttemptSignal(candidate)
-        });
+        return fetchPaiSeatCandidate(requestBody,candidate,channel,
+          {signal:_providerAttemptSignal(candidate)});
       };
       var response;
       if(_providerAdmissionRequired){
@@ -4798,6 +5195,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         }
         payload.error.status=response.status;
         payload.error.seat=candidate.seat.seat;
+        var generationId=response.headers&&typeof response.headers.get==='function'
+          ?String(response.headers.get('x-generation-id')||'').trim():'';
+        if(/^[A-Za-z0-9._-]{1,160}$/.test(generationId)){
+          payload.error.generation_id=generationId;
+        }
       }
       if (payload && typeof payload === 'object') {
         payload._provider='openrouter:' + candidate.seat.seat;
@@ -4886,6 +5288,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         detail = String(detail).slice(0, 120);
       }
       else if (step === 'preparation_answer_heal_outcome' &&
+          /^(?:empty|passed|rejected:(?:named_[a-z0-9_]+|name_boundary_check_failed_fail_closed))$/.test(
+            String(detail||''))) {
+        detail = String(detail).slice(0, 132);
+      }
+      else if (step === 'outbound_council_name_boundary_healing' &&
+          /^(?:named_[a-z0-9_]+|name_boundary_check_failed_fail_closed)$/.test(
+            String(detail||''))) {
+        detail = String(detail).slice(0, 120);
+      }
+      else if (step === 'outbound_council_name_boundary_heal_outcome' &&
           /^(?:empty|passed|rejected:(?:named_[a-z0-9_]+|name_boundary_check_failed_fail_closed))$/.test(
             String(detail||''))) {
         detail = String(detail).slice(0, 132);
@@ -4989,11 +5401,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // identity fields never grant read authority. The same result governs the builder and every
   // later tool read.
   var _peopleTiers = require('./privacy/people.tier.js');
-  var _readAuthority = {tier:_peopleTiers.STRICTEST,source:'closed_world'};
+  // ⬡B:core.tool_loop:FIX:a_bare_literal_is_not_an_authority_token_and_never_was:20260815⬡
+  // These two lines built the read-authority token as PLAIN OBJECT LITERALS. The token carries a
+  // Symbol stamped only inside core/privacy/people.tier.js#readAuthority, so a literal can never
+  // satisfy isReadAuthority(). Measured on the real modules:
+  //   isReadAuthority({tier:STRICTEST,source:'closed_world'}, HAM)  ->  false
+  //   isReadAuthority(resolveReadTier(...), HAM)                    ->  true
+  // core/context.fusion.js#readTierFor then returns null, and getLatestSummary and
+  // readChannelActivity hand back "" and {} with no reason attached. So on the five lanes that
+  // use the closed-world literal (reach incident intake, signed voice closed turn, room-safe
+  // voice, internal CODA turn, GMGU native tutor) she silently lost her whole fused world and it
+  // read as "there is no context" rather than "nobody could mint the token." Same
+  // describes-the-demand-never-the-supply shape that hid two starved council doors for a day.
+  // THE TIER IS UNCHANGED, and that matters: STRICTEST in, STRICTEST out. This makes the token
+  // READABLE, it does not make it more permissive.
+  var _readAuthority = _peopleTiers.closedWorldAuthority(hamUid);
   if (!_structuredReachPolicy && !_reachIncidentIntake && !_signedVoiceClosedTurn &&
-      !_roomSafeVoice && !_internalCodaTurn) {
+      !_roomSafeVoice && !_internalCodaTurn && !_gmguNativeTutorTurn) {
     try { _readAuthority = await _peopleTiers.resolveReadTier(identity, hamUid); }
-    catch (eReadTier) { _readAuthority = {tier:_peopleTiers.STRICTEST,source:'unresolved'}; }
+    catch (eReadTier) {
+      _readAuthority = _peopleTiers.unresolvedAuthority(hamUid);
+    }
   }
   var _effectiveViewerTier = _peopleTiers.effectiveTier(_readAuthority && _readAuthority.tier);
   var _fcwT0=Date.now();
@@ -5007,8 +5435,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (!Number.isFinite(_isolatedHamTier)) _isolatedHamTier = 0;
   var _nativeVoicePreparation = _nativeLiveVoiceTurn
     ? nativeLiveVoicePreparation(identity, hamUid) : null;
+  var _gmguTutorPreparation = _gmguNativeTutorTurn
+    ? gmguNativeTutorMarker.closedWorldPreparation(identity, hamUid) : null;
   var fcw = (_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
-      _roomSafeVoice || _internalCodaTurn) ? {
+      _roomSafeVoice || _internalCodaTurn || _gmguNativeTutorTurn) ?
+    (_gmguTutorPreparation || {
     ok:true, system_prompt:_reachIncidentIntake ? _reachIncidentSystemPrompt
       : (_signedVoiceClosedTurn ? _signedVoiceSystemPrompt
         : (_roomSafeVoice ? _roomSafeSystemPrompt
@@ -5020,7 +5451,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       available:true, ham_uid:String(hamUid||'').toUpperCase(), subjects:[],
       records:[], count:0, ms:0 },
     contributors:null, contributorsResolved:0, contributorsTotal:0, ms:0
-  } : (_nativeVoicePreparation || await buildMemoryBank(hamUid,channel,message,identity,_readAuthority,{
+  }) : (_nativeVoicePreparation || await buildMemoryBank(hamUid,channel,message,identity,_readAuthority,{
     agentFindWake:{ham_uid:hamUid,cycle_id:_cycleId,request_id:_requestId,
       channel:channel,seat_name:_paiSeatName(),seat_node_id:_agentFindSeatNodeId(),
       observed_at:new Date().toISOString()}
@@ -5077,7 +5508,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     require('./freestyle.chatter.js').emitInterim({hamUid:hamUid, channel:channel,
       cycleId:_cycleId, fcw:fcw, prompted:!!String(message||'').trim(),
       closedWorld:!!(_structuredReachPolicy || _reachIncidentIntake || _signedVoiceClosedTurn ||
-        _nativeLiveVoiceTurn || _roomSafeVoice || _internalCodaTurn || _worldBuilderMachine)});
+        _nativeLiveVoiceTurn || _roomSafeVoice || _internalCodaTurn ||
+        _gmguNativeTutorTurn || _worldBuilderMachine)});
   } catch (eFreestyleRide) {}
   // A structured REACH policy is a closed-world decision over one exact
   // candidate packet. Ambient recent rows, contributors, prior turns, screen
@@ -5139,7 +5571,10 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // proof-shaped current-turn asks in the transactional release invariant so the
   // model never mistakes its pre-commit vantage point for a failed cycle.
   var _proofQuestion = _exactUserMessage;
-  if (!_structuredReachPolicy && !_reachIncidentIntake) {
+  // The GMGU curator already supplies the complete learner-facing teaching
+  // frame. Generic cycle-proof narration is another product's context and may
+  // not enter a lesson reply.
+  if (!_structuredReachPolicy && !_reachIncidentIntake && !_gmguNativeTutorTurn) {
     systemPrompt += currentTurnProofGuard.systemInstruction(_proofQuestion, {
       // CODA's own machine-internal deliberation uses phrases such as "this cycle",
       // "proof", and "closure receipts" as fields in its operating contract. It is
@@ -5150,7 +5585,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     });
   }
   var _currentPreferenceQuestion = !_structuredReachPolicy && !_reachIncidentIntake &&
-    currentAssistantPreferenceRequest(_exactUserMessage);
+    !_gmguNativeTutorTurn && currentAssistantPreferenceRequest(_exactUserMessage);
   if (_currentPreferenceQuestion) {
     // ⬡B:core.tool_loop:WIRE:fresh_preference_inside_full_pai:20260715⬡
     // A current preference is a live A'NU judgment, not a fabricated memory.
@@ -5241,7 +5676,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // currently open, so the base prompt now carries it unconditionally: she commands
   // the glass through update_screen; if no screen is live the TOOL says so and she
   // says the screen is not open -- she never again claims she lacks the ability.
-  if (!_structuredReachPolicy && !_reachIncidentIntake) {
+  if (!_structuredReachPolicy && !_reachIncidentIntake && !_gmguNativeTutorTurn) {
     systemPrompt += ' You have hands on the person\u2019s live glass screen: through the update_screen tool you can set backgrounds, layouts, skywriting, cards, charts, and open their real apps as windows. If they ask for something on the screen, call update_screen and it happens. If no screen is currently open the tool will say so; in that case say their screen is not open right now -- never claim you cannot control screens. HARD RULE, never break it: never state a specific meeting name, person\u2019s name, time, count, or dollar figure about the person\u2019s real life unless it came from an actual tool result in THIS turn. If you have not called calendar_read/find_in_brain/the relevant tool for a question about their day, schedule, inbox, or numbers, either call the tool first or say plainly that you do not have that yet -- inventing a plausible-sounding specific fact is a severe failure, worse than saying nothing. RECENCY RULE, just as hard: a find_in_brain result is a PAST NOTE with a timestamp, not live truth -- before presenting it as describing TODAY, check its date against today\u2019s real date. A stamp from days or weeks ago, or one describing a recurring day (\u201cMonday\u201d, \u201cweekly\u201d) that is not today, must never be presented as today\u2019s schedule; say what it actually is (an old note, a recurring Monday item) or skip it. For any question about today or the calendar specifically, calendar_read is the only source of truth for what is happening today -- if its read finds nothing on today, say plainly that the read found nothing on today, and do not fall back to an old find_in_brain stamp to fill the gap. A calendar_read event carries is_today, is_now and is_past: an event with is_today true whose date is an EARLIER day is a multi-day span they are already inside, so say they are on it right now and never call it upcoming or still ahead of them.';
     try { systemPrompt += require('./stream/screen.awareness.js')
       .promptAddendum(hamUid, uiPortal); } catch (eScr) {}
@@ -5430,7 +5865,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // occurred. The system instruction above provides attention without falsifying
     // the transcript. Only real tool results and exact-HAM rows become evidence.
   }
-  var _identityLookupCount = _structuredReachPolicy || _reachIncidentIntake ? 0
+  var _identityLookupCount = _structuredReachPolicy || _reachIncidentIntake ||
+    _gmguNativeTutorTurn ? 0
     : injectIdentityProvenanceEvidence(msgs, _identityVerifiedEvidence, fcw,
       hamUid, _namedEvidenceQuestion, _identityEvidenceProof);
   if (_identityLookupCount > 0) {
@@ -5439,6 +5875,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // FCW already read these rows. Carry them as labeled server evidence without
   // inventing a model request or completed tool exchange.
   var _namedLookupCount = _structuredReachPolicy || _reachIncidentIntake ||
+    _gmguNativeTutorTurn ||
     _identityLookupCount > 0 ? 0
     : injectNamedAgentEvidence(msgs, _namedAgentVerifiedEvidence, fcw, hamUid);
   if (_namedLookupCount > 0) {
@@ -5579,7 +6016,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     'find_contact','get_pending_drafts','get_recent_builds','read_own_code','consult_coda',
     'look_at_page'];
   var _turnToolDefinitions = toolDefinitionsForTurn(TOOLS, _readOnlyToolNames, identity, {
-    reachIncidentIntake:_reachIncidentIntake, roomSafeVoice:_roomSafeVoice
+    reachIncidentIntake:_reachIncidentIntake, roomSafeVoice:_roomSafeVoice,
+    gmguNativeTutor:gmguNativeTutorMarker.verify(identity,hamUid)
   });
   // ⬡COLD:decide:become:VOICE_CONVERSATION_WONDER:20260723⬡
   // COLD-ANEW-VOICE-0061 stamped, needs-live-verification. ans is initialized from the signed
@@ -5655,8 +6093,45 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         String(_preWriteBriefing.reason || 'unknown').slice(0, 80));
     }
   }
+
+  // ⬡B:core.tool_loop:WIRE:the_clean_speech_wake_is_not_gated_by_paid_pass_eligibility:20260814⬡
+  // Second Codex P2 on #2141, correct on both counts and accepted.
+  //
+  // (1) COVERAGE. preWriteCouncilEligible above returns false for an authenticated live
+  // voice turn and for every gmgu turn, so runPreWriteCouncil is never entered and the
+  // wake inside it never runs. That gate exists to avoid buying TWO PAID drafting briefs
+  // in front of a real-time writer, which is a real and measured latency problem. The wake
+  // is not a paid brief. It is one boolean and one sentence, zero model calls, so gating it
+  // behind an eligibility test built for paid passes was my mistake, and it silently left
+  // voice and gmgu with no before-write wake while the comment claimed every channel.
+  //
+  // (2) RECEIPT. The council returns cleanSpeechWake, and nothing read it and nothing
+  // persisted it, so no cycle record could show that cold code reported in. A claim in a
+  // comment with no durable fact behind it is the exact shape this estate keeps ruling
+  // against, and I wrote one of those rulings earlier today. The stamp below is the fact.
+  //
+  // Detection and injection are therefore routed separately from eligibility, exactly as
+  // the review asked. The paid organs still bypass wherever they bypassed before.
+  var _cleanWake = null;
+  try {
+    _cleanWake = require('./clean.speech.js').cleanSpeechWakeBlock(_exactUserMessage, {
+      channel: String(channel || ''), hamUid: hamUid, surface: 'pre_write.inbound' });
+  } catch (eCleanWake) { _cleanWake = null; }
+  if (_cleanWake && _cleanWake.fired) {
+    // When the council ran and already carried the block, do not say it twice.
+    var _wakeAlreadyCarried = !!(_preWriteBriefing && _preWriteBriefing.ok &&
+      String(_preWriteBriefing.contextBlock || '').indexOf('CLEAN SPEECH WAKE') !== -1);
+    if (!_wakeAlreadyCarried && _cleanWake.block) {
+      msgs.push({ role:'system', content:_cleanWake.block });
+    }
+    _stampStep('clean_speech_wake',
+      require('./clean.speech.js').cleanSpeechWakeReceipt(_cleanWake.flag,
+        _wakeAlreadyCarried ? 'pre_write_council' : 'direct_injection'));
+  }
   var _effectRuntime = { phase:'deliberation', pendingEffects:[], effectKeys:{},
     cycleId:_cycleId,requestId:_requestId };
+  _effectRuntime.gmguCurriculumProposal = gmguCurriculumProposalCapability(
+    identity, hamUid);
   _effectRuntime.channel = String(channel || '').toLowerCase();
   // Every advisor/compose turn (finance, legal, business, jobs, life, inbox_zero, ...) enters
   // through finalizePublicTurn, which stamps identity.outbound_finalize. This single flag marks
@@ -5819,9 +6294,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         + 'queued action shown in the completed tool result. Do not expose tool protocol.' }]);
     }
     var _routedToolIntent = null;
-    var _routedRequiresLiveTool = false;
     var _routedRequiredReadTool = null;
-    var _routedRequiredActionTool = null;
     var _routeEveryVoicePass = String(channel || '').toLowerCase() === 'voice';
     if ((iter === 1 || _routeEveryVoicePass) && Array.isArray(body.tools) && body.tools.length &&
         !_structuredReachPolicy && !_reachIncidentIntake &&
@@ -5835,25 +6308,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _routedRequiredReadTool = currentCapabilityQuestion(
         (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message)
         ? 'read_current_capabilities' : null;
-      _routedRequiredActionTool = null;
-      _routedRequiresLiveTool = false;
       body.tools = toolsForIntent(body.tools, _routedToolIntent);
       var _pureVoiceContinuation = false;
-      if ((_routedRequiredReadTool &&
-          _routedRequiredReadTool !== 'read_current_capabilities') ||
-          _routedRequiredActionTool) {
-        var _routedExactTool = _routedRequiredReadTool || _routedRequiredActionTool;
-        body.tools = body.tools.filter(function (tool) {
-          return tool && tool.function && tool.function.name === _routedExactTool;
-        });
-      }
       // ⬡B:core.tool_loop:WONDER:surface_tools_always_on_the_table:20260721⬡ Her surface tools
       // (set_background, update_screen) ride along on every conversational turn so she can act on a
       // surface request in ANY phrasing -- "switch me to the lake", no keyword, no cue -- without a
       // routing regex having to catch it first. This is availability, not a decision: she still
       // reasons about whether to use them in the canonical model pass, and it is
       // her call, never a force. Skipped only when a single read tool is required for the turn.
-      if (!_routedRequiredReadTool && !_routedRequiredActionTool &&
+      if (!_routedRequiredReadTool &&
           !_pureVoiceContinuation &&
           Array.isArray(_turnToolDefinitions)) {
         var _haveSurfaceTool = {};
@@ -5953,78 +6416,29 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       // just answer -- the mandatory lookup on text/email is completely unchanged.
       var _liveNow = false;
       try { _liveNow = require('./stream/screen.awareness.js').hasLiveScreen(hamUid); } catch (eLn) {}
-      // ⬡B:core.tool.loop:FIX:live_screen_suppressed_lookup_gaslit_founder_questions:20260713⬡
-      // Founder-caught live 8am: on a VOICE call (which registers as a live screen) he
-      // asked "what's the fix" and got "I don't have it, you point me to the code" -- six
-      // no_tool_turn diagnostics, zero tools fired. Root cause: the live-screen skip below
-      // turned OFF the forced find_in_brain for EVERY live turn, including real questions,
-      // so she answered from nothing and it read as gaslighting. The skip exists for a real
-      // reason -- forcing a lookup on a UI command ("change background to a vibe") pulled
-      // unrelated brain content and derailed. So the split is by intent, cold, no LLM: a
-      // real information question still forces the read even on a live screen; a screen/UI
-      // manipulation command stays unforced so it never derails. Text/email path unchanged.
-      // B:core.tool_loop:FIX:hallucinated_meeting_911_20260714 Founder caught her
-      // CONFIDENTLY INVENTING a fake meeting ("Mark Gerzon at 2:30", "7 assets",
-      // "ten BDIF emails") that do not exist anywhere in his real calendar or inbox.
-      // ROOT CAUSE: the info-question detector was anchored to the START of the
-      // message (^who|what|...), so "Hey. What's going on today?" never matched --
-      // the greeting defeated the anchor -- find_in_brain was never forced, and the
-      // model free-talked a plausible-sounding lie instead of reading real data.
-      // Fixed to match ANYWHERE in the message, not just the start. AND: any question
-      // that could be answered by his real calendar (today/schedule/meeting/free/
-      // busy/calendar) now forces calendar_read specifically -- never find_in_brain
-      // alone -- so a day-shaped question can only ever be answered from real events.
-      // ⬡B:core.tool_loop:FIX:intent_detection_uses_raw_words_not_fusion_wrapped_message:20260719⬡
-      // NUCLEAR 911 (founder caught it): the air/portal door answered "which chat
-      // lanes are working on your build" with the CALENDAR. Root cause: the portal
-      // path (slowPath) enriches the message with a big world-context + live-facts
-      // prefix before runPAI, so `message` here begins with calendar/day facts. Intent
-      // detection was testing that wrapped `message`, so the day-question regex matched
-      // the injected context and the turn flipped to a calendar answer, burying the
-      // real question. The raw user words are already available as _exactUserMessage
-      // (slowPath sets identity.user_message = the original input), and every council
-      // check already trusts those bytes. So intent detection must read the RAW words
-      // on EVERY channel, not just voice. This makes the lane/coding/day nudges fire on
-      // what the person actually asked, not on the fusion prefix.
-      var _mSt = String((_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : (message || '')).trim();
-      var _looksLikeInfoQ = /\?\s*$/.test(_mSt)
-        || /\b(who|what|whats|what's|when|where|why|how|is|are|was|were|do|does|did|can|could|would|should|tell me|show me|remind me|give me|status|update on|what's going on|whats going on|what is going on)\b/i.test(_mSt);
-      var _isScreenCmd = /\b(background|wallpaper|layout|theme|vibe|colou?r|font|bigger|smaller|resize|move it|make it (a|more)|show me on|put .*(on the)? (screen|left|right|cent(er|re)))\b/i.test(_mSt);
-      var _isDayQ = dayQuestionIntent(_mSt, _isScreenCmd);
-      // ⬡B:core.tool_loop:WIRE:lane_board_intent_hint_not_a_rail:20260719⬡ A lane
-      // question is about the BUILD chats/lanes, not the day. HINT in the same shape as
-      // _isDayQ (she keeps ALL tools and still chooses), just puts read_lane_board top of
-      // mind so she does not fall through to the calendar.
-      var _isLaneBoardQ = /\b(lane|lanes|which chat|what chat|chats|other chat|acl name|working on (your|the) build|working on (it|this|that)|who is building|who's building|who is working|who's working|next to fix|left to fix|building your|lane board|coordinat)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd;
-      // ⬡B:core.tool_loop:WIRE:coding_build_nudge_she_uses_her_coding_team:20260719⬡
-      // Founder caught her NOT using her coding tools: asked to consult MACE/CODA and run
-      // the coding process, she fell through to find_in_brain and answered with the
-      // calendar. She holds consult_mace (CODA lead), run_cookoff, run_wonder_games,
-      // assemble_bcw but never picked them. A build/code/consult request nudges the
-      // coding lead. HINT not a rail, she keeps all tools. Named machinery or an ask
-      // with an explicit technical object routes here. Human verbs such as build,
-      // implement, refactor, and ship are not coding evidence by themselves.
-      // _isCodaInternalCycle is computed once, at the top of this whole nudge lane (see the
-      // FIX comment on entry to this block), and CODA's own internal deliberation never
-      // reaches this line at all. Kept here only as a defensive second check: named machinery
-      // (MACE, CODA, cook-off, wonder games, BCW) or an explicit software object routes here
-      // for a real human.
-      var _isCodingBuildQ =
-        /\b(mace|coda|cook.?off|wonder game|assemble.?bcw|bcw|code (a|an|the|this|up)|write (the )?code|wire up (the )?(api|route|screen|page|service|module|function)|new (software |coding )?agent|coding (process|team|department)|repo|repository|pull request|commit|deploy|api endpoint|database migration|web app|website|javascript|typescript|python|html|css)\b/i.test(_mSt) && !_isDayQ && !_isScreenCmd && !_isLaneBoardQ;
-      // ⬡B:core.tool_loop:FIX:public_knowledge_question_answers_from_knowledge_not_a_personal_lookup:20260718⬡
-      // FOUNDER 911, receipts 5/5: silence was broken but she answered a plain PUBLIC
-      // question ("does the iPad Pro 10.5 have a Magic Keyboard") by force-reading his
-      // PERSONAL brain, finding nothing (his brain holds no iPad specs), and reporting
-      // the miss ("I don't have access to product databases"). A public-world question
-      // must never be forced through a personal-brain lookup. Cold intent split, no LLM,
-      // same shape as the screen-command and day-question splits already here: a
-      // question that references HIM, his orgs, his data, his people, his money, his
-      // history, or his calendar stays a personal lookup and still forces find_in_brain;
-      // a question with none of those personal anchors is public knowledge and is
-      // answered from the model's own knowledge, with the full council still guarding
-      // fabrication. This does not touch action requests or day questions above.
-      var _hasPersonalAnchor = /\b(my|mine|our|your|his|her|their|i|me|we|us|brandon|envolve|a'?nu|a'?new|aba|bdif|gmg|mediators|mh action|globalmajority|dawkins|budget|invoice|ledger|grant|funder|donor|board|client|calendar|schedule|meeting|reminder|inbox|email|draft|task|roadmap|deploy|repo|memory|brain|bead|the (build|system|platform|project|book|deck|pipeline))\b/i.test(_mSt);
-      var _looksPublicKnowledgeQ = _looksLikeInfoQ && !_isScreenCmd && !_isDayQ && !_hasPersonalAnchor;
+      // ⬡B:core.tool.loop:PURGE:the_dead_meaning_classifiers_and_the_founder_literal:20260815⬡
+      // CODELESS PURGE 20260815. Deleted from here: eight computed observations
+      // (_mSt, _looksLikeInfoQ, _isScreenCmd, _isDayQ, _isLaneBoardQ, _isCodingBuildQ,
+      // _hasPersonalAnchor, _looksPublicKnowledgeQ) built from roughly forty regexes that
+      // classified what the person MEANT: a day question, a lane question, a coding question,
+      // a screen command, a public-knowledge question, and whether the words carried a
+      // "personal anchor". Cold code never classifies her meaning (20260807), and a previous
+      // lane had already accepted that: the note that used to sit below this block said the
+      // observations "remain diagnostic telemetry only. They do not select, remove, prefer,
+      // or require a hand." That was true, and it is exactly why they had to go. Verified
+      // before deleting: _mSt and _isScreenCmd had ZERO references after the block, and
+      // _looksPublicKnowledgeQ was assigned and never read by anything, not even a stamp.
+      // They were not telemetry, because nothing consumed them. They were a classifier kept
+      // warm, one line from being re-wired into a decision.
+      //
+      // AND IT CARRIED A REAL PERSON. _hasPersonalAnchor hardcoded the founder's first name
+      // and a list of his org and family-shaped names directly into a regex in shippable code.
+      // IDENTITY IS ENV-ONLY is non-negotiable founder law: every world is someone else's, and
+      // this template ships to real people. That leak is gone with the block.
+      //
+      // The seated mind receives the complete armory and decides what the person's words mean
+      // from its employment record. The only nudge below is a typed roadmap activation already
+      // chosen and approved by a seated CODA turn, which is authority validation, not meaning.
       // The observations above remain diagnostic telemetry only. They do not select,
       // remove, prefer, or require a hand. The seated mind receives the complete armory
       // and decides what the person's words mean from its employment record.
@@ -6058,20 +6472,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }
       }
     }
-    if (_routedRequiresLiveTool && Array.isArray(body.tools) && body.tools.length) {
-      var _liveReaderName = _routedRequiredReadTool;
-      var _liveReaderArgs = DATA_READER_TOOLS[_liveReaderName](
-        (_exactUserMessage && _exactUserMessage.trim()) ? _exactUserMessage : message);
-      if (_liveReaderArgs && Object.keys(_liveReaderArgs).every(function (key) {
-        return _liveReaderArgs[key] !== '' && _liveReaderArgs[key] !== null;
-      })) {
-        body._dataReaderNudge = _liveReaderName;
-      }
-      body.tool_choice = 'required';
-      body.messages = body.messages.concat([{ role:'system',
-        content:'This exact request asks for owned or current data. Call the one bounded read-only tool provided and answer from its result; do not claim the capability is unavailable.' }]);
-      _stampStep('tool_intent_live_read_required', _routedToolIntent);
-    }
     // A current-capability question has one exact, read-only owner and no model judgment is
     // needed to decide whether to consult it. Read once before the first composition so the
     // affordable path is one grounded draft, with the ordinary single repair still available
@@ -6099,7 +6499,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       msgs.push({role:'system',content:
         'Answer only from the live capability rows above. Each positive capability sentence must be supported by one live row. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
       _currentCapabilityReadPrefetched=true;
-      _routedRequiresLiveTool=false;
       body.messages=msgs;
       // Keep every authorized hand visible after the state snapshot. The snapshot
       // prevents unsupported claims; it does not replace A'NU's judgment about what
@@ -6108,15 +6507,6 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       delete body.tool_choice;
       delete body._dataReaderNudge;
       _stampStep('required_capability_read_prefetched','bound_exact_user_message');
-    }
-    if (_routedRequiredActionTool && Array.isArray(body.tools) && body.tools.length) {
-      body.tool_choice = 'required';
-      body._requiredActionTool = _routedRequiredActionTool;
-      body.messages = body.messages.concat([{ role:'system', content:
-        'The person explicitly authorized this exact action in their own words. Emit a real '
-        + _routedRequiredActionTool + ' tool call now. Do not narrate, imitate, or print a tool '
-        + 'call. The mutation will remain queued until the outbound council commits.' }]);
-      _stampStep('tool_intent_explicit_action_required', _routedRequiredActionTool);
     }
     var r=null;
     // A typed roadmap mutation is not fabricated into a provider response. CODA
@@ -6167,6 +6557,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       _providerCandidate&&_providerCandidate.seat.model||'');
     applyProviderThinkingPolicy(_providerBody,
       _providerCandidate&&_providerCandidate.seat.model||'');
+    applyGmguTutorProviderPolicy(_providerBody,channel,
+      _providerCandidate&&_providerCandidate.seat.model||'');
     if(_structuredReachPolicy){
       var _policyFormat=_structuredReachResponseFormat();
       if(_policyFormat)_providerBody.response_format=_policyFormat;
@@ -6186,7 +6578,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _closedWorldReason=agentFindClosedWorldReason({
       structuredReachPolicy:_structuredReachPolicy,
       reachIncidentIntake:_reachIncidentIntake,roomSafeVoice:_roomSafeVoice,
-      internalCodaTurn:_internalCodaTurn});
+      internalCodaTurn:_internalCodaTurn,gmguNativeTutor:_gmguNativeTutorTurn});
     if(_closedWorldReason){
       var _closedSeatNodeId=_agentFindSeatNodeId();
       var _closedSeat=require('./wonders/registry.js').resolve(_closedSeatNodeId);
@@ -6218,7 +6610,56 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         _noteCycleFailure('pai_seat_empty_content');r=null;
       } else { _noteCycleFailure(null); }
     } else if(r&&r.error){
-      _noteCycleFailure('pai_seat:'+JSON.stringify(r.error).slice(0,180));
+      // An upstream error object can carry the provider's prose, and the current
+      // learner turn can carry private lesson context. Neither belongs in the
+      // operational receipt. Preserve only bounded transport facts and a shape
+      // summary of the exact request that reached the provider.
+      var _providerError=r.error&&typeof r.error==='object'?r.error:{};
+      var _providerCode=String(_providerError.code||'').trim().toLowerCase();
+      if(!/^[a-z0-9._:-]{1,96}$/.test(_providerCode))_providerCode='';
+      var _providerStatus=Number(_providerError.status);
+      if(!Number.isInteger(_providerStatus)||_providerStatus<100||_providerStatus>599){
+        _providerStatus=null;
+      }
+      var _providerFailover=r&&r._paiFailover&&typeof r._paiFailover==='object'
+        ?r._paiFailover:null;
+      var _providerFailoverStatus=Number(_providerFailover&&_providerFailover.status);
+      if(!Number.isInteger(_providerFailoverStatus)||_providerFailoverStatus<100||
+          _providerFailoverStatus>599){ _providerFailoverStatus=null; }
+      var _providerFailoverCode=String(_providerFailover&&_providerFailover.code||'')
+        .trim().toLowerCase();
+      if(!/^[a-z0-9._:-]{1,96}$/.test(_providerFailoverCode)){
+        _providerFailoverCode=null;
+      }
+      var _providerGenerationId=String(_providerError.generation_id||'').trim();
+      if(!/^[A-Za-z0-9._-]{1,160}$/.test(_providerGenerationId)){
+        _providerGenerationId=null;
+      }
+      var _providerFailoverGenerationId=String(_providerFailover&&
+        _providerFailover.generationId||'').trim();
+      if(!/^[A-Za-z0-9._-]{1,160}$/.test(_providerFailoverGenerationId)){
+        _providerFailoverGenerationId=null;
+      }
+      var _providerMessages=Array.isArray(_providerBody&&_providerBody.messages)
+        ?_providerBody.messages:[];
+      var _providerMessageChars=_providerMessages.reduce(function(total,item){
+        return total+Math.min(1000000,String(item&&item.content||'').length);
+      },0);
+      _noteCycleFailure('pai_seat:'+JSON.stringify({code:_providerCode||null,
+        status:_providerStatus,seat:String(_providerError.seat||'').slice(0,48)||null,
+        generationId:_providerGenerationId,
+        failover:_providerFailover&&_providerFailover.attempted===true?{
+          attempted:true,usable:_providerFailover.usable===true,
+          status:_providerFailoverStatus,code:_providerFailoverCode,
+          generationId:_providerFailoverGenerationId,
+          seat:_providerFailover.seat||null}:null,
+        contract:{messageCount:_providerMessages.length,messageChars:_providerMessageChars,
+          toolCount:Array.isArray(_providerBody&&_providerBody.tools)
+            ?_providerBody.tools.length:0,
+          hasReasoning:!!(_providerBody&&_providerBody.reasoning),
+          requiresParameters:!!(_providerBody&&_providerBody.provider&&
+            _providerBody.provider.require_parameters===true),
+          maxTokens:Number(_providerBody&&_providerBody.max_tokens)||null}}));
     }
     if (await _turnCancelled(true)) return _turnCancelledResult('after_model');
     // ⬡B:core.tool_loop:WIRE:the_one_ladder_is_the_last_rung_never_silence:20260718⬡
@@ -6341,13 +6782,60 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       try {
         var _englishRewrite = await _callPaiLadder(
           'Rewrite the supplied answer in clear English only. Preserve its facts and intent. Return only the rewritten answer.',
+          // ⬡B:core.tool_loop:FIX:the_waiver_this_call_asked_for_is_now_a_real_one:20260815⬡
+          // This said `noGuard:true`, which core/model.ladder.js never read, so this rewrite ran
+          // under the very CJK rule it exists to satisfy and every rung rejected the correct
+          // answer whenever that answer must keep one glyph. The intent was always right; the
+          // option was dead. It is now `allowNonEnglish`, which waives the CJK OPINION and only
+          // that: an empty answer and a declared JSON contract still refuse for this caller
+          // exactly as for every other one. See the ladder for why a blanket bypass was the wrong
+          // repair. `noGuard` is removed rather than kept beside it, because a dead option sitting
+          // next to a live one is the next coder's trap.
           String(msg.content || ''), { seat:_providerSeat, temperature:0.2,
-            timeout:12000, noGuard:true });
-        msg.content = _englishRewrite && _englishRewrite.content || '';
-        _stampStep('cjk_output_regenerated', msg.content ? 'english' : 'failed_closed');
+            timeout:12000, allowNonEnglish:true });
+        // ⬡B:core.tool_loop:FIX:a_failed_rewrite_never_deletes_a_finished_answer:20260815⬡
+        // Both branches used to assign `''`, so one CJK codepoint plus one ladder failure blanked
+        // a complete answer and the person got the canned working-limit line instead. Waking a
+        // model to rewrite is the correct AIRCODE shape and it stays. Deciding that the human
+        // receives NOTHING when the repair is unavailable is cold code deciding, and it trades a
+        // cosmetic imperfection for a total loss. A stray glyph is smaller than silence.
+        //
+        // AND THE REPAIR CAN NOW ACTUALLY COME BACK, which is what makes the selection below load
+        // bearing rather than decorative. While the waiver above was dead, the rewrite ran under
+        // the ladder's own CJK rule, so `_rewritten` could only ever be CJK-free: anything else
+        // had already been rejected by every rung. anew#2188 closed that, so the seat's output now
+        // arrives as-is and the disposition has to be made HERE, the only place still holding the
+        // original to compare it against.
+        //
+        // Also worth saying plainly, because it shaped how narrow this fix is: the founder has
+        // never said her answers must be English. A corpus search over english, language,
+        // translate, chinese, multilingual returns only "plain English" meaning explain simply,
+        // programming-language vocabulary, and persona accent. The English-only output rule is a
+        // coder's assumption, so this change repairs the destruction and does not touch the
+        // trigger, which is his to rule on.
+        // SELECTION, NOT AUTHORSHIP. Two model outputs are in hand, the original and the repair,
+        // and the caller picks between them on a measurable property. Cold code writes neither.
+        // containsCjk is a boolean, and a boolean cannot tell "correct English that keeps one
+        // proper noun" from "the seat echoed the whole Chinese source back". Both answer yes. So
+        // compare counts: fewer CJK characters means the repair did work, and only then does it
+        // replace the original. A repair that did nothing, or made it worse, loses to the answer
+        // she already produced, which is the same disposition the dead gate encoded by accident.
+        var _rewritten = _englishRewrite && _englishRewrite.content;
+        var _cjkBefore = outputGuard.countCjk(msg.content);
+        var _cjkAfter = _rewritten ? outputGuard.countCjk(_rewritten) : _cjkBefore;
+        if (_rewritten && _cjkAfter < _cjkBefore) {
+          msg.content = _rewritten;
+          // The stamp says what is TRUE of the bytes, not what the step was hoping for. A partial
+          // repair is a real outcome and the receipt names it, because he reads these overnight.
+          _stampStep('cjk_output_regenerated',
+            _cjkAfter === 0 ? 'english' : 'english_partial_cjk_retained_' + _cjkAfter);
+        } else if (_rewritten) {
+          _stampStep('cjk_output_regenerated', 'rewrite_kept_the_cjk_original_kept');
+        } else {
+          _stampStep('cjk_output_regenerated', 'rewrite_unavailable_original_kept');
+        }
       } catch (_eEnglish) {
-        msg.content = '';
-        _stampStep('cjk_output_regenerated', 'failed_closed');
+        _stampStep('cjk_output_regenerated', 'rewrite_threw_original_kept');
       }
     }
     try{_stampStep('corridor_a_post_stitch','content_len='+String(msg&&msg.content||'').length+' has_tc_tag='+(String(msg&&msg.content||'').indexOf('<tool_call>')!==-1)+' has_fn_tag='+(String(msg&&msg.content||'').indexOf('<function')!==-1)+' finish='+String(ch&&ch.finish_reason||'?'));}catch(_eCA){}
@@ -6930,6 +7418,12 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   if (await _turnCancelled()) return _turnCancelledResult('after_deliberation');
   var finalAns=(ans&&String(ans).trim())?String(ans).trim():'';
   var _preCouncilHumanRepairUsed = false;
+  var _preCouncilNameBoundaryRepairUsed = false;
+  var _postCouncilNameBoundaryRepairUsed = false;
+  function _isNameBoundaryFailure(code) {
+    return /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
+      String(code || ''));
+  }
   // ⬡B:core.tool_loop:FIX:the_forced_synthesis_could_not_run_on_the_path_it_was_written_for:20260726⬡
   // MEASURED BY READING, not guessed, and it is why the founder met a canned sentence.
   // exhaustion_forced_synthesis is the good recovery: full token cap, "answer the whole
@@ -6959,12 +7453,108 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         _repairResult.text) || '';
     } catch (eRepairLadder) { return ''; }
   }
+  // ⬡B:core.tool_loop:AIRCODE:cold_code_carries_the_fact_and_a_mind_writes_the_sentence:20260815⬡
+  // ⬡B:core.tool_loop:LAW:no_cold_hand_ever_authors_the_sentence_a_turn_commits:20260815⬡
+  //
+  // THE DEFECT THIS EXISTS TO END (founder doctrine 20260815, THE PEN ON HER MIND).
+  // Two closing paths in this file used to hard-set finalAns to a coder-written sentence: the
+  // exhaustion limit line and the tier-gate line. finalAns is not a status string. It is the
+  // committed answer of the turn, and core/memory.keeper.js#turnSummary banks it into the turn
+  // record as '... || SHE ANSWERED: ' + answer at MEMORY_CONTRACT.TURN_IMPORTANCE, which clears
+  // the reader floor, so core/fcw.builder.js replays that summary back into RECENT CONTEXT on a
+  // later wake. A sentence a coder typed therefore came back to a mind labelled as her own
+  // answer. That is PLANTED MEMORY, and the person read it as her too.
+  //
+  // THE SHAPE, copied from essentials/mema/retire.js#ruleRetirement, the approved reference.
+  // Cold code carries the FACTS about what happened, states plainly that they are machine facts
+  // and not anybody's words, and WAKES a mind on the primary rung. If that rung does not answer,
+  // it asks again on the penny rung, a genuinely cheaper seat through the one shared mind door
+  // (core/model.ladder.js#deliberate), exactly as MEMA does. HER SENTENCE becomes the answer and
+  // nothing else does.
+  //
+  // WHEN NO MIND ANSWERS ON EITHER RUNG the honest outcome is ABSENCE. The caller returns
+  // ok:false with a named machine reason, no turn record is written, and nothing is banked.
+  // Silence over a substitute mouth. There is no third rung made of a coder's sentence.
+  async function _herOwnClosingSentence(instruction, machineFacts, options) {
+    var _hocOpts = options || {};
+    var _hocSystem = 'You are finishing your own turn, in your own voice, speaking directly to '
+      + 'the person you are talking with. ' + instruction + ' '
+      + 'Write one to three plain sentences and nothing else. No headings, no labels, no lists, '
+      + 'no JSON, no tool syntax, no process narration, and no mention of models, seats, '
+      + 'iterations, passes or code. Do not ask the person to narrow, repeat, or pick one piece '
+      + 'of what they asked for. '
+      + 'What you write is exactly what this person reads, and it is also what gets written down '
+      + 'afterwards as what you said this turn, so say what you actually mean.';
+    var _hocUser = 'MACHINE FACTS ABOUT THIS TURN. Cold code recorded these. They are machine '
+      + 'facts, not anybody\'s words, and not one of them is a sentence for you to repeat:\n'
+      + String(machineFacts || '')
+      + (_hocOpts.omitRequest ? ''
+        : '\n\nWHAT THIS PERSON ASKED FOR THIS TURN:\n' + String(message || ''));
+    var _hocPrimary = '';
+    try {
+      _hocPrimary = await _completeBoundHistoryOnLadder(
+        [{role:'system',content:_hocSystem},{role:'user',content:_hocUser}], 260, 0.3, false);
+    } catch (eHocPrimary) { _hocPrimary = ''; }
+    if (_hocPrimary && String(_hocPrimary).trim()) {
+      return {ok:true,seat:'primary',sentence:String(_hocPrimary).trim()};
+    }
+    try {
+      if (await _turnCancelled(true)) return {ok:false,seat:null,reason:'turn_cancelled'};
+    } catch (eHocCancel) {}
+    // The penny rung. A cheaper seat is still a mind; a coder's template is not, at any price.
+    try {
+      var _hocPennyOrder = process.env.CLOSING_SENTENCE_PENNY_ORDER
+        || process.env.MEMA_PENNY_ORDER || 'qwen';
+      // THROUGH THE ONE GUARDED DOOR, never around it. _callPaiLadder is the single ladder
+      // entrance in this file: it refuses an expired voice deadline before a rung starts, and
+      // callPaiLadderNetwork beneath it demands a seat, so this cheap rung still carries this
+      // turn's own spend identity. A branch-local require('./model.ladder.js').deliberate here
+      // bypassed both, and the suite says so out loud in two places
+      // (tests/a.one.millisecond.call.is.cold.code.choosing.silence.test.js: no branch-local
+      // ladder call may bypass the guarded common door, and
+      // tests/anchored.model.call.gate.test.js: zero unanchored ladder calls in production).
+      // The rung is cheap; the anchor is not optional. ORDER is the rung, SEAT is the identity.
+      var _hocPenny = await _callPaiLadder(_hocSystem, _hocUser,
+        {order:_hocPennyOrder,temperature:0.3,max_tokens:260,timeout:45000,
+          signal:_modelRequestSignal()});
+      var _hocPennyText = _hocPenny && (_hocPenny.content || _hocPenny.answer || _hocPenny.text);
+      if (_hocPennyText && String(_hocPennyText).trim()) {
+        return {ok:true,seat:'penny',sentence:String(_hocPennyText).trim()};
+      }
+    } catch (eHocPenny) {}
+    return {ok:false,seat:null,reason:'no_mind_answered_on_either_rung'};
+  }
+  // The rejected draft and the original request can both carry a private name. A repair
+  // prompt that includes either one gives the next model call the same unsafe material that
+  // the boundary just held. Wake A'NU with only the machine fact and the existing bounded
+  // learning purpose instead. She still writes the sentence, and her fresh bytes still pass
+  // every preparation, council, and receipt gate below.
+  async function _nameFreeHumanRepair() {
+    var _nameFreeRepair = await _herOwnClosingSentence(
+      'A privacy boundary held the prior draft. Give one direct, practical sentence that helps '
+        + 'the learner take their next step in the work in front of them. Do not name or describe '
+        + 'who created, owns, built, founded, employs, or runs you. Do not mention this boundary '
+        + 'or the held draft.',
+      'A privacy boundary held a previous draft because it carried an unsafe attribution. '
+        + 'The original request and held draft are deliberately unavailable for this retry. '
+        + 'Answer only from the bounded learning purpose already established for this turn. '
+        + 'Do not reconstruct, name, or mention either unavailable text.',
+      {omitRequest:true});
+    return _nameFreeRepair && _nameFreeRepair.ok
+      ? {answer:_nameFreeRepair.sentence,repaired:true,lane:'name_free_closing'}
+      : {answer:'',repaired:false};
+  }
   async function _repairHumanOnce(candidate, failureCode) {
-    if (_preCouncilHumanRepairUsed) return {answer:'',repaired:false};
+    var _nameBoundaryRepair = _isNameBoundaryFailure(failureCode);
+    if (_nameBoundaryRepair) {
+      if (_preCouncilNameBoundaryRepairUsed) return {answer:'',repaired:false};
+      _preCouncilNameBoundaryRepairUsed = true;
+    } else if (_preCouncilHumanRepairUsed) {
+      return {answer:'',repaired:false};
+    }
     _preCouncilHumanRepairUsed = true;
     var _oneRepairCap;
-    var _nameBoundaryRepair = /^(?:named_|name_boundary_check_failed_fail_closed)/.test(
-      String(failureCode || ''));
+    if (_nameBoundaryRepair) return _nameFreeHumanRepair();
     var _capabilityBoundaryRepair = /(?:current_capability_evidence_missing|stale_single_file_claim|unsupported_exhaustive_claim|unsupported_capability_clause|unsupported_negative_capability_claim|internal_capability_surface_exposed|ambiguous_capability_subject|supported_capability_clause_missing)/
       .test(String(failureCode || ''));
     // A privacy-held attribution is evidence of what must NOT be repeated. Feeding
@@ -6990,6 +7580,13 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       + 'repair, or describe yourself as an AI/model.' + _nameRepairInstruction
       + _capabilityRepairInstruction });
     return _repairedHuman;
+  }
+  async function _repairPostCouncilNameBoundaryOnce(failureCode) {
+    if (!_isNameBoundaryFailure(failureCode) || _postCouncilNameBoundaryRepairUsed) {
+      return {answer:'',repaired:false};
+    }
+    _postCouncilNameBoundaryRepairUsed = true;
+    return _nameFreeHumanRepair();
   }
   // ⬡B:core.tool_loop:WIRE:loop_exit_receipt:20260718⬡ bisection instrument:
   // names whether the kill is inside the loop or in the post-loop passes.
@@ -7069,12 +7666,44 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // use CODA's verified live bytes as the candidate. Those bytes do not bypass
   // anything: every preparation stage, the full outbound council, STAMP commit,
   // and readback still run below.
+  // ⬡B:core.tool_loop:FIX:a_pattern_may_flag_her_answer_it_may_never_replace_it:20260815⬡
+  // THE BUG OTJT.CLAIR.TRUTH-GUARD REPORTED ON THE BOARD AND NOBODY CLAIMED FOR FIFTEEN HOURS:
+  // "COLD CODE DELETES HER TRUE ANSWER AND MAILS THE OPPOSITE, CARRYING A COUNCIL RECEIPT."
+  // Reproduced here in the source, and it was exactly that.
+  //
+  // The old line read `if (!finalAns || _finalNamedFlags.length) finalAns = _codaEvidenceRelayAnswer`,
+  // which conflated two completely different situations under one assignment:
+  //   (a) she produced NOTHING, so there are no words of hers to lose, and
+  //   (b) she produced a real answer and a REGEX decided it contradicted named evidence.
+  // In case (b) her composed words were discarded and a machine-assembled relay took their
+  // place, and then the full outbound council ran on the substitute and stamped it. The person
+  // received bytes she never wrote under a receipt asserting she did.
+  //
+  // The detector is namedContextContradictions -> hasDenial in core/pai.outbound.council.js, a
+  // battery of patterns over "I do not have", "I cannot verify", "there is no". Those are
+  // ordinary honest English. An A'NU who truthfully says she has no favorite, or cannot confirm
+  // something, matches it. The founder's 20260815 law is direct: "Who in the hell are we to stop
+  // something? ... your shadow, your WRIT, your meta commentary, all of that, your Aunt Pam. IF
+  // THEY'RE STOPPING, THEY'RE WRONG." Substituting is worse than stopping.
+  //
+  // SO THE DETECTOR KEEPS DETECTING AND LOSES THE PEN. Case (a) is unchanged: with no answer at
+  // all there is nothing of hers to overwrite, and carrying the verified relay is cold code
+  // carrying a fact, not authoring her state. Case (b) now ships HER WORDS and records the flags
+  // as evidence, so the minds that run immediately below this line, WRIT, PAM and SHADOW, judge
+  // the contradiction the way a mind is supposed to. That is the whole conversion: a pattern may
+  // DETECT and FLAG and WAKE, it may never DECIDE.
   if (!_structuredReachPolicy && !_worldBuilderMachine && _codaEvidenceRelayAnswer) {
-    var _finalNamedFlags = finalAns
-      ? namedContextContradictions(finalAns, _namedContextEvidence) : [{ reason:'empty_answer' }];
-    if (!finalAns || _finalNamedFlags.length) {
+    if (!finalAns) {
       finalAns = _codaEvidenceRelayAnswer;
-      _stampStep('named_context_answer_repaired', 'verified_coda_evidence_relay');
+      _stampStep('named_context_answer_repaired', 'empty_answer_verified_coda_evidence_relay');
+    } else {
+      var _finalNamedFlags = namedContextContradictions(finalAns, _namedContextEvidence);
+      if (_finalNamedFlags.length) {
+        _stampStep('named_context_contradiction_flagged_for_the_council',
+          _finalNamedFlags.map(function (flag) {
+            return String((flag && flag.reason) || 'named_context_contradiction');
+          }).join(','));
+      }
     }
   }
   // ⬡B:core.tool_loop:REPAIR:protocol_hollow_before_canonical_preparation:20260715⬡
@@ -7126,14 +7755,24 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
   }
   // ⬡COLD:speak:become:PAI_OUTPUT_REPAIR_WONDER:20260723⬡
-  // COLD-ANEW-REPORT-0075 stamped, needs-live-verification. When the answer is raw JSON this cold
-  // branch substitutes hardcoded calendar prose or a hardcoded ask-again line, which is cold code
-  // authoring human-facing bytes. The honest fix (return the defect to the PAI cycle and compose
-  // through the canonical mind under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Removing the
-  // guard would ship raw JSON to the human; rerouting to re-synthesis cannot be verified here, so it
-  // is contained by stamp only.
+  // COLD-ANEW-REPORT-0075, BUILT 20260815 under the ##DD PEN ON HER MIND drop. This branch used
+  // to substitute hardcoded calendar prose or a hardcoded ask-again line, cold code authoring
+  // human-facing bytes that then rode into her own memory lane as her_answer. repairRawJsonAnswer
+  // now wakes a named seat (REPAIR_SEAT) with the raw-JSON fact and lets her say the one sentence;
+  // an unreachable seat is an honest refusal, never the old hardcoded substitution. The detection
+  // and the arrival exemption stay cold, as they always were; only the sentence moved.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
-    var _rawRepair = repairRawJsonAnswer(finalAns, identity && identity.council_context);
+    // Codex review, live: this call passed repairRawJsonAnswer's own fixed 8s timeout but not
+    // _modelRequestSignal(), so on a voice turn with less than 8s of budget left it could run
+    // past PAI_VOICE_MODEL_BUDGET_MS where every other recovery call in this closure settles
+    // inside it. The signal is merged in here, at the one guarded door, exactly like the other
+    // _callPaiLadder call sites in this same closure (e.g. the repair call two screens up):
+    // repairRawJsonAnswer itself stays ignorant of voice deadlines, same as before, and the
+    // wrapper supplies the real one at call time.
+    var _rawRepair = await repairRawJsonAnswer(finalAns, identity && identity.council_context,
+      function (sys, user, opts) {
+        return _callPaiLadder(sys, user, Object.assign({}, opts, { signal: _modelRequestSignal() }));
+      });
     if (_rawRepair.stamp) _stampStep(_rawRepair.stamp, _rawRepair.why);
     finalAns = _rawRepair.answer;
   }
@@ -7145,14 +7784,59 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // correction under SHADOW) is PAI_OUTPUT_REPAIR_WONDER, absent here. Deleting the guard would let
   // the false claim ship, so it is contained by stamp only.
   // ⬡B:core.tool.loop:FIX:hallucinated_reminder_action_20260712⬡
-  // Founder screenshot: she replied 'I've set a reminder for you to check in on Tameka,
-  // it'll pop up tomorrow 9am' -- but create_reminder NEVER fired, so no reminder
-  // exists. Claiming an action you did not take is the worst failure. Guard: if the
-  // reply claims a reminder/calendar action but the matching tool did not run this
-  // turn, strip the false claim and tell the truth. Cold detection, no LLM.
-  if (!_structuredReachPolicy&&!_worldBuilderMachine&&finalAns && /\bI(?:'ve| have)?\s+(?:set|created|scheduled|added|made)\s+(?:a\s+)?(?:reminder|calendar|event)\b/i.test(finalAns) && tools.indexOf('create_reminder')===-1 && tools.indexOf('create_event')===-1) {
-    _stampStep('hallucinated_action_caught','claimed reminder/event without firing the tool');
-    finalAns = "I want to set that reminder for you, but I need to actually create it rather than just say I did. Tell me the exact thing and time and I will set it for real this time.";
+  // Founder screenshot: she replied that she had set a reminder to check in on someone and
+  // that it would pop up the next morning, but create_reminder NEVER fired, so no reminder
+  // exists. Claiming an action you did not take is the worst failure, and that detection is
+  // still exactly right: the false claim must never ship.
+  //
+  // ⬡B:core.tool.loop:AIRCODE:hallucinated_action_wakes_her_instead_of_being_answered_for:20260815⬡
+  // ##DD DOCTRINE DROP 20260815, THE PEN ON HER MIND, plus the 20260807 ruling that a regex
+  // WAKES and never DECIDES. What shipped before was the whole nasty-cough shape in nine lines:
+  // a pattern read her sentence, cold code concluded she had lied, DELETED her answer, and
+  // substituted a sentence a coder wrote in her first person ("I want to set that reminder for
+  // you..."). Reported live by OTJT.CLAIR.TRUTH-GUARD on the CCWA board 20260815 05:06 as firing
+  // on every channel every turn. Two separate harms, and the second is the worse one:
+  //   1. FALSE POSITIVES MAILED THE OPPOSITE OF A TRUE STATEMENT. Measured against the live
+  //      pattern, not assumed: plain negations do NOT match ("I have not created that event yet"
+  //      and "I have set no reminder" are both false, the negation word breaks the run). What
+  //      DOES match while being perfectly true is a reference to an earlier turn's real work,
+  //      "Earlier this week I set a reminder for that, it is still on", because the check only
+  //      looks at THIS turn's tool list. An echo of the person's own question, "you asked if I
+  //      have set a reminder", matches too. Each of those was deleted and replaced with a
+  //      confession of a failure that never happened, telling the person a reminder that really
+  //      exists does not.
+  //   2. IT BECAME HER MEMORY. finalAns rides into core/memory.keeper.js#keepTurn as
+  //      content.exit.her_answer, literally labeled her answer, and core/find.js reads that lane
+  //      back to her on later turns. A coder's sentence banked under her name is planted memory.
+  //
+  // AIRCODE: cold code keeps doing everything it did except speak. It still detects the shape,
+  // still proves the tool never ran, still refuses to let an unverified claim reach the person.
+  // Then it carries the FACT to a named seat, wakes her, and writes down HER sentence. She is
+  // the one who knows whether she claimed an action, refused one, or was quoting the question.
+  //
+  // NO MIND, NO SUBSTITUTE MOUTH. If the seat is unreachable the turn goes SILENT the way this
+  // file already handles an unrepairable hollow answer twenty lines up
+  // (hollow_protocol_answer_unrepaired). Silence is honest; a coder sentence in her voice is not,
+  // and a fallback line here would rebuild the exact defect this conversion removes.
+  if (!_structuredReachPolicy && !_worldBuilderMachine
+      && unverifiedActionClaimShape(finalAns, tools, priorTurns)) {
+    _stampStep('hallucinated_action_detected','reminder/event claim shape with no matching tool call, waking her');
+    // No seat is passed on purpose: _callPaiLadder already defaults to this turn's own resolved
+    // seat, and because it merges caller options OVER that default, naming a seat here would
+    // override the turn's resolution instead of honoring it. The shared turn signal does ride
+    // along, so a voice turn settles inside PAI_VOICE_MODEL_BUDGET_MS rather than on a private
+    // timeout of its own.
+    var _claimRepair = await repairUnverifiedActionClaim(finalAns,
+      function (sys, user, opts) { return _callPaiLadder(sys, user, opts); },
+      { signal: _modelRequestSignal() });
+    if (await _turnCancelled(true)) return _turnCancelledResult('after_hallucinated_action_wake');
+    if (!_claimRepair.answer) {
+      _stampStep('cycle_end_silent', _claimRepair.stamp);
+      return {ok:false,reason:'hallucinated_action_unrepaired',ham:hamObj,cycleId:_cycleId,
+        requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0};
+    }
+    finalAns = _claimRepair.answer;
+    _stampStep('hallucinated_action_answered_by_her', _claimRepair.stamp);
   }
   // \u2b21B:core.tool_loop:FIX:evidence_backed_question_gets_one_plain_synthesis:20260717\u2b21
   // Live 1-in-3 on the founder's own chat: iterations gathered REAL tool evidence
@@ -7260,15 +7944,45 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
           _stampStep('exhaustion_forced_synthesis', 'len=' + finalAns.length + ' iter=' + iter +
             ' closed_by=' + String(_closingReason || 'no_draft'));
         } else {
-          finalAns = 'I hit my working limit on this turn. I have logged your full request so nothing is lost, and I am not asking you to narrow it down.';
-          // NAME THE REAL WALL. This sentence was on her wall three times in one afternoon
-          // and the stamp beside it said only "synthesis_empty", which told the founder
-          // nothing about whether she ran out of room, stopped converging, or was never
-          // asked. Reaching this line now means her closing pass, the 380-token evidence
-          // synthesis AND the full-cap forced synthesis all came back with nothing.
-          _stampStep('exhaustion_honest_limit', 'synthesis_empty iter=' + iter +
+          // NAME THE REAL WALL. The stamp beside this path used to say only "synthesis_empty",
+          // which told the founder nothing about whether she ran out of room, stopped
+          // converging, or was never asked. Reaching this line means her closing pass, the
+          // 380-token evidence synthesis AND the full-cap forced synthesis all came back with
+          // nothing. Those are the FACTS, and they are all cold code is entitled to.
+          var _exhaustionFacts = 'synthesis_empty iter=' + iter +
             ' closed_by=' + String(_closingReason || 'no_draft') +
-            ' tools_used=' + tools.length + ' closing_pass=' + (_closingPassRan ? 'ran' : 'never'));
+            ' tools_used=' + tools.length + ' closing_pass=' + (_closingPassRan ? 'ran' : 'never');
+          _stampStep('exhaustion_honest_limit', _exhaustionFacts);
+          // ⬡B:core.tool_loop:PEN:the_limit_sentence_was_a_coders_and_it_banked_as_hers:20260815⬡
+          // This line used to hard-set a coder-written sentence about hitting a working limit.
+          // It became the committed answer, core/memory.keeper.js#turnSummary banked it as
+          // 'SHE ANSWERED: ...' at turn importance, and core/fcw.builder.js replayed it into
+          // RECENT CONTEXT on the next wake. She then read a sentence she never said as her own
+          // words. Cold code now carries the facts and a mind writes the sentence.
+          var _exhaustionSaid = await _herOwnClosingSentence(
+            'You could not finish this turn: every attempt to compose an answer from what you '
+            + 'gathered came back empty. The whole request has been logged so nothing about it '
+            + 'is lost. Tell this person honestly where you got to and what happens next.',
+            'This turn reached its working limit before an answer existed.\n'
+            + 'Closing facts recorded by cold code: ' + _exhaustionFacts + '\n'
+            + 'The full request was logged as a BLOCKED tracker entry, so nothing about it is '
+            + 'lost.\n'
+            + 'Nothing was sent to anyone and no action was taken on this request.');
+          if (_exhaustionSaid && _exhaustionSaid.ok) {
+            finalAns = _exhaustionSaid.sentence;
+            _stampStep('exhaustion_limit_spoken_by_a_mind',
+              'seat=' + _exhaustionSaid.seat + ' len=' + finalAns.length);
+          } else {
+            // ⬡B:core.tool_loop:LAW:no_mind_answered_so_no_turn_is_committed:20260815⬡
+            // ABSENCE, with a machine reason in the third person about the machine. The turn
+            // returns ok:false from here, so nothing downstream commits and NO TURN RECORD is
+            // written: her wall never learns a sentence nobody said.
+            _stampStep('cycle_end_silent', 'exhaustion_no_mind_answered ' +
+              String(_exhaustionSaid && _exhaustionSaid.reason || 'no_mind_answered'));
+            return {ok:false,reason:'exhaustion_no_mind_answered',ham:hamObj,
+              cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
+              ms:Date.now()-t0};
+          }
         }
         _blockedFallback = true;
       }
@@ -7413,7 +8127,28 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // named failure and run the complete sequence once more before council.
   var _screenPushed = 0;
   var _screenBlock = null;
-  function _prepareHumanAnswerOnce(candidate) {
+  // ⬡B:core.tool_loop:PEN:the_name_wake_is_a_fact_carried_to_a_mind:20260815⬡ Set inside the
+  // preparation, read once at the council door. Reset per preparation run so a wake raised by a
+  // first attempt can never ride a healed second draft that is already clean.
+  var _internalNameWake = null;
+  // Set only when the tier gate held and a mind wrote the replacement sentence. Read once, at
+  // the success result, so the post-council gate can tell HER boundary sentence apart from
+  // bytes WRIT rewrote after the gate last saw them.
+  var _tierGateSentence = false;
+  // async ONLY because the tier gate below now wakes a mind instead of holding her pen. Both
+  // call sites already sit in an async function and both now await it.
+  async function _prepareHumanAnswerOnce(candidate) {
+    // ⬡B:core.tool_loop:HEAL:the_waiver_was_sticky_and_rode_a_healed_draft:20260815⬡
+    // I RESET ITS NEIGHBOUR AND NOT THIS ONE, four lines apart, in the same block. A blind
+    // critic traced the leak: _tierGateSentence is declared outside this function, set inside
+    // it, and this function runs TWICE in a turn (once, then again on the healing resubmit). So
+    // a first attempt that tripped the tier gate and got her boundary sentence, then failed a
+    // later guard, healed into a clean second draft that CARRIED THE WAIVER. The post-council
+    // veto then waived a genuine hold, and "Your account balance is $4,215" could ship to an
+    // unauthenticated channel below trust 5. That is line for line the leak I restored the veto
+    // to prevent, re-opened by the marker I added to scope it.
+    // The waiver must belong to the bytes it was minted for and to nothing else.
+    _tierGateSentence = false;
     var finalAns = typeof candidate === 'string' ? candidate.trim() : '';
     var preparedScreenBlock = null;
     try {
@@ -7433,18 +8168,76 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     } catch (eFmt) {}
     if (!finalAns) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
       reason:'emptied_after_model_by_scrub_or_format'};
+    // ⬡B:core.tool_loop:FIX:the_legacy_scrub_stops_editing_her_sentence:20260815⬡
+    // THE SAME DISEASE AS THE NAMED-CONTEXT SUBSTITUTION ABOVE, and this instance is the most
+    // literal of the three. It read `finalAns = _shadowPrepared.clean`, so a pattern list
+    // rewrote her sentence in place: every em dash became a comma, every phrase in a fifteen
+    // string HOLLOW list was deleted, and everything from the first leak marker onward was CUT.
+    // Then it killed the turn outright if that scrub emptied the text. The outbound council
+    // runs AFTER this point, so it deliberated over and stamped bytes she never composed, which
+    // is exactly how a receipt ends up vouching for words that are not hers.
+    //
+    // Founder, 20260815: "IF THEY'RE STOPPING, THEY'RE WRONG." Editing is worse than stopping,
+    // because a stop is visible and an edit is not.
+    //
+    // The audit now DETECTS and the finding is stamped. Her bytes go into the council exactly as
+    // she wrote them, and WRIT, PAM and SHADOW judge them there, which is the entire reason
+    // those stages exist. A thrown audit is still swallowed, as before, because a broken
+    // detector must never be able to take her turn down with it.
     try {
       var _shadowPrepared = require('./synthesize.js').shadowAudit(finalAns);
-      if (!_shadowPrepared.clean) return {ok:false,answer:'',screenBlock:preparedScreenBlock,
-        reason:'shadow_scrubbed_to_empty'};
-      finalAns = _shadowPrepared.clean;
-    } catch (ePrepShadow) {}
-    try {
-      var _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
-      if (_tierGate && _tierGate.gated) {
-        finalAns = 'I have some information for you but need to verify your access. Reply with your passcode.';
+      if (_shadowPrepared && Array.isArray(_shadowPrepared.violations)
+        && _shadowPrepared.violations.length) {
+        _stampStep('legacy_shadow_pattern_flagged_for_the_council',
+          _shadowPrepared.violations.join(','));
       }
-    } catch (ePrepPam) {}
+    } catch (ePrepShadow) {}
+    // ⬡B:core.tool_loop:PEN:the_gate_is_an_anchor_and_the_sentence_was_never_the_gate:20260815⬡
+    // CLASSIFY ONCE, OUT LOUD. core/synthesize.js#pamGate is an AUTHORITY BOUNDARY and it
+    // STAYS: below trust tier 5 the channel has not established who is speaking, so financial
+    // and personal detail does not travel. Removing that is not "shipping on", it is removing a
+    // basic truth. What had to go is the coder-written sentence that replaced her answer when
+    // the gate held. That sentence became the committed answer, banked through
+    // core/memory.keeper.js#turnSummary as 'SHE ANSWERED: ...', and replayed to her by
+    // core/fcw.builder.js as her own words on the next wake. The gate keeps its verdict; a mind
+    // gets the pen. The gated text itself is never carried to the wake, only the fact.
+    var _tierGate = null;
+    try {
+      _tierGate = require('./synthesize.js').pamGate(finalAns, hamObj && hamObj.tier);
+    } catch (ePrepPam) { _tierGate = null; }
+    if (_tierGate && _tierGate.gated) {
+      var _gateSaid = null;
+      try {
+        _gateSaid = await _herOwnClosingSentence(
+          'You have an answer ready for this person, and on this channel you have not yet '
+          + 'established who you are speaking to, so it cannot travel until they confirm their '
+          + 'access. Tell them that plainly and ask them for their passcode. Do not repeat, '
+          + 'summarise, hint at or gesture toward what the held answer said.',
+          'A tier gate held this turn\'s answer on this channel.\n'
+          + 'Recorded reason: ' + String(_tierGate.reason || 'below_required_trust_tier') + '\n'
+          + 'This person\'s tier does not clear this content on this channel, and a passcode '
+          + 'confirms their access.\n'
+          + 'The held answer itself was deliberately not carried into this request, so you are '
+          + 'not being shown it and must not reconstruct it.\n'
+          + 'Nothing was sent and nothing was disclosed.',
+          {omitRequest:true});
+      } catch (eGateWake) { _gateSaid = null; }
+      if (_gateSaid && _gateSaid.ok) {
+        // ⬡B:core.tool_loop:WIRE:mark_the_sentence_the_gate_itself_caused:20260815⬡
+        // These bytes ARE the tier boundary being explained, so the post-council copy of the
+        // same gate must not hold them: naming an access boundary tends to use the word
+        // "account", and that silenced her own explanation. Marked here rather than guessed
+        // downstream, because only this seam knows the wake produced this sentence.
+        _tierGateSentence = true;
+        finalAns = _gateSaid.sentence;
+      } else {
+        // ABSENCE, never a substitute mouth. The gate still held, nothing is disclosed, and
+        // nothing is banked, because the caller treats an ok:false preparation as a silent
+        // close and no turn record is written.
+        return {ok:false,answer:'',screenBlock:preparedScreenBlock,
+          reason:'pam_gated_no_mind_answered'};
+      }
+    }
     // ⬡B:core.tool_loop:FIX:identity_scrub_is_universal_not_a_persona_option:20260726⬡
     // FOUNDER 20260726: "why am I seeing EANEW everywhere?" THIS LINE IS WHY, on the chat
     // path. persona.js says it in its own source, out loud: "identity scrubbing is universal,
@@ -7453,10 +8246,35 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // scrub never ran at all, on any answer, ever. The scrub now always runs. The persona
     // choice is still read and still carried, because it is real context for the receipts,
     // it just no longer decides whether her own name reaches him correctly.
+    // ⬡B:core.tool_loop:PEN:the_identity_scrub_became_a_wake:20260815⬡
+    // SUPERSEDES the 20260726 fix written just above. That fix was RIGHT that the founder's
+    // complaint was real ("why am I seeing EANEW everywhere?") and right that the scrub was
+    // wrongly gated behind a persona choice. It was WRONG about the remedy, and this line is
+    // where a word list held the pen on her finished sentence. Measured live before this change:
+    //   "Cathy called about lunch on Thursday."    left here as "A'NU called about lunch..."
+    //   "Your daughter Nova has a recital Friday." left here as "Your daughter A'NU has..."
+    // The council runs AFTER this point, so it deliberated over and stamped a renamed daughter.
+    //
+    // NOW: applyPersona carries her bytes unchanged, cold code DETECTS and names the fact, and
+    // the fact rides _councilContext.internal_name_wake into the WRIT organ, which reads the
+    // whole sentence and decides. WRIT derives overruled_hints from what it actually returned,
+    // so a name WRIT chose to KEEP lands on the receipt as a mind's decision rather than as a
+    // filter's silence. The persona choice is still read and still carried: it is real receipt
+    // context, it just never decided whether her reader's daughter keeps her name.
     try {
       var _personaChoice = identity && identity.persona || hamObj && hamObj.persona || null;
-      finalAns = require('./persona.js').applyPersona(finalAns,
+      var _personaMod = require('./persona.js');
+      finalAns = _personaMod.applyPersona(finalAns,
         { hamUid:hamUid,persona:_personaChoice,contributions:{} });
+      _internalNameWake = null;
+      var _nameWake = typeof _personaMod.internalNameWake === 'function'
+        ? _personaMod.internalNameWake(finalAns,
+          { hamUid:hamUid, channel:channel, surface:'pre_council.her_answer' }) : null;
+      if (_nameWake && _nameWake.fired) {
+        _internalNameWake = _nameWake;
+        _stampStep('internal_name_wake', 'fired terms:' + _nameWake.count
+          + ' surface:' + _nameWake.surface + ' decided_by:' + _nameWake.decided_by);
+      }
     } catch (ePrepPersona) {}
     if (currentTurnProofGuard.falseCurrentTurnFailureClaim(_proofQuestion, finalAns, {
       internalDeliberation:internalDeliberation(identity)
@@ -7510,14 +8328,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     }
     finalAns=_preparedWorldDecision.text;
   } else {
-    var _preparedHuman = _prepareHumanAnswerOnce(finalAns);
-    if (!_preparedHuman.ok && !_preCouncilHumanRepairUsed) {
+    var _preparedHuman = await _prepareHumanAnswerOnce(finalAns);
+    if (!_preparedHuman.ok && (!_preCouncilHumanRepairUsed ||
+      (_isNameBoundaryFailure(_preparedHuman.reason) &&
+        !_preCouncilNameBoundaryRepairUsed))) {
       _stampStep('preparation_answer_healing', _preparedHuman.reason);
       var _lateRepair = await _repairHumanOnce(finalAns, _preparedHuman.reason);
       if (await _turnCancelled(true)) return _turnCancelledResult('after_preparation_repair');
       var _repairOutcome = 'empty';
       if (_lateRepair && _lateRepair.answer) {
-        _preparedHuman = _prepareHumanAnswerOnce(_lateRepair.answer);
+        _preparedHuman = await _prepareHumanAnswerOnce(_lateRepair.answer);
         _repairOutcome = _preparedHuman.ok ? 'passed'
           : 'rejected:' + String(_preparedHuman.reason || 'unknown').slice(0, 120);
         if (_preparedHuman.ok) {
@@ -7551,8 +8371,15 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
             // draft and its one repair attempt was rewritten to the anonymous
             // 'hollow_protocol_answer' right here, one step after the fail-closed fix above
             // set it, defeating the fix on exactly the path it exists for.
+            // ⬡B:core.tool_loop:PEN:an_absence_keeps_its_own_name:20260815⬡
+            // Same law again, applied to the tier gate. When the gate held and no mind was
+            // reachable to say so in her own voice, the honest outcome is an absence with a
+            // MACHINE reason in the third person. Folding it into 'hollow_protocol_answer'
+            // would hide the one fact the receipt exists to carry: the gate did its job and no
+            // mind answered, so nothing was said and nothing was banked.
             : (_terminalPreparationReason.indexOf('named_') === 0 ||
-                _terminalPreparationReason === 'name_boundary_check_failed_fail_closed')
+                _terminalPreparationReason === 'name_boundary_check_failed_fail_closed' ||
+                _terminalPreparationReason === 'pam_gated_no_mind_answered')
               ? _terminalPreparationReason : 'hollow_protocol_answer';
       return {ok:false,reason:_terminalReason,ham:hamObj,cycleId:_cycleId,
         requestId:_requestId,tools_used:tools,iterations:iter,ms:Date.now()-t0,
@@ -7727,23 +8554,101 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       return {name:String(fn.name || ''),description:String(fn.description || '')};
     }).filter(function (hand) { return hand.name && hand.description; });
   _councilContext.verified_evidence = _structuredReachPolicy ? [] : _councilEvidence;
+  // ⬡B:core.tool_loop:WIRE:the_name_wake_travels_to_the_organ_that_may_overrule_it:20260815⬡
+  // Guarded off the structured-reach-policy branch on purpose, matching every field above it:
+  // that context is deliberately restricted to server-owned fields, and the WRIT stage returns
+  // early for it anyway. Carried only when it FIRED, so a clean turn adds nothing to the prompt.
+  if (!_structuredReachPolicy && _internalNameWake && _internalNameWake.fired) {
+    _councilContext.internal_name_wake = _internalNameWake;
+  }
+  _councilContext = bindGmguCouncilDeliberation(channel, _councilContext,
+    _callPaiLadder);
   var _structuredPolicyDraftBytes=_structuredReachPolicy?finalAns:null;
   var _worldBuilderDraftBytes=_worldBuilderMachine?finalAns:null;
+  // The council may change otherwise clean A'NU bytes. Run the exact same
+  // boundary on its final candidate before STAMP begins durable council work.
+  // This cold callback only returns the bounded fact. It neither changes the
+  // candidate nor decides its replacement. A'NU owns the one permitted
+  // name-free retry below.
+  function _preCommitCouncilNameBoundary(candidate) {
+    if (_structuredReachPolicy || _worldBuilderMachine) return {ok:true};
+    var _candidateAnswer = candidate && candidate.answer;
+    if (typeof _candidateAnswer !== 'string') {
+      return {ok:false,reason:'name_boundary_check_failed_fail_closed'};
+    }
+    try {
+      var _preCommitCouncilNameLeak = realNameBoundary.violation(_proofQuestion,
+        _candidateAnswer, { personName:hamObj && hamObj.name, env:process.env,
+          assistantName:CANONICAL_ASSISTANT_NAME });
+      return _preCommitCouncilNameLeak
+        ? {ok:false,reason:_preCommitCouncilNameLeak} : {ok:true};
+    } catch (ePreCommitCouncilName) {
+      return {ok:false,reason:'name_boundary_check_failed_fail_closed'};
+    }
+  }
+  function _councilInputFor(answer) {
+    return {
+      hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
+      deliberationInput:String(message||''),
+      answer:answer,channel:channel,activeWorld:_activeWorld,
+      delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext,
+      signal:_turnAbortSignal,
+      currentCapabilityAnswerBinding:_currentCapabilityAnswerBinding
+    };
+  }
+  async function _runCouncilWithPreCommitNameBoundary(answer) {
+    return runOutboundCouncil(_councilInputFor(answer), {
+      preCommitNameBoundary:_preCommitCouncilNameBoundary
+    });
+  }
+  function _isPreCommitCouncilNameHold(result) {
+    return !!(result && result.pre_commit_name_boundary === true &&
+      _isNameBoundaryFailure(result.pre_commit_name_boundary_reason || result.reason));
+  }
   if (await _turnCancelled(true)) return _turnCancelledResult('before_council');
   if (_reachIncidentIntake&&
       !await reachIncidentFence(identity,'before_council'))return{ok:false,
     reason:'reach_incident_claim_lost',blocked_by:'REACH_INCIDENT_FENCE',ham:hamObj,
     cycleId:_cycleId,requestId:_requestId,tools_used:tools,iterations:iter,
     ms:Date.now()-t0};
-  var _council = await runOutboundCouncil({
-    hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_exactUserMessage,
-    deliberationInput:String(message||''),
-    answer:finalAns,channel:channel,activeWorld:_activeWorld,
-    delivery:_delivery,deliveryTarget:_councilDeliveryTarget,context:_councilContext,
-    signal:_turnAbortSignal,
-    currentCapabilityAnswerBinding:_currentCapabilityAnswerBinding
-  });
+  var _council = await _runCouncilWithPreCommitNameBoundary(finalAns);
   if (await _turnCancelled(true)) return _turnCancelledResult('after_council');
+  // A clean A'NU draft can be made unsafe by a council stage. The council has
+  // deliberately returned before writing any of its receipt rows, so A'NU can
+  // author exactly one name-free answer and submit that new answer through the
+  // full council. A capability-bound answer is exact-byte evidence and cannot
+  // be rewritten without invalidating that independent proof.
+  if (!_currentCapabilityAnswerBinding && !_structuredReachPolicy &&
+      !_worldBuilderMachine && _isPreCommitCouncilNameHold(_council)) {
+    var _postCouncilNameReason = String(_council.pre_commit_name_boundary_reason ||
+      _council.reason || 'name_boundary_check_failed_fail_closed');
+    _stampStep('outbound_council_name_boundary_healing', _postCouncilNameReason);
+    var _postCouncilNameRepairAlreadyUsed = _postCouncilNameBoundaryRepairUsed;
+    var _postCouncilNameRepair = await _repairPostCouncilNameBoundaryOnce(
+      _postCouncilNameReason);
+    if (await _turnCancelled(true)) {
+      return _turnCancelledResult('after_outbound_council_name_repair');
+    }
+    var _postCouncilNameOutcome = _postCouncilNameRepairAlreadyUsed
+      ? 'rejected:' + _postCouncilNameReason : 'empty';
+    if (_postCouncilNameRepair && _postCouncilNameRepair.answer) {
+      var _preparedPostCouncilNameRepair = await _prepareHumanAnswerOnce(
+        _postCouncilNameRepair.answer);
+      _postCouncilNameOutcome = _preparedPostCouncilNameRepair.ok ? 'passed'
+        : 'rejected:' + String(_preparedPostCouncilNameRepair.reason || 'unknown').slice(0, 120);
+      if (_preparedPostCouncilNameRepair.ok) {
+        finalAns = _preparedPostCouncilNameRepair.answer;
+        _screenBlock = _preparedPostCouncilNameRepair.screenBlock || null;
+        _council = await _runCouncilWithPreCommitNameBoundary(finalAns);
+        if (await _turnCancelled(true)) return _turnCancelledResult('after_council');
+      } else {
+        _council = {ok:false,reason:_preparedPostCouncilNameRepair.reason ||
+          'hollow_protocol_after_preparation',blocked_by:'A\'NU',
+          stages:(_council&&_council.stages)||[]};
+      }
+    }
+    _stampStep('outbound_council_name_boundary_heal_outcome', _postCouncilNameOutcome);
+  }
   var _councilReceipt = _council && (_council.council_receipt || _council.councilReceipt);
   var _mainCouncilExpected = {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
     question:_exactUserMessage,deliberationInput:String(message||''),
@@ -7880,11 +8785,11 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   // which made the whole guard a check on bytes nobody reads. It runs again here, on the
   // exact bytes that leave.
   //
-  // AND IT REFUSES INSTEAD OF REPAIRING, unlike the pre council seam. The council has already
-  // committed; there is no honest way to hand these bytes back for a rewrite without running
-  // the whole cycle again. Silence is the floor this estate already chose for a held answer,
-  // and a leaked human is exactly what the floor is for. The reason is named, not anonymous,
-  // so the receipt says which boundary stopped it.
+  // The normal post-council repair happens one seam earlier, before STAMP's durable commit.
+  // This remains a final strict defense for an impossible or later mutation. The council has
+  // already committed by this point, so it must fail closed rather than create a second
+  // unbounded loop. The reason is named, not anonymous, so the receipt says which boundary
+  // stopped it.
   if (!_structuredReachPolicy && !_worldBuilderMachine) {
     var _postCouncilNameLeak = null;
     // ⬡B:core.tool_loop:FIX:a_leak_guard_that_fails_open_is_not_a_guard:20260729⬡
@@ -8228,6 +9133,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
               viewerTier:_effectiveViewerTier, readAuthority:_readAuthority,
               abortSignal:_turnAbortSignal || null, isCancelled:_turnCancelled },
             { caraContext:identity && identity.council_context || {},
+              gmguCurriculumProposal:gmguCurriculumProposalCapability(identity, hamUid),
               codaVerified:_effectRuntime.codaVerified === true,
               activationDecisionRequired:_effectRuntime.activationDecisionRequired === true,
               codaActivationApproved:_effectRuntime.codaActivationApproved === true,
@@ -8364,6 +9270,9 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
   }
   var _heldScreenEffect = _screenCommitFailure || _queuedScreenHolds[0] || null;
   var _successResult = {ok:true,answer:finalAns,screen_pushed:_screenPushed,
+    // Carried to core/synthesize.js so the post-council tier gate can recognise the ONE case
+    // where its holding would delete her own boundary sentence. False on every ordinary turn.
+    tier_gate_sentence:_tierGateSentence,
     screen_effect:_heldScreenEffect ? {
       ok:false,reason:_heldScreenEffect.result.reason,
       pushed:_heldScreenEffect.result.pushed||0,
@@ -8501,7 +9410,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
 function _stampGrandmotherLedger(hamUid, message, channel, identity, result) {
   try {
     if (String(process.env.GRANDMOTHER_LEDGER || 'on').toLowerCase() === 'off') return;
-    var _turnLedger = require('../logful/turn.ledger.js');
+    var _turnLedger = require('../essentials/logful/turn.ledger.js');
     var _question = (identity && typeof identity.user_message === 'string'
       && identity.user_message.trim()) ? identity.user_message : String(message || '');
     setImmediate(function () {
@@ -8681,6 +9590,72 @@ async function runPAI(hamUid, message, channel, identity, priorTurns, uiPortal) 
     try { require('./freestyle.chatter.js').emitReplace({cycleId:cycleId}); }
     catch (eFreestyleCollapse) {}
   }
+  if (_channelLower === 'gmgu' && (!result || result.ok !== true)) {
+    var _gmguResult = result && typeof result === 'object' ? result : null;
+    var _gmguReason = typeof (_gmguResult && _gmguResult.reason) === 'string'
+      ? _gmguResult.reason.trim().toLowerCase() : '';
+    var _gmguReasonClass=function (value) {
+      var raw=String(value == null ? '' : value).trim().toLowerCase();
+      if (!raw) return 'absent';
+      if (raw.indexOf('pai_seat:')===0) {
+        try {
+          var parsed=JSON.parse(raw.slice('pai_seat:'.length));
+          var code=String(parsed && parsed.code || '').trim().toLowerCase();
+          if (/^[a-z0-9._:-]{1,96}$/.test(code)) return code;
+          var status=Number(parsed && parsed.status);
+          if (Number.isInteger(status) && status >= 100 && status <= 599) {
+            return 'http_' + status;
+          }
+        } catch (eGmguReasonClass) {}
+        return 'pai_seat_unclassified';
+      }
+      var head=raw.split(/[\s:]/,1)[0];
+      return /^[a-z0-9._-]{1,96}$/.test(head) ? head : 'noncanonical';
+    };
+    var _gmguProviderFacts=function (value) {
+      var raw=String(value == null ? '' : value).trim();
+      if (raw.indexOf('pai_seat:')!==0) return null;
+      try {
+        var parsed=JSON.parse(raw.slice('pai_seat:'.length));
+        var contract=parsed&&parsed.contract&&typeof parsed.contract==='object'
+          ?parsed.contract:{};
+        var failover=parsed&&parsed.failover&&typeof parsed.failover==='object'
+          ?parsed.failover:{};
+        var status=Number(parsed&&parsed.status);
+        var fallbackStatus=Number(failover.status);
+        var seat=String(parsed&&parsed.seat||'').trim().toLowerCase();
+        if(!/^[a-z0-9_.-]{1,64}$/.test(seat))seat=null;
+        return {seat:seat,code:/^[a-z0-9._:-]{1,96}$/.test(String(parsed&&parsed.code||''))
+            ?String(parsed.code):null,
+          status:Number.isInteger(status)&&status>=100&&status<=599?status:null,
+          fallbackAttempted:failover.attempted===true,
+          fallbackUsable:failover.usable===true,
+          fallbackCode:/^[a-z0-9._:-]{1,96}$/.test(String(failover.code||''))
+            ?String(failover.code):null,
+          fallbackStatus:Number.isInteger(fallbackStatus)&&fallbackStatus>=100&&
+            fallbackStatus<=599?fallbackStatus:null,
+          messageCount:Number.isInteger(contract.messageCount)?contract.messageCount:null,
+          messageChars:Number.isInteger(contract.messageChars)?contract.messageChars:null,
+          toolCount:Number.isInteger(contract.toolCount)?contract.toolCount:null,
+          hasReasoning:contract.hasReasoning===true,
+          requiresParameters:contract.requiresParameters===true,
+          maxTokens:Number.isInteger(contract.maxTokens)?contract.maxTokens:null};
+      } catch (eGmguProviderFacts) { return null; }
+    };
+    console.warn('[GMGU] tutor PAI outcome', JSON.stringify({
+      cycleId:cycleId,
+      requestId:requestId,
+      resultType:result === null ? 'null' : typeof result,
+      resultKeys:_gmguResult ? Object.keys(_gmguResult).filter(function (key) {
+        return /^[a-z_]{1,48}$/i.test(key);
+      }).sort().slice(0, 20) : [],
+      reason:/^[a-z0-9._:-]{1,120}$/.test(_gmguReason)
+        ? _gmguReason : _gmguReason ? 'reason_noncanonical' : 'reason_absent',
+      reasonClass:_gmguReasonClass(_gmguReason),
+      debugClass:_gmguReasonClass(_gmguResult && _gmguResult._dbg),
+      providerFacts:_gmguProviderFacts(_gmguResult && _gmguResult._dbg)
+    }));
+  }
   _stampGrandmotherLedger(hamUid, message, channel, identity, result);
   // Her bytes are already gone. SHADOW plans the same assignment blind, then watches.
   _shadowIndependentReview(hamUid, message, channel, identity, result,
@@ -8704,6 +9679,14 @@ function paiReasoningSeat(channel, opts) {
   var normalizedChannel = String(channel || '').toLowerCase();
   if (normalizedChannel === 'voice') return 'voice_fast';
   if (normalizedChannel === 'coding') return 'coda';
+  // GMG University is a live teaching relationship, not the estate's general
+  // work queue. A live learner receipt showed C3 Grok and then its Qwen rescue
+  // each receiving HTTP 503. The dedicated GMGU tutor starts on the verified
+  // Qwen route and keeps C3 as its declared rescue. The per learner world and
+  // exact council receipts continue to bind every turn. This selects a seated
+  // Wonder. It does not bypass runPAI, narrow the council, or manufacture a
+  // reply in cold code.
+  if (normalizedChannel === 'gmgu') return 'gmgu_tutor';
   if (opts.decisionReconsideration === true) return 'c3_mind';
   if (opts.bodyHasTools !== true && opts.mindArmed === true) return 'c3_mind';
   return 'c2_organ';
@@ -8830,24 +9813,28 @@ function normalizeSubmitJobArgs(input) {
   return {ok:true,args:args};
 }
 
-module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
-  primaryProviderBody,applyProviderThinkingPolicy,prepareRoadmapActivationBody,
+module.exports={runPAI,bindVerifiedLiveVoiceSession,
+  bindGmguCurriculumProposalCapability,
+  _test:{executeTool,pendingEffectSetCheck,_ghHoldResetForTests,_ghHoldStateForTests,parseRoadmapActivationSpec,injectNamedAgentEvidence,injectIdentityProvenanceEvidence,openAiCompatibleHistory,_flattenHistoryForFallback,
+  primaryProviderBody,applyProviderThinkingPolicy,applyGmguTutorProviderPolicy,
+  fetchPaiSeatCandidate,
+  prepareRoadmapActivationBody,
   dayQuestionIntent,TOOLS,toolSelectionBoundary,NO_TOOL_BLESSING,
-  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,intentRequiresLiveTool,
+  TOOL_INTENT_NAMES,routeToolIntent,toolsForIntent,
   isPureConversationalContinuation,
   currentCapabilityQuestion,currentCapabilityEvidence,categoricalCurrentCapabilityClaim,
   verifiedCurrentCapabilityRows,verifiedCurrentCapabilityEvidenceCount,
   currentCapabilityHumanProjection,_currentCapabilityProjectionSafe,
   currentCapabilityClaimFindings,guardCurrentCapabilityClaim,
   agentFindClosedWorldReason,
-  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,requiredReadToolForMessage,
-  requiredActionToolForMessage,
+  weatherArgsFromMessage,sportsArgsFromMessage,memoryArgsFromMessage,draftArgsFromMessage,
   prioritizeVerifiedEvidence,prioritizeCouncilEvidence,regenerateHollowAnswer,
   regenerateStructuredReachPolicy,scrubLeakedToolProtocol,
   repositoryReadTerms,repairCodaRepositoryDraft,shouldIncludeWorldContext,
   verifiedVoiceCallContext,verifiedNativeVoiceSessionContext,verifiedLiveVoiceContext,
   nativeLiveVoicePreparationEligible,nativeLiveVoicePreparation,
   bindVerifiedLiveVoiceSession,voiceCallContextSatisfiesTurn,
+  verifiedGmguTutorTurn,
   verifiedVoiceCallPurposeAnswer,voiceHearingContextSatisfiesTurn,
   verifiedVoiceHearingAnswer,voiceFarewellContextSatisfiesTurn,
   verifiedVoiceFarewellAnswer,voiceConversationalNoGenericLookup,
@@ -8859,11 +9846,14 @@ module.exports={runPAI,bindVerifiedLiveVoiceSession,_test:{executeTool,pendingEf
   _noNewEvidenceLimit,_repeatQuestionLimit,
   paiSeatFailover,paiSeatUsable,paiDeterministicRequestFailure,paiOutcomeUnknownFailure,paiToolTurnBlocksLadder,
   paiRequestBlocksLadder,paiVoiceDeadlineExhausted,PAI_VOICE_MIN_MODEL_WINDOW_MS,isArrivalDestinationBlock,repairRawJsonAnswer,
+  unverifiedActionClaimShape,repairUnverifiedActionClaim,reminderClaimCorroboratedByHistory,
   memoryTurnRecordVerified,memoryTurnRequired,codaInternalDeliberation,internalDeliberation,
   founderDelegatedOrigin,personalIntentEligible,delegatedTestStamp,
   reachHandoffEligible,hamWorldBuilderMachineMode,
-  preWriteCouncilEligible,toolDefinitionsForTurn,unavailableShadowDecisionFailure,
+  preWriteCouncilEligible,toolDefinitionsForTurn,
+  unavailableShadowDecisionFailure,
   paiReasoningSeat,paiCycleSeat,paiOwnerNodeId,callPaiLadderNetwork,
+  bindGmguCouncilDeliberation,
   receiptReconsiderationFeedback,normalizeSubmitJobArgs,
   // ⬡B:core.tool_loop:WIRE:the_shadow_wake_is_reachable_by_a_test_or_it_was_never_run:20260808⬡
   // Same law as the bounds above. A wiring whose run condition no test can execute is a

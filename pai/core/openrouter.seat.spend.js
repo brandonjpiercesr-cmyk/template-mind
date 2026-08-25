@@ -37,7 +37,7 @@ function bearer(init) {
   return match ? clean(match[1]) : '';
 }
 
-function keyOwner(key, env) {
+function resolveKeyOwner(key, env, attributedSeat) {
   var runtime = env || process.env;
   var matches = [];
   seatMap.seatNames(runtime).forEach(function (name) {
@@ -45,14 +45,39 @@ function keyOwner(key, env) {
     var own = seat && seatMap.sanitizeKey(runtime[seat.keyEnv]);
     if (own && sameSecret(key, own)) matches.push(seat);
   });
-  if (matches.length > 1) return {ok:false,reason:'openrouter_key_shared_across_seats',
-    seats:matches.map(function (seat) { return seat.seat; })};
+  if (matches.length > 1) {
+    // A duplicate remains an egress refusal unless the already-running server cycle
+    // names one of the exact matching seats. This is for a legacy credential
+    // collision only. No request header, body, or caller argument reaches this value.
+    var exact = clean(attributedSeat);
+    var attributed = matches.find(function (seat) { return seat.seat === exact; });
+    if (attributed) return {ok:true,seat:attributed,sharedAttribution:true};
+    return {ok:false,reason:'openrouter_key_shared_across_seats',
+      seats:matches.map(function (seat) { return seat.seat; })};
+  }
   if (matches.length === 1) return {ok:true,seat:matches[0]};
   var shared = seatMap.sanitizeKey(runtime.OPENROUTER_API_KEY);
   if (shared && sameSecret(key, shared)) {
     return {ok:false,reason:'anonymous_shared_openrouter_key_forbidden'};
   }
   return {ok:false,reason:'openrouter_key_has_no_named_seat'};
+}
+
+function keyOwner(key, env) { return resolveKeyOwner(key, env, ''); }
+
+function attributedSeat() {
+  try {
+    return clean(require('./spend.guard.js').currentAttribution().seat);
+  } catch (error) {
+    return '';
+  }
+}
+
+// A legacy duplicate may be named only by the server-owned attribution already
+// running in this process. This helper deliberately accepts no caller seat.
+// Unscoped inspection stays on keyOwner(), which remains strictly refusing.
+function attributedKeyOwner(key, env) {
+  return resolveKeyOwner(key, env, attributedSeat());
 }
 
 function usageNumber(value) {
@@ -136,7 +161,7 @@ async function run(url, init, fetchImpl, execute, env) {
   }
   var key = bearer(init);
   if (!key) return {blocked:false,response:await execute()};
-  var owner = keyOwner(key, env);
+  var owner = resolveKeyOwner(key, env, attributedSeat());
   if (!owner.ok) return {blocked:true,status:429,reason:owner.reason,
     seats:owner.seats || []};
   var seat = owner.seat;
@@ -185,7 +210,8 @@ async function run(url, init, fetchImpl, execute, env) {
 
 function reset() { queues.clear(); }
 
-module.exports = {run:run,keyOwner:keyOwner,bearer:bearer,currentUsage:currentUsage,
+module.exports = {run:run,keyOwner:keyOwner,attributedKeyOwner:attributedKeyOwner,
+  bearer:bearer,currentUsage:currentUsage,
   dryAccountBlockArmed:dryAccountBlockArmed,
   _test:{sameSecret:sameSecret,usageNumber:usageNumber,usageSignal:usageSignal,
     balanceMaxAgeMs:balanceMaxAgeMs,queueSeat:queueSeat,reset:reset}};

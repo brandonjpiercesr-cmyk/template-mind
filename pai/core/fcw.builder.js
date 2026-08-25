@@ -152,6 +152,14 @@ function agentFindWallProjection(plan,systemPrompt){
     fcw_bytes:Buffer.byteLength(systemPrompt,'utf8'),evidence_body_bytes:plan.fcw_bytes,
     fcw_byte_budget:plan.fcw_byte_budget,context_budget_source:plan.context_budget_source,
     byte_envelope_reached:plan.byte_envelope_reached,omitted:plan.omitted,
+    // ⬡B:core.fcw.builder:FIX:a_dropped_row_she_is_never_told_about_20260815⬡
+    // CODELESS PURGE. planWallEvidence computes compact_omitted (agent.find.js:341, rows
+    // dropped by a hand-tuned score when the compact byte envelope fills) and carried it on
+    // the plan, but this projection copied `omitted` and silently left `compact_omitted`
+    // behind. So the rows cold code scored lowest never reached the wall, never reached
+    // agent.find.js#bindWall's wallGaps, and never reached her prompt. She could not overrule
+    // what she was never told was missing. Carried here so the gap appendix can name it.
+    compact_omitted:Array.isArray(plan.compact_omitted) ? plan.compact_omitted.slice() : [],
     complete:plan.complete,partial:plan.partial,
     active_truth_enforced:plan.active_truth_enforced===true,
     storage_limitations:Array.isArray(plan.storage_limitations)
@@ -281,7 +289,8 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       named_agents:_namedAgentGlobals,include_preferences:_isPreferenceQ,
       include_wonder_games:_isWonderGamesQ,
       compact_byte_budget:options && options.agentFindCompactByteBudget,
-      fcw_byte_budget:options && options.agentFindFcwByteBudget});
+      fcw_byte_budget:options && options.agentFindFcwByteBudget}, {
+      last_air_fact_sink:options && options.agentFindProgressiveSink});
     if (!_evidencePlan || _evidencePlan.ok !== true) {
       return {ok:false,available:false,reason:String(_evidencePlan && _evidencePlan.reason ||
         'agent_find_evidence_plan_unavailable'),agent_find:_evidencePlan || null,
@@ -502,9 +511,15 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       var name = c && (c.agent || c.name || c.world);
       var role = c && (c.role || c.purpose);
       var summary = (b && (b.summary || b.source)) || '?';
-      if (name && role) return '- ' + String(name).toUpperCase() + ': ' + String(role);
-      if (name) return '- ' + String(name).toUpperCase() + ': ' + String(summary);
-      return '- ' + String(summary);
+      // ⬡B:core.fcw.builder:FIX:the_pen_fence_reaches_the_agent_roster_too:20260815⬡
+      // Same fence as RECENT CONTEXT and ROADMAP AND DOCTRINE: a roster row is a bead like
+      // any other and can be a mind's real record or a machine fact a seeder stamped in.
+      var _writer = String(b && b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+      var line;
+      if (name && role) line = '- ' + String(name).toUpperCase() + ': ' + String(role);
+      else if (name) line = '- ' + String(name).toUpperCase() + ': ' + String(summary);
+      else line = '- ' + String(summary);
+      return line + ' [written by ' + _writer + ']';
     }).join('\n');
   }
 
@@ -565,9 +580,71 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   allContext = dedupeContextRows(allContext);
   // The wall carries every fetched row and its complete summary. Provider pagination controls
   // transport batches only; it does not become a hidden cognition or prompt ceiling here.
+  // ⬡B:core.fcw.builder:FIX:every_context_line_names_its_writer:20260815⬡
+  // Founder ruling 20260815, the pen on her mind: cold writers stamp RESULT beads at the
+  // reader importance floor (a template briefing, a scheduler retiring tasks, a catch
+  // block), and this map presented them identically to mind-authored records, so a machine
+  // byte replayed to her as her own remembered life. The SOURCE is the writer's name in
+  // this brain, so it rides on every line as a carried fact, and the RECENT CONTEXT
+  // heading below hands HER the judgment. Carry, never classify: no source list here
+  // decides which rows count as truly hers. Same fence as the new world's minute
+  // presenters (anew-world PR 321). This wall's line shape deliberately differs from
+  // core/agent.find.js and advisors/coding.js: here the writer fact is judgment-bearing
+  // (she is told to weigh each line by it), so it is set off in the bracket, not inlined.
+  // GAUNTLET ROUND, blind-critic findings applied: (1) for turn records the raw source is
+  // an opaque row address (pai.minutes.<ham>.<ms>) with zero authorship signal, and the
+  // real discriminator, the channel, already rides in the summary's [TURN <channel>]
+  // prefix, so those rows carry the one truthful writer name their contract proves: the
+  // memory keeper at the one turn exit. (2) the source is bounded to 120 chars so a
+  // 260-char provenance-bound source cannot become a per-line prefix on an uncapped
+  // wall. (3) the body no longer falls back to b.source, which the header now carries,
+  // so a summary-less row does not print its source twice as if it were content.
+  var _turnPrefix = require('./memory.keeper.js').MEMORY_CONTRACT.TURN_SOURCE_PREFIX;
+  // ⬡B:core.fcw.builder:FIX:writer_legend_short_refs_on_the_uncapped_wall:20260815⬡
+  // Codex P1 on the fence itself, and it is the founder's own first cheap trap ("do not
+  // repeat a 57-char stamp on every row. Use a legend plus short refs"): this wall is
+  // deliberately uncapped, and measured against her live rows every full source is UNIQUE
+  // (row addresses carry timestamps), so inline repetition never dedupes and costs about
+  // twelve thousand prompt tokens per thousand rows. The WRITER the doctrine means is the
+  // MODULE, which is the source's lane prefix with its trailing ids and timestamps
+  // stripped; lanes number in the dozens, not the thousands. So: one legend line naming
+  // each lane once, short W-refs per row. A row with no source stays inline in his exact
+  // words, never minted a legend entry, per the second trap.
+  // Codex P2: a lane string is free-form, so a source normalizing to an inherited
+  // Object.prototype key (toString, constructor) would read truthy on a plain object and
+  // never mint its legend entry. Null prototype keeps every lane an own property.
+  var _writerRefs = Object.create(null);
+  var _writerLegend = [];
+  var _laneOf = function (src) {
+    var parts = src.split('.');
+    // Codex P2: 'continuation' is twelve letters and the first cut of this pattern ate it,
+    // collapsing model.shadow.continuation rows into model.shadow and falsifying the very
+    // provenance the fence exists to carry. An identifier has digits in it; a pure word is a
+    // lane component and stays.
+    while (parts.length > 1 && /^([0-9]+|[0-9a-f]{6,}|(?=[a-z0-9]*[0-9])[a-z0-9]{10,})$/i.test(parts[parts.length - 1]) && /[0-9]/.test(parts[parts.length - 1])) parts.pop();
+    return parts.join('.');
+  };
   contextStr = allContext.map(function(b) {
-    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '') + '] ' + (b.summary||b.source||'');
+    var _src = String(b.source || '').slice(0, 120);
+    var _writer = _src.indexOf(_turnPrefix) === 0
+      ? 'the memory keeper, a real turn, channel on the line'
+      : (_src ? _laneOf(_src) : '');
+    var _tag;
+    if (!_writer) _tag = '(no writer stamp on the row)';
+    else {
+      if (!_writerRefs[_writer]) {
+        _writerRefs[_writer] = 'W' + (_writerLegend.length + 1);
+        _writerLegend.push(_writerRefs[_writer] + '=' + _writer);
+      }
+      _tag = _writerRefs[_writer];
+    }
+    return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '')
+      + ' | written by ' + _tag + '] ' + (b.summary || '');
   }).join('\n');
+  if (_writerLegend.length) {
+    contextStr = 'WRITERS LEGEND (each W-ref below is the lane or module that stamped the row): '
+      + _writerLegend.join(', ') + '\n' + contextStr;
+  }
 
   // ⬡B:core.fcw.builder:WIRE:doctrine_in_fcw_20260701⬡
   // Roadmap + doctrine now ride in every Memory Bank. Real gap closed: she was asked her
@@ -580,7 +657,14 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
         var c = typeof b.content === 'string' ? b.content : JSON.stringify(b.content || '');
         body = c.slice(0);
       } catch(e) {}
-      return '[' + (b.stamp_type||'?') + '] ' + (b.summary||'').slice(0) + (body ? '\n  ' + body : '');
+      // ⬡B:core.fcw.builder:FIX:the_pen_fence_reaches_the_doctrine_block_too:20260815⬡
+      // The 20260814 fence landed on RECENT CONTEXT only. A roadmap or doctrine row is just
+      // as capable of being a machine fact a scheduler stamped in as it is of being a mind's
+      // real words, and this block was handing her both with no way to tell them apart.
+      // Same writer clause, same fallback wording, no filter added.
+      var _writer = String(b.source || '').slice(0, 120) || '(no writer stamp on the row)';
+      return '[' + (b.stamp_type||'?') + ' | written by ' + _writer + '] '
+        + (b.summary||'').slice(0) + (body ? '\n  ' + body : '');
     }).join('\n');
   }
 
@@ -750,13 +834,14 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
           : '';
         if (!_statedRows.length) return statedWarning;
         var lines = _statedRows.map(function (b) {
-          var words = '', when = (b && b.created_at) ? String(b.created_at) : '';
+          var words = '', when = (b && b.created_at) ? String(b.created_at) : '', leash = '';
           try {
             var c = b && b.content;
             if (typeof c === 'string') c = JSON.parse(c);
             if (c && typeof c === 'object') {
               words = String(c.their_words || c.gist || c.words || '');
               if (c.kept_at) when = String(c.kept_at);
+              leash = String((c.exit && c.exit.leash) || '');
             }
           } catch (e) { words = ''; }
           if (!words) words = String((b && b.summary) || '');
@@ -769,10 +854,48 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
               : (mins < 2880 ? (Math.round(mins / 60) + ' hours ago')
               : (Math.round(mins / 1440) + ' days ago'));
           }
-          return '- ' + (age ? '(they told you this ' + age + ') ' : '(no timestamp on this one) ') + words;
+          // ⬡B:core.fcw.builder:FIX:the_pen_fence_reaches_what_they_told_you_too:20260815⬡
+          // The last unfenced presenter, held back from the mechanical pass on purpose: these
+          // rows carry the memory keeper's leash, and a naive writer clause would have fenced
+          // the row while the heading's "in their own words" claim stayed overstated for the
+          // overruled case. leashToTheirWords (core/memory.keeper.js) proves the mind's
+          // proposed quote against the real message before anything is kept, and the verdict
+          // rides on content.exit.leash: 'verbatim' really is their own words, unedited;
+          // 'overruled_quote_not_in_message' means the keeper kept their WHOLE message because
+          // the quoted span could not be verified inside it, and the line now says exactly
+          // that. No row is dropped or filtered on any leash value; she judges.
+          // Codex P1 (20260815): this block is EXHAUSTIVE, not bounded (findStatedCommitments
+          // passes no limit), and every gift source is unique (it carries a timestamp), so a
+          // per-row 120-char writer repeats without ever deduping, the founder's first cheap
+          // trap again. All rows here share ONE lane by construction (the finder queries
+          // source_prefix memory.gifted.), so the writer is named ONCE in the heading, and a
+          // row only carries a writer tag when it deviates: a missing stamp says so in his
+          // exact words, and an unexpected lane is carried by name rather than hidden.
+          var _giftLane = 'memory.gifted.';
+          var _src = String(b && b.source || '');
+          var _writerTag = !_src
+            ? ' [(no writer stamp on the row)]'
+            : (_src.indexOf(_giftLane) === 0 ? ''
+              : ' [written by ' + _src.slice(0, 120) + ']');
+          var _leashNote = leash === 'verbatim'
+            ? ''
+            : (leash === 'overruled_quote_not_in_message'
+              ? ' [not a verbatim quote: the keeper could not verify the proposed quote inside '
+                + 'what they actually said, so this is their whole message, kept as-is]'
+              : (leash ? ' [leash: ' + leash + ']' : ''));
+          return '- ' + (age ? '(they told you this ' + age + ') ' : '(no timestamp on this one) ')
+            + words + _leashNote + _writerTag;
         }).filter(function (line) { return !!line; });
         if (!lines.length) return '';
-        return statedWarning + 'WHAT THEY TOLD YOU DIRECTLY, in their own words, kept at the moment they said it:\n'
+        return statedWarning
+          + 'WHAT THEY TOLD YOU DIRECTLY, evidence with its age. Every row below was stamped '
+          + 'by the memory keeper\'s gift lane (memory.gifted); a writer name is the module '
+          + 'that stamped the row, never proof of who authored the words, these names are '
+          + 'internal, never said to the person, and a row deviating from that lane carries '
+          + 'its own writer tag. Rows without a bracketed '
+          + 'caveat are kept in their own words, unedited, at the moment they said it; a row '
+          + 'marked not-a-verbatim-quote is their whole message kept as a fallback. YOU judge '
+          + 'which is which and how much weight it carries:\n'
           + lines.join('\n') + '\n'
           + 'These are things this person SAID TO YOU. They are not calendar entries and most of them '
           + 'will never appear on any calendar, and they are every bit as real as what is on one. When '
@@ -812,13 +935,25 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
         + 'true answer -- not a memory to search for, the actual live reason for this exact call.'
       : ''),
     '',
-    'AVAILABLE AGENTS AND TOOLS:',
+    'AVAILABLE AGENTS AND TOOLS: each line names the writer that stamped it. A writer name '
+    + 'is the module that stamped the row, not proof of who authored it. Judge each line by '
+    + 'its named writer; these writer names are internal, never say one to the person.',
     _agentSection,
     '',
-    'ROADMAP AND DOCTRINE (your world\'s current priorities):',
+    'ROADMAP AND DOCTRINE (your world\'s current priorities): each line names the writer '
+    + 'that stamped it. A writer name is the lane or module that stamped the row, not proof '
+    + 'of who authored it: a roadmap or doctrine row can be a mind\'s real words or a machine '
+    + 'fact a scheduler or a template stamped in. Judge each line by its named writer. These '
+    + 'writer names are internal; use them to judge a line, never say one to the person.',
     _doctrineSection,
     '',
-    'RECENT CONTEXT (brain):',
+    'RECENT CONTEXT (brain): stamped records, each line naming the writer that put it '
+    + 'there. A writer name is the lane or module that stamped the row, not proof of who '
+    + 'authored the words: real turns arrive through the memory keeper with their channel '
+    + 'on the line, station results arrive through their stations, and some rows are '
+    + 'machine facts a template, a scheduler, or a retry stamped in. '
+    + 'Judge each line by its named writer. These writer names are internal; '
+    + 'use them to judge a line, never say one to the person.',
     _contextSection,
     '',
     'SEARCH FIRST, ALWAYS: whenever the person asks about anything specific you do not '

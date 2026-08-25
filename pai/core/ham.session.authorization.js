@@ -3,9 +3,11 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { TextDecoder } = require('node:util');
+const exactHam = require('./exact.ham.uid.js');
 
 const COOKIE_NAME = 'anu_ham';
-const GMGU_COOKIE_NAME = COOKIE_NAME;
+const GMGU_COOKIE_NAME = 'anu_gmgu';
 const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
 
 // ⬡B:core.ham_session_authorization:BUILD:two_tiers_one_signer_because_a_typed_id_is_not_a_password:20260728⬡
@@ -66,13 +68,21 @@ const HAM_PATTERN = /^[A-Z0-9._:-]{2,160}$/;
 const TIER_SIGN_IN = 'sign_in';
 const TIER_WORLD_ID = 'world_id';
 const TIER_GMGU = 'gmgu';
+const TIER_GMGU_PUBLIC = 'gmgu_public';
 const TIER_SEPARATOR = '~';
+const EXACT_SIGN_IN_MARK = 'e2';
 const WORLD_ID_MARK = 'w1';
 const GMGU_MARK = 'g1';
+const GMGU_PUBLIC_MARK = 'g2';
+const GMGU_PUBLIC_KEY = 'public_email';
 const WORLD_ID_TTL_SECONDS = 12 * 60 * 60;
 const GMGU_TTL_SECONDS = 30 * 24 * 60 * 60;
 const INTERNAL_CYCLE_VERSION = 'anew.ham.internal-cycle-context.v1';
 const INTERNAL_CYCLE_MAX_LIFETIME_MS = 2 * 60 * 1000;
+const MAX_EXACT_SIGN_IN_DATA_LENGTH = Math.ceil(exactHam.MAX_EXACT_HAM_UID_BYTES * 4 / 3);
+const MAX_SESSION_TOKEN_LENGTH = EXACT_SIGN_IN_MARK.length + TIER_SEPARATOR.length
+  + MAX_EXACT_SIGN_IN_DATA_LENGTH + 1 + 64;
+const CANONICAL_BASE64URL = /^[A-Za-z0-9_-]+$/;
 // ⬡B:core.ham_session_authorization:FIX:uppercasing_before_checking_let_case_folding_invent_a_world:20260726⬡
 // The SAME shape of the world ID pattern, but written to be tested against the input BEFORE
 // it is uppercased, which is the whole point of its existing.
@@ -96,6 +106,8 @@ const INTERNAL_CYCLE_MAX_LIFETIME_MS = 2 * 60 * 1000;
 // become one. Found by external review (Codex, anew#1171).
 const HAM_INPUT_PATTERN = /^[A-Za-z0-9._:-]{2,160}$/;
 const MAC_PATTERN = /^[a-f0-9]{64}$/;
+const GMGU_COHORT_PATTERN = /^[A-Za-z0-9._:]{1,160}$/;
+const GMGU_PUBLIC_HAM_PATTERN = /^GMGU\.PUBLIC\.[A-F0-9]{64}$/;
 
 // Preserve the signed-session key order already used by advisor.face.routes.
 // MEMORY_BANK_KEY is the migration-compatible fallback when the legacy bank key
@@ -111,6 +123,12 @@ function normalizeHamUid(value) {
   if (!HAM_INPUT_PATTERN.test(raw)) return null;
   const hamUid = raw.toUpperCase();
   return HAM_PATTERN.test(hamUid) ? hamUid : null;
+}
+
+// This only recognizes the opaque GMGU public identity shape. The GMGU module owns
+// derivation from a verified email; the shared signer remains independent of GMGU storage.
+function isPublicGmguHamUid(value) {
+  return typeof value === 'string' && GMGU_PUBLIC_HAM_PATTERN.test(value);
 }
 
 // The one place a MAC is computed, for both tiers. Whatever string is handed here is what the
@@ -132,6 +150,17 @@ function signHamSession(hamUid) {
   const mac = normalized ? macFor(normalized) : null;
   if (!normalized || !mac) return null;
   return normalized + '.' + mac;
+}
+
+// The explicit exact-HAM full-trust format is for an already authenticated sign_in identity
+// source. A typed world ID must keep using signWorldIdSession below and can never call this.
+// The old signHamSession format above remains byte-identical for every existing caller.
+function signExactHamSession(hamUid) {
+  if (!exactHam.isValidExactHamUid(hamUid)) return null;
+  const data = Buffer.from(hamUid, 'utf8').toString('base64url');
+  const payload = EXACT_SIGN_IN_MARK + TIER_SEPARATOR + data;
+  const mac = macFor(payload);
+  return mac ? payload + '.' + mac : null;
 }
 
 // THE WEAKER TIER. Same signer, same secret, same cookie name, same verifier. Three differences
@@ -197,8 +226,37 @@ function signGmguSession(hamUid, opts) {
   return payload + '.' + mac;
 }
 
+// Public GMGU entry is a separate signed tier. Its payload carries the exact cohort and
+// public-email key inside the MAC, so a valid public learner token cannot be replayed as a
+// general A'NU session, a legacy invitation token, or a credential for another cohort.
+function signGmguPublicSession(hamUid, opts) {
+  const normalized = normalizeHamUid(hamUid);
+  const cohortId = String(opts && opts.cohortId || '').trim();
+  const publicKey = opts && opts.publicKey === undefined
+    ? GMGU_PUBLIC_KEY : String(opts && opts.publicKey || '');
+  if (!normalized || !isPublicGmguHamUid(normalized)
+      || !GMGU_COHORT_PATTERN.test(cohortId)
+      || publicKey !== GMGU_PUBLIC_KEY) return null;
+  const ttl = normalizedGmguTtlSeconds(opts);
+  const nowSeconds = Math.floor(((opts && opts.now) || Date.now()) / 1000);
+  const payload = normalized + TIER_SEPARATOR + GMGU_PUBLIC_MARK + TIER_SEPARATOR
+    + cohortId + TIER_SEPARATOR + publicKey + TIER_SEPARATOR + (nowSeconds + ttl);
+  const mac = macFor(payload);
+  if (!mac) return null;
+  return payload + '.' + mac;
+}
+
 function gmguSessionCookie(hamUid, opts) {
   const token = signGmguSession(hamUid, opts);
+  if (!token) return null;
+  const ttl = normalizedGmguTtlSeconds(opts);
+  return GMGU_COOKIE_NAME + '=' + encodeURIComponent(token)
+    + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + ttl
+    + (opts && opts.secure ? '; Secure' : '');
+}
+
+function gmguPublicSessionCookie(hamUid, opts) {
+  const token = signGmguPublicSession(hamUid, opts);
   if (!token) return null;
   const ttl = normalizedGmguTtlSeconds(opts);
   return GMGU_COOKIE_NAME + '=' + encodeURIComponent(token)
@@ -224,36 +282,67 @@ function worldIdSessionCookie(hamUid, opts) {
 // against. Returning the canonical form rather than re-serialising at the call site is what
 // stops a lenient parser from accepting one string and verifying a different one.
 function parseSessionPayload(payload) {
+  if (payload.startsWith(EXACT_SIGN_IN_MARK + TIER_SEPARATOR)) {
+    const exactParts = payload.split(TIER_SEPARATOR);
+    if (exactParts.length !== 2 || exactParts[0] !== EXACT_SIGN_IN_MARK
+      || exactParts[1].length > MAX_EXACT_SIGN_IN_DATA_LENGTH
+      || !CANONICAL_BASE64URL.test(exactParts[1])) return null;
+    let bytes;
+    let hamUid;
+    try {
+      bytes = Buffer.from(exactParts[1], 'base64url');
+      if (bytes.byteLength < 1 || bytes.byteLength > exactHam.MAX_EXACT_HAM_UID_BYTES
+        || bytes.toString('base64url') !== exactParts[1]) return null;
+      hamUid = new TextDecoder('utf-8', { fatal:true }).decode(bytes);
+    } catch (e) {
+      return null;
+    }
+    if (!exactHam.isValidExactHamUid(hamUid)
+      || Buffer.compare(Buffer.from(hamUid, 'utf8'), bytes) !== 0) return null;
+    return { hamUid:hamUid, via:TIER_SIGN_IN, expiresAt:null,
+      canonical:payload, exactSignIn:true };
+  }
   if (payload.indexOf(TIER_SEPARATOR) === -1) {
     const hamUid = normalizeHamUid(payload);
     if (!hamUid) return null;
     return { hamUid:hamUid, via:TIER_SIGN_IN, expiresAt:null, canonical:hamUid };
   }
   const parts = payload.split(TIER_SEPARATOR);
-  if (parts.length !== 3) return null;
-  if (parts[1] !== WORLD_ID_MARK && parts[1] !== GMGU_MARK) return null;
-  if (!/^[0-9]{1,12}$/.test(parts[2])) return null;
   const hamUid = normalizeHamUid(parts[0]);
   if (!hamUid) return null;
-  return {
-    hamUid: hamUid,
-    via: parts[1] === GMGU_MARK ? TIER_GMGU : TIER_WORLD_ID,
-    expiresAt: Number(parts[2]),
-    canonical: hamUid + TIER_SEPARATOR + parts[1] + TIER_SEPARATOR + parts[2]
-  };
+  if (parts.length === 3 && (parts[1] === WORLD_ID_MARK || parts[1] === GMGU_MARK)
+      && /^[0-9]{1,12}$/.test(parts[2])) {
+    return {
+      hamUid: hamUid,
+      via: parts[1] === GMGU_MARK ? TIER_GMGU : TIER_WORLD_ID,
+      expiresAt: Number(parts[2]),
+      canonical: hamUid + TIER_SEPARATOR + parts[1] + TIER_SEPARATOR + parts[2]
+    };
+  }
+  if (parts.length === 5 && parts[1] === GMGU_PUBLIC_MARK
+      && GMGU_COHORT_PATTERN.test(parts[2]) && parts[3] === GMGU_PUBLIC_KEY
+      && /^[0-9]{1,12}$/.test(parts[4])) {
+    return { hamUid:hamUid, via:TIER_GMGU_PUBLIC, cohortId:parts[2],
+      publicKey:parts[3], expiresAt:Number(parts[4]), canonical:hamUid
+        + TIER_SEPARATOR + parts[1] + TIER_SEPARATOR + parts[2]
+        + TIER_SEPARATOR + parts[3] + TIER_SEPARATOR + parts[4] };
+  }
+  return null;
 }
 
 function verifyAnySessionToken(token) {
   const secret = signingSecret();
   if (!secret) return { ok:false, status:503, reason:'ham_session_secret_unconfigured' };
   const raw = typeof token === 'string' ? token.trim() : '';
-  if (!raw || raw.length > 320) {
+  if (!raw || raw.length > MAX_SESSION_TOKEN_LENGTH) {
     return { ok:false, status:401, reason:'ham_session_invalid' };
   }
   const separator = raw.lastIndexOf('.');
   if (separator <= 0) return { ok:false, status:401, reason:'ham_session_invalid' };
   const parsed = parseSessionPayload(raw.slice(0, separator));
-  const suppliedMac = raw.slice(separator + 1).toLowerCase();
+  const suppliedMacRaw = raw.slice(separator + 1);
+  const suppliedMac = parsed && parsed.exactSignIn
+    ? suppliedMacRaw : suppliedMacRaw.toLowerCase();
   if (!parsed || !MAC_PATTERN.test(suppliedMac)) {
     return { ok:false, status:401, reason:'ham_session_invalid' };
   }
@@ -268,15 +357,19 @@ function verifyAnySessionToken(token) {
   // 30 day cookie lifetime the browser enforces, which is a separate question this change
   // deliberately does not reopen.
   if (parsed.via !== TIER_SIGN_IN && !(parsed.expiresAt * 1000 > Date.now())) {
-    return { ok:false, status:401, reason:parsed.via === TIER_GMGU
+    return { ok:false, status:401, reason:(parsed.via === TIER_GMGU
+      || parsed.via === TIER_GMGU_PUBLIC)
       ? 'gmgu_session_expired' : 'world_id_session_expired' };
   }
-  return { ok:true, hamUid:parsed.hamUid, via:parsed.via, expiresAt:parsed.expiresAt };
+  return Object.assign({ ok:true, hamUid:parsed.hamUid, via:parsed.via,
+    expiresAt:parsed.expiresAt }, parsed.cohortId ? { cohortId:parsed.cohortId,
+      publicKey:parsed.publicKey } : {});
 }
 
 function verifySessionToken(token) {
   const verified = verifyAnySessionToken(token);
-  if (verified.ok && verified.via === TIER_GMGU) {
+  if (verified.ok && (verified.via === TIER_GMGU
+      || verified.via === TIER_GMGU_PUBLIC)) {
     return { ok:false, status:403, reason:'gmgu_session_scope_forbidden' };
   }
   return verified;
@@ -340,7 +433,7 @@ function authorizeSessionRequest(req) {
   if (!credential) return { ok:false, status:401, reason:'ham_session_required' };
   const verified = verifySessionToken(credential);
   if (!verified.ok) return verified;
-  if (verified.via === TIER_GMGU) {
+  if (verified.via === TIER_GMGU || verified.via === TIER_GMGU_PUBLIC) {
     return { ok:false, status:403, reason:'gmgu_session_scope_forbidden' };
   }
   return { ok:true, hamUid:verified.hamUid, kind:kind, via:verified.via,
@@ -367,11 +460,53 @@ function authorizeGmguRequest(req) {
   if (!credential) return { ok:false, status:401, reason:'ham_session_required' };
   const verified = verifyAnySessionToken(credential);
   if (!verified.ok) return verified;
-  if (verified.via !== TIER_SIGN_IN && verified.via !== TIER_GMGU) {
+  if (verified.via !== TIER_SIGN_IN && verified.via !== TIER_GMGU
+      && verified.via !== TIER_GMGU_PUBLIC) {
     return { ok:false, status:403, reason:'sign_in_required_for_this' };
   }
-  return { ok:true, hamUid:verified.hamUid, kind:kind, via:verified.via,
-    expiresAt:verified.expiresAt };
+  return Object.assign({ ok:true, hamUid:verified.hamUid, kind:kind, via:verified.via,
+    expiresAt:verified.expiresAt }, verified.cohortId ? { cohortId:verified.cohortId,
+      publicKey:verified.publicKey } : {});
+}
+
+// One GMGU identity boundary for every learner-owned provider door. The signed
+// credential is the only identity input. Atmosphere may add world context, but
+// it may not rename the signed learner before membership, storage, or provider
+// work begins.
+async function authorizeExactGmguRequest(req, deps) {
+  const session = requireGmguTier(authorizeGmguRequest(req));
+  if (!session || !session.ok) {
+    return session || { ok:false, status:401, reason:'ham_session_required' };
+  }
+  const signedHamUid = normalizeHamUid(session.hamUid);
+  if (!signedHamUid) return { ok:false, status:401, reason:'identity_unresolved' };
+  const configuredCohortId = String(process.env.GMGU_COHORT_ID || '').trim();
+  if (session.via === TIER_GMGU_PUBLIC && !GMGU_COHORT_PATTERN.test(configuredCohortId)) {
+    return { ok:false, status:503, reason:'gmgu_cohort_unconfigured' };
+  }
+  if (session.via === TIER_GMGU_PUBLIC) {
+    if (session.cohortId !== configuredCohortId || session.publicKey !== GMGU_PUBLIC_KEY
+        || !isPublicGmguHamUid(signedHamUid)) {
+      return { ok:false, status:403, reason:'gmgu_public_cohort_forbidden' };
+    }
+    return { ok:true, hamUid:signedHamUid, kind:session.kind, via:session.via,
+      expiresAt:session.expiresAt, cohortId:session.cohortId,
+      publicKey:session.publicKey, envelope:{ ham_uid:signedHamUid, name:null,
+        trust_level:0, world:'gmg', gmgu_public_identity:true },
+      publicGmguIdentity:true };
+  }
+  const resolveAtmosphere = deps && deps.resolveAtmosphere
+    || require('./atmosphere.gate.js').resolveAtmosphere;
+  let envelope;
+  try { envelope = await resolveAtmosphere({ hamUid:signedHamUid }); }
+  catch (error) { return { ok:false, status:503, reason:'atmosphere_unavailable' }; }
+  const resolvedHamUid = normalizeHamUid(envelope && envelope.ham_uid);
+  if (!resolvedHamUid) return { ok:false, status:401, reason:'identity_unresolved' };
+  if (resolvedHamUid !== signedHamUid) {
+    return { ok:false, status:403, reason:'ham_identity_mismatch' };
+  }
+  return { ok:true, hamUid:signedHamUid, kind:session.kind, via:session.via,
+    expiresAt:session.expiresAt, envelope:envelope };
 }
 
 function authorizeHamRequest(req, expectedHamUid) {
@@ -1123,7 +1258,8 @@ function requireGmguTier(session) {
   if (!session || !session.ok) {
     return session || { ok:false, status:401, reason:'ham_session_required' };
   }
-  if (session.via !== TIER_SIGN_IN && session.via !== TIER_GMGU) {
+  if (session.via !== TIER_SIGN_IN && session.via !== TIER_GMGU
+      && session.via !== TIER_GMGU_PUBLIC) {
     return { ok:false, status:403, reason:'sign_in_required_for_this' };
   }
   return session;
@@ -1160,16 +1296,23 @@ module.exports = {
   TIER_SIGN_IN,
   TIER_WORLD_ID,
   TIER_GMGU,
+  TIER_GMGU_PUBLIC,
+  EXACT_SIGN_IN_MARK,
+  MAX_SESSION_TOKEN_LENGTH,
   WORLD_ID_TTL_SECONDS,
   GMGU_TTL_SECONDS,
   signingSecret,
   normalizeHamUid,
+  isPublicGmguHamUid,
   worldIdForPage,
   signHamSession,
+  signExactHamSession,
   signWorldIdSession,
   signGmguSession,
+  signGmguPublicSession,
   worldIdSessionCookie,
   gmguSessionCookie,
+  gmguPublicSessionCookie,
   worldIdTierRefusal,
   heldSessionOn,
   signInTierGuard,
@@ -1181,6 +1324,7 @@ module.exports = {
   forwardSessionHeaders,
   authorizeSessionRequest,
   authorizeGmguRequest,
+  authorizeExactGmguRequest,
   authorizeHamRequest,
   authorizeExactHamRequest,
   internalSessionHeaders,

@@ -666,6 +666,35 @@ const NODES = [
       doctrine:'the mind that senses is not the mind that fixes; a portal incident becomes CODA evidence, and only her cycle dispatches a hand or a reach'}
   },
   {
+    // ⬡B:core.wonders.registry:WIRE:sentra_security_evidence_sensor:20260808⬡
+    // SENTRA is the coding department's cold security evidence organ. It keeps one default-on
+    // clock, records bounded exact evidence, and feeds CODA. It never turns a candidate into a
+    // verdict, performs a repair, changes an account, reaches a person, or calls a model.
+    id:'sensor.sentra', display_name:'SENTRA', kind:'sensor', lifecycle:'active',
+    owner_wonder_id:'station.coda', reports_to:'station.coda', ham_scope:'system',
+    technical_role:'Scan repository text and binary census facts for credential and code-execution candidates, compare exact dependency lock versions with public GitHub advisories, retain explicit coverage gaps, and stamp bounded evidence pages, a compact root, health, and one typed observation for CODA. Cold facts only: never judge, repair, change provider settings, reach a human, or call a model.',
+    product_role:'The coding department security evidence monitor: one durable trail of what was checked, what needs CODA judgment, and what this first slice does not yet cover.',
+    cycle:{triggers:['estate.monitor','operator.ask'],coordinator:'station.coda'},
+    context_policy:'context.sensor.event.v1',authority_policy:'authority.gate.accept_only.v1',
+    return_gate:'gate.coda.sensor_event',
+    metadata:{wiring:[wire('core/estate.monitor.js#runPass'),
+      wire('core/sentra.evidence.contract.js#materialDigest'),
+      wire('core/secret.material.guard.js'),
+      wire('core/runtime.interval.js#scheduleInterval'),
+      wire('core/primary.runtime.js#isPrimaryRuntime'),
+      wire('core/coda/sensor.store.js#persistSnapshot'),
+      wire('core/coda/sensor.store.js#persistHealth'),
+      wire('core/coda/sensor.store.js#persistEvent'),
+      wire('core/coda/sensor.wake.js#wakeForSensorEvent'),
+      wire('core/coda/wall.js#hydrateSentraRows'),
+      wire('routes/estate.monitor.routes.js','GET status and POST manual run')],
+      observation_schema:'anew.sentra.estate-observation.v1',
+      event_type:'sentra.estate.observation',judgment_owner:'station.coda',
+      code_auditor:'station.audra',repair_hand:'agent.mace',
+      provider_contract_owner:'CATHY.CODA2',provider_contract_integrated:false,
+      doctrine:'SENTRA carries cold security facts to CODA through exact durable receipts. CODA owns meaning, AUDRA can challenge the code evidence, MACE can carry a repair CODA dispatches, and only A\'NU can speak to a person.'}
+  },
+  {
     // ⬡B:core.wonders.registry:WIRE:always_on_heartbeat_seat:20260726⬡
     // ⬡B:core.wonders.registry:UPGRADE:always_on_conductor_contained:20260801⬡
     // ALWAYS ON, the confidence-scored liveness heartbeat (docs/roadmaps/
@@ -1025,8 +1054,13 @@ const NODES = [
     return_gate:'gate.ham.active_channel',
     metadata:{build_state:'half',
       build_gap:'The ledger, ledger mind, FIELD, self-read, enrich and hunch passes are live; the standing whole-estate backfill and a proven cross-world read cadence are not.',
+<<<<<<< HEAD
       wiring:[wire('logful/index.js'), wire('logful/ledger.mind.js'), wire('logful/field.js'),
         wire('logful/gate.js'), wire('logful/hunch.js')]}
+=======
+      wiring:[wire('essentials/logful/index.js'), wire('essentials/logful/ledger.mind.js'), wire('essentials/logful/field.js'),
+        wire('essentials/logful/gate.js'), wire('essentials/logful/hunch.js')]}
+>>>>>>> origin/main
   },
   {
     // THE KEEPER. Two-pass consult plus the verifyExcerpts anti-ventriloquism leash. The leash is
@@ -1222,6 +1256,8 @@ const CODE_OWNERSHIP_RULES=Object.freeze([
   {owner_node_id:'station.pai',match:'exact',target:'core/tool.loop.js'},
   {owner_node_id:'station.coda',match:'prefix',target:'coding-department'},
   {owner_node_id:'station.coda',match:'prefix',target:'core/coda'},
+  {owner_node_id:'sensor.sentra',match:'exact',target:'core/estate.monitor.js'},
+  {owner_node_id:'sensor.sentra',match:'exact',target:'core/sentra.evidence.contract.js'},
   {owner_node_id:'station.coda',match:'exact',target:'advisors/coding.js'},
   {owner_node_id:'station.coda',match:'exact',target:'core/webhook.guard.js'},
   {owner_node_id:'station.coda',match:'exact',target:'routes/coda.sensor.routes.js'},
@@ -1746,6 +1782,16 @@ const SEAT_LEGS = {
     goals: ['No portal fails in front of a person without a report landing here.'],
     toolbelt: ['tool.portal.beacon'],
     may_summon: [], may_recommend: ['station.coda'], wakes: [], hands_to: ['gate.coda.sensor_event']
+  },
+  'sensor.sentra': {
+    persona: { differentia: 'You are the coding department security evidence keeper. You preserve exactly what was checked and what was found, and you leave every meaning, priority, and response to CODA.', temperament: 'Cold, exact, durable, explicit about every gap.' },
+    jd: { summary: 'Collect repository and dependency security facts, persist their exact bounded evidence graph, and wake CODA with the typed observation that names it.',
+      duties: ['Scan the repository without retaining matched secret values or source lines.', 'Compare exact lock versions with every GitHub advisory class.', 'Persist pages, root, health, and typed observation before waking CODA.', 'Name uncovered outside-web and provider-account surfaces in band.'],
+      never: ['Never decide whether a candidate is harmful.', 'Never repair code or change a provider account.', 'Never call a model or reach a human.', 'Never wire or invoke NastyCough.'] },
+    goals: ['Every security candidate CODA may judge has an exact durable path back to cold evidence.', 'A failed or incomplete scan becomes durable evidence instead of a silent timer error.', 'The one security monitor is default on and its status can never look green while dark.'],
+    toolbelt: ['tool.github.read', 'tool.brain.find'],
+    may_summon: [], may_recommend: ['station.coda'], wakes: [],
+    hands_to: ['gate.coda.sensor_event']
   },
   'sensor.always_on': {
     persona: { differentia: 'You are her pulse. You stay quiet while her connections look alive, and you knock only when you sense nothing there. Quiet is your normal state, not a failure of it.', temperament: 'Quiet, confidence scored, never anxious.' },
