@@ -5283,12 +5283,57 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _ptMax = _boundEnvInt('PAI_PRIOR_TURNS_MAX', 40, 0, 100000);
     var _ptChars = _boundEnvInt('PAI_PRIOR_TURN_CHARS', 12000, 0, 10000000);
     var _recentTurns = _ptMax > 0 ? priorTurns.slice(-_ptMax) : priorTurns;
+    // \u2b21B:core.tool_loop:FIX:tell_her_the_history_was_cut_instead_of_cutting_it_quietly:20260824\u2b21
+    // The bound is a real cost bound and it stays. What was missing is that NOTHING said so:
+    // she could not tell a 40-turn session from a 400-turn session handed to her 40 turns deep,
+    // so an honest "we never discussed that" and a bound-induced blind spot looked identical.
+    // Cold code detects the bite and WAKES her with the fact. It does not summarize the dropped
+    // turns, does not rank them, does not decide what to say about them. She decides that.
+    // CRITIC REFUTATION 20260824, both earned. FIRST: the first cut counted turns BEFORE the
+    // role/type filter below and asserted "nothing was summarized" on the same pass that
+    // truncates any turn past PAI_PRIOR_TURN_CHARS one line down. A change whose whole premise
+    // is "stop letting bounds lie" shipped a sentence the adjacent line made false. Now the
+    // count is taken AFTER the filter and the truncation is counted and named. SECOND: it told
+    // her what to SAY, in coder nouns ("outside the window you were handed"). Two voices, never
+    // crossed. This states the fact to her and forbids reciting the plumbing to the person.
+    // ROUND 2 REFUTATION 20260824, earned: _carried counts only turns passing the role/type
+    // filter below, but it was compared against priorTurns.length, the RAW client array. With
+    // PAI_PRIOR_TURNS_MAX=0 (deliberately unbounded, nothing withheld), a payload carrying one
+    // system-role or blank entry produced "9 of 10, the other 1 are not in front of you" -- a
+    // bound-bite notice on a pass where no bound bit, inventing a withheld turn that was never
+    // a turn. Compare like with like: count the ELIGIBLE turns in the full array.
+    function _eligibleTurn(t) {
+      return !!(t && (t.role === 'user' || t.role === 'assistant')
+        && typeof t.content === 'string' && t.content.trim());
+    }
+    var _eligibleTotal = priorTurns.filter(_eligibleTurn).length;
+    var _carried = 0, _truncated = 0;
     _recentTurns.forEach(function(t){
-      if (t && (t.role==='user'||t.role==='assistant') && typeof t.content==='string' && t.content.trim()) {
-        var _tc = (_ptChars > 0 && t.content.length > _ptChars) ? t.content.slice(0, _ptChars) : t.content;
+      if (_eligibleTurn(t)) {
+        var _cut = _ptChars > 0 && t.content.length > _ptChars;
+        var _tc = _cut ? t.content.slice(0, _ptChars) : t.content;
+        if (_cut) _truncated++;
+        _carried++;
         msgs.push({role:t.role, content:_tc});
       }
     });
+    if (_carried < _eligibleTotal || _truncated > 0) {
+      var _handedNote = '\nWHAT YOU WERE HANDED OF THIS SESSION: ' + _carried
+        + ' earlier turns of ' + _eligibleTotal + '.';
+      if (_carried < _eligibleTotal) {
+        _handedNote += ' The other ' + (_eligibleTotal - _carried) + ' are not in front of '
+          + 'you on this pass. They were not deleted and nothing was written in their place.';
+      }
+      if (_truncated > 0) {
+        _handedNote += ' ' + _truncated + ' of the turns you can see were shortened, so the end '
+          + 'of those is missing.';
+      }
+      _handedNote += ' So if something is genuinely not in front of you, do not tell the person '
+        + 'it never happened, and do not assert that it did. Say you do not have it in front of '
+        + 'you and ask them. Never recite these numbers or any of this plumbing to the person. '
+        + 'They are for you, not for them.';
+      msgs[0].content += _handedNote;
+    }
   }
   // ⬡B:tool.loop:NUDGE:nash_routing_20260711⬡ cold keyword router: a sports
   // question MUST reach NASH; the model was answering "no real-time access"
