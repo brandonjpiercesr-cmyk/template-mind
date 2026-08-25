@@ -75,7 +75,17 @@ function coldDecision(confidence, importance) {
 }
 
 // THE ORGAN. judgeExit(finding, opts) -> a decision object. finding: { summary, content, importance,
-// confidence }. Returns { ok, exit, region, call_worthy, world_line, reasoning, source, cold_exit }.
+// confidence, writer }. Returns { ok, exit, region, call_worthy, world_line, reasoning, source, cold_exit }.
+// ⬡B:core.reach.wonder:FIX:the_finding_now_names_the_module_that_stamped_it:20260825⬡
+// `writer` is new and optional. Founder ruling 20260815, the pen on her mind: a presenter that
+// feeds a stored record into a mind's prompt carries the writer that stamped the row. This
+// prompt already carried the row's weight and its words; it did not carry the module that put
+// the row in the world, so a real finding a mind wrote and a row a scheduler stamped on a timer
+// read identically to the mind deciding whether to interrupt a person. Its caller
+// (core/overseer/exit.tool.js#runExitPass) already selects `source` on every row it reads and
+// now hands it over. A caller that passes nothing is not invented a writer: the line below says
+// exactly that no writer was stamped, in the founder's own wording. Carry, never classify: no
+// trusted-writer list, no row dropped or reordered on the strength of a name.
 // source is 'llm' when the mind decided within the region, 'floor' when it fell back to the cold pick.
 // Never throws: any failure returns the cold decision so an exit is never left undecided.
 async function judgeExit(finding, opts) {
@@ -105,12 +115,24 @@ async function judgeExit(finding, opts) {
   var deliberate = (options && typeof options.deliberate === 'function') ? options.deliberate : ladder.deliberate;
   if (typeof deliberate !== 'function') return floorOut;
 
+  var writerName = safeStr(f.writer).replace(/\s+/g, ' ').trim().slice(0, 120);
   var user = [
     'FINDING (what an organ surfaced this window):',
     'summary: ' + safeStr(f.summary).slice(0, 600),
     'detail: ' + safeStr(typeof f.content === 'string' ? f.content : JSON.stringify(f.content || {})).slice(0, 1200),
+    'written by: ' + (writerName || '(no writer stamp on the row)'),
     'importance (1 to 10): ' + (isFinite(importance) ? importance : 'unknown'),
     'confidence (0 to 1): ' + (isFinite(confidence) ? confidence : 'unknown'),
+    '',
+    'THE WRITER AND THE WEIGHT ARE FACTS, NOT VERDICTS. The written-by name is the MODULE that ' +
+      'stamped this row into the world, never proof of who authored the words inside it: real ' +
+      'words arrive through cold modules too. Some findings are a mind\'s real words and some ' +
+      'are a fact a scheduler, template or retry stamped in, and you judge which is which by ' +
+      'meaning, never by trusting the name. The importance is the number that writer picked ' +
+      'when it stamped the row, never a ruling about whether this deserves anyone\'s ' +
+      'attention: read a low number as "the writer thought this was small", never as "this was ' +
+      'not worth showing you". Nothing was held back from you by weight. This name is internal ' +
+      'bookkeeping and is never repeated to a person.',
     '',
     'ALLOWED CHANNELS for this finding (choose exactly one of these, nothing else): ' + JSON.stringify(cold.region),
     'The cold table would have chosen: ' + cold.exit,

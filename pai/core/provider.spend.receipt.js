@@ -1354,14 +1354,57 @@ async function readProviderStatementInterval(options) {
     provider_statement_reason:null,
     provider_statement_authority:'memory_bank.provider_account_statements.service_role_readback'});
 }
+// ⬡B:core.provider_spend_receipt:FIX:scope_carries_identity_values_never_predicates:20260825⬡
+// The summary scope loop below used to prefix every caller value with `eq.` unseen. That is
+// the exact shape that silently broke a real read in agents/eanew/hunch.js: a caller passed
+// `neq.EANEW` where the helper added its own `eq.`, the bank received
+// `agent_global=eq.neq.EANEW`, a LEGAL query that matches NOTHING, and the read returned an
+// empty list on every run, forever, swallowed. The estate's canonical bank reader
+// (core/brain.client.js#readBead, and hunch.js#fetchBeads after its fix) takes the operator
+// verbatim from the composition site so the helper can never lie about what was asked. This
+// summary cannot adopt that contract outright: its two live callers
+// (core/advisors/cfo.seat.js and routes/voice.turn.routes.js) pass PLAIN identity values by
+// design, and `scope` is an identity scope echoed onto the summary, not a filter object. So
+// the contract is pinned the other way around, matching this file's own inline style where
+// the operator is written visibly against a known field at the composition site:
+//   1. scope values are EXACT IDENTITY VALUES, never predicates. A value that begins with a
+//      PostgREST operator token (the hunch.js trap class) is REFUSED loudly with a named
+//      reason instead of being double-wrapped into a query that matches nothing.
+//   2. each value must pass the SAME validator the write side runs before storing that
+//      column (exactHam for ham_uid, identifier bounds for the rest, see prepare()). A value
+//      the bank could never have stored is refused by name, never answered with a confident
+//      readable:true total:0 that reads as "no spend".
+//   3. a refused scoped request returns without touching SUMMARY_CACHE, exactly like a
+//      failed scoped read: the unscoped durable spend wall is never erased by a bad scope.
+// No live caller changes behavior: both pass plain, already-normalized identity values.
+var SCOPE_PREDICATE_PREFIX = /^(?:eq|neq|gt|gte|lt|lte|like|ilike|match|imatch|in|is|isdistinct|fts|plfts|phfts|wfts|cs|cd|ov|sl|sr|nxr|nxl|adj|not|or|and|all|any)\./i;
+var SCOPE_FIELDS = {
+  ham_uid:function(value){return exactHam(value);},
+  key_alias:function(value){return identifier(value,220);},
+  component:function(value){return identifier(value,160);},
+  service_id:function(value){return identifier(value,160);}
+};
 async function readSummary(options) {
   var requestedScope = options && options.scope && typeof options.scope === 'object'
     ? options.scope : null;
-  var scope = {};
-  ['ham_uid','key_alias','component','service_id'].forEach(function(field) {
-    var value = clean(requestedScope && requestedScope[field]);
-    if (value) scope[field] = value;
+  var scope = {}, scopeRefused = null;
+  Object.keys(SCOPE_FIELDS).forEach(function(field) {
+    var raw = clean(requestedScope && requestedScope[field]);
+    if (!raw || scopeRefused) return;
+    if (SCOPE_PREDICATE_PREFIX.test(raw)) {
+      scopeRefused = 'provider_spend_scope_predicate_rejected_' + field;
+      return;
+    }
+    var value = SCOPE_FIELDS[field](raw);
+    if (!value) {
+      scopeRefused = 'provider_spend_scope_value_invalid_' + field;
+      return;
+    }
+    scope[field] = value;
   });
+  if (scopeRefused) {
+    return {readable:false,total:null,reason:scopeRefused,at:Date.now()};
+  }
   var scoped = Object.keys(scope).length > 0;
   function publish(summary) {
     if (!scoped) SUMMARY_CACHE = summary;
@@ -1381,7 +1424,13 @@ async function readSummary(options) {
   query.set('select','attempt_id,phase,provider,kind,key_alias,component,ham_uid,service_id,' +
     'disposition,status_code,actual_cost_usd,cost_source,provider_usage,usage_source,created_at');
   query.set('order','created_at.asc,attempt_id.asc,phase.asc');
-  Object.keys(scope).forEach(function(field) { query.set(field,'eq.' + scope[field]); });
+  // Operator written visibly against each known field, this file's canonical composition
+  // style (see readPhase and bankUsageCandidate). The values were validated above; a
+  // predicate can no longer arrive here to be double-wrapped.
+  if (scope.ham_uid) query.set('ham_uid','eq.' + scope.ham_uid);
+  if (scope.key_alias) query.set('key_alias','eq.' + scope.key_alias);
+  if (scope.component) query.set('component','eq.' + scope.component);
+  if (scope.service_id) query.set('service_id','eq.' + scope.service_id);
   var offset = 0, pages = 0, rowsScanned = 0;
   var intents = new Map(), terminalAttempts = new Set(), seenRows = new Set();
   var providers = new Map(), kinds = new Map(), components = new Map(), keyAliases = new Map();

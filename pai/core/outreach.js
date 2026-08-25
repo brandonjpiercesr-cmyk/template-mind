@@ -2331,9 +2331,22 @@ async function composeDigest(facts) {
         // Feed the REAL fields: what actually moved (the fact summaries), the real
         // count, what she sees (the CC note), and the active directive if present.
         var movedFacts = facts.slice(0, 3).map(function (f) { return (f.summary || '').replace(/^\[[^\]]*\]\s*/, '').slice(0, 40); }).filter(Boolean);
+        // ⬡B:core.outreach:FIX:the_active_directive_line_read_every_worlds_bank:20260825⬡
+        // THE LEAK, landed here in the seed at the same time as the same repair in `anew`,
+        // because this repo is the mind every world inherits and a cold hand left here is a cold
+        // hand in every stranger's world. Its own sibling above is the proof of the right shape:
+        // gatherDigestFacts binds `ham_uid=eq.' + founderUid()` on the very same table, and this
+        // read carried no ham at all. It asked the shared bank for the newest CORE_DIRECTIVE
+        // anywhere in it, so on a bank holding more than one world this world's digest could open
+        // with another person's standing directive, and buildReport hands that line on. Identity
+        // is an ANCHOR: the same founderUid() already in scope resolves from the caller's reach
+        // context first and this world's configured name second, never a literal. No ham, no
+        // read: the directive stays null and the honest "no directive" path runs rather than
+        // borrowing somebody else's. A missing identity is a refusal, not a guess.
         var activeDirective = null;
         try {
-          var dq = await fetch(_bu() + '/rest/v1/' + _tbl() + '?stamp_type=eq.CORE_DIRECTIVE&order=created_at.desc&limit=1&select=summary', { headers: bh() }).then(function (r) { return r.ok ? r.json() : []; });
+          var directiveHam = founderUid();
+          var dq = directiveHam ? await fetch(_bu() + '/rest/v1/' + _tbl() + '?stamp_type=eq.CORE_DIRECTIVE&ham_uid=eq.' + encodeURIComponent(directiveHam) + '&order=created_at.desc&limit=1&select=summary', { headers: bh() }).then(function (r) { return r.ok ? r.json() : []; }) : [];
           if (dq && dq[0]) activeDirective = (dq[0].summary || '').replace(/^\[[^\]]*\]\s*/, '').slice(0, 60);
         } catch (eD) {}
         var _rep = require('./chatterReport.js').buildReport({ name: 'Your day' }, { moved: movedFacts, sees: ccNote.slice(0, 80), count: facts.length, directive: activeDirective });

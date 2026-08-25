@@ -562,11 +562,37 @@ function hollowHoldReason(reason) {
 // question once. It never softens a gate, never lets a held answer through, and every
 // reason outside the list (shadow_deterministic_hold, PAM_HOLD, an action-claim hold, a
 // hollow protocol answer) still fails closed to honest silence exactly as before.
+// ⬡B:core.pai_outbound_council:FIX:the_one_hold_this_gate_can_still_rescue:20260825⬡
+// A 20260825 census traced seven live paths in this file that end a turn with NO WORDS reaching
+// the person, and asked why not one of them is in this list. The honest answer, measured rather
+// than assumed, is that this list is NOT the lever for six of them, and widening it would have
+// made the person WORSE off. The one door that consumes this gate is core/wren/reply.js, and it
+// holds a hard ceiling of TWO council attempts per inbound. A retry spends the second one, and
+// its own boundary-speech seam then declines with 'pai_attempt_ceiling_reached'. So on that
+// door, being re-askable and getting a boundary sentence are MUTUALLY EXCLUSIVE, and
+// core/boundary.speech.js already speaks for every hold except STAMP, its own four
+// never-speaks causes, and the causes that are terminal by construction. Adding
+// shadow_deterministic_hold or the writ_meaning families here would trade a sentence the person
+// reliably receives, composed by HER, for a coin flip that ends in nothing when it loses.
+// Measured on the real suites before it was reverted: five wren rows went from delivering her
+// boundary sentence to delivering silence.
+// SO ONE ENTRY IS ADDED, and it is the only one of the seven that is a pure gain here.
+// 'answer_hollow_protocol' is refused at the INPUT gate, INPUT is not a stage in STAGE_ORDER,
+// and boundary.speech declines any non-stage with 'not_a_named_council_stage'. That turn gets no
+// sentence, no retry and no words at all today. It now gets the one re-ask, on top of the one
+// in-council repair added at the gate itself.
+// WHAT IS LEFT, NAMED SO IT IS NOT LOST: the /cara/chat door and the faces consult neither this
+// gate nor core/boundary.speech.js. routes/cara.routes.js returns {ok:false, reason, detail:null}
+// with no reply field, so a hold there is silence no matter what this list says. Wiring that door
+// to boundary.speech, and raising or reordering wren's two-attempt ceiling so a re-ask and a
+// boundary sentence can both happen, are the two rows that finish this, and both live outside
+// this file.
 var CLEAN_BOARD_HOLD_REASONS = Object.freeze([
   'shadow_model_hold',
   'shadow_wonder_hold',
   'writ_hold',
-  'content_too_short'
+  'content_too_short',
+  'answer_hollow_protocol'
 ]);
 
 // ⬡B:core.pai_outbound_council:FIX:one_reader_for_every_hold_reason_in_the_house:20260725⬡
@@ -1404,10 +1430,36 @@ function evidenceDefinesIdentityOrRole(record) {
   return hasRoleNoun && hasRolePredicate;
 }
 
+// ⬡B:core.pai_outbound_council:FIX:one_shared_token_is_not_a_contradiction:20260825⬡
+// THE ONE TOKEN CONTRADICTION. 'entity_or_role' is the DEFAULT scope, the bucket an absence
+// claim lands in when absenceClaimScope could not place it in any of the three categories
+// below. It carried no content test at all: it returned true for EVERY stored row, so a row
+// that happened to share one whitespace token with her sentence counted as evidence
+// CONTRADICTING her. That finding then entered deterministicFindings, and every fail-open she
+// has requires that list to be empty, so one token overlap silently stripped her protections
+// and a flaky model seat became silence.
+// COLD CODE MAY NOT CONCLUDE THAT TWO TEXTS CONTRADICT EACH OTHER. That is a judgment. The
+// three scopes below each test whether the row actually speaks about the claim's own subject
+// matter, so each of them carries a real fact a reader can check. The default bucket has no
+// subject matter to test, which is exactly what makes it the default, so there is nothing
+// honest to test with. A token count, a similarity score or a threshold would be the same
+// disease with a bigger number, so none is added here.
+// WHAT HAPPENS INSTEAD: the rows are still GATHERED, because "she said there is nothing
+// recorded and these stored rows mention her subject terms" is a real fact and the judge
+// should have it. Only the CONCLUSION is dropped. absenceScopeConcludes says out loud which
+// scopes prove a contradiction and which prove only a mention, and
+// categoricalMemoryContradiction names its finding accordingly so that no consumer can read a
+// mention as a verdict.
+function absenceScopeConcludes(scope) {
+  return scope === 'preference' || scope === 'relationship' ||
+    scope === 'definition_or_role';
+}
+
 function evidenceSupportsAbsenceScope(record, scope) {
   var text = String(record && record.text || '');
   var stampType = String(record && record.stamp_type || '').toUpperCase();
   var source = String(record && record.source || '');
+  // Gathered, never concluded. See absenceScopeConcludes above.
   if (scope === 'entity_or_role') return true;
   if (scope === 'definition_or_role') return evidenceDefinesIdentityOrRole(record);
   if (scope === 'preference') {
@@ -1699,24 +1751,39 @@ function preferenceJudgmentFindings(question, answer, evidenceBinding) {
   if (!freshOrigin && !storedOrigin) {
     findings.push({ reason:'current_preference_origin_unstated' });
   }
-  var wordCount = (text.match(/\b[\w']+\b/g) || []).length;
+  // ⬡B:core.pai_outbound_council:FIX:a_twelve_word_honest_reason_is_still_a_reason:20260825⬡
+  // A `wordCount >= 14` stood in this condition and decided that her reason was not long enough
+  // to count as a reason. Nobody sourced that number: it appears in no ruling, it is not env
+  // owned, and it rode no receipt as an owned setting. Measured on the suite's own fixture,
+  // "CODA is my favorite because she stayed inside the verified relay" is eleven words and was
+  // marked as having no reason at all. That is a threshold gating what she is allowed to have
+  // said, and it is deleted rather than tuned, because a bigger number is the same disease.
+  // WHAT IS KEPT is the FACT and nothing more: the person asked why, and no causal connective
+  // appears anywhere in her answer. It is a note the judge reads alongside her actual sentence,
+  // never a hold on its own after the 20260825 double vote fix, and the judge is the one that
+  // decides whether she explained herself.
   var causalReason = /\b(?:because|since|based\s+on|the\s+reason|what\s+(?:i|we)\s+(?:saw|see|verified|know)|from\s+the\s+evidence)\b/i.test(text);
-  if (/\bwhy\b/i.test(String(question || '')) &&
-      !(wordCount >= 14 && causalReason)) {
+  if (/\bwhy\b/i.test(String(question || '')) && !causalReason) {
     findings.push({ reason:'current_preference_reason_missing' });
   }
   if (selected.length === 1 && !invalidNegativeClaim && !historicalClaim) {
     var binding = Object.assign({ question:String(question || '') },
       evidenceBinding || {});
+    // ⬡B:core.pai_outbound_council:BUILD:an_evidence_fact_and_a_phrasing_are_not_one_finding:20260825⬡
+    // These two are the only findings in this function that RAN A LOOKUP. Everything above is a
+    // pattern reading her sentence: six hardcoded English templates for stating a choice, two
+    // hand typed origin phrase lists, and a word count. evidence_checked says which is which,
+    // out loud on the finding, so the council can let a lookup result hold on its own and hand
+    // the phrasings to the judge as the notes they are. It names a fact and decides nothing.
     if (!preferenceEvidenceItems(binding).some(function (item) {
       return evidenceMentionsOption(item, selected[0], binding);
     })) {
       findings.push({ reason:'current_preference_choice_unverified',
-        selected_option:selected[0] });
+        evidence_checked:true, selected_option:selected[0] });
     }
     if (storedOrigin && !storedPreferenceSupportsChoice(selected[0], binding)) {
       findings.push({ reason:'stored_preference_evidence_missing',
-        selected_option:selected[0] });
+        evidence_checked:true, selected_option:selected[0] });
     }
   }
   return findings;
@@ -1844,9 +1911,15 @@ async function categoricalMemoryContradiction(ctx, injected) {
       if (matchedTerms.indexOf(term) < 0) matchedTerms.push(term);
     });
   });
+  // The scope decides what this finding IS, and it is one of two different facts. A scope with
+  // a real content test states a CONTRADICTION, which is a finding against the answer. The
+  // default bucket states a MENTION, which is evidence for the judge and nothing more.
+  var contradictionConcluded = absenceScopeConcludes(claimScope);
   return {
     claim: claim,
-    reason: 'categorical_memory_absence_contradicted',
+    reason: contradictionConcluded ? 'categorical_memory_absence_contradicted'
+      : 'categorical_memory_absence_subject_mentioned',
+    contradiction_concluded: contradictionConcluded,
     claim_scope: claimScope,
     subject_terms: terms,
     matched_terms: matchedTerms.slice(0, 8),
@@ -2397,7 +2470,25 @@ async function defaultShadowStage(ctx, injected) {
   var memoryAbsenceFlag = structuredPolicy ? null
     : await categoricalMemoryContradiction(ctx, injected);
   var memoryAbsenceFlags = memoryAbsenceFlag ? [memoryAbsenceFlag] : [];
+  // A mention is not a contradiction. Only a scope that ran a real content test states a
+  // finding against the answer; the default bucket states a fact for the judge to weigh and
+  // never enters the findings that can hold her. See absenceScopeConcludes.
+  var memoryAbsenceFindings = memoryAbsenceFlags.filter(function (flag) {
+    return !!(flag && flag.contradiction_concluded === true);
+  });
   var preferenceFlags = preferenceJudgmentFindings(ctx.question, ctx.answer, ctx);
+  // Two different things wear one name here. A preference finding stamped evidence_checked is
+  // the result of a LOOKUP: the option she named appears in no verified evidence, or she
+  // claimed a stored preference that no stored row supports. Every other preference finding is
+  // a PHRASING: six hardcoded English sentence templates, two hand typed origin phrase lists
+  // and a word count deciding whether her sentence counts as an answer at all. The lookups may
+  // hold on their own. The phrasings are notes, and the judge below already reads all of them.
+  var preferenceEvidenceFlags = preferenceFlags.filter(function (flag) {
+    return !!(flag && flag.evidence_checked === true);
+  });
+  var preferencePhrasingFlags = preferenceFlags.filter(function (flag) {
+    return !(flag && flag.evidence_checked === true);
+  });
   var relayRoleFlags = codingRelayContradictions(ctx.answer, ctx.context || {}, ctx);
   // ⬡B:core.pai_outbound_council:BUILD:unreceipted_action_claim_hold:20260725⬡
   // Law of record: docs/os/UNRECEIPTED_ACTION_CLAIM_HOLD_20260725.md. A cold
@@ -2474,8 +2565,30 @@ async function defaultShadowStage(ctx, injected) {
   // deterministic findings; only non-contradicted absence phrasing stays advisory.
   var deterministicFindings = ((boardResult && boardResult.flags) || [])
     .concat(namedContextFlags, preferenceFlags, relayRoleFlags, provenanceFlags,
-      identityReceiptFlags, memoryAbsenceFlags, actionClaimFlags, threeSourceFlags);
+      identityReceiptFlags, memoryAbsenceFindings, actionClaimFlags, threeSourceFlags);
   var advisoryMemoryAbsence = memoryAbsenceFlags;
+  // ⬡B:core.pai_outbound_council:FIX:the_classifier_stops_voting_after_the_mind_has_ruled:20260825⬡
+  // THE DOUBLE VOTE, ENDED. Three cold classifiers were wired into boardPassed and into
+  // deterministicFindings, and both of those outrank the model judgment. But the SAME findings
+  // are handed to the woken judge twelve lines below as deterministic_findings,
+  // named_context_evidence, current_preference_provenance and categorical_memory_absence, and
+  // the judge's own system prompt already instructs it on all three by name. So a mind was
+  // woken, paid for, handed the findings, and reached a verdict, and then cold code discarded
+  // that verdict by ANDing it with its own vote. This file's own law at the shadowPassed seam
+  // says the opposite in as many words: "the verdict belongs to the WONDER; deterministic
+  // proofs are evidence it weighs, never cold overrides."
+  // WHAT CHANGES AND WHAT DOES NOT. The classifiers keep DETECTING, every finding still rides
+  // to the judge, and every finding still rides onto the receipt. Detect and wake is the
+  // sanctioned shape and it was already built here. What stops is the finding independently
+  // forcing a hold AFTER a mind has ruled on it.
+  // WHAT IS DELIBERATELY PRESERVED: a path where NO mind was reachable is a different
+  // question. Nobody ruled there, so there is no verdict to overrule, and these findings still
+  // hold exactly as they did. judgeRuled below is the line between the two cases.
+  var judgeWeighedFindings = [].concat(namedContextFlags, preferencePhrasingFlags,
+    memoryAbsenceFindings);
+  var independentFindings = deterministicFindings.filter(function (finding) {
+    return judgeWeighedFindings.indexOf(finding) === -1;
+  });
   // ⬡B:core.pai_outbound_council:911:a_forty_percent_hold_rate_that_names_no_family_cannot_be_fixed:20260725⬡
   // MEASURED 20260725, four days before the demo: ten real conversational questions to her
   // gate, FOUR held. Three of those four came back as the single word
@@ -2508,9 +2621,14 @@ async function defaultShadowStage(ctx, injected) {
     var fired = deterministicFamilies();
     return fired.length ? ('shadow_deterministic_hold:' + fired.join(',')) : 'shadow_deterministic_hold';
   }
-  var boardPassed = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
+  // Clean on everything no mind is asked about. namedContextFlags and the preference PHRASINGS
+  // are gone from this conjunction: the judge is handed both and instructed on both, so they
+  // are its business now. The preference LOOKUPS stay, because a named option that appears in
+  // no verified evidence is a mechanical evidence fact, not a reading of her sentence.
+  // categorical memory absence was never in this conjunction and still is not.
+  var boardCleanOfUnjudged = !!(boardResult && boardResult.ok === true && boardResult.verdict === 'PASS' &&
     ((boardResult && boardResult.flags) || []).length === 0 &&
-    namedContextFlags.length === 0 && preferenceFlags.length === 0 && relayRoleFlags.length === 0 &&
+    preferenceEvidenceFlags.length === 0 && relayRoleFlags.length === 0 &&
     provenanceFlags.length === 0 && identityReceiptFlags.length === 0 &&
     actionClaimFlags.length === 0 && threeSourceFlags.length === 0);
   // ⬡COLD:decide:become:VOICE_SHADOW_WONDER:20260723⬡
@@ -2526,7 +2644,7 @@ async function defaultShadowStage(ctx, injected) {
     ctx, verifiedVoiceHandoff);
   var voiceFarewellAcknowledgement = verifiedVoiceFarewellAcknowledgement(
     ctx, verifiedVoiceHandoff);
-  var deterministicVoicePassReason = boardPassed && deterministicFindings.length === 0 &&
+  var deterministicVoicePassReason = boardCleanOfUnjudged && deterministicFindings.length === 0 &&
     (exactVoiceHandoffRelay || trivialVoiceGreeting || voiceHearingAcknowledgement ||
       voiceFarewellAcknowledgement)
     ? (exactVoiceHandoffRelay ? 'SHADOW_PASS_VERIFIED_VOICE_HANDOFF' :
@@ -2625,6 +2743,16 @@ async function defaultShadowStage(ctx, injected) {
     });
     parsed = judgment && parseStrictJsonObject(judgment.content);
   }
+  // THE LINE BETWEEN A MIND BEING OVERRULED AND NO MIND AT ALL. judgeRuled is true only when a
+  // real judgment came back AND parsed into a verdict. Until that is true, nobody has ruled on
+  // the three classifier findings, so they still hold her exactly as they did before this fix.
+  var judgeRuled = !!(judgment && parsed);
+  var boardPassed = boardCleanOfUnjudged &&
+    (judgeRuled || (namedContextFlags.length === 0 && preferencePhrasingFlags.length === 0));
+  // The findings a hold may rest on with NO mind in the loop. When a mind ruled, the three it
+  // was handed and instructed on stop counting here, because its verdict already weighed them.
+  // When no mind ruled, this is the whole list, byte for byte what it was before.
+  var unjudgedFindings = judgeRuled ? independentFindings : deterministicFindings;
   var modelPassed = !!(parsed && parsed.approved === true && isNonEmpty(parsed.reason));
   var hasRealDecisionJudgment = !!(parsed &&
     typeof parsed.decision_approved === 'boolean' && isNonEmpty(parsed.decision_reason));
@@ -2650,7 +2778,7 @@ async function defaultShadowStage(ctx, injected) {
     return c.length >= 12 && String(ctx.answer || '').indexOf(c) !== -1;
   }
   var _judgeHasQuotable = _verbatimClaimFound(parsed);
-  if (!requiresRealDecisionJudgment && boardPassed && deterministicFindings.length === 0 &&
+  if (!requiresRealDecisionJudgment && boardPassed && unjudgedFindings.length === 0 &&
       judgment && parsed &&
       parsed.approved === false && _judgeHasQuotable) {
     // ⬡B:core.pai_outbound_council:FIX:skip_review_when_no_quotable_claim:20260719⬡
@@ -2700,7 +2828,10 @@ async function defaultShadowStage(ctx, injected) {
         hamUid:ctx.hamUid, requestId:ctx.requestId, cycleId:ctx.cycleId
       });
     }));
-  var wonderUnavailableCleanPass = !!(boardPassed && deterministicFindings.length === 0 &&
+  // This arm requires that no judgment came back, so judgeRuled is false here and
+  // unjudgedFindings is the full deterministic list. Behaviour is unchanged: a turn no mind
+  // ever saw still fails closed on every one of these findings.
+  var wonderUnavailableCleanPass = !!(boardPassed && unjudgedFindings.length === 0 &&
     (!judgment || !parsed) && !attemptedRelayEvidence && !requiresRealDecisionJudgment);
   // ⬡B:core.pai_outbound_council:FIX:shadow_holds_only_with_a_quotable_false_claim_20260718⬡
   // Founder doctrine, decides-vs-renders + no nasty-C holds: SHADOW is a
@@ -2727,7 +2858,7 @@ async function defaultShadowStage(ctx, injected) {
   var judgeWasBlindfolded = !!(deliberationEvidence && deliberationEvidence.truncated === true);
   var shadowDecisionUnavailableHold = !!(requiresRealDecisionJudgment &&
     !hasRealDecisionJudgment);
-  var shadowFailOpenCleanBoard = !!(boardPassed && deterministicFindings.length === 0 &&
+  var shadowFailOpenCleanBoard = !!(boardPassed && unjudgedFindings.length === 0 &&
     !modelPassed && (!shadowHasQuotableFalseClaim || judgeWasBlindfolded) &&
     !(attemptedRelayEvidence && (!judgment || !parsed)) && !shadowDecisionUnavailableHold);
   var relayUnavailableHold = !!(attemptedRelayEvidence && (!judgment || !parsed));
@@ -3379,9 +3510,11 @@ async function healAnswer(answer, reason, stage, input, deps) {
       ? 'A second reader compared what you meant with the exact words that were about to be sent, and could not confirm the two say the same thing. Say the same true thing again, plainly enough that the two readings cannot come apart: one meaning per sentence, every fact, number, date, name, and commitment stated straight, nothing implied that you would not say outright, no hedge that could be read two ways. Add no new facts and drop none of the real ones. It stays yours and it stays warm; it just stops being ambiguous.'
       : (/internal_system_leak/.test(String(reason || ''))
       ? 'A leak judge held this because it names internal machinery to someone standing outside the house. Say the same true thing in the words an ordinary person uses, with none of that internal vocabulary in it. Keep every real fact, every number, and every commitment exactly as it stands; only the inside words go. Do not explain that anything was changed.'
+      : (/writ_post_meta_/.test(String(reason || ''))
+      ? 'A privacy reader re-read the finished words on their way to the person and would not clear them. That means one of two things is in there: the words name internal machinery, tools, prompts, systems or steps that belong inside the house, or they carry something that belongs to somebody else and not to this person. Say the same true thing again, straight to the person, in the words they would use, with none of the inside vocabulary and nobody else\'s business in it. Keep every real fact, number, date and commitment exactly as it stands, and do not mention that anything was changed.'
       : (hollowHoldReason(reason) ? HOLLOW_HEAL_GUIDANCE
         : (boundarySpeechGuidance ? boundarySpeechGuidance.instruction
-          : (guidance[stage] || guidance.PAM)))));
+          : (guidance[stage] || guidance.PAM))))));
   var worldBuilderRepairContext = {channel:input&&input.channel,
     context:input&&input.context,answer:answer};
   if (hamWorldBuilderDecisionContext(worldBuilderRepairContext)) {
@@ -3564,11 +3697,23 @@ async function defaultWritStage(ctx) {
   var output = result && typeof result.cleaned === 'string' ? result.cleaned : '';
   var writOutput = output;
   var writOutputDigest = output ? digestText(output) : null;
-  var writOutputBound = !!(bank && bank.banked === true && bank.verdict &&
+  var writVerdictBanked = !!(bank && bank.banked === true);
+  var writOutputBound = !!(writVerdictBanked && bank.verdict &&
     bank.verdict.output_digest === writOutputDigest &&
     bank.verdict.output_bytes === Buffer.byteLength(output, 'utf8'));
+  // TWO OPPOSITE EVENTS WORE ONE BOOLEAN, and only one of them is about her words.
+  //   THE BANK DID NOT SAVE. A storage failure. A fact to carry, never a verdict. See the
+  //     20260825 fix below: her WRIT-passed bytes ship and the fact rides the receipt.
+  //   THE BANK SAVED AND IT DESCRIBES DIFFERENT BYTES. Not a storage failure. The verdict of
+  //     record is attached to something else, so THESE bytes carry no ruling at all, which is
+  //     the replay and substitution shape this council exists to stop. That still holds, and
+  //     the post-WRIT privacy organ is still never handed bytes no verdict describes.
+  var writReceiptMismatch = !!(ctx.hamUid && writVerdictBanked && !writOutputBound);
   var postMeta = null;
   var postMetaHoldReason = null;
+  // A fact, carried: the privacy organ answered and its own record did not persist. It is not
+  // a verdict about her words. See the 20260825 fix at the post META gate below.
+  var postMetaReceiptUnsaved = false;
   var requiresHumanRecheck = requiresHumanRecheckFor(ctx.context);
   // ⬡B:core.pai_outbound_council:FIX:the_consult_minted_no_meaning_packet_and_expression_ate_her_answer:20260815⬡
   // MEASURED 20260815 on the real path, not reasoned about. The seat before this one removed the
@@ -3682,6 +3827,10 @@ async function defaultWritStage(ctx) {
   // conversion list, behind the read-back fence that already exists, and folding it in here would
   // be a second change wearing this one's name.
   var humanReadsThisProse = !packetWaivedFor(ctx.context);
+  // A banked verdict that describes different bytes stops here, before the privacy organ, and
+  // blanks the output: those bytes carry no ruling. A bank that simply did not save does not,
+  // because WRIT's ruling on these exact bytes is real and only its record is missing.
+  if (result && result.ok === true && writReceiptMismatch) output = '';
   if (requiresHumanRecheck && result && result.ok === true && writOutputBound && output.trim()) {
     var metaOrgan = require('../agents/meta_commentary.js');
     var postState = {pendingOutbound:output};
@@ -3724,11 +3873,30 @@ async function defaultWritStage(ctx) {
       metaVerdict.receipt_state === 'unavailable' && metaOutputBound &&
       metaOutput === writOutput && metaOutput.trim());
     var metaProven = metaModelProven || metaUnavailableProven;
+    // ⬡B:core.pai_outbound_council:FIX:the_organ_answered_and_its_bookkeeping_blanked_her:20260825⬡
+    // THIS BLOCK USED TO HAVE ONE else, AND IT DELETED HER WORDS FOR TWO OPPOSITE EVENTS.
+    // The two are not the same event and they never were:
+    //   THE ORGAN RAN AND SAID NO. A real verdict about her words. It holds. It always did.
+    //   THE ORGAN ANSWERED AND ITS RECEIPT DID NOT PERSIST. metaVerdict.banked and
+    //     metaVerdict.receipt_state are bookkeeping about a brain write. Whether a bead saved
+    //     decided whether the person heard her, and during any brain outage EVERY human facing
+    //     turn died right here, with no heal even offered, on an exact string allowlist that
+    //     the comment twelve lines above had already learned its lesson about.
+    // THE LINE THAT MATTERS IS metaOutputBound. When the organ's own verdict digest matches
+    // the bytes in hand, those bytes HAVE a verdict attached to them; only the record of it
+    // failed to save, and a storage failure is a fact to carry, never a verdict about her
+    // words. When metaOutputBound is false the bytes genuinely have no verdict attached, so
+    // that case still holds. Nothing else is waived.
     if (metaProven) {
       output = metaOutput;
+    } else if (metaVerdict && metaVerdict.ok !== true) {
+      postMetaHoldReason = 'writ_post_meta_model_hold';
+      output = '';
+    } else if (metaOutputBound && metaOutput.trim()) {
+      output = metaOutput;
+      postMetaReceiptUnsaved = true;
     } else {
-      postMetaHoldReason = metaVerdict && metaVerdict.ok !== true
-        ? 'writ_post_meta_model_hold' : 'writ_post_meta_receipt_unverified';
+      postMetaHoldReason = 'writ_post_meta_receipt_unverified';
       output = '';
     }
   }
@@ -3755,8 +3923,28 @@ async function defaultWritStage(ctx) {
   }).slice(0, 2);
   var writVerdict = result && (result.reason || result.verdict);
   var writHeld = !!(result && result.ok !== true);
+  // ⬡B:core.pai_outbound_council:FIX:a_failed_bank_is_not_a_failed_review:20260825⬡
+  // THIS LINE USED TO READ: if (result.ok === true && !writReceiptVerified) output = '';
+  // WRIT, a mind, read her words and said PASS. The council then erased them because the
+  // RECORD of that pass did not save. writOutputBound requires bank.banked === true plus a
+  // digest and byte match, and board/writ/writ.js#writCheckAndBank says in its own comment at
+  // the producing end: "BEST EFFORT ON PURPOSE. A failed bank returns a named reason and NEVER
+  // converts into a passing grade or blocks a real answer... Cold code may fail to write; it
+  // may not decide the writing was fine because it did." core/prose.quality.js returns
+  // {ok:true, banked:false, reason:'writ_verdict_bank_failed'} when the brain write fails.
+  // This consumer did the exact thing the producer forbids, in the opposite direction.
+  // WHAT IT COST: during any Memory Bank outage, key rotation, schema mismatch or plain
+  // network blip, EVERY human facing turn in every world died here, and the reason string
+  // handed to the person was 'stage_empty_answer:writ_pass'. That string contains the word
+  // PASS while the person receives nothing. The heal then ran, spent a paid model call, and
+  // re-ran WRIT into the same dead bank, so the outage cost double and still ended silent.
+  // A STORAGE FAILURE IS A STORAGE FAILURE. It is a FACT to carry, never a verdict about her
+  // words. A review that passed, passed. The fact is already on this stage's receipt in
+  // verdict_bank (ok, banked, output_bound) and is now named there as receipt_verified too, so
+  // whoever needs to know the receipt did not persist can read it. Nothing is waived: WRIT
+  // still judges, a WRIT hold still holds, and unbound bytes with no verdict attached to them
+  // are still held one branch down in the post META gate.
   var writReceiptVerified = !ctx.hamUid || writOutputBound;
-  if (result && result.ok === true && !writReceiptVerified) output = '';
   var meaningPacket = humanReadsThisProse && output.trim() && ctx.runtime &&
     typeof ctx.runtime === 'object' ? Object.freeze({
       ham_uid:String(ctx.hamUid || '').toUpperCase(),request_id:String(ctx.requestId || ''),
@@ -3784,7 +3972,7 @@ async function defaultWritStage(ctx) {
     (!humanReadsThisProse ? 'not_applicable_machine_contract_turn' :
       (!output.trim() ? 'no_output_to_bind' : 'no_stage_runtime_to_mint_into'));
   var stageResult = {
-    ok: !!(result && result.ok === true && output.trim().length > 0 && writReceiptVerified),
+    ok: !!(result && result.ok === true && output.trim().length > 0),
     answer: output,
     reason: postMetaHoldReason || ((writHeld && uniqueFails.length && writVerdict)
       ? (String(writVerdict) + ':' + uniqueFails.join(':'))
@@ -3819,7 +4007,8 @@ async function defaultWritStage(ctx) {
         why_changed:postMeta.metaCommentary.why_changed || null,
         banked:postMeta.metaCommentary.banked === true,
         receipt_state:postMeta.metaCommentary.receipt_state || null,
-        output_bound:metaOutputBound
+        output_bound:metaOutputBound,
+        receipt_unsaved:postMetaReceiptUnsaved
       } : null,
       // Bounded durable evidence only. The exact source contains the world key, so the
       // council carries its digest rather than letting that identifier reach a face.
@@ -3827,6 +4016,12 @@ async function defaultWritStage(ctx) {
         ok: !!(bank && bank.ok === true),
         banked: !!(bank && bank.banked === true),
         output_bound: writOutputBound,
+        // The fact, carried. receipt_verified false means the verdict of record did not
+        // persist for these bytes; it is not a verdict about the bytes and nothing downstream
+        // may read it as one. receipt_mismatch true is the different, harder fact: a verdict
+        // DID persist and it describes other bytes. See the 20260825 fix above.
+        receipt_verified: writReceiptVerified,
+        receipt_mismatch: writReceiptMismatch,
         reason: (bank && /^[a-z][a-z0-9_.-]{0,63}$/.test(String(bank.reason || '')))
           ? String(bank.reason) : null,
         source_digest: (bank && bank.source) ? digestText(String(bank.source)) : null
@@ -4230,7 +4425,29 @@ async function defaultStampPreflight(ctx) {
   var verdict;
   try { verdict = await pam.pamCheck(ctx.answer, scopedWorld); }
   catch (e) { verdict = null; }
-  var privacyReady = !!(verdict && verdict.ok === true);
+  // ⬡B:core.pai_outbound_council:FIX:one_file_cannot_read_the_same_missing_verdict_two_ways:20260825⬡
+  // TWO LINES IN THIS FILE READ THE IDENTICAL ABSENT VALUE IN OPPOSITE DIRECTIONS, and both
+  // cannot be right. Same module, same call, same bytes: defaultPamStage runs
+  // pam.pamCheck(ctx.answer, scopedWorld) inside the same try/catch, and when the verdict comes
+  // back missing it records a FAIL OPEN, under a comment that states the law it is
+  // implementing: "FOUNDER: judges heal, they never silently kill... If PAM itself disappears
+  // or throws despite its total contract, that is a missing verdict rather than invented
+  // evidence, so this stage records a fail-open." This preflight never got that fix, so it read
+  // the same absence as a HOLD.
+  // WHAT THAT COST: PAM is called three times per turn on the same bytes. If the module throws,
+  // is missing or times out, calls one and two pass her and call three killed the turn AFTER
+  // every stage had run and every paid model call had been spent, and STAMP appears in no heal
+  // path at all. The person received stamp_final_pam_uncertain and no words, for a turn that
+  // both of its earlier privacy checks had already cleared.
+  // WHAT IS AND IS NOT WAIVED, said out loud per the door law. PAM's VERDICT is an anchor and
+  // it is untouched: a real ok:false still holds here, exactly as before, and that is the
+  // credential and cross person privacy boundary doing its job. PAM's ABSENCE is not the anchor
+  // being crossed, it is the anchor's own producer being unreachable, and this file already
+  // ruled on that exact distinction one stage over. Holding on it here protected nothing that
+  // the two earlier fail opens had not already let through, because a dead module scanned
+  // nothing three times.
+  var pamUnavailable = !verdict;
+  var privacyReady = !(verdict && verdict.ok === false);
   var privacyFlags = verdict && Array.isArray(verdict.flags)
     ? verdict.flags.map(function (flag) {
       return flag && typeof flag.reason === 'string' ? flag.reason : null;
@@ -4238,13 +4455,16 @@ async function defaultStampPreflight(ctx) {
   return {
     ok: privacyReady,
     answer: ctx.answer,
-    reason: privacyReady ? 'STAMP_READY' :
-      (verdict && verdict.ok === false ? 'stamp_final_pam_hold' : 'stamp_final_pam_uncertain'),
+    // The pass says out loud when nobody scanned, so a receipt can never claim a clearance
+    // that never happened.
+    reason: privacyReady
+      ? (pamUnavailable ? 'STAMP_READY_PAM_UNAVAILABLE' : 'STAMP_READY')
+      : 'stamp_final_pam_hold',
     evidence: {
       stage_receipt_count: sources.length,
       final_source: plan.finalSource,
       privacy:{ verdict:verdict && verdict.verdict || null,
-        flags:privacyFlags, failed_closed:!verdict }
+        flags:privacyFlags, failed_open:pamUnavailable }
     }
   };
 }
@@ -4713,11 +4933,20 @@ function remintWritReceipt(stages, healedDraft, remintNorm, startedMs, endedMs) 
   return receipt;
 }
 
+// ⬡B:core.pai_outbound_council:BUILD:the_envelope_says_whether_the_person_may_ask_again:20260825⬡
+// A held council returns a machine reason code and no reply field, and every surface that
+// reads it has to work out for itself whether a second ask can win. Two of them already do
+// that by importing mayRetryHold; the rest cannot see the question at all, so they show a
+// spinner that ends in nothing. Carry the ANSWER on the envelope, as a bounded fact, so a face
+// or a channel can tell the person the difference between "ask me that again" and "this one is
+// settled" without reading this file. Cold code states a fact here and composes no sentence: a
+// sentence to a person is hers to say, through her own gate, and never a coder's string.
 function failureResult(reason, blockedBy, stages, input, currentAnswer) {
   return {
     ok: false,
     reason: reason,
     blocked_by: blockedBy,
+    may_reask: mayRetryHold(reason),
     ham_uid: input.hamUid,
     request_id: input.requestId,
     cycle_id: input.cycleId,
@@ -4991,7 +5220,45 @@ async function runPreWriteCouncil(input, injected) {
 
 async function runOutboundCouncil(input, injected) {
   var inputError = validateInput(input);
-  if (inputError) return { ok: false, reason: inputError, blocked_by: 'INPUT', stages: [] };
+  // ⬡B:core.pai_outbound_council:FIX:the_input_gate_gets_the_one_repair_every_stage_already_gets:20260825⬡
+  // THE HEAL MACHINERY LIVES ENTIRELY INSIDE THE STAGE LOOP, so a refusal at this gate was an
+  // instant, total, unrepairable end: no stage ran, the stages array is empty, so
+  // boundedCouncilFailureCodes and councilHoldEvidence had nothing to report and the durable
+  // hold row carried one word. answer_hollow_protocol is decided by isHumanFacingAnswer, a
+  // predicate this file records breaking FOUR TIMES IN ONE SESSION, each break shipping or
+  // discarding real sentences. The predicate must exist, and it stays exactly as it is: a live
+  // turn shipped the literal tool call marker to a person and another shipped a bracketed
+  // fragment to a real phone. What it owed and did not have is the same ONE repair every stage
+  // downstream gets. The guidance string for exactly this case was already written and already
+  // says the right thing; it simply had no caller here.
+  // A repair that is itself protocol is rejected inside healAnswer, so this can never launder
+  // plumbing into an answer, and if nothing usable comes back the gate refuses exactly as it
+  // did before. Only answer_hollow_protocol is offered this: answer_required means there are
+  // no bytes to repair, and every other input error is a shape or authority fact.
+  var inputHealOutcome = null;
+  if (inputError === 'answer_hollow_protocol') {
+    var inputHealed = null;
+    try {
+      inputHealed = await healAnswer(input.answer, 'answer_hollow_protocol', 'INPUT',
+        input, injected || {});
+    } catch (inputHealError) {
+      inputHealed = null;
+      inputHealOutcome = 'heal_threw:' + errorReason(inputHealError).slice(0, 60);
+    }
+    if (inputHealed && typeof inputHealed === 'string' && inputHealed.trim() &&
+        isHumanFacingAnswer(inputHealed) && inputHealed !== input.answer) {
+      input = Object.assign({}, input, { answer: inputHealed });
+      inputError = validateInput(input);
+      inputHealOutcome = inputError ? 'heal_repair_still_invalid' : 'heal_repaired';
+    } else if (!inputHealOutcome) {
+      inputHealOutcome = 'heal_no_usable_repair';
+    }
+  }
+  if (inputError) {
+    return { ok: false, reason: inputError, blocked_by: 'INPUT',
+      may_reask: mayRetryHold(inputError), stages: [],
+      evidence: inputHealOutcome ? { heal_outcome: inputHealOutcome } : undefined };
+  }
   var suppliedTarget = hasOwn(input, 'deliveryTarget') ? input.deliveryTarget : input.delivery_target;
   input = Object.assign({}, input);
   if (suppliedTarget !== undefined) input.deliveryTarget = canonicalizeDeliveryTarget(suppliedTarget);
@@ -5001,10 +5268,11 @@ async function runOutboundCouncil(input, injected) {
   delete input.currentCapabilityAnswerBinding;
   if (!capabilityBinding.ok) {
     return { ok:false, reason:'current_capability_answer_binding_unverified',
-      blocked_by:'INPUT', stages:[] };
+      blocked_by:'INPUT', may_reask:false, stages:[] };
   }
   if (councilCancellationRequested(input)) {
-    return { ok:false, reason:'council_cancelled', blocked_by:'CANCELLED', stages:[] };
+    return { ok:false, reason:'council_cancelled', blocked_by:'CANCELLED',
+      may_reask:false, stages:[] };
   }
   // ⬡B:core.pai_outbound_council:GUARD:identity_receipt_before_stages:20260715⬡
   // A provenance-required cycle cannot begin unless the exact injected result
@@ -5012,7 +5280,7 @@ async function runOutboundCouncil(input, injected) {
   var inputIdentityReceiptFlags = identityEvidenceReceiptContradictions(input);
   if (inputIdentityReceiptFlags.length) {
     return { ok:false, reason:'identity_evidence_receipt_unverified',
-      blocked_by:'INPUT', stages:[], evidence:{
+      blocked_by:'INPUT', may_reask:false, stages:[], evidence:{
         identity_evidence_receipt_conflicts:inputIdentityReceiptFlags } };
   }
 
@@ -5219,9 +5487,20 @@ async function runOutboundCouncil(input, injected) {
         'writ_meaning_shadow_uncertain'];
       var _meaningRemintHold = stage === 'ANU_EXPRESSION' &&
         _MEANING_HEALABLE_REASONS.indexOf(String(normalized.reason || '')) !== -1;
-      var _semanticFinalHold = (stage === 'WRIT' &&
-        /^writ_post_meta_/.test(String(normalized.reason || '')));
-      var _healableStage = !capabilityBinding.present && !_semanticFinalHold &&
+      // ⬡B:core.pai_outbound_council:FIX:the_post_meta_hold_gets_the_one_heal_every_other_verdict_gets:20260825⬡
+      // A _semanticFinalHold guard stood here and excluded every writ_post_meta_ reason from
+      // the heal. It was written when that prefix covered a bookkeeping outcome as well as a
+      // verdict, and it meant the most common brain outage failure in the file was the one
+      // failure with no repair attempted at all. Both remaining post META reasons are now
+      // things a repair can genuinely cure, so the exclusion is retired with the writer it
+      // protected: writ_post_meta_model_hold is the privacy organ saying these words name
+      // internal machinery or somebody else's business, which is exactly the craft repair
+      // healAnswer exists for and which now has its own named guidance arm; and
+      // writ_post_meta_receipt_unverified now fires only when the bytes carry no verdict at
+      // all, which a re-run of the real WRIT stage on repaired bytes re-mints from scratch.
+      // Nothing heals around itself: the healed draft walks the same WRIT handler, the same
+      // voice law, the same privacy organ, and holds again if it still leaks.
+      var _healableStage = !capabilityBinding.present &&
         (stage === 'WRIT' || stage === 'SHADOW' ||
         stage === 'META_COMMENTARY' || stage === 'PAM' || stage === 'QUILL' ||
         stage === 'ANU_EXPRESSION');

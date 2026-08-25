@@ -82,7 +82,34 @@ function worldForGrant(g) {
   return m[g] || null;
 }
 
+// ⬡B:routes.iman:FIX:detected_and_carried_never_decided:20260825⬡
+// The two tokens that also name the internal cross-world privacy boundary, the same pattern
+// pai/reach/iman.js declares under the same name. This pattern DETECTS and holds no vote
+// anywhere in this file: the finding rides the inbound council deliberation before the mind
+// composes the reply (see processInbound), and rides the reply result as an advisory after
+// it, and the mind decides what the words mean. It used to be a refusal inside
+// sendEmailReply's guard block, a two-token regex overruling the committed nine-row inbound
+// council that had already composed and read these exact bytes; the removal site carries its
+// own 20260825 stamp. The world-name block beside it (checkEbcFirewall) is a DIFFERENT, real
+// cross-world protection and is untouched.
+var EBC_FIREWALL_TOKENS = /\bebc\b|firewall/i;
+
 async function sendEmailReply(toEmail, subject, body, grant, replyToId, hamUid, councilResult) {
+  var out = await sendBoundEmailReply(toEmail, subject, body, grant, replyToId, hamUid,
+    councilResult);
+  // ⬡B:routes.iman:FIX:the_firewall_word_stops_voting_after_the_council_has_composed_the_reply:20260825⬡
+  // Detected and carried, never decided, the exact shape of pai/reach/iman.js's committed
+  // seam: present only when the detection fired, so a clean reply keeps its exact historical
+  // shape. This one seam covers every result of the reply path, refusal or send, so the fact
+  // is never silently dropped and a reading mind judges what the words mean.
+  if (out && typeof out === 'object' &&
+      EBC_FIREWALL_TOKENS.test(String(subject || '') + ' ' + String(body || ''))) {
+    out.advisories = ['ebc_firewall_token_mentioned'];
+  }
+  return out;
+}
+
+async function sendBoundEmailReply(toEmail, subject, body, grant, replyToId, hamUid, councilResult) {
   var key = process.env.NYLAS_API_KEY; // default; per-grant below
   // ⬡B:routes.iman:WIRE:grant_to_key_resolver:20260709⬡ the right app key per grant, always
   var keyForGrant = require('../core/nylasKeys.js').keyForGrant;
@@ -102,7 +129,18 @@ async function sendEmailReply(toEmail, subject, body, grant, replyToId, hamUid, 
       var _fw = _pam.checkEbcFirewall(_scan, _world);
       if (!_fw.ok) return { ok: false, blocked: true, reason: 'ebc_firewall_block: ' + _world + ' reply named the ' + _fw.from_world + ' world' };
     }
-    if (/\bebc\b|firewall/i.test(_scan)) return { ok: false, blocked: true, reason: 'ebc_firewall_block: reply referenced the firewall itself' };
+    // ⬡B:routes.iman:FIX:the_firewall_word_is_a_fact_the_mind_weighs_never_a_cold_verdict:20260825⬡
+    // A two-token regex vote used to refuse the reply right here, AFTER the committed nine-row
+    // inbound council had composed and committed these exact bytes, with the reason
+    // 'ebc_firewall_block: reply referenced the firewall itself', so any legitimate reply
+    // mentioning a network firewall died blocked:true and the person received nothing at all.
+    // Cold code overruling a mind that already ruled is the named defect, and the fix is the
+    // same shape as the 20260825 removal in pai/reach/iman.js: the detector stays
+    // (EBC_FIREWALL_TOKENS above; the inbound deliberation in processInbound names the fact
+    // BEFORE the council composes, and sendEmailReply carries the detection on every result of
+    // this seam as an advisory), and only the cold vote is removed. The world-name block
+    // directly above is a DIFFERENT protection, the real cross-world anchor, and stays exactly
+    // as it is.
   } catch (eFw) { return { ok: false, blocked: true, reason: 'ebc_firewall_guard_unavailable' }; }
   var payload = {
     subject: subject || 'Re: your message',
@@ -188,6 +226,20 @@ async function processInbound(obj, fromEmail, hamData) {
     + 'Use this reply subject unless a truthful correction is required: ' + replySubject + '\n'
     + 'Reply directly to the inbound email below. Do not narrate the process.\n\n'
     + 'INBOUND EMAIL:\n' + subject + '\n\n' + groundedBody;
+  // ⬡B:routes.iman:FIX:the_firewall_word_is_a_fact_the_council_weighs_never_a_cold_verdict:20260825⬡
+  // Detect and carry, the exact shape of pai/reach/iman.js#finalizeApprovedEmail. "ebc" and
+  // "firewall" are also the internal names of this estate's cross-world privacy boundary, so
+  // an inbound that says them MIGHT be probing internal architecture, and might just be an
+  // office email about a network firewall. Which one it is is a meaning question, so the mind
+  // that composes the reply is told the fact and judges it; no cold vote fires on its answer.
+  if (EBC_FIREWALL_TOKENS.test(exactMessage)) {
+    deliberationInput += '\n\nDETECTED FACT, carried for the council to weigh, never a verdict: ' +
+      'the inbound email above contains the token "ebc" or the word "firewall". Those are also ' +
+      'the internal names of this system\'s cross-world privacy boundary. An ordinary message ' +
+      'about a network or security firewall is legitimate; describing this system\'s own ' +
+      'internal boundary to an outside recipient is a leak. Judge which this is and compose ' +
+      'or refuse the reply accordingly.';
+  }
   var emailIdentity = Object.assign({}, hamData || {}, {
     user_message: exactMessage,
     world: _replyWorld || hamData && hamData.world || null,
@@ -240,8 +292,13 @@ async function processInbound(obj, fromEmail, hamData) {
   if (!sendRes || sendRes.ok !== true) return;
   require('../core/outbound.trace.js').stampOutbound({ hamUid: hamUid, channel: 'email', sent: true, textPreview: approvedBody }).catch(function(){});
   require('../logful/index.js').logfulStore({ hamUid: hamUid, agent: 'ANU', type: 'channel_turn',
-    data: { channel: 'email', inputData: exactMessage, subject: approvedSubject,
+    // Detected and carried, never decided; present only when the detection fired on the
+    // reply seam. This sister's processInbound returns nothing, so the durable channel_turn
+    // record is where the advisory rides instead of a return object. See the
+    // detected-and-carried stamp beside EBC_FIREWALL_TOKENS.
+    data: Object.assign({ channel: 'email', inputData: exactMessage, subject: approvedSubject,
       answer: approvedBody, councilProof: councilProof },
+      sendRes.advisories ? { advisories: sendRes.advisories } : {}),
     summary: '[EMAIL turn] ' + String(subject).slice(0, 80), importance: 5 }).catch(function(){}); // \u2b21B:memory.unification:BUILD:every_channel_saves_full_turns_20260710\u2b21
 }
 

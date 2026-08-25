@@ -599,7 +599,30 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   // 260-char provenance-bound source cannot become a per-line prefix on an uncapped
   // wall. (3) the body no longer falls back to b.source, which the header now carries,
   // so a summary-less row does not print its source twice as if it were content.
-  var _turnPrefix = require('./memory.keeper.js').MEMORY_CONTRACT.TURN_SOURCE_PREFIX;
+  var _memoryContract = require('./memory.keeper.js').MEMORY_CONTRACT;
+  var _turnPrefix = _memoryContract.TURN_SOURCE_PREFIX;
+  // ⬡B:core.fcw.builder:FIX:the_wall_carries_the_weight_and_says_who_chose_it:20260825⬡
+  // The reader importance floor came off every memory read today (core/memory.keeper.js, the
+  // retired-floor law). Two things follow for this presenter, and they are the whole reason the
+  // fence had to land before the predicate came off.
+  //
+  // ONE. Rows that were structurally invisible now arrive, including turn records
+  // core/memory.keeper.js#abandonTurn demoted to ABANDONED_IMPORTANCE because the cycle they
+  // belonged to ended without reaching the person. The line below used to call every
+  // turn-prefixed row "a real turn, channel on the line". Said of an abandoned row that is
+  // simply false, and the floor was the only thing keeping it from being said. So the writer
+  // name itself now tells the two apart, by the ONE exact fact that means abandonment,
+  // importance === ABANDONED_IMPORTANCE, never a floor comparison: routes/stream.routes.js
+  // stamped real DELIVERED browser-stream turns at importance 5 for weeks, and a < comparison
+  // would mislabel every one of those retained turns as never delivered. Same fact, same
+  // wording, same reasoning as core/goals/keeper.js#normalizedWriterSource, which got this
+  // wrong once and corrected it the same day.
+  //
+  // TWO. The weight rides on the line as a carried fact. Importance is a number some writer
+  // chose; it is no longer a ruling about what she is allowed to see, and the only way she can
+  // weigh it herself is if she can read it. A row with no importance selected says so rather
+  // than being handed an invented number.
+  var _abandonedImportance = _memoryContract.ABANDONED_IMPORTANCE;
   // ⬡B:core.fcw.builder:FIX:writer_legend_short_refs_on_the_uncapped_wall:20260815⬡
   // Codex P1 on the fence itself, and it is the founder's own first cheap trap ("do not
   // repeat a 57-char stamp on every row. Use a legend plus short refs"): this wall is
@@ -626,9 +649,32 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
   };
   contextStr = allContext.map(function(b) {
     var _src = String(b.source || '').slice(0, 120);
-    var _writer = _src.indexOf(_turnPrefix) === 0
-      ? 'the memory keeper, a real turn, channel on the line'
-      : (_src ? _laneOf(_src) : '');
+    // ⬡B:core.fcw.builder:FIX:a_missing_weight_is_never_rendered_as_a_number:20260825⬡
+    // Number(null) is 0 and Number.isFinite(0) is true, so the first cut of the line below
+    // presented a row nobody ever weighted to her as "weight 0", and the fence paragraph in
+    // this same prompt tells her to read a low weight as "the writer thought this was small".
+    // A row nobody weighted was therefore handed to her as a row a writer deliberately judged
+    // worthless, which is the founder's own named NULL-column trap and is worse than silence
+    // because she now has a reason to trust it. core/find.js#canonicalObservedRow normalizes a
+    // missing or NULL importance column to null, so the null check has to come first and the
+    // Number() coercion second.
+    var _hasWeight = b != null && b.importance != null && Number.isFinite(Number(b.importance));
+    var _importance = _hasWeight ? Number(b.importance) : null;
+    var _writer;
+    if (_src.indexOf(_turnPrefix) === 0) {
+      // Three arms, not two. The old else branch asserted the positive: it said "a real turn,
+      // channel on the line" of a row whose weight could not be read at all. Cold code cannot
+      // know that. An unreadable weight is evidence of nothing, and an admitted gap beats an
+      // invented certainty.
+      _writer = !_hasWeight
+        ? 'the memory keeper, a turn record whose weight is not readable here, so whether it '
+          + 'reached the person is not readable here either'
+        : (_importance === _abandonedImportance
+          ? 'the memory keeper, a turn record marked abandoned, never delivered to the person'
+          : 'the memory keeper, a real turn, channel on the line');
+    } else {
+      _writer = _src ? _laneOf(_src) : '';
+    }
     var _tag;
     if (!_writer) _tag = '(no writer stamp on the row)';
     else {
@@ -638,8 +684,11 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
       }
       _tag = _writerRefs[_writer];
     }
+    // The weight the writer chose, carried, never compared against. A row whose importance was
+    // not selected or is not a number says exactly that, rather than being given a made-up one.
+    var _weight = _hasWeight ? String(_importance) : 'no weight stamped on the row';
     return '[' + (b.stamp_type||'?') + (b.agent_global ? '/' + b.agent_global : '')
-      + ' | written by ' + _tag + '] ' + (b.summary || '');
+      + ' | written by ' + _tag + ' | weight ' + _weight + '] ' + (b.summary || '');
   }).join('\n');
   if (_writerLegend.length) {
     contextStr = 'WRITERS LEGEND (each W-ref below is the lane or module that stamped the row): '
@@ -871,12 +920,29 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
           // source_prefix memory.gifted.), so the writer is named ONCE in the heading, and a
           // row only carries a writer tag when it deviates: a missing stamp says so in his
           // exact words, and an unexpected lane is carried by name rather than hidden.
+          // ⬡B:core.fcw.builder:FIX:the_gift_lane_floor_came_off_so_the_tag_carries_the_weight:20260825⬡
+          // findStatedCommitments' second leg (stamp_type MEMORY, no source prefix) used to
+          // carry importance_gte at the reader floor, which is how the low-weight MEMORY
+          // housekeeping stamps stayed off this block: they never came back. That predicate is
+          // gone (core/memory.keeper.js, the retired-floor law), so they arrive here now. They
+          // are not hidden and they are not classified away: a row outside the gift lane
+          // already carries its writer by name, and the weight its writer chose now rides
+          // beside it, so a bookkeeping marker reads as a bookkeeping marker and is skipped in
+          // a quarter of a token instead of being made unknowable.
           var _giftLane = 'memory.gifted.';
           var _src = String(b && b.source || '');
-          var _writerTag = !_src
+          // Same NULL-column trap as the RECENT CONTEXT wall above, same fix: a missing or
+          // NULL importance column is not a zero and is never printed as one. It says it is
+          // missing, in the founder's own wording, rather than dropping the tag silently.
+          var _hasWeight = b != null && b.importance != null && Number.isFinite(Number(b.importance));
+          var _importance = _hasWeight ? Number(b.importance) : null;
+          var _weightTag = _hasWeight
+            ? (' [weight ' + _importance + ', the number its writer chose, not a ruling]')
+            : ' [no weight stamped on the row]';
+          var _writerTag = (!_src
             ? ' [(no writer stamp on the row)]'
             : (_src.indexOf(_giftLane) === 0 ? ''
-              : ' [written by ' + _src.slice(0, 120) + ']');
+              : ' [written by ' + _src.slice(0, 120) + ']')) + _weightTag;
           var _leashNote = leash === 'verbatim'
             ? ''
             : (leash === 'overruled_quote_not_in_message'
@@ -948,12 +1014,18 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     _doctrineSection,
     '',
     'RECENT CONTEXT (brain): stamped records, each line naming the writer that put it '
-    + 'there. A writer name is the lane or module that stamped the row, not proof of who '
-    + 'authored the words: real turns arrive through the memory keeper with their channel '
-    + 'on the line, station results arrive through their stations, and some rows are '
-    + 'machine facts a template, a scheduler, or a retry stamped in. '
-    + 'Judge each line by its named writer. These writer names are internal; '
-    + 'use them to judge a line, never say one to the person.',
+    + 'there and the weight that writer chose. A writer name is the lane or module that '
+    + 'stamped the row, not proof of who authored the words: real turns arrive through the '
+    + 'memory keeper with their channel on the line, station results arrive through their '
+    + 'stations, and some rows are machine facts a template, a scheduler, or a retry stamped '
+    + 'in. Nothing has been held back from you here and nothing has been sorted into yours '
+    + 'and not-yours: every row that matched is on this wall, including bookkeeping rows and '
+    + 'turn records marked abandoned, each one saying on the line what it is. The weight is a '
+    + 'number the writer picked, never a ruling about whether the row matters, so read a low '
+    + 'weight as "the writer thought this was small" and never as "this was not worth '
+    + 'showing you". Judge each line by its named writer and decide for yourself what it is '
+    + 'worth. These writer names are internal; use them to judge a line, never say one to '
+    + 'the person.',
     _contextSection,
     '',
     'SEARCH FIRST, ALWAYS: whenever the person asks about anything specific you do not '
