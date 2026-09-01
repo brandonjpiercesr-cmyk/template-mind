@@ -125,7 +125,21 @@ function keepAlive(t) {
 }
 
 // =========================================================================================
-test('the memory contract is one object and every number clears the reader floor', () => {
+// RETIRED 20260825, with the writer it protected. This test used to be named "every number
+// clears the reader floor" and its last three assertions pinned READER_IMPORTANCE_FLOOR === 7,
+// TURN_IMPORTANCE >= floor and GIFT_IMPORTANCE >= floor. That constant is gone from
+// MEMORY_CONTRACT and every reader predicate built on it came off in the same change
+// (pai/core/memory.keeper.js, the retired-floor law; pai/core/find.js, both legs). A test
+// asserting that low-importance rows are correctly excluded is a test asserting the removed
+// behavior was right, which the 20260815 doctrine names as nasty cough in its own right: it
+// would have told the next reader that the cap is the design. It is retired here rather than
+// "tightened" to a smaller number, because a smaller number is the same hand on the same pen.
+// The separable coverage those assertions rode along with is genuinely worth keeping and is kept
+// verbatim below: the four address constants are a real contract between the memory keeper and
+// pai/core/find.js, and a rename on either side really does silence her memory. The refusal pin
+// that replaces the floor assertions is directly under it. This mirrors the anew retirement in
+// anew/tests/memory.keeper.turn.test.js in the same window.
+test('the memory contract is one object and both readers know the same four addresses', () => {
   const contract = require(KEEPER_PATH).MEMORY_CONTRACT;
   assert.equal(contract.TURN_SOURCE_PREFIX, 'pai.minutes.',
     'the turn record must be written where core/find.js findContext already reads');
@@ -133,11 +147,28 @@ test('the memory contract is one object and every number clears the reader floor
     'the gift must be written where core/find.js findStatedCommitments already reads');
   assert.equal(contract.TURN_STAMP_TYPE, 'RESULT');
   assert.equal(contract.GIFT_STAMP_TYPE, 'MEMORY');
-  assert.ok(contract.TURN_IMPORTANCE >= contract.READER_IMPORTANCE_FLOOR,
-    'the writer must be raised to clear the floor, never the floor lowered to the writer');
-  assert.ok(contract.GIFT_IMPORTANCE >= contract.READER_IMPORTANCE_FLOOR);
-  assert.equal(contract.READER_IMPORTANCE_FLOOR, 7,
-    'the floor stays at 7: below it the importance-2 housekeeping MEMORY markers reach her wall');
+});
+
+test('there is no reader importance floor, and no read may reintroduce one', () => {
+  const contract = require(KEEPER_PATH).MEMORY_CONTRACT;
+  assert.equal(contract.READER_IMPORTANCE_FLOOR, undefined,
+    'READER_IMPORTANCE_FLOOR is retired; a floor is cold code turning a weight into a verdict '
+    + 'on what a mind may know exists, and a smaller number or an env default is the same hand '
+    + 'on the same pen');
+  assert.equal(typeof contract.TURN_IMPORTANCE, 'number',
+    'importance survives as a WEIGHT a writer chooses and a reading mind reads');
+  assert.equal(typeof contract.ABANDONED_IMPORTANCE, 'number');
+
+  // CARRY, NEVER CLASSIFY, pinned. No read in pai/core/find.js may carry an importance predicate
+  // built on the memory contract. Ordering by importance is fine; excluding by it is not.
+  const findSource = fs.readFileSync(FIND_PATH, 'utf8');
+  const live = findSource.split('\n').filter(function (line) {
+    return !/^\s*(\/\/|\*|\/\*)/.test(line);
+  }).join('\n');
+  assert.ok(!/importance_gte\s*:\s*contract\./.test(live),
+    'core/find.js must not filter her own memory by importance again');
+  assert.ok(!/READER_IMPORTANCE_FLOOR/.test(live),
+    'nothing in core/find.js may read a reader importance floor back into existence');
 });
 
 test('the leash: she cannot keep words the person never said', () => {
@@ -310,8 +341,13 @@ test('the pen-on-her-mind fence: every RECENT CONTEXT line names its writer, she
   assert.match(builderSource, /\| written by /,
     'every context line must carry the writer that stamped the row as a fact on the line');
 
+  // The canonical byte-paired core/fcw.builder.js wraps this sentence across string-concatenation
+  // lines ("A writer name '\n  + 'is the module that stamped the row, not proof of who authored
+  // it"), so the match is on the contiguous portion that carries the whole point. fcw.builder.js
+  // is a pai-sync-check synced pair and cannot be reflowed on one side, so the pin follows the
+  // source, not the reverse.
   assert.match(builderSource,
-    /A writer name is the lane or module that stamped the row, not proof of who/,
+    /is the module that stamped the row, not proof of who authored it/,
     'the mind must be told plainly that a writer name is the module, never proof of authorship');
 
   assert.match(builderSource, /Judge each line by its named writer/,

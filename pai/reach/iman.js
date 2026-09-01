@@ -579,6 +579,13 @@ function founderTestEnvelope(to, subject, opts) {
 // may not change the caller's subject by a single byte, and a display name the
 // system sets may not carry the word.
 var TEST_WORD = /\btest(s|ed|ing)?\b/i;
+// ⬡B:reach.iman:FIX:detected_and_carried_never_decided:20260825⬡
+// The two tokens that also name the internal cross-world privacy boundary. This pattern
+// DETECTS and holds no vote anywhere: the finding rides the council deliberation before the
+// mind rules and rides the receipt as an advisory after it, and the mind decides what the
+// words mean. It used to be a refusal fired AFTER the committed council cycle, twice in this
+// file; both refusal sites carry the 20260825 stamp explaining the removal.
+var EBC_FIREWALL_TOKENS = /\bebc\b|firewall/i;
 // An address is an address, not copy. Anything address-shaped comes out before the
 // words are judged, so a real .test domain or a name that is just an email address
 // is never mistaken for the marker he forbade.
@@ -620,6 +627,21 @@ async function finalizeApprovedEmail(input) {
     'Return exactly one RFC822-like artifact in this form: Subject: <approved subject>, then one blank line, then the approved body. ' +
     'Return no preface, explanation, labels other than Subject, or code fence. Do not call a send, write, deploy, or mutation tool.\n\n' +
     'LOSSLESS RAW SUBJECT + BODY REQUEST CLAIM:\n' + claim;
+  // ⬡B:reach.iman:FIX:the_firewall_word_is_a_fact_the_council_weighs_never_a_cold_verdict:20260825⬡
+  // Detect and carry. "ebc" and "firewall" are also the internal names of this estate's
+  // cross-world privacy boundary, so an outbound that says them MIGHT be describing internal
+  // architecture to a stranger, and might just be an office email about a network firewall.
+  // Which one it is is a meaning question, so the mind that rules on these bytes is told the
+  // fact and judges it. A regex on this file used to refuse the approved artifact after the
+  // council had already committed; the pattern now wakes, it never decides.
+  if (EBC_FIREWALL_TOKENS.test(input.subject + '\n\n' + input.body)) {
+    deliberation += '\n\nDETECTED FACT, carried for the council to weigh, never a verdict: ' +
+      'the raw request above contains the token "ebc" or the word "firewall". Those are also ' +
+      'the internal names of this system\'s cross-world privacy boundary. An ordinary message ' +
+      'about a network or security firewall is legitimate; describing this system\'s own ' +
+      'internal boundary to an outside recipient is a leak. Judge which this is and approve ' +
+      'or refuse accordingly.';
+  }
   var rid = requestId(input.opts);
   if (!rid) return fail('request_id_invalid');
   var deliveryTarget = { kind:'email', value:input.to };
@@ -700,13 +722,9 @@ async function finalizeApprovedEmail(input) {
     var pam = require('../board/pam/pam.js');
     var finalVerdict = await pam.pamCheck(approved.subject + '\n\n' + approved.body, input.world || null);
     if (!finalVerdict || finalVerdict.ok !== true) return fail('approved_email_pam_hold', {
-      blocked: true, requestId: rid, cycleId: pai.cycleId, councilProof: proof
+      blocked: true, requestId: rid, cycleId: pai.cycleId, councilProof: proof,
+      pamFlags: (finalVerdict && finalVerdict.flags) || null
     });
-    if (/\bebc\b|firewall/i.test(approved.subject + '\n\n' + approved.body)) {
-      return fail('ebc_firewall_block: outbound referenced the firewall itself', {
-        blocked: true, requestId: rid, cycleId: pai.cycleId, councilProof: proof
-      });
-    }
   } catch (ePam) {
     return fail('approved_email_pam_uncertain', {
       blocked: true, requestId: rid, cycleId: pai.cycleId, councilProof: proof
@@ -714,6 +732,22 @@ async function finalizeApprovedEmail(input) {
   }
   var finalized = { ok: true, approved: approved, requestId: rid,
     cycleId: pai.cycleId, councilProof: proof };
+  // ⬡B:reach.iman:FIX:the_firewall_word_stops_voting_after_the_council_has_ruled:20260825⬡
+  // A two-token regex (EBC_FIREWALL_TOKENS) used to refuse the approved artifact right here,
+  // AFTER the committed nine-row council cycle had ruled on these exact bytes and PAM had
+  // passed them, so any legitimate email mentioning a network firewall, a firewall clause, or
+  // an IT quote died blocked:true and the person received nothing at all. Cold code overruling
+  // a mind that already ruled is the named defect, and the fix is the same shape as the
+  // 20260825 double-vote fix in core/pai.outbound.council.js: the detector stays, the finding
+  // reaches the mind (the deliberation above names the fact BEFORE the council rules), and
+  // only the cold vote is removed. The detection on the approved bytes rides the receipt below
+  // as an advisory, the exact detect-and-carry shape of board/pam/pam.js ADVISORY_PATTERNS,
+  // so the fact is never silently dropped and a reading mind decides what it means. The PAM
+  // check above is untouched: a real PAM hold still refuses, with PAM's own flags on the line,
+  // so the receipt names the true refuser and its grounds.
+  if (EBC_FIREWALL_TOKENS.test(approved.subject + '\n\n' + approved.body)) {
+    finalized.advisories = ['ebc_firewall_token_mentioned'];
+  }
   Object.defineProperty(finalized, '_councilResult', { enumerable:false, value:pai });
   return finalized;
 }
@@ -892,6 +926,9 @@ async function sendThroughCommittedBoundary(config) {
     // lane can record it. Present only on the round that went to him.
     intendedRecipients:testEnvelope.intendedRecipients || null,
     founderTest:testEnvelope.founderTest === true };
+  // Present only when a detection fired, so a clean send keeps its exact historical shape.
+  // See the detected-and-carried stamp in finalizeApprovedEmail.
+  if (finalized.advisories) proofResult.advisories = finalized.advisories;
   if (!provider.ok) return fail(provider.reason, Object.assign({}, proofResult,
     provider.status === undefined ? {} : { status: provider.status },
     provider.providerAccepted ? { providerAccepted:true,
@@ -1005,11 +1042,20 @@ async function sendCommittedToHam(hamUid, exactEmail, artifact, world, authoriza
   try {
     var pam = require('../board/pam/pam.js');
     var verdict = await pam.pamCheck(approved.subject + '\n\n' + approved.body, world);
-    if (!verdict || verdict.ok !== true ||
-        /\bebc\b|firewall/i.test(approved.subject + '\n\n' + approved.body)) {
+    // ⬡B:reach.iman:FIX:the_receipt_names_the_true_refuser_and_the_word_stops_voting:20260825⬡
+    // Two defects lived folded into one condition here. A two-token regex
+    // (EBC_FIREWALL_TOKENS) refused bytes a council had already committed and read in full,
+    // and its refusal was OR'd into PAM's verdict, so the receipt said approved_email_pam_hold
+    // while PAM had PASSED the very same bytes: a false receipt naming an organ that never
+    // held. Both are fixed. The cold vote is removed (the committing council read the exact
+    // artifact and ruled; this seam may not start a second cycle, so the detection rides the
+    // receipt below as an advisory a reading mind judges), and approved_email_pam_hold is now
+    // returned only when PAM itself held, with PAM's own flags on the line, so the record
+    // names the true refuser and its grounds.
+    if (!verdict || verdict.ok !== true) {
       return fail('approved_email_pam_hold', { blocked:true,
         requestId:councilProof.request_id, cycleId:councilProof.cycle_id,
-        councilProof:councilProof });
+        councilProof:councilProof, pamFlags:(verdict && verdict.flags) || null });
     }
   } catch (ePam) { return fail('approved_email_pam_uncertain', { blocked:true,
     requestId:councilProof.request_id, cycleId:councilProof.cycle_id,
@@ -1021,6 +1067,11 @@ async function sendCommittedToHam(hamUid, exactEmail, artifact, world, authoriza
     requireExactHamTarget:true });
   var proofResult={requestId:councilProof.request_id,cycleId:councilProof.cycle_id,
     councilProof:councilProof,approvedSubject:approved.subject,approvedBody:approved.body};
+  // Detected and carried, never decided; present only when the detection fired. See the
+  // detected-and-carried stamp beside EBC_FIREWALL_TOKENS.
+  if (EBC_FIREWALL_TOKENS.test(approved.subject + '\n\n' + approved.body)) {
+    proofResult.advisories = ['ebc_firewall_token_mentioned'];
+  }
   if (!provider.ok) return fail(provider.reason,Object.assign({},proofResult,
     provider.status===undefined?{}:{status:provider.status},
     provider.providerAccepted?{providerAccepted:true,messageId:provider.messageId||null,

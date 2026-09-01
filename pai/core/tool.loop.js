@@ -2171,27 +2171,96 @@ function verifiedCurrentCapabilityEvidenceCount(evidence, expected) {
   return verifiedCurrentCapabilityRows(evidence,expected).length;
 }
 
+// ⬡B:core.tool_loop:PEN:the_facts_carried_now_include_what_this_deployment_could_not_verify:20260825⬡
+// This projection is what the mind actually READS before it answers a capability question, and
+// until now it carried only the LIVE rows. A capability the deployment could NOT verify this
+// turn was absent from her context entirely, so she had no way to say "Always On is not
+// confirmed running right now" even though that was the true and useful answer, and the
+// approved-sentence table retired from core/current.capability.grounding.js then scored her
+// honest attempt as unsupported. Cold code establishing what is true is legitimate; cold code
+// withholding half of what is true and then grading her on the missing half is not.
+// EVERY VERIFIED ROW NOW RIDES, with the deployment's own verdict on it, split into what was
+// confirmed this turn and what was not. NOTHING IS CLASSIFIED FOR HER: a name under
+// not_verified means it was not confirmed this turn, which is not the same as broken and is
+// not proof of absence, and the narration below says exactly that so she judges it herself.
+// The row state words are the FIELD names the capability read already publishes (`active`,
+// `running`, `enabled`, `connected`) and the Come Code action descriptions are the workspace's
+// own canonical text. No coder writes a sentence for her here.
+// WHAT IS STILL WITHHELD, and it is named rather than hidden: the two internal station rows
+// (outbound.meta_commentary, outbound.writ) do not enter her context, because the two voices
+// law says the person on the other end never receives an internal station name and carrying
+// those rows into her prompt is the shortest path to one leaking. That is a real remaining gap:
+// asked directly about them she can only say she could not verify. Converting it needs the
+// narration fence written and proved for internal names, which is its own change.
+function _capabilityStateNames(row) {
+  var id = String(row && row.capability_id || '');
+  var facts = row && row.facts || {};
+  if (id === 'world_builder.seat') return [{name:'Active', present:facts.active === true}];
+  if (id === 'world_builder.always_on') {
+    return [{name:'Running', present:facts.running === true},
+      {name:'Enabled', present:facts.enabled === true}];
+  }
+  if (id === 'world_builder.mission_board') {
+    return [{name:'Connected', present:facts.connected === true}];
+  }
+  if (/^come_code\./.test(id)) {
+    // The workspace contract has no per-action boolean: an action is real when the surface
+    // itself verified live, so the row's own verdict is what decides which list these land in.
+    return (Array.isArray(facts.actions) ? facts.actions : []).map(function (action) {
+      var description = Array.isArray(action) ? String(action[1] || '').trim() : '';
+      return {name:description, present:row && row.state === 'live'};
+    }).filter(function (entry) { return !!entry.name; });
+  }
+  return [];
+}
+
+var CURRENT_CAPABILITY_SUBJECTS = Object.freeze({
+  'come_code.read':'Come Code','come_code.coder':'Come Code',
+  'world_builder.seat':'World Builder','world_builder.always_on':'Always On',
+  'world_builder.mission_board':'Mission Board'
+});
+
+var CURRENT_CAPABILITY_HOW_TO_READ = 'These rows are what this deployment checked about ' +
+  'itself while answering this question. state is the deployment\'s overall verdict for that ' +
+  'surface right now; confirmed and not_confirmed are the individual checks behind it, and a ' +
+  'name under not_confirmed came back negative or could not be read just now, which is not ' +
+  'proof that the thing is broken and not proof that it is absent. These are facts, not ' +
+  'sentences to repeat: decide for yourself what is worth saying and say it in your own ' +
+  'words. If the person asked about something no row covers, say plainly that you could not ' +
+  'verify it rather than guessing either way.';
+
+// The one boundary this projection keeps, and it is an anchor rather than a filter on her
+// judgment: nothing internal may cross into a prompt whose words are meant for a person. Shape
+// only, over bytes she would otherwise read: known subjects, a known state word, plain detail
+// strings, no capability id, no source ref, no repository path, no route, no internal
+// snake_case name.
 function _currentCapabilityProjectionSafe(projection) {
-  if (!projection || !Array.isArray(projection.verified_capabilities) ||
-      Object.keys(projection).length!==1) return false;
+  if (!projection || !Array.isArray(projection.capability_rows) ||
+      typeof projection.how_to_read !== 'string' ||
+      Object.keys(projection).length!==2) return false;
   var allowedSubjects={'World Builder':true,'Always On':true,
     'Mission Board':true,'Come Code':true};
-  return projection.verified_capabilities.every(function (row) {
-    if (!row || !allowedSubjects[row.subject] || !Array.isArray(row.verified) ||
-        !row.verified.length || Object.keys(row).length!==2) return false;
-    return row.verified.every(function (detail) {
-      var value=String(detail || '').trim();
-      return !!value && !/(?:meta[ _-]?commentary|\bwrit\b|\boutbound\b|source_refs?|capability_id|\bcore\/|\b(?:GET|POST)\s+\/|#[A-Z_]+|\b[a-z]+_[a-z_]+\b)/i
-        .test(value);
-    });
+  var allowedStates={live:true,unverified:true};
+  var plainDetail=function (detail) {
+    var value=String(detail || '').trim();
+    return !!value && !/(?:meta[ _-]?commentary|\bwrit\b|\boutbound\b|source_refs?|capability_id|\bcore\/|\b(?:GET|POST)\s+\/|#[A-Z_]+|\b[a-z]+_[a-z_]+\b)/i
+      .test(value);
+  };
+  return projection.capability_rows.every(function (row) {
+    if (!row || !allowedSubjects[row.subject] || Object.keys(row).length!==4 ||
+        !allowedStates[row.state] ||
+        !Array.isArray(row.confirmed) || !Array.isArray(row.not_confirmed) ||
+        (!row.confirmed.length && !row.not_confirmed.length)) return false;
+    return row.confirmed.every(plainDetail) && row.not_confirmed.every(plainDetail);
   });
 }
 
 // The signed receipt is the verifier's complete record, including internal council seats and
-// canonical source addresses. A model drafting words for a person needs a narrower view: only
-// live external subjects the person actually asked about, expressed through the workspace's own
-// action descriptions. This projection is derived only after receipt verification, never from
-// the unsigned tool bytes, and it cannot replace or weaken the evidence the guard consumes.
+// canonical source addresses. A model drafting words for a person needs the external subjects
+// the person actually asked about, expressed through the deployment's own state words and the
+// workspace's own action descriptions. This projection is derived only after receipt
+// verification, never from the unsigned tool bytes, and it cannot replace or weaken the
+// evidence the detectors consume.
 function currentCapabilityHumanProjection(question, evidence, expected) {
   var text=String(question || '').toLowerCase().replace(/[\u2018\u2019]/g,"'");
   var namedExternal=/\b(?:come code|world builder|always on|mission board)\b/.test(text);
@@ -2210,40 +2279,30 @@ function currentCapabilityHumanProjection(question, evidence, expected) {
     }
     return false;
   }
-  var rows=verifiedCurrentCapabilityRows(evidence,expected).filter(requested);
-  var visible=[];
-  var world=rows.find(function (row) { return row.capability_id==='world_builder.seat'; });
-  if (world&&world.facts&&world.facts.active===true) {
-    visible.push({subject:'World Builder',verified:['Live']});
-  }
-  var always=rows.find(function (row) {
-    return row.capability_id==='world_builder.always_on';
-  });
-  if (always&&always.facts) {
-    var alwaysStates=[];
-    if (always.facts.running===true) alwaysStates.push('Running');
-    if (always.facts.enabled===true) alwaysStates.push('Enabled');
-    if (alwaysStates.length) visible.push({subject:'Always On',verified:alwaysStates});
-  }
-  var mission=rows.find(function (row) {
-    return row.capability_id==='world_builder.mission_board';
-  });
-  if (mission&&mission.facts&&mission.facts.connected===true) {
-    visible.push({subject:'Mission Board',verified:['Connected']});
-  }
-  var descriptions=[];
-  rows.filter(function (row) { return /^come_code\./.test(row.capability_id); })
-    .forEach(function (row) {
-      var actions=row&&row.facts&&Array.isArray(row.facts.actions)?row.facts.actions:[];
-      actions.forEach(function (action) {
-        var description=Array.isArray(action)?String(action[1] || '').trim():'';
-        if (description&&descriptions.indexOf(description)<0) descriptions.push(description);
-      });
+  var verified=currentCapabilityGrounding.verifiedRows(evidence,expected);
+  var allRows=verified.length===1?verified[0].allRows:[];
+  var rows=allRows.filter(requested);
+  var bySubject=[];
+  var index={};
+  rows.forEach(function (row) {
+    var subject=CURRENT_CAPABILITY_SUBJECTS[String(row.capability_id || '')];
+    if (!subject) return;
+    if (!index[subject]) {
+      index[subject]={subject:subject,state:'live',confirmed:[],not_confirmed:[]};
+      bySubject.push(index[subject]);
+    }
+    if (row.state!=='live') index[subject].state='unverified';
+    _capabilityStateNames(row).forEach(function (entry) {
+      if (index[subject].confirmed.indexOf(entry.name)>=0 ||
+          index[subject].not_confirmed.indexOf(entry.name)>=0) return;
+      (entry.present ? index[subject].confirmed : index[subject].not_confirmed).push(entry.name);
     });
-  if (descriptions.length) visible.push({subject:'Come Code',verified:descriptions});
-  var projection={verified_capabilities:visible};
+  });
+  var projection={capability_rows:bySubject.filter(function (row) {
+    return row.confirmed.length || row.not_confirmed.length;
+  }),how_to_read:CURRENT_CAPABILITY_HOW_TO_READ};
   return _currentCapabilityProjectionSafe(projection)
-    ? projection : {verified_capabilities:[]};
+    ? projection : {capability_rows:[],how_to_read:CURRENT_CAPABILITY_HOW_TO_READ};
 }
 
 function currentCapabilityClaimFindings(question, answer, evidence, expected) {
@@ -3396,6 +3455,10 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     // sub-100ms design intent holds for the common (exact-hit) path.
     // Same advisor guard as the ALERT fallback: on an outbound/compose turn the advisor grounds on
     // its own curated context, so skip this keyword net that would pull arbitrary founder-wall beads.
+    // The keyword net asks the bank for its own row bound rather than the caller's, so the row
+    // bound that actually applied is reported below by name instead of being inferred wrongly
+    // from q.limit. Naming the existing literal is not a new bound.
+    var _KEYWORD_FALLBACK_ROW_LIMIT = 12;
     if (_honestFindEmpty() && !(runtime && runtime.outboundFinalize === true)) {
       var _kwStop = {the:1,and:1,for:1,you:1,your:1,what:1,whats:1,who:1,whos:1,does:1,did:1,is:1,are:1,was:1,were:1,my:1,me:1,do:1,i:1,a:1,an:1,of:1,to:1,in:1,on:1,about:1,tell:1,show:1,any:1,have:1,has:1,love:1,like:1,favorite:1};
       var _kw = String(origMessage||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
@@ -3410,7 +3473,8 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
           var _kwUrl = _bu() + '/rest/v1/' + _tbl() + '?ham_uid=eq.' + encodeURIComponent(q.ham_uid)
             + '&summary=ilike.*' + encodeURIComponent(_kw[_ki]) + '*'
             + (_kwTierFilter ? '&' + _kwTierFilter : '')
-            + '&select=id,stamp_type,source,summary,content,created_at&order=created_at.desc&limit=12';
+            + '&select=id,stamp_type,source,summary,content,created_at&order=created_at.desc&limit='
+            + _KEYWORD_FALLBACK_ROW_LIMIT;
           var _kwDeadline = AbortSignal.timeout(2500);
           var _kwSignal = runtime && runtime.abortSignal && typeof AbortSignal.any === 'function'
             ? AbortSignal.any([runtime.abortSignal,_kwDeadline])
@@ -3493,30 +3557,57 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
     // honest "X ago" language, explicit instruction not to assert without
     // it) rather than inventing a new convention.
     var _now = Date.now();
-    // ⬡B:core.tool_loop:FIX:hard_filter_stale_day_beads_20260714⬡ 911, repeated
-    // pattern: the recency-decay tagging below ("stamped: 22 days ago") already
-    // existed and the model STILL presented a 22-day-old, Monday-only ALERT
-    // ("Mediators Monday: 2:30 Mark Gerzon") as today's (a Tuesday) real meeting --
-    // proof that attaching honest text is not enough when the model chooses to
-    // override it. This is a hard, mechanical filter, not another instruction: for a
-    // day/schedule/meeting-shaped question, any ALERT/BRIEF bead older than 48 hours,
-    // OR one that names a specific weekday that is not today, is stripped from the
-    // result before the model ever sees it -- it cannot present what it cannot read.
+    // ⬡B:core.tool_loop:PEN:cold_code_stops_stripping_rows_out_of_her_memory_read:20260825⬡
+    // SUPERSEDES the 20260714 hard filter that stood here. That filter combined a regex on the
+    // PERSON's message, a 48 hour cutoff, and a weekday-name regex on the ROW's own summary, and
+    // then DELETED the matching ALERT and BRIEF rows out of res.beads before the mind ever saw
+    // them. Its own comment stated the intent outright: "it cannot present what it cannot read."
+    // That is cold code deciding what a mind is permitted to remember, and then hiding that it
+    // decided. Relevance is a judgment and judgments belong to minds (Pen On Her Mind, 20260815:
+    // CARRY, NEVER CLASSIFY). It also fired on the bare word "free" or "busy" in any sentence, so
+    // unrelated turns quietly lost rows, and a real standing meeting that names its own weekday
+    // went invisible on the very day it happens once the row passed 48 hours old.
+    // NOTHING IS REMOVED NOW. The same measurements are still taken, and they ride out as FACTS
+    // on the result (day_shaped_question, stale_day_rows) in the same shape core/wonders/wake.js
+    // uses when it CARRIES a bound instead of acting on one. No new threshold, no new filter: the
+    // 48 hours below is the reported measurement the old filter used, kept only so the mind can
+    // see which rows the old cold rule would have hidden and rule on them itself. The mind that
+    // already receives this tool result is the one that judges whether a row is still this
+    // person's real schedule.
     var _dayQMsg = /\b(today|schedule|calendar|meeting|meetings|free|busy|agenda|going on today|day today|tomorrow)\b/i.test(String(origMessage||''));
+    var _staleDayRows = [];
     if (_dayQMsg) {
       var _todayName = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][new Date().getDay()];
-      res.beads = res.beads.filter(function (b) {
-        var isDayFlavored = /^(ALERT|BRIEF)$/.test(b.stamp_type || '');
-        if (!isDayFlavored) return true; // only guard the day-shaped stamp types
-        var ageH = b.created_at ? (_now - Date.parse(b.created_at)) / 3600000 : 999999;
-        if (ageH > 48) return false; // too old to be today's real schedule
-        var mentionsOtherWeekday = /\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i.test(b.summary || '')
+      res.beads.forEach(function (b) {
+        if (!/^(ALERT|BRIEF)$/.test(b.stamp_type || '')) return; // only the day-shaped stamp types were ever measured
+        var ageH = b.created_at ? (_now - Date.parse(b.created_at)) / 3600000 : null;
+        var namesOtherWeekday = /\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i.test(b.summary || '')
           && !new RegExp('\\b' + _todayName + '\\b', 'i').test(b.summary || '');
-        if (mentionsOtherWeekday) return false; // named a day that is not today
-        return true;
+        var olderThan48h = (ageH == null) || (ageH > 48);
+        if (!olderThan48h && !namesOtherWeekday) return; // nothing measurable to report about this row
+        _staleDayRows.push({ id: b.id == null ? null : b.id, stamp_type: b.stamp_type || null,
+          summary: b.summary || null,
+          age_hours: ageH == null ? null : Math.round(ageH * 10) / 10,
+          created_at_missing: ageH == null,
+          names_weekday_other_than_today: namesOtherWeekday, today_is: _todayName });
       });
     }
-    _result.beads = res.beads.slice(0,8).map(function(b){
+    // ⬡B:core.tool_loop:PEN:the_unreported_cap_of_eight_is_gone_from_her_memory_read:20260825⬡
+    // SUPERSEDES `res.beads.slice(0,8)`, which stood immediately above the day-shaped filter
+    // retired one commit earlier. That filter stopped hiding rows and this cap went on hiding
+    // them: a read that matched the caller's full requested limit came back cut to eight, with
+    // a count that equalled the post-cut number, so both she and every downstream reader took
+    // the eight for the complete set.
+    // NOTHING FORCED EIGHT, and this was checked rather than assumed. The row bound on this
+    // read is already chosen one layer up by the caller itself (`q.limit = args.limit || 10`,
+    // handed straight to the bank query by core/find.js as `limit=`), or, on the keyword net
+    // below, by that net's own _KEYWORD_FALLBACK_ROW_LIMIT. Eight was a second, tighter,
+    // unreported cap underneath a bound the mind had already set for itself, so it is removed
+    // rather than reported: there is no fact to carry about a limit that should not exist.
+    // What IS carried is the bound that genuinely applied, in the vocabulary core/find.js
+    // already uses (`truncated`), so nobody has to learn a second word for the same idea.
+    var _rowLimitApplied = res.keyword_fallback ? _KEYWORD_FALLBACK_ROW_LIMIT : q.limit;
+    _result.beads = res.beads.map(function(b){
       var ageMin = b.created_at ? Math.round((_now - Date.parse(b.created_at)) / 60000) : null;
       var ageLabel = ageMin == null ? 'age unknown' :
         ageMin < 60 ? (ageMin + ' minutes ago') :
@@ -3529,7 +3620,28 @@ async function executeTool(name, args, hamUid, origMessage, runtime, providerRet
       if (_bc != null && typeof _bc !== 'string') { try { _bc = JSON.stringify(_bc); } catch (eBc) { _bc = String(_bc); } }
       return {stamp_type:b.stamp_type,summary:b.summary,content:(_bc||'').slice(0),stamped:ageLabel};
     });
+    // Reported, never silent. rows_returned is what this result actually carries and
+    // rows_matched is what the read actually returned, so the two are equal now that nothing
+    // is cut here; `truncated` stays in the result on purpose, as core/find.js's own field
+    // name, so a reader never has to wonder whether a missing field means nothing was cut.
+    _result.rows_returned = _result.beads.length;
+    _result.rows_matched = res.beads.length;
+    _result.truncated = res.beads.length > _result.beads.length;
+    _result.row_limit_applied = _rowLimitApplied;
     _result.recency_instruction = 'Every result above carries "stamped: X ago", real elapsed time, not a guess. Before stating anything as a CURRENT problem, loop, or status, check its age. Anything more than a few hours old may already be resolved -- state it as history ("as of N ago, X was happening") not as present-tense fact ("X is happening right now"), unless you have separately confirmed it is still true today.';
+    _result.recency_instruction += ' This result carries every row the read returned, ' +
+      'rows_returned of rows_matched, with nothing removed after the read. The read itself ' +
+      'asked the bank for at most row_limit_applied rows, so if rows_returned equals ' +
+      'row_limit_applied there may well be more rows than these; ask again with a larger ' +
+      'limit or a narrower question if what you need is not here.';
+    // The measurement the old cold filter used to act on, now carried as a fact instead. Nothing
+    // above was removed. stale_day_rows is a report about rows that are still present in the
+    // result, matched by their summary text, so the judgment stays where it belongs.
+    _result.day_shaped_question = _dayQMsg;
+    _result.stale_day_rows = _staleDayRows;
+    if (_dayQMsg) {
+      _result.recency_instruction += ' Some ALERT and BRIEF rows above are older than 48 hours, carry no timestamp at all, or name a weekday that is not today; every one of them is listed in stale_day_rows with its measured age. No row was removed from this result. Judge for yourself whether any of them is still this person\'s real schedule.';
+    }
     if (res.keyword_fallback) _result.keyword_fallback = res.keyword_fallback;
     // Preserve FIND's own measured read duration in the public result. Besides being the
     // canonical timing field, it is evidence from the reader itself and can legitimately
@@ -5701,6 +5813,14 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       + 'not claim an external action was completed unless a verified tool receipt proves it.';
   }
   var msgs=[{role:'system',content:systemPrompt}];
+  // ⬡B:core.tool_loop:FIX:carry_the_prior_turns_bound_as_a_reported_fact:20260825⬡ Defaults hold
+  // for every caller that passes no priorTurns at all (unchanged: nothing was ever truncated).
+  // Set for real below only when the bound below actually fires.
+  var _priorTurnsAvailable = Array.isArray(priorTurns) ? priorTurns.length : 0;
+  var _priorTurnsUsed = _priorTurnsAvailable;
+  var _priorTurnsTruncated = false;
+  var _priorTurnsTruncatedReason = null;
+  var _priorTurnsServerContextHeldOut = 0;
   if (!_structuredReachPolicy && Array.isArray(priorTurns) && priorTurns.length) {
     // ⬡B:tool.loop:FIX:bound_prior_turns_so_history_cannot_balloon_every_call:20260722⬡
     // Cost audit follow-up (founder 911 20260722): priorTurns was appended UNBOUNDED, so a long
@@ -5715,15 +5835,101 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     // UNBOUNDED branch: every prior turn, at full length, into every request. The bound
     // whose whole job is cost containment was removed by the typo meant to tune it, and
     // nothing said so. 0 still means deliberately unbounded; garbage now means the default.
+    // ⬡B:core.tool_loop:FIX:carry_the_prior_turns_bound_as_a_reported_fact:20260825⬡ Unlike
+    // essentials/logful/index.js's now-removed limit=40 (no genuine constraint forced that one),
+    // THIS bound is real: it exists to keep the deliberation input inside the model provider's
+    // context window and call-cost budget, exactly the "provider window" case the project rule
+    // says to keep and report rather than remove. It stays, but it is no longer silent -- the
+    // fact rides on _successResult (prior_turns_used/available/truncated/truncated_reason) for
+    // every caller of runPAI to read, same shape as core/coda/watch.js history_truncated.
+    // ⬡B:core.tool_loop:FIX:the_history_bound_can_no_longer_evict_a_server_built_context_turn:20260825⬡
+    // A caller may hand this function turns that are NOT conversation history: routes/
+    // stream.routes.js prepends the project instructions and knowledge files that
+    // buildTurnContext assembled, and marks each of them server_context:true. A tail slice over
+    // the combined array put those context turns at the FRONT of the window, so a long enough
+    // conversation pushed the project's own instructions out of the call and nothing said so.
+    // They are not history and they do not compete for the window: they are held out and always
+    // ride, and only real conversation turns are bounded. Every caller that passes no
+    // server_context flag is byte-for-byte unchanged, because the partition below yields an
+    // empty held-out list and the identical slice.
     var _ptMax = _boundEnvInt('PAI_PRIOR_TURNS_MAX', 40, 0, 100000);
     var _ptChars = _boundEnvInt('PAI_PRIOR_TURN_CHARS', 12000, 0, 10000000);
-    var _recentTurns = _ptMax > 0 ? priorTurns.slice(-_ptMax) : priorTurns;
+    // \u2b21B:core.tool_loop:MERGE:hold_out_server_context_and_still_tell_her_the_bound_bit:20260825\u2b21
+    // TWO LANES REACHED THIS BLOCK INDEPENDENTLY AND BOTH WERE RIGHT, so this keeps both rather
+    // than picking a winner. The 20260825 lane found that a tail slice over the COMBINED array
+    // put server-built context turns at the front of the window, so a long enough conversation
+    // silently pushed the project's own instructions out of the call. The 20260824 lane found
+    // that when the bound bit, nothing told her, so a bound-induced blind spot and an honest
+    // "we never discussed that" looked identical to her. Neither fix subsumes the other: the
+    // partition decides WHAT rides, the notice below states WHAT DID NOT. Taking either side
+    // alone would have dropped a real fix, and taking this side alone would also have broken
+    // the file, since the loop below this block reads _eligibleTurn, _eligibleTotal, _carried
+    // and _truncated, which only the other side defines.
+    var _serverContextTurns = priorTurns.filter(function (t) {
+      return !!(t && t.server_context === true);
+    });
+    var _conversationTurns = priorTurns.filter(function (t) {
+      return !(t && t.server_context === true);
+    });
+    var _recentConversationTurns = _ptMax > 0
+      ? _conversationTurns.slice(-_ptMax) : _conversationTurns;
+    var _recentTurns = _serverContextTurns.concat(_recentConversationTurns);
+    _priorTurnsServerContextHeldOut = _serverContextTurns.length;
+    _priorTurnsTruncated = _conversationTurns.length > _recentConversationTurns.length;
+    _priorTurnsTruncatedReason = _priorTurnsTruncated
+      ? 'pai_prior_turns_max_forced_by_model_context_window_and_call_cost_budget' : null;
+    _priorTurnsUsed = _recentTurns.length;
+    // \u2b21B:core.tool_loop:FIX:tell_her_the_history_was_cut_instead_of_cutting_it_quietly:20260824\u2b21
+    // The bound is a real cost bound and it stays. What was missing is that NOTHING said so:
+    // she could not tell a 40-turn session from a 400-turn session handed to her 40 turns deep,
+    // so an honest "we never discussed that" and a bound-induced blind spot looked identical.
+    // Cold code detects the bite and WAKES her with the fact. It does not summarize the dropped
+    // turns, does not rank them, does not decide what to say about them. She decides that.
+    // CRITIC REFUTATION 20260824, both earned. FIRST: the first cut counted turns BEFORE the
+    // role/type filter below and asserted "nothing was summarized" on the same pass that
+    // truncates any turn past PAI_PRIOR_TURN_CHARS one line down. A change whose whole premise
+    // is "stop letting bounds lie" shipped a sentence the adjacent line made false. Now the
+    // count is taken AFTER the filter and the truncation is counted and named. SECOND: it told
+    // her what to SAY, in coder nouns ("outside the window you were handed"). Two voices, never
+    // crossed. This states the fact to her and forbids reciting the plumbing to the person.
+    // ROUND 2 REFUTATION 20260824, earned: _carried counts only turns passing the role/type
+    // filter below, but it was compared against priorTurns.length, the RAW client array. With
+    // PAI_PRIOR_TURNS_MAX=0 (deliberately unbounded, nothing withheld), a payload carrying one
+    // system-role or blank entry produced "9 of 10, the other 1 are not in front of you" -- a
+    // bound-bite notice on a pass where no bound bit, inventing a withheld turn that was never
+    // a turn. Compare like with like: count the ELIGIBLE turns in the full array.
+    function _eligibleTurn(t) {
+      return !!(t && (t.role === 'user' || t.role === 'assistant')
+        && typeof t.content === 'string' && t.content.trim());
+    }
+    var _eligibleTotal = priorTurns.filter(_eligibleTurn).length;
+    var _carried = 0, _truncated = 0;
     _recentTurns.forEach(function(t){
-      if (t && (t.role==='user'||t.role==='assistant') && typeof t.content==='string' && t.content.trim()) {
-        var _tc = (_ptChars > 0 && t.content.length > _ptChars) ? t.content.slice(0, _ptChars) : t.content;
+      if (_eligibleTurn(t)) {
+        var _cut = _ptChars > 0 && t.content.length > _ptChars;
+        var _tc = _cut ? t.content.slice(0, _ptChars) : t.content;
+        if (_cut) _truncated++;
+        _carried++;
         msgs.push({role:t.role, content:_tc});
       }
     });
+    if (_carried < _eligibleTotal || _truncated > 0) {
+      var _handedNote = '\nWHAT YOU WERE HANDED OF THIS SESSION: ' + _carried
+        + ' earlier turns of ' + _eligibleTotal + '.';
+      if (_carried < _eligibleTotal) {
+        _handedNote += ' The other ' + (_eligibleTotal - _carried) + ' are not in front of '
+          + 'you on this pass. They were not deleted and nothing was written in their place.';
+      }
+      if (_truncated > 0) {
+        _handedNote += ' ' + _truncated + ' of the turns you can see were shortened, so the end '
+          + 'of those is missing.';
+      }
+      _handedNote += ' So if something is genuinely not in front of you, do not tell the person '
+        + 'it never happened, and do not assert that it did. Say you do not have it in front of '
+        + 'you and ask them. Never recite these numbers or any of this plumbing to the person. '
+        + 'They are for you, not for them.';
+      msgs[0].content += _handedNote;
+    }
   }
   // ⬡B:tool.loop:NUDGE:nash_routing_20260711⬡ cold keyword router: a sports
   // question MUST reach NASH; the model was answering "no real-time access"
@@ -6452,7 +6658,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       msgs.push({role:'tool',tool_call_id:_prefetchedCapabilityId,
         content:JSON.stringify(_prefetchedCapabilityProjection)});
       msgs.push({role:'system',content:
-        'Answer only from the live capability rows above. Each positive capability sentence must be supported by one live row. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
+        'The rows above are what this deployment confirmed about itself just now and what it could not confirm. Ground anything you say about what is or is not working in those rows, and say plainly when a row did not confirm something rather than guessing either way. Do not close the list as if it were everything you can do, do not repeat an older limitation the rows contradict, and never name a tool, an internal station, or this check to the person. The wording is yours.'});
       _currentCapabilityReadPrefetched=true;
       body.messages=msgs;
       // Keep every authorized hand visible after the state snapshot. The snapshot
@@ -7169,7 +7375,8 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
         msgs.push({role:'tool',tool_call_id:tc.id,content:_toolResultForModel});
         if (tc.function.name === 'read_current_capabilities') {
           msgs.push({role:'system',content:
-            'Answer the capability question itself in concise, plain language. Each positive capability sentence must be supported by one live capability row above. Do not make an exhaustive claim, repeat an older limitation, name tools or internal stages, or describe this check.'});
+            'Answer the capability question itself in concise, plain language. ' +
+            'The rows above are what this deployment confirmed about itself just now and what it could not confirm. Ground anything you say about what is or is not working in those rows, and say plainly when a row did not confirm something rather than guessing either way. Do not close the list as if it were everything you can do, do not repeat an older limitation the rows contradict, and never name a tool, an internal station, or this check to the person. The wording is yours.'});
         }
         // ⬡B:core.tool_loop:EVIDENCE:bound_bcw_refocused_after_generic_find:20260715⬡
         // Information questions force a live FIND after CODA's preload. A generic
@@ -7510,7 +7717,7 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     _preCouncilHumanRepairUsed = true;
     var _oneRepairCap;
     if (_nameBoundaryRepair) return _nameFreeHumanRepair();
-    var _capabilityBoundaryRepair = /(?:current_capability_evidence_missing|stale_single_file_claim|unsupported_exhaustive_claim|unsupported_capability_clause|unsupported_negative_capability_claim|internal_capability_surface_exposed|ambiguous_capability_subject|supported_capability_clause_missing)/
+    var _capabilityBoundaryRepair = /(?:current_capability_evidence_missing|stale_single_file_claim|unsupported_exhaustive_claim|internal_capability_surface_exposed)/
       .test(String(failureCode || ''));
     // A privacy-held attribution is evidence of what must NOT be repeated. Feeding
     // it back as the assistant's last sentence anchored the healer on the exact
@@ -7520,10 +7727,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     var _nameRepairInstruction = _nameBoundaryRepair
       ? ' Remove every creator, owner, founder, builder, employer, or author attribution and every real-person name from the answer, including the name of the person on this call. Answer who you are, why you are here, or who authorized the call only in terms of what you do, the signed call purpose, and non-human system or Wonder roles already established in the bound context. Do not repeat or paraphrase the rejected attribution.'
       : '';
+    // ⬡B:core.tool_loop:PEN:the_repair_hands_back_a_concern_it_no_longer_dictates_a_sentence:20260825⬡
+    // WHAT STOOD HERE. The old instruction was the retired five-sentence whitelist written out
+    // as a prompt: "Begin every positive capability sentence with exactly one visible subject
+    // label copied verbatim", "For Come Code, write \"Come Code can \" followed by one full
+    // action description copied from that subject, changing only its first letter to
+    // lowercase", one action per sentence, one state word per subject. That is a coder writing
+    // her sentences and then a table grading her for obeying. Both are gone.
+    // WHAT IS HERE NOW. The concern is named as a FACT, the rows she needs are already in her
+    // completed context with their real current state, and the judgment is handed back to her.
+    // No sentence shape, no template, no approved wording.
     var _capabilityRepairInstruction = _capabilityBoundaryRepair
       ? (String(failureCode || '').indexOf('current_capability_evidence_missing') >= 0
-        ? ' The current capability read supplied zero live rows. Answer without claiming the capability is present or absent. State the uncertainty directly in natural human language, with no process narration, tool names, system vocabulary, or invented replacement capability.'
-        : ' Rewrite from the live capability rows already in the completed context. Use short atomic sentences. Begin every positive capability sentence with exactly one visible subject label copied verbatim from the completed capability result. Never combine subject labels in one sentence. Never substitute a pronoun, you, or the system for the visible subject label. For Come Code, write "Come Code can " followed by one full action description copied from that subject, changing only its first letter to lowercase. Use one action per sentence. For other subjects, use one state word listed under that same subject. Omit a claim rather than broaden, combine, or paraphrase it. Remove unsupported, exhaustive, and old limitation claims. Use natural human language with no process narration, tool names, system vocabulary, or invented replacement capability.')
+        ? ' The current capability read did not verify for this turn, so nothing in front of you establishes what is or is not live right now. Do not claim a capability is present and do not claim it is absent. Say plainly, in your own words, that you could not confirm it right now, in natural human language with no process narration, tool names, or system vocabulary.'
+        : ' The capability rows already in your completed context carry, for each surface, what this deployment confirmed just now and what it could not. Answer again from those rows, in your own words and your own sentence order. Anything a row does not carry, either leave out or say plainly you could not confirm it. Do not close the list as if it were everything you can do, do not repeat an old limitation the rows contradict, and do not name an internal station, a tool, or a stage to the person. Nothing here is a sentence to copy: the judgment about what to say is yours.')
       : '';
     var _repairedHuman = await regenerateHollowAnswer(_repairCandidate, msgs, [async function (repairMessages) {
       return (await _completeBoundHistoryOnLadder(repairMessages, _oneRepairCap, 0.1, false)) || '';
@@ -8052,6 +8269,22 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     : guardCurrentCapabilityClaim(_proofQuestion, finalAns, _verifiedToolEvidence, {
       hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
     });
+  // ⬡B:core.tool_loop:PEN:a_capability_concern_is_a_receipt_line_not_a_dead_turn:20260825⬡
+  // WHAT STOOD HERE. A held capability check ran one heal, judged the heal by the same table of
+  // five approved sentences that produced the hold, and then ended the turn cycle_end_silent
+  // with ok:false, so the person asking the most ordinary question anybody asks her ("what can
+  // you do right now") received no answer at all and nothing they could act on. The table is
+  // gone (core/current.capability.grounding.js), and with it the reason this branch existed.
+  // WHAT HAPPENS NOW. The remaining detectors name a concern, the concern goes back to the mind
+  // ONCE as a fact, and HER answer ships either way with the concern riding on the receipt.
+  // Which bytes ship is not a meaning call: the heal is her second answer written with the
+  // concern in front of her, so it is preferred whenever it is non-empty, and when the heal
+  // comes back empty the original draft is kept rather than replaced by silence. Same shape as
+  // cjk_output_regenerated below, which also keeps the original when a repair does not help.
+  // A silent death is worse than a visible one: nobody learns it happened, the person retries
+  // the same question, and the same wall answers it the same way.
+  var _currentCapabilityConcerns = _capabilityDraft.held
+    ? String(_capabilityDraft.reason || '').split(',').filter(Boolean) : [];
   if (_capabilityDraft.held) {
     _stampStep('current_capability_claim_held', _capabilityDraft.reason);
     var _capabilityRepair = await _repairHumanOnce('', _capabilityDraft.reason);
@@ -8066,14 +8299,16 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     _stampStep('current_capability_claim_repair_checked',
       'len='+String(_capabilityRepair.answer || '').length+
       ' post_check_reason='+_capabilityRepairPostReason);
-    if (!_capabilityRepair.answer || _capabilityRepairCheck.held) {
-      _stampStep('cycle_end_silent', 'current_capability_unverified');
-      return {ok:false,reason:'current_capability_unverified',blocked_by:'A\'NU',
-        ham:hamObj,cycleId:_cycleId,requestId:_requestId,tools_used:tools,
-        iterations:iter,ms:Date.now()-t0};
+    if (_capabilityRepair.answer) {
+      finalAns = _capabilityRepair.answer;
+      _currentCapabilityConcerns = _capabilityRepairCheck.held
+        ? String(_capabilityRepairCheck.reason || '').split(',').filter(Boolean) : [];
+      _stampStep('current_capability_claim_repaired',
+        _capabilityDraft.reason + ' post_check_reason=' + _capabilityRepairPostReason);
+    } else {
+      _stampStep('current_capability_repair_empty_original_answer_kept',
+        _capabilityDraft.reason);
     }
-    finalAns = _capabilityRepair.answer;
-    _stampStep('current_capability_claim_repaired', _capabilityDraft.reason);
   }
   // ⬡B:core.tool.loop:WIRE:screen_awareness_act:20260709⬡
   // ⬡B:core.tool_loop:REPAIR:one_full_preparation_resubmission:20260719⬡
@@ -8353,26 +8588,37 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       finalAns, _verifiedToolEvidence, {
         hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion
       });
+    // Same law as the draft seam above: a named concern is recorded, never converted into a
+    // dead turn. The preparation stages (screen extraction, formatting, PAM, SHADOW, persona)
+    // can legitimately move her words around, and a concern that appears here is a fact about
+    // the prepared bytes, not a licence to hand the person nothing.
     if (_preparedCapabilityCheck.held) {
       _stampStep('current_capability_claim_changed_during_preparation',
         _preparedCapabilityCheck.reason);
-      return {ok:false,reason:'current_capability_unverified',blocked_by:'A\'NU',
-        ham:hamObj,cycleId:_cycleId,requestId:_requestId,tools_used:tools,
-        iterations:iter,ms:Date.now()-t0};
+      _currentCapabilityConcerns = String(_preparedCapabilityCheck.reason || '')
+        .split(',').filter(Boolean);
     }
     _currentCapabilityAnswerBinding = mintCurrentCapabilityAnswerBinding({
       hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,question:_proofQuestion,
       answer:finalAns,evidence:_verifiedToolEvidence
     });
+    // A binding pins these exact bytes to the signed capability receipt so no council stage can
+    // substitute unbound prose for them. It is a strengthening, not a permission: when it
+    // cannot be minted (a named concern still stands, or the signed read did not verify) the
+    // turn proceeds as an ORDINARY turn, exactly as every non-capability answer already does,
+    // rather than dying. Refusing to speak because an extra proof was unavailable is the
+    // silence this whole seam exists to remove, and the fact that the answer went out unbound
+    // is stamped and rides on the result.
     if (!_currentCapabilityAnswerBinding) {
-      _stampStep('current_capability_answer_binding_failed', 'signed_evidence_unverified');
-      return {ok:false,reason:'current_capability_answer_binding_unverified',
-        blocked_by:'A\'NU',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
-        tools_used:tools,iterations:iter,ms:Date.now()-t0};
+      _stampStep('current_capability_answer_unbound_answer_still_ships',
+        _currentCapabilityConcerns.length
+          ? _currentCapabilityConcerns.join(',') : 'signed_evidence_unverified');
     }
-    _stampStep('current_capability_answer_bound',
-      'bytes='+_currentCapabilityAnswerBinding.answer_bytes+
-      ' digest='+_currentCapabilityAnswerBinding.answer_digest);
+    if (_currentCapabilityAnswerBinding) {
+      _stampStep('current_capability_answer_bound',
+        'bytes='+_currentCapabilityAnswerBinding.answer_bytes+
+        ' digest='+_currentCapabilityAnswerBinding.answer_digest);
+    }
   }
   // ⬡B:core.tool_loop:GUARD:full_pai_outbound_council_every_return:20260715⬡
   // This is the only successful exit. PAM, SHADOW, META_COMMENTARY, conditional
@@ -8699,12 +8945,27 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       });
     var _postCouncilCapabilityDigest = _crypto.createHash('sha256')
       .update(Buffer.from(String(finalAns), 'utf8')).digest('hex');
-    if (_postCouncilCapabilityCheck.held ||
-        _postCouncilCapabilityDigest !== _currentCapabilityAnswerBinding.answer_digest ||
+    // ⬡B:core.tool_loop:PEN:the_last_capability_seam_records_and_ships:20260825⬡ A named
+    // concern on the bytes that actually leave is recorded on the receipt and the answer still
+    // goes. It is measured HERE, on the shipping bytes, rather than on a draft nobody reads,
+    // which is the property the pre-council check could never have on its own.
+    if (_postCouncilCapabilityCheck.held) {
+      _stampStep('current_capability_post_council_concern',
+        _postCouncilCapabilityCheck.reason);
+      _currentCapabilityConcerns = String(_postCouncilCapabilityCheck.reason || '')
+        .split(',').filter(Boolean);
+    }
+    // THIS ONE STAYS CLOSED, and it is not a whitelist on her speech. The binding is a
+    // cryptographic pin between these exact bytes and the signed capability receipt, and
+    // core/pai.outbound.council.js already restores the bound answer whenever a stage proposes
+    // different bytes, so reaching this line means the pinned bytes were replaced by bytes with
+    // no evidence behind them after every stage had already committed. That is an integrity
+    // failure, not a judgment about what she may say. It is named rather than anonymous, it is
+    // stamped, it is logged by the caller, and the caller shows the person a real failure they
+    // can retry; it is not a turn quietly ending with nothing.
+    if (_postCouncilCapabilityDigest !== _currentCapabilityAnswerBinding.answer_digest ||
         Buffer.byteLength(finalAns, 'utf8') !== _currentCapabilityAnswerBinding.answer_bytes) {
-      var _postCouncilCapabilityReason = _postCouncilCapabilityCheck.held
-        ? _postCouncilCapabilityCheck.reason : 'current_capability_bound_answer_mutated';
-      _stampStep('outbound_council_blocked', _postCouncilCapabilityReason);
+      _stampStep('outbound_council_blocked', 'current_capability_bound_answer_mutated');
       return {ok:false,reason:'current_capability_post_council_unverified',
         blocked_by:'A\'NU',ham:hamObj,cycleId:_cycleId,requestId:_requestId,
         tools_used:tools,iterations:iter,ms:Date.now()-t0};
@@ -9148,6 +9409,20 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
       }),
       tools_used:tools, iterations:iter, ms:Date.now()-t0 };
   }
+  // The concerns carried on the result are measured one last time on the exact bytes that
+  // leave, so an unbound answer (no binding minted) is measured too and the receipt can never
+  // describe a draft that was replaced later. Nothing is decided here, only counted.
+  if (!_structuredReachPolicy && !_worldBuilderMachine) {
+    var _shippedCapabilityCheck = guardCurrentCapabilityClaim(_proofQuestion, finalAns,
+      _verifiedToolEvidence, {hamUid:hamUid,requestId:_requestId,cycleId:_cycleId,
+        question:_proofQuestion});
+    _currentCapabilityConcerns = _shippedCapabilityCheck.held
+      ? String(_shippedCapabilityCheck.reason || '').split(',').filter(Boolean) : [];
+    if (_currentCapabilityConcerns.length) {
+      _stampStep('current_capability_concerns_shipped_with_answer',
+        _currentCapabilityConcerns.join(','));
+    }
+  }
   // ⬡B:core.tool_loop:COMMIT:post_council_effects_only:20260715⬡
   // No visible screen move and no completion record may precede the committed
   // council. A failed council therefore leaves no successful side-effect trail.
@@ -9245,6 +9520,22 @@ async function runPAIInner(hamUid, message, channel, identity, priorTurns, uiPor
     ham:hamObj,cycleId:_cycleId,
     requestId:_requestId,request_id:_requestId,councilReceipt:_councilReceipt,council_receipt:_councilReceipt,
     stampProof:_stampProof,stamp_proof:_stampProof,
+    // Reported, never silent (see the FIX note near where these are computed, above):
+    // how many prior turns the caller actually had, how many rode into this deliberation,
+    // and why, only when the model-context-window bound actually cut the window down.
+    prior_turns_available:_priorTurnsAvailable,prior_turns_used:_priorTurnsUsed,
+    prior_turns_truncated:_priorTurnsTruncated,
+    prior_turns_truncated_reason:_priorTurnsTruncatedReason,
+    // Held OUT of the bound above, never counted against it, which is why used can exceed
+    // PAI_PRIOR_TURNS_MAX. Carried so a reader can see the difference instead of guessing.
+    prior_turns_server_context_held_out:_priorTurnsServerContextHeldOut,
+    // ⬡B:core.tool_loop:PEN:a_capability_concern_leaves_with_the_answer:20260825⬡ Measured on
+    // the EXACT bytes that ship, after every stage, not on a draft nobody reads. These used to
+    // end the turn in silence; they are a receipt line now, so the answer reaches the person
+    // AND the concern reaches whoever reads the result. Empty on every turn that raised none,
+    // and on every turn that was never a capability question at all.
+    current_capability_concerns:_currentCapabilityConcerns,
+    current_capability_answer_bound:!!_currentCapabilityAnswerBinding,
     tools_used:tools,iterations:iter,
     world_builder_observation:_worldBuilderMachine?{
       semantic_authority:false,purpose:'TELEMETRY_ONLY',

@@ -166,17 +166,36 @@ test('a packet is really MINTED for every turn a person reads, not merely flagge
     }
   });
 
-test('a ham with no bank behind it cannot mint, and that dependency is visible here not in an outage',
+// ⬡B:tests.writ_meaning_packet_mint_complement:RETIRED:a_dead_bank_was_pinned_as_a_dead_mint:20260825⬡
+// THIS TEST USED TO ASSERT minted:false WITH reason:'no_output_to_bind' WHEN THE BRAIN BANKED
+// NOTHING, and the only reason there was no output to bind was that the council had just erased
+// a WRIT-passed answer over a failed bead write. That erasure is retired on 20260825 (a storage
+// failure is a fact to carry, never a verdict about her words), so there IS output, and the
+// packet mints from her real bytes.
+// COVERAGE LOST, plainly: nothing asserts any more that a brain outage stops the mint, because
+// it does not, and the change runs strictly in the direction of MORE bytes judged. What that
+// costs is named rather than hidden: on a turn whose verdict bead did not save, the meaning
+// shadow now actually runs, which is one penny seat call it did not previously buy, on a turn
+// that previously shipped nothing at all.
+// COVERAGE KEPT: the mint still reports its own supply out loud, and a real integrity mismatch
+// (a verdict that SAVED and describes different bytes) still blanks the output and still cannot
+// mint, which is asserted below and is the case this row was really guarding.
+// Mirrors the anew retirement in anew/tests/writ.meaning.packet.mint.complement.test.js, same
+// window; the byte-paired pai/core/pai.outbound.council.js is what makes both mint identically.
+test('a failed bead write no longer stops the mint, but a mismatched verdict still does',
   async () => {
-    // The precondition made observable on purpose. `writReceiptVerified` needs the WRIT verdict
-    // to bind, so a real ham whose brain banks nothing reports minted:false with a reason that
-    // names the SUPPLY rather than the demand. Two versions of this pin hid that behind a hamless
-    // run; a future seat who breaks banking should meet this row, not a dead door.
-    const result = await runStage({ mode: 'coding', bcw: true }, { banked: false });
-    const packet = result.evidence.meaning_packet;
-    assert.strictEqual(packet.applies, true, 'it still applies: a person still reads these bytes');
-    assert.strictEqual(packet.minted, false);
-    assert.strictEqual(packet.reason, 'no_output_to_bind');
+    const banklessRun = await runStage({ mode: 'coding', bcw: true }, { banked: false });
+    const banklessPacket = banklessRun.evidence.meaning_packet;
+    assert.strictEqual(banklessPacket.applies, true,
+      'it still applies: a person still reads these bytes');
+    assert.strictEqual(banklessPacket.minted, true,
+      'WRIT ruled on these exact bytes; only the record of it failed to save');
+    assert.strictEqual(banklessPacket.reason, 'minted');
+    assert.strictEqual(banklessRun.ok, true);
+    assert.strictEqual(banklessRun.evidence.verdict_bank.receipt_verified, false,
+      'and the unsaved receipt is carried as a fact');
+    assert.strictEqual(banklessRun.evidence.verdict_bank.receipt_mismatch, false,
+      'a bank that did not save is not a bank that saved the wrong thing');
   });
 
 test('the machine contract returns early and never reaches the mint', async () => {

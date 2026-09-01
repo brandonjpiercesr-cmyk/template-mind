@@ -58,11 +58,10 @@
 //                                <- the prefix findContext leg 1 has always queried. KEPT,
 //                                   not renamed, so every historical MINUTES row written by
 //                                   the browser stream still reads back under the same lane.
-//   importance  7                <- the reader's floor. THE WRITER WAS RAISED TO CLEAR THE
-//                                   FLOOR. The floor was NOT lowered, and must never be:
-//                                   lowering it drags the importance-2 housekeeping markers
-//                                   (nash.surfaced, soul.shown) onto her wall as if they were
-//                                   things a person said.
+//   importance  7                <- a WEIGHT, never a verdict. It says a real turn carries
+//                                   about this much weight next to a housekeeping marker.
+//                                   NO READER MAY TURN IT INTO A CUTOFF. See the retired
+//                                   READER_IMPORTANCE_FLOOR note below the contract.
 //
 // GIFT, written only when a mind rules the person handed something over to keep:
 //   stamp_type  MEMORY
@@ -82,20 +81,68 @@ var MEMORY_CONTRACT = Object.freeze({
   GIFT_STAMP_TYPE: 'MEMORY',
   GIFT_SOURCE_PREFIX: 'memory.gifted.',
   GIFT_IMPORTANCE: 9,
-  // The floor every wall reader applies. Raise a writer to clear it; never lower it.
-  READER_IMPORTANCE_FLOOR: 7,
-  // ⬡B:core.memory.keeper:LAW:an_abandoned_turn_falls_below_the_floor_it_never_earned:20260803⬡
+  // ⬡B:core.memory.keeper:LAW:an_abandoned_turn_is_labelled_not_hidden:20260825⬡
   // FOUNDER_ACTIONS_OUTSTANDING item 12. The turn record above is written unconditionally,
   // before core/tool.loop.js knows whether the turn it belongs to actually reached the
   // person: a cancellation or a failed post-council effect can still end the cycle after
-  // this row is durably read back. abandonTurn demotes exactly that row to this importance,
-  // the same value the comment above already names as beneath every wall reader's floor, so
-  // a turn nobody actually received is excluded by the READER_IMPORTANCE_FLOOR check every
-  // reader already runs. No reader needed a new field to trust; one existing gate now also
-  // carries this honesty.
+  // this row is durably read back. abandonTurn demotes exactly that row to this importance.
+  //
+  // WHAT THIS VALUE MEANS NOW, and it changed on 20260825. It used to mean "hidden": the
+  // demotion worked only because every reader ran an importance >= READER_IMPORTANCE_FLOOR
+  // predicate, so an abandoned turn simply stopped coming back. That predicate is gone (see
+  // the retired-floor note below), so this value no longer hides anything. It is an EXACT,
+  // SINGLE-VALUE FACT that a presenter reads and LABELS: core/goals/keeper.js and
+  // core/fcw.builder.js both check `importance === ABANDONED_IMPORTANCE` and say on the line
+  // that this row is a turn record for an exchange the person never received. Hiding a thing
+  // that happened is its own small forgery; saying what it is out loud is not.
+  //
+  // Never compare against it with < or >=. Two different facts share the low end of this
+  // scale: routes/stream.routes.js stamped real, genuinely DELIVERED browser-stream turns at
+  // importance 5 for weeks, and a floor comparison mislabels every one of those as abandoned.
+  // Only the exact value written here means abandonment.
   ABANDONED_IMPORTANCE: 2,
   AGENT_GLOBAL: 'PAI'
 });
+
+// ⬡B:core.memory.keeper:LAW:READER_IMPORTANCE_FLOOR_is_retired_and_never_comes_back:20260825⬡
+// RETIRED 20260825. `READER_IMPORTANCE_FLOOR: 7` used to live in the frozen contract above and
+// every memory reader in the estate turned it into a PostgREST predicate, `importance=gte.7`.
+// That is not a sort and it is not a bound on what a process can hold. It is a hard filter: the
+// rows never came back, no count of what was withheld came back either, and no mind at any layer
+// was ever told a row existed.
+//
+// It had to go because a cold hand was on both ends of it. TURN_IMPORTANCE, GIFT_IMPORTANCE and
+// ABANDONED_IMPORTANCE are all coder-typed constants, so cold code assigned the weight AND cold
+// code converted that weight into a verdict on what she is allowed to know exists. Even the one
+// path where a mind picks its own number (core/tool.loop.js write_to_brain) proved the defect
+// rather than escaping it: a mind that deliberately wrote something at 5, meaning "modest, but
+// real, keep it", had that row silently deleted from every future read of its own memory. The
+// mind expressed a WEIGHT. The floor converted it into a VISIBILITY VERDICT nobody issued.
+//
+// The live harm is on the record and is not theoretical: routes/stream.routes.js stamped every
+// genuinely DELIVERED browser-stream turn at importance 5 for weeks. Those turns really happened,
+// really reached the person, are still in the bank, and `importance=gte.7` meant she could not
+// see a single one of them.
+//
+// The identical defect on the identical column was already ruled on once in this estate and
+// already cured six lines away: core/find.js#doctrineWallFloor, whose own comment states the line
+// this retirement follows. "A bound on what a process can hold is a fact; a ruling on what is
+// worth seeing is a judgment." The byte budget stays (core/agent.find.js#runtimeContextBudgets
+// still binds the wall and still REPORTS every row it omits). The relevance verdict goes.
+//
+// DO NOT REINTRODUCE IT, and do not reintroduce it wearing a smaller number or an env var with a
+// default. Lowering the floor to 5, or to 3, or making it configurable, is the same hand on the
+// same pen picking a fourth number. Importance is still doing real work where a weight belongs:
+// core/agent.find.js#candidateFacts folds it into the ranking score additively, never as a
+// cutoff, so ordering by importance is fine and excluding by importance is not.
+//
+// WHAT REPLACED IT. The read-back fence, which is the thing that makes the removal safe: every
+// presenter that feeds stored rows into a mind's prompt carries, per line, the writer that
+// stamped the row and the weight that writer chose, and tells the reading mind plainly that a
+// writer name is the MODULE that stamped the row and never proof of who authored the words, that
+// importance is a weight a writer chose and never a ruling on whether the row matters, and that
+// SHE judges which is which. Carry, never classify: no whitelist of trusted writers, no sorting
+// rows into hers and not-hers, no row filtered out, no cap on her read.
 
 // ⬡B:core.memory.keeper:WIRE:bank_derived_from_the_selected_bank_never_a_dead_literal:20260726⬡
 // The proven-correct shape (core/brain.client.js): table and schema derive from the SAME
@@ -518,10 +565,11 @@ async function keepTurn(entrance) {
 // honest fix is not pretending the row was never written. abandonTurn is called from
 // tool.loop.js's own cancellation and post-council-effect-failure exits, the ones that run
 // AFTER keepTurn already started. It demotes the exact row this turn wrote to
-// MEMORY_CONTRACT.ABANDONED_IMPORTANCE, below every reader's existing floor, so a turn that
-// never reached the person, or whose committed effect failed, is excluded by the same
-// importance >= READER_IMPORTANCE_FLOOR check core/find.js already runs on every read. It
-// never throws and it never touches a row this turn did not itself durably write.
+// MEMORY_CONTRACT.ABANDONED_IMPORTANCE, which is the one exact value that means "this turn
+// never reached the person." As of 20260825 that row is no longer EXCLUDED from any read:
+// the presenters carry it and say on the line what it is, and the reading mind decides what
+// an abandoned exchange is worth. It never throws and it never touches a row this turn did
+// not itself durably write.
 async function abandonTurn(turnRecord, outcome, signal) {
   if (!turnRecord || turnRecord.ok !== true || !turnRecord.id || !turnRecord.source) {
     return { ok: false, reason: 'nothing_to_abandon' };

@@ -359,8 +359,7 @@ function canonicalSourceStream(rows) {
 function latestTurnPath(hamUid, viewerTier) {
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return evidenceQueryPath({source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid,
-    stamp_type:contract.TURN_STAMP_TYPE,
-    importance_gte:contract.READER_IMPORTANCE_FLOOR,viewer_tier:viewerTier,
+    stamp_type:contract.TURN_STAMP_TYPE,viewer_tier:viewerTier,
     select:evidenceSelect(true)}, {limit:1});
 }
 
@@ -391,10 +390,19 @@ async function readLastAirCycleCandidate(input, options) {
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   var council = require('./pai.outbound.council.js');
   var sources = cycleId && requestId ? council.councilSources(cycleId, requestId) : null;
+  // ⬡B:core.find:FIX:a_low_importance_anchor_was_hard_failing_the_whole_readback:20260825⬡
+  // This check used to include `Number(anchor.importance) < contract.READER_IMPORTANCE_FLOOR`,
+  // and it did not merely skip a low-importance anchor: it returned last_air_cycle_anchor_invalid
+  // for the ENTIRE read. A legacy delivered turn stamped at importance 5 by
+  // routes/stream.routes.js, sitting as the newest anchor, therefore broke the last-AIR-cycle
+  // readback outright. Every clause left below is a STRUCTURAL fact about whether this row is
+  // the turn record it claims to be (right person, right stamp, right source shape, a parseable
+  // turn schema, a receipt that matches its own council sources). Importance is not one of
+  // those facts, it is a weight a writer chose, so it is carried to the reading mind rather than
+  // ruled on here. See core/memory.keeper.js, the retired-floor law.
   if (exactHam(anchor && anchor.ham_uid) !== hamUid || anchor.stamp_type !==
       contract.TURN_STAMP_TYPE || String(anchor.source || '').indexOf(
         contract.TURN_SOURCE_PREFIX + hamUid + '.') !== 0 ||
-      Number(anchor.importance) < contract.READER_IMPORTANCE_FLOOR ||
       !content || content.schema !== 'anew.memory.turn.v1' || !plainObject(entrance) ||
       !plainObject(exit) || !cycleId || !requestId || !receiptSource || !sources ||
       receiptSource !== sources.finalSource || !rowIdentity(anchor)) {
@@ -982,30 +990,26 @@ function fcwEvidenceQueries(input) {
     q('agentJDs',{stamp_type:'SCW',ham_uid:hamUid}),
     q('agentJDs',{stamp_type:'AGENT_JD'},true),
     q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid,
-      stamp_type:contract.TURN_STAMP_TYPE,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR}),
-    q('context',{stamp_type:contract.TURN_STAMP_TYPE,ham_uid:hamUid,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR}),
+      stamp_type:contract.TURN_STAMP_TYPE}),
+    q('context',{stamp_type:contract.TURN_STAMP_TYPE,ham_uid:hamUid}),
     // The unqualified source-prefix anchor forced PostgREST to walk the entire turn namespace
     // before it could return one row. On the live bank that read can time out, which leaves a
-    // successfully saved text turn outside the next FCW. Turn records already carry one exact
-    // stamp and the reader importance floor, so include both selective predicates on the anchor.
+    // successfully saved text turn outside the next FCW. Turn records carry one exact stamp, so
+    // the stamp_type predicate stays on the anchor: it is a selectivity fact about the lane, not
+    // a ruling on which rows are worth seeing. The importance predicate that used to ride here
+    // came off 20260825 (see core/memory.keeper.js, the retired-floor law).
     q('context',{source_prefix:contract.TURN_SOURCE_PREFIX,ham_uid:hamUid,
-      stamp_type:contract.TURN_STAMP_TYPE,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR},true),
+      stamp_type:contract.TURN_STAMP_TYPE},true),
     q('recent',{stamp_type:'RESULT',ham_uid:hamUid,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR,
       source_not_prefix:contract.TURN_SOURCE_PREFIX}),
     q('recent',{stamp_type:'RESULT',ham_uid:hamUid,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR,
       source_not_prefix:contract.TURN_SOURCE_PREFIX},true),
     q('doctrine',{stamp_type:'ROADMAP',ham_uid:hamUid}),
     q('doctrine',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:doctrineWallFloor()}),
     q('doctrine',{stamp_type:'DOCTRINE',ham_uid:hamUid,importance_gte:doctrineWallFloor()},true),
     q('profile',{source_prefix:'scw.person_profile.' + hamUid,ham_uid:hamUid},true),
     q('statedPlans',{source_prefix:contract.GIFT_SOURCE_PREFIX,ham_uid:hamUid}),
-    q('statedPlans',{stamp_type:contract.GIFT_STAMP_TYPE,ham_uid:hamUid,
-      importance_gte:contract.READER_IMPORTANCE_FLOOR}),
+    q('statedPlans',{stamp_type:contract.GIFT_STAMP_TYPE,ham_uid:hamUid}),
     q('statedPlans',{source_prefix:contract.GIFT_SOURCE_PREFIX,ham_uid:hamUid},true)
   ];
   (Array.isArray(value.named_agents) ? value.named_agents : []).forEach(function (name) {
@@ -1401,17 +1405,21 @@ async function findContext(hamUid, limit, viewerTier) {
   // channels he actually uses BOTH legs of her conversation memory pointed at things nothing
   // wrote. The writer is now core/memory.keeper.js, at the ONE common PAI exit, on every
   // channel, and it emits EXACTLY the contract both legs below query: stamp_type RESULT,
-  // source prefix pai.minutes., importance 7. THE CONTRACT LIVES IN ONE PLACE:
+  // source prefix pai.minutes. THE CONTRACT LIVES IN ONE PLACE:
   // core/memory.keeper.js MEMORY_CONTRACT. Read it before you change either string here.
-  // The floor stays at 7 and the writer was raised to clear it; lowering it would drag the
-  // importance-2 housekeeping markers onto her wall as if a person had said them.
+  // ⬡B:core.find:FIX:the_reader_importance_floor_came_off_her_conversation_memory:20260825⬡
+  // Both legs used to carry importance_gte: contract.READER_IMPORTANCE_FLOOR. That predicate is
+  // gone. It was never a sort or a capacity bound, it was a PostgREST importance=gte.7 that made
+  // the rows not come back at all, with no count of what was withheld, so no mind ever learned
+  // those turns existed. routes/stream.routes.js stamped every genuinely delivered browser-stream
+  // turn at importance 5 for weeks, and this read could not see one of them. The full reasoning
+  // and the standing refusal to reintroduce it under a smaller number live in one place:
+  // core/memory.keeper.js, the retired-floor law under MEMORY_CONTRACT.
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([
     callerWindow({ source_prefix: contract.TURN_SOURCE_PREFIX, ham_uid: hamUid,
-      stamp_type: contract.TURN_STAMP_TYPE,
-      importance_gte: contract.READER_IMPORTANCE_FLOOR }, limit),
-    callerWindow({ stamp_type: contract.TURN_STAMP_TYPE, ham_uid: hamUid,
-      importance_gte: contract.READER_IMPORTANCE_FLOOR }, limit)
+      stamp_type: contract.TURN_STAMP_TYPE }, limit),
+    callerWindow({ stamp_type: contract.TURN_STAMP_TYPE, ham_uid: hamUid }, limit)
   ], viewerTier));
 }
 
@@ -1438,7 +1446,6 @@ async function findRecentResults(hamUid, limit, viewerTier) {
   if (!hamUid) return { beads: [] };
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([callerWindow({ stamp_type: 'RESULT', ham_uid: hamUid,
-    importance_gte: contract.READER_IMPORTANCE_FLOOR,
     source_not_prefix: contract.TURN_SOURCE_PREFIX }, limit)], viewerTier));
 }
 
@@ -1600,16 +1607,18 @@ async function findWonderGames(hamUid, limit, viewerTier) {
 // would silently regress this branch's own fix. Kept both contract-driven clauses.
 // Fails closed without a ham (the Feb-2026 cross-HAM law, same as findRecentResults),
 // and ham_uid scopes every query, so one person's stated plans can never surface in
-// another person's wall. The importance floor keeps the low-importance MEMORY housekeeping
-// stamps (surface-rotation and dedup markers, importance 2) out of the wall.
+// another person's wall. The importance floor that used to sit on the second leg came off
+// 20260825: it kept the low-importance MEMORY housekeeping stamps out of the wall by making
+// them unknowable, and a bookkeeping row belongs on the wall LABELLED as a bookkeeping row so
+// the reading mind can skip it in a quarter of a token. The read-back writer fence in
+// core/fcw.builder.js carries that label. See core/memory.keeper.js, the retired-floor law.
 // UNIVERSALITY: keyed by ham_uid, any HAM gets their own. No person, no content hardcoded.
 async function findStatedCommitments(hamUid, limit, viewerTier) {
   if (!hamUid) return { beads: [] };
   var contract = require('./memory.keeper.js').MEMORY_CONTRACT;
   return find(scopedQueries([
     callerWindow({ source_prefix: contract.GIFT_SOURCE_PREFIX, ham_uid: hamUid }, limit),
-    callerWindow({ stamp_type: contract.GIFT_STAMP_TYPE, ham_uid: hamUid,
-      importance_gte: contract.READER_IMPORTANCE_FLOOR }, limit)
+    callerWindow({ stamp_type: contract.GIFT_STAMP_TYPE, ham_uid: hamUid }, limit)
   ], viewerTier));
 }
 
