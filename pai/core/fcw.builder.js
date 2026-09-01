@@ -1167,6 +1167,31 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
     var _BU = _bu(), _BK = _bk();
     if (_BU && _BK) {
       var _wm = Date.now();
+      // ⬡B:core.fcw.builder:911:this_minutes_bead_was_an_orphan_and_the_graph_could_not_see_it:20260901⬡
+      // MEASURED, against the live bank: 150 of 150 MINUTES beads sampled in the founder's
+      // world carried an EMPTY edges array, while 150 of 150 PAI_STAGE beads carried real
+      // ones. 123 of those 150 orphans came from this exact POST. So his meeting minutes sat
+      // in a bank of 1.4 million edged beads connected to nothing, and no traversal could
+      // ever reach them or walk out of them.
+      // WHY IT ESCAPED THE GUARD THAT EXISTS FOR THIS: `core/brain.client.js#writeBead`
+      // THROWS on an orphan bead ("edges array must contain at least one typed edge"). This
+      // path never calls it. It POSTs a raw row straight at PostgREST, so the one guard in
+      // the estate that refuses orphans was never in the way.
+      // THE EDGES BELOW ARE FACTS THIS FUNCTION ALREADY HOLDS, never invented targets. A
+      // fabricated address would be worse than no edge: it makes a graph LOOK connected and
+      // dead-ends anything that walks it. PRODUCED_BY names the module that wrote the row so
+      // every wall build is findable; ABOUT names the ham's wall, the thing these minutes are
+      // minutes OF, in the same namespace the source line already uses; one CONTRIBUTED_BY
+      // per section that actually resolved, so "which builds had doctrine on the wall" is a
+      // question the bank can now answer. A section that came back empty gets no edge,
+      // because it did not contribute.
+      var _wallEdges = [
+        { type: 'PRODUCED_BY', target: 'core.fcw.builder' },
+        { type: 'ABOUT', target: 'ham_' + String(hamUid).toLowerCase() + '.wall' }
+      ];
+      Object.keys(contributors).forEach(function (_ck) {
+        if (contributors[_ck]) _wallEdges.push({ type: 'CONTRIBUTED_BY', target: 'fcw.contributor.' + _ck });
+      });
       fetch(_bu() + '/rest/v1/' + _tbl() + '', {
         method: 'POST',
         headers: { apikey: _BK, Authorization: 'Bearer ' + _BK, 'Accept-Profile': _schema(),
@@ -1177,13 +1202,18 @@ async function buildMemoryBank(hamUid, channel, question, identity, resolvedRead
           stamp_type: 'MINUTES',
           acl_stamp: '\u2b21B:core.fcw.builder:MINUTES:wall_built:' + _wm + '\u2b21',
           source: 'ham_' + String(hamUid).toLowerCase() + '.fcw.build.' + _wm,
+          // Both places the graph lives, written identically, the way every edged row in this
+          // bank already carries them. A reader that looks in only one of the two must not be
+          // able to miss this bead (see core/graph/edge.walk.js#edgesOf for that whole story).
+          edges: _wallEdges,
           content: JSON.stringify({
             entrance: { hamUid: String(hamUid).toUpperCase(), channel: channel || null, question: String(question || '').slice(0), gateIdentity: !!identity },
             exit: { ok: true, contributors: contributors,
               contributorAvailability: _contributorAvailability,
               contributorsResolved: _contributorsResolved,
               contributorsAvailable: _availableReadCount, ms: (Date.now() - t0) },
-            note: 'Memory Bank wall assembled with ' + _availabilityNotes.join('; ')
+            note: 'Memory Bank wall assembled with ' + _availabilityNotes.join('; '),
+            edges: _wallEdges
           }),
           summary: '[Memory Bank] wall built for ' + String(hamUid).toUpperCase() + ' ('
             + (channel || 'na') + '), ' + _contributorsResolved + '/' + Object.keys(contributors).length
